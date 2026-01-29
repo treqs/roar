@@ -1,0 +1,82 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (build only, no upload)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine tomli
+
+      - name: Verify version matches release tag
+        if: github.event_name == 'release'
+        run: |
+          # Extract version from pyproject.toml
+          PACKAGE_VERSION=$(python -c "import tomli; print(tomli.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          # Extract version from release tag (strip 'v' prefix if present)
+          RELEASE_TAG="${{ github.event.release.tag_name }}"
+          TAG_VERSION="${RELEASE_TAG#v}"
+
+          echo "Package version: $PACKAGE_VERSION"
+          echo "Release tag version: $TAG_VERSION"
+
+          if [ "$PACKAGE_VERSION" != "$TAG_VERSION" ]; then
+            echo "ERROR: Version mismatch!"
+            echo "pyproject.toml version ($PACKAGE_VERSION) does not match release tag ($TAG_VERSION)"
+            exit 1
+          fi
+
+          echo "Version verified successfully"
+
+      - name: Clean previous builds
+        run: rm -rf dist/ build/ *.egg-info/
+
+      - name: Build distribution
+        run: python -m build
+
+      - name: Check distribution
+        run: twine check dist/*
+
+      - name: Upload to PyPI
+        if: ${{ !inputs.dry_run }}
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload dist/*
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create release artifacts
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber

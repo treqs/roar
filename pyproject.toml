@@ -1,0 +1,144 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "roar-cli"
+version = "0.2.0"
+description = "Reproducibility and provenance tracker for ML training pipelines"
+authors = [
+    { name="TReqs Team", email="info@treqs.ai" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+keywords = [
+    "machine-learning",
+    "reproducibility",
+    "lineage",
+    "provenance",
+    "mlops",
+    "data-versioning",
+    "artifact-tracking",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Version Control",
+    "Typing :: Typed",
+]
+dependencies = [
+    "blake3>=0.3.0",
+    "click>=8.1.0",
+    "dependency-injector>=4.40.0",
+    "sqlalchemy>=2.0.0",
+    "pysqlite3-binary>=0.5.0",  # Fallback when stdlib sqlite3 unavailable
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "tomli>=2.0.0; python_version < '3.11'",
+]
+
+[project.urls]
+Homepage = "https://github.com/treqs/roar"
+Repository = "https://github.com/treqs/roar"
+Documentation = "https://github.com/treqs/roar#readme"
+Issues = "https://github.com/treqs/roar/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-timeout>=2.0.0",
+    "pytest-mock>=3.10.0",
+    "pytest-cov>=4.0.0",
+    "pytest-xdist>=3.5.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+]
+
+[project.scripts]
+# This registers `roar` on PATH after pip install
+roar = "roar.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["roar", "roar.*"]
+
+[tool.setuptools.package-data]
+roar = ["bin/*"]
+
+[tool.pytest.ini_options]
+# Parallel execution enabled by default with pytest-xdist
+# - Uses --dist loadfile to keep same-file tests in same worker (avoids cwd race conditions)
+# - live_glaas tests must be run separately with --dist no (sequential)
+testpaths = ["tests"]
+markers = [
+    "integration: Integration tests (uses fixtures)",
+    "e2e: End-to-end tests (full workflows)",
+    "glaas: Tests requiring GLaaS server",
+    "live_glaas: Tests requiring live GLaaS API running locally",
+    "cloud: Tests for cloud storage operations",
+    "happy_path: Happy path tests for core functionality",
+]
+addopts = "-v --strict-markers -n auto --dist loadfile"
+timeout = 60
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["roar"]
+omit = [
+    "tests/*",
+    "roar/__main__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+exclude = [".venv", "build", "dist", "*.egg-info", "__pycache__", ".roar"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
+ignore = ["E501", "B008", "SIM108"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["B011", "B017"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["roar"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.10"
+files = ["roar"]
+exclude = ["tests/", "benchmarks/", "roar/services/execution/inject/"]
+ignore_missing_imports = true
+show_error_codes = true
+pretty = true
+# Relaxed settings for existing codebase without prior type checking
+# These can be re-enabled incrementally as the codebase is typed
+# Phase 1 complete: method-assign, unreachable, import-untyped, call-overload, return-value, misc, var-annotated
+# Phase 2 complete: prop-decorator, union-attr, type-abstract (index, assignment deferred - Job/dict mismatch)
+# Phase 3 complete: operator, call-arg, arg-type
+# Phase 4 in progress: attr-defined, override, abstract, index, assignment
+disable_error_code = []
