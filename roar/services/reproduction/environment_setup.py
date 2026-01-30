@@ -158,6 +158,13 @@ class EnvironmentSetupService:
         else:
             self.logger.debug("Skipping system package installation (--package-sync not set)")
 
+        # Install pip-installed build tools (before regular pip packages)
+        build_pip_packages = self._get_build_pip_packages(pipeline)
+        self.logger.debug("Found %d build_pip packages", len(build_pip_packages))
+        if build_pip_packages:
+            self.logger.debug("build_pip packages: %s", build_pip_packages)
+            self._install_build_pip_packages(venv_dir, build_pip_packages, repo_dir, pip_any_version)
+
         # Install pip packages
         packages = self._get_packages(pipeline)
         self.logger.debug(
@@ -229,6 +236,100 @@ class EnvironmentSetupService:
 
         packages = {**build_pkgs, **run_pkgs}
         return dict(sorted(packages.items()))
+
+    def _get_build_pip_packages(self, pipeline: "PipelineInfo") -> dict[str, str]:
+        """Extract build_pip package dict {name: version} from pipeline metadata."""
+        import json
+
+        packages: dict[str, str] = {}
+
+        def _extract_build_pip_from_steps(steps: list) -> dict[str, str]:
+            result: dict[str, str] = {}
+            for step in steps:
+                metadata = step.get("metadata") or {}
+                if isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except json.JSONDecodeError:
+                        continue
+
+                pkgs_by_manager = metadata.get("packages", {})
+                build_pip_pkgs = pkgs_by_manager.get("build_pip", {})
+
+                if isinstance(build_pip_pkgs, dict):
+                    for name, version in build_pip_pkgs.items():
+                        if name and name not in result:
+                            result[name] = version or ""
+            return result
+
+        build_pkgs = _extract_build_pip_from_steps(pipeline.build_steps)
+        run_pkgs = _extract_build_pip_from_steps(pipeline.run_steps)
+        self.logger.debug("build_pip packages from build steps: %d", len(build_pkgs))
+        self.logger.debug("build_pip packages from run steps: %d", len(run_pkgs))
+
+        packages = {**build_pkgs, **run_pkgs}
+        return dict(sorted(packages.items()))
+
+    def _install_build_pip_packages(
+        self,
+        venv_dir: Path,
+        packages: dict[str, str],
+        repo_dir: Path,
+        pip_any_version: bool = False,
+    ) -> None:
+        """Install pip-installed build tools into the venv before regular packages."""
+        if not packages:
+            return
+
+        self._print(f"Installing {len(packages)} build tool pip packages...")
+
+        # Build versioned specifiers: "pkg==version"
+        specs = [
+            f"{name}=={version}" if version else name
+            for name, version in packages.items()
+        ]
+
+        if self._use_uv:
+            result = subprocess.run(
+                ["uv", "pip", "install", *specs],
+                cwd=repo_dir,
+                env={"VIRTUAL_ENV": str(venv_dir), "PATH": os.environ.get("PATH", "")},
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        else:
+            pip = self._get_pip(venv_dir)
+            result = subprocess.run(
+                [str(pip), "install", *specs],
+                cwd=repo_dir,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+        if result.returncode != 0:
+            self.logger.warning("Build pip install failed: %s", result.stderr.strip())
+            if pip_any_version:
+                # Retry without version pins
+                unversioned = list(packages.keys())
+                self._print("Retrying build tool pip packages without version pins...")
+                if self._use_uv:
+                    subprocess.run(
+                        ["uv", "pip", "install", *unversioned],
+                        cwd=repo_dir,
+                        env={"VIRTUAL_ENV": str(venv_dir), "PATH": os.environ.get("PATH", "")},
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                else:
+                    pip = self._get_pip(venv_dir)
+                    subprocess.run(
+                        [str(pip), "install", *unversioned],
+                        cwd=repo_dir,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+        else:
+            self._print("Build tool pip packages installed successfully")
 
     def _get_dpkg_packages(self, pipeline: "PipelineInfo") -> dict[str, str]:
         """Extract dpkg package dict {name: version} from pipeline metadata."""

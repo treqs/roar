@@ -23,6 +23,7 @@ from ....filters import FileClassifier
 from .assembler import ProvenanceAssemblerService
 from .data_loader import DataLoaderService
 from .file_filter import FileFilterService
+from .build_pip_collector import BuildPipCollectorService
 from .build_tool_collector import BuildToolCollectorService
 from .package_collector import PackageCollectorService
 from .process_summarizer import ProcessSummarizerService
@@ -199,6 +200,14 @@ class ProvenanceService:
         if build_dpkg:
             packages["build_dpkg"] = build_dpkg
             self.logger.debug("Build tool dpkg packages: %d", len(build_dpkg))
+
+        # 8c. Collect pip-installed build tool dependencies from process tree
+        self.logger.debug("Collecting pip-installed build tool dependencies")
+        build_pip_collector = BuildPipCollectorService(logger=self._logger)
+        build_pip = build_pip_collector.collect(tracer_data.processes, python_data.sys_prefix)
+        if build_pip:
+            packages["build_pip"] = build_pip
+            self.logger.debug("Build tool pip packages: %d", len(build_pip))
 
         # 9. Run analyzers
         self.logger.debug("Running analyzers")

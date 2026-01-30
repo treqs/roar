@@ -196,6 +196,7 @@ def _show_preview(
     import json
 
     build_dpkg_packages = set()
+    build_pip_packages = set()
     packages = set()
     dpkg_packages = set()
     for step in pipeline.build_steps + pipeline.run_steps:
@@ -214,6 +215,12 @@ def _show_preview(
             for name in build_dpkg_pkgs.keys():
                 if name:
                     build_dpkg_packages.add(name)
+
+        build_pip_pkgs = pkgs_by_manager.get("build_pip", {})
+        if isinstance(build_pip_pkgs, dict):
+            for name in build_pip_pkgs.keys():
+                if name:
+                    build_pip_packages.add(name)
 
         pip_packages = pkgs_by_manager.get("pip", {})
         if isinstance(pip_packages, dict):
@@ -237,6 +244,17 @@ def _show_preview(
                 click.echo(f"  - {pkg}")
             if len(build_dpkg_packages) > 10:
                 click.echo(f"  ... and {len(build_dpkg_packages) - 10} more")
+
+    if build_pip_packages:
+        click.echo(f"\nBuild tool pip packages ({len(build_pip_packages)}):")
+        if list_requirements:
+            for pkg in sorted(build_pip_packages):
+                click.echo(f"  - {pkg}")
+        else:
+            for pkg in sorted(build_pip_packages)[:10]:
+                click.echo(f"  - {pkg}")
+            if len(build_pip_packages) > 10:
+                click.echo(f"  ... and {len(build_pip_packages) - 10} more")
 
     if dpkg_packages:
         click.echo(f"\nSystem packages ({len(dpkg_packages)}):")

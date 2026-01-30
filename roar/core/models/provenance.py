@@ -145,6 +145,7 @@ class PackageInfo(RoarBaseModel):
     pip: dict[str, str] = Field(default_factory=dict)
     dpkg: dict[str, str] = Field(default_factory=dict)
     build_dpkg: dict[str, str] = Field(default_factory=dict)
+    build_pip: dict[str, str] = Field(default_factory=dict)
     rpm: dict[str, str] = Field(default_factory=dict)
     conda: dict[str, str] = Field(default_factory=dict)
 
