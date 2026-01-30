@@ -17,7 +17,7 @@ from .models import Base
 try:
     import sqlite3 as sqlite_module
 except ImportError:
-    import pysqlite3 as sqlite_module  # type: ignore[import-not-found]
+    import pysqlite3 as sqlite_module  # type: ignore[import-not-found, no-redef]
 
 
 @event.listens_for(Engine, "connect")

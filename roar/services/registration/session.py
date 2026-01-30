@@ -38,7 +38,7 @@ class SessionRegistrationService(ISessionRegistrar):
         self._client = client
         from ...services.logging import NullLogger
 
-        self._logger = logger or resolve_or_default(ILogger, NullLogger)
+        self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
 
     @property
     def client(self) -> GlaasClient:

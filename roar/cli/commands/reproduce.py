@@ -212,13 +212,13 @@ def _show_preview(
 
         build_dpkg_pkgs = pkgs_by_manager.get("build_dpkg", {})
         if isinstance(build_dpkg_pkgs, dict):
-            for name in build_dpkg_pkgs.keys():
+            for name in build_dpkg_pkgs:
                 if name:
                     build_dpkg_packages.add(name)
 
         build_pip_pkgs = pkgs_by_manager.get("build_pip", {})
         if isinstance(build_pip_pkgs, dict):
-            for name in build_pip_pkgs.keys():
+            for name in build_pip_pkgs:
                 if name:
                     build_pip_packages.add(name)
 
@@ -230,7 +230,7 @@ def _show_preview(
 
         dpkg_pkgs = pkgs_by_manager.get("dpkg", {})
         if isinstance(dpkg_pkgs, dict):
-            for name in dpkg_pkgs.keys():
+            for name in dpkg_pkgs:
                 if name:
                     dpkg_packages.add(name)
 

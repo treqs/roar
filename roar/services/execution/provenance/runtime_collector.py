@@ -242,7 +242,11 @@ class RuntimeCollectorService:
         gpu_info = []
 
         stdout = self._run_command(
-            ["nvidia-smi", "--query-gpu=name,memory.total,compute_cap", "--format=csv,noheader,nounits"]
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,compute_cap",
+                "--format=csv,noheader,nounits",
+            ]
         )
         if stdout:
             for line in stdout.strip().split("\n"):

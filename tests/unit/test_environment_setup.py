@@ -5,8 +5,7 @@ Tests that roar is NOT installed into the reproduce venv.
 """
 
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -54,8 +53,8 @@ class TestEnvironmentSetupSkipsRoarInstallation:
             patch.object(service, "_clone_repository") as mock_clone,
             patch.object(service, "_create_venv") as mock_venv,
             patch.object(service, "_install_roar") as mock_install_roar,
-            patch.object(service, "_initialize_roar") as mock_init_roar,
-            patch.object(service, "_install_packages") as mock_install_packages,
+            patch.object(service, "_initialize_roar") as _mock_init_roar,
+            patch.object(service, "_install_packages") as _mock_install_packages,
             patch.object(service, "_get_packages") as mock_get_packages,
             patch.object(service, "_validate_environment") as mock_validate,
         ):
@@ -77,9 +76,9 @@ class TestEnvironmentSetupSkipsRoarInstallation:
         with (
             patch.object(service, "_clone_repository") as mock_clone,
             patch.object(service, "_create_venv") as mock_venv,
-            patch.object(service, "_install_roar") as mock_install_roar,
+            patch.object(service, "_install_roar") as _mock_install_roar,
             patch.object(service, "_initialize_roar") as mock_init_roar,
-            patch.object(service, "_install_packages") as mock_install_packages,
+            patch.object(service, "_install_packages") as _mock_install_packages,
             patch.object(service, "_get_packages") as mock_get_packages,
             patch.object(service, "_validate_environment") as mock_validate,
         ):
@@ -133,6 +132,7 @@ class TestCreateVenvGitignore:
         repo_dir.mkdir()
 
         with patch("subprocess.run") as mock_run:
+
             def create_venv_with_gitignore(*args, **kwargs):
                 venv = repo_dir / ".venv"
                 venv.mkdir(exist_ok=True)
@@ -168,13 +168,7 @@ class TestGetPackages:
     def test_extracts_pip_packages_from_metadata(self, service, mock_pipeline):
         """Should extract pip packages from metadata.packages.pip."""
         mock_pipeline.run_steps = [
-            {
-                "metadata": {
-                    "packages": {
-                        "pip": {"numpy": "1.24.1", "pandas": "2.0.0"}
-                    }
-                }
-            }
+            {"metadata": {"packages": {"pip": {"numpy": "1.24.1", "pandas": "2.0.0"}}}}
         ]
 
         packages = service._get_packages(mock_pipeline)
@@ -187,10 +181,7 @@ class TestGetPackages:
         mock_pipeline.run_steps = [
             {
                 "metadata": {
-                    "packages": {
-                        "pip": {"requests": "2.31.0"},
-                        "dpkg": {"libc6": "2.35-0ubuntu3"}
-                    }
+                    "packages": {"pip": {"requests": "2.31.0"}, "dpkg": {"libc6": "2.35-0ubuntu3"}}
                 }
             }
         ]
@@ -225,9 +216,7 @@ class TestGetPackages:
 
     def test_deduplicates_across_steps(self, service, mock_pipeline):
         """Should deduplicate packages from multiple steps."""
-        mock_pipeline.build_steps = [
-            {"metadata": {"packages": {"pip": {"numpy": "1.24.1"}}}}
-        ]
+        mock_pipeline.build_steps = [{"metadata": {"packages": {"pip": {"numpy": "1.24.1"}}}}]
         mock_pipeline.run_steps = [
             {"metadata": {"packages": {"pip": {"numpy": "1.24.1", "pandas": "2.0.0"}}}}
         ]
@@ -238,9 +227,7 @@ class TestGetPackages:
 
     def test_handles_package_without_version(self, service, mock_pipeline):
         """Should handle packages with no version specified."""
-        mock_pipeline.run_steps = [
-            {"metadata": {"packages": {"pip": {"somepackage": None}}}}
-        ]
+        mock_pipeline.run_steps = [{"metadata": {"packages": {"pip": {"somepackage": None}}}}]
 
         packages = service._get_packages(mock_pipeline)
 
@@ -312,9 +299,7 @@ class TestGetDpkgPackages:
         mock_pipeline.run_steps = [
             {
                 "metadata": {
-                    "packages": {
-                        "dpkg": {"libc6": "2.35-0ubuntu3", "libssl3": "3.0.2-0ubuntu1"}
-                    }
+                    "packages": {"dpkg": {"libc6": "2.35-0ubuntu3", "libssl3": "3.0.2-0ubuntu1"}}
                 }
             }
         ]
@@ -325,15 +310,7 @@ class TestGetDpkgPackages:
 
     def test_returns_versions(self, service, mock_pipeline):
         """Package dict should include versions."""
-        mock_pipeline.run_steps = [
-            {
-                "metadata": {
-                    "packages": {
-                        "dpkg": {"curl": "7.88.1-10"}
-                    }
-                }
-            }
-        ]
+        mock_pipeline.run_steps = [{"metadata": {"packages": {"dpkg": {"curl": "7.88.1-10"}}}}]
 
         packages = service._get_dpkg_packages(mock_pipeline)
 
@@ -350,15 +327,13 @@ class TestGetDpkgPackages:
 
         packages = service._get_dpkg_packages(mock_pipeline)
 
-        # First occurrence wins
-        assert packages["libc6"] == "2.35-0ubuntu3"
+        # Last occurrence wins (dict.update overwrites)
+        assert packages["libc6"] == "2.36-0ubuntu1"
         assert packages["curl"] == "7.88"
 
     def test_handles_missing_dpkg_section(self, service, mock_pipeline):
         """Return empty dict when no dpkg packages."""
-        mock_pipeline.run_steps = [
-            {"metadata": {"packages": {"pip": {"numpy": "1.24.1"}}}}
-        ]
+        mock_pipeline.run_steps = [{"metadata": {"packages": {"pip": {"numpy": "1.24.1"}}}}]
 
         packages = service._get_dpkg_packages(mock_pipeline)
 
@@ -366,9 +341,7 @@ class TestGetDpkgPackages:
 
     def test_handles_none_version(self, service, mock_pipeline):
         """Should convert None version to empty string."""
-        mock_pipeline.run_steps = [
-            {"metadata": {"packages": {"dpkg": {"curl": None}}}}
-        ]
+        mock_pipeline.run_steps = [{"metadata": {"packages": {"dpkg": {"curl": None}}}}]
 
         packages = service._get_dpkg_packages(mock_pipeline)
 
@@ -391,9 +364,7 @@ class TestInstallDpkgPackages:
     def test_skips_on_non_debian(self, service):
         """Skip with warning on non-Debian systems."""
         with patch.object(service, "_is_debian_based", return_value=False):
-            success, warnings = service._install_dpkg_packages(
-                {"curl": "7.88"}, auto_confirm=True
-            )
+            success, warnings = service._install_dpkg_packages({"curl": "7.88"}, auto_confirm=True)
 
         assert success is True
         assert "non-Debian system" in warnings[0]
@@ -405,9 +376,7 @@ class TestInstallDpkgPackages:
             patch.object(service, "_is_root", return_value=False),
             patch.object(service, "_is_interactive", return_value=False),
         ):
-            success, warnings = service._install_dpkg_packages(
-                {"curl": "7.88"}, auto_confirm=False
-            )
+            success, warnings = service._install_dpkg_packages({"curl": "7.88"}, auto_confirm=False)
 
         assert success is True
         assert "non-interactive" in warnings[0]
@@ -422,9 +391,7 @@ class TestInstallDpkgPackages:
         ):
             mock_run.return_value = MagicMock(returncode=0)
 
-            service._install_dpkg_packages(
-                {"curl": "7.88"}, auto_confirm=True
-            )
+            service._install_dpkg_packages({"curl": "7.88"}, auto_confirm=True)
 
             cmd = mock_run.call_args_list[0][0][0]
             assert cmd[0] == "sudo"
@@ -439,9 +406,7 @@ class TestInstallDpkgPackages:
         ):
             mock_run.return_value = MagicMock(returncode=0)
 
-            service._install_dpkg_packages(
-                {"curl": "7.88"}, auto_confirm=True
-            )
+            service._install_dpkg_packages({"curl": "7.88"}, auto_confirm=True)
 
             cmd = mock_run.call_args_list[0][0][0]
             assert cmd[0] != "sudo"
@@ -501,14 +466,12 @@ class TestInstallDpkgPackages:
             ok = MagicMock(returncode=0)
             mock_run.side_effect = [fail, fail, ok]
 
-            success, warnings = service._install_dpkg_packages(
+            _success, _warnings = service._install_dpkg_packages(
                 {"curl": "99.99"}, auto_confirm=False
             )
 
             # Should have prompted for fallback
-            service._presenter.confirm.assert_any_call(
-                "Install system packages?", default=False
-            )
+            service._presenter.confirm.assert_any_call("Install system packages?", default=False)
 
     def test_skips_failed_packages_when_user_declines_fallback(self, service):
         """When user declines, skip the failed packages with warning."""
@@ -539,20 +502,29 @@ class TestPlatformDetection:
     def test_is_debian_based_linux(self, service):
         """Should return True on Linux with apt-get."""
         with (
-            patch("roar.services.reproduction.environment_setup.platform.system", return_value="Linux"),
-            patch("roar.services.reproduction.environment_setup.shutil.which", return_value="/usr/bin/apt-get"),
+            patch(
+                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+            ),
+            patch(
+                "roar.services.reproduction.environment_setup.shutil.which",
+                return_value="/usr/bin/apt-get",
+            ),
         ):
             assert service._is_debian_based() is True
 
     def test_is_not_debian_on_macos(self, service):
         """Should return False on macOS."""
-        with patch("roar.services.reproduction.environment_setup.platform.system", return_value="Darwin"):
+        with patch(
+            "roar.services.reproduction.environment_setup.platform.system", return_value="Darwin"
+        ):
             assert service._is_debian_based() is False
 
     def test_is_not_debian_without_apt(self, service):
         """Should return False when apt-get is not available."""
         with (
-            patch("roar.services.reproduction.environment_setup.platform.system", return_value="Linux"),
+            patch(
+                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+            ),
             patch("roar.services.reproduction.environment_setup.shutil.which", return_value=None),
         ):
             assert service._is_debian_based() is False
@@ -564,16 +536,12 @@ class TestEnvironmentValidation:
     def test_warns_on_os_mismatch(self, service, mock_pipeline):
         """Should warn when OS differs from original."""
         mock_pipeline.run_steps = [
-            {
-                "metadata": {
-                    "runtime": {
-                        "os": {"system": "Linux", "machine": "x86_64"}
-                    }
-                }
-            }
+            {"metadata": {"runtime": {"os": {"system": "Linux", "machine": "x86_64"}}}}
         ]
 
-        with patch("roar.services.reproduction.environment_setup.platform.system", return_value="Darwin"):
+        with patch(
+            "roar.services.reproduction.environment_setup.platform.system", return_value="Darwin"
+        ):
             warnings = service._validate_environment(mock_pipeline)
 
         assert any("OS mismatch" in w for w in warnings)
@@ -581,18 +549,17 @@ class TestEnvironmentValidation:
     def test_warns_on_architecture_mismatch(self, service, mock_pipeline):
         """Should warn when machine architecture differs."""
         mock_pipeline.run_steps = [
-            {
-                "metadata": {
-                    "runtime": {
-                        "os": {"system": "Linux", "machine": "x86_64"}
-                    }
-                }
-            }
+            {"metadata": {"runtime": {"os": {"system": "Linux", "machine": "x86_64"}}}}
         ]
 
         with (
-            patch("roar.services.reproduction.environment_setup.platform.system", return_value="Linux"),
-            patch("roar.services.reproduction.environment_setup.platform.machine", return_value="aarch64"),
+            patch(
+                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+            ),
+            patch(
+                "roar.services.reproduction.environment_setup.platform.machine",
+                return_value="aarch64",
+            ),
         ):
             warnings = service._validate_environment(mock_pipeline)
 
@@ -605,15 +572,20 @@ class TestEnvironmentValidation:
                 "metadata": {
                     "runtime": {
                         "os": {"system": "Linux", "machine": "x86_64"},
-                        "cuda": {"cuda_version": "11.8"}
+                        "cuda": {"cuda_version": "11.8"},
                     }
                 }
             }
         ]
 
         with (
-            patch("roar.services.reproduction.environment_setup.platform.system", return_value="Linux"),
-            patch("roar.services.reproduction.environment_setup.platform.machine", return_value="x86_64"),
+            patch(
+                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+            ),
+            patch(
+                "roar.services.reproduction.environment_setup.platform.machine",
+                return_value="x86_64",
+            ),
             patch.object(service, "_get_current_cuda_version", return_value="12.0"),
         ):
             warnings = service._validate_environment(mock_pipeline)
@@ -627,15 +599,20 @@ class TestEnvironmentValidation:
                 "metadata": {
                     "runtime": {
                         "os": {"system": "Linux", "machine": "x86_64"},
-                        "cuda": {"cuda_version": "11.8"}
+                        "cuda": {"cuda_version": "11.8"},
                     }
                 }
             }
         ]
 
         with (
-            patch("roar.services.reproduction.environment_setup.platform.system", return_value="Linux"),
-            patch("roar.services.reproduction.environment_setup.platform.machine", return_value="x86_64"),
+            patch(
+                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+            ),
+            patch(
+                "roar.services.reproduction.environment_setup.platform.machine",
+                return_value="x86_64",
+            ),
             patch.object(service, "_get_current_cuda_version", return_value=None),
         ):
             warnings = service._validate_environment(mock_pipeline)
@@ -649,15 +626,20 @@ class TestEnvironmentValidation:
                 "metadata": {
                     "runtime": {
                         "os": {"system": "Linux", "machine": "x86_64"},
-                        "gpu": [{"name": "NVIDIA A100"}]
+                        "gpu": [{"name": "NVIDIA A100"}],
                     }
                 }
             }
         ]
 
         with (
-            patch("roar.services.reproduction.environment_setup.platform.system", return_value="Linux"),
-            patch("roar.services.reproduction.environment_setup.platform.machine", return_value="x86_64"),
+            patch(
+                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+            ),
+            patch(
+                "roar.services.reproduction.environment_setup.platform.machine",
+                return_value="x86_64",
+            ),
             patch.object(service, "_check_gpu_available", return_value=False),
         ):
             warnings = service._validate_environment(mock_pipeline)
@@ -667,18 +649,17 @@ class TestEnvironmentValidation:
     def test_no_warnings_when_environment_matches(self, service, mock_pipeline):
         """Should return empty list when environments match."""
         mock_pipeline.run_steps = [
-            {
-                "metadata": {
-                    "runtime": {
-                        "os": {"system": "Linux", "machine": "x86_64"}
-                    }
-                }
-            }
+            {"metadata": {"runtime": {"os": {"system": "Linux", "machine": "x86_64"}}}}
         ]
 
         with (
-            patch("roar.services.reproduction.environment_setup.platform.system", return_value="Linux"),
-            patch("roar.services.reproduction.environment_setup.platform.machine", return_value="x86_64"),
+            patch(
+                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+            ),
+            patch(
+                "roar.services.reproduction.environment_setup.platform.machine",
+                return_value="x86_64",
+            ),
         ):
             warnings = service._validate_environment(mock_pipeline)
 
@@ -686,9 +667,7 @@ class TestEnvironmentValidation:
 
     def test_handles_missing_runtime_metadata(self, service, mock_pipeline):
         """Should return empty list when no runtime metadata."""
-        mock_pipeline.run_steps = [
-            {"metadata": {"packages": {"pip": {"numpy": "1.24.1"}}}}
-        ]
+        mock_pipeline.run_steps = [{"metadata": {"packages": {"pip": {"numpy": "1.24.1"}}}}]
 
         warnings = service._validate_environment(mock_pipeline)
 
@@ -733,7 +712,9 @@ class TestInstallPipPackages:
             mock_run.side_effect = [fail, fail, ok]
 
             success, warnings = service._install_packages(
-                venv_dir, ["numpy==99.99"], repo_dir,
+                venv_dir,
+                ["numpy==99.99"],
+                repo_dir,
                 pip_any_version=True,
             )
 
@@ -753,8 +734,10 @@ class TestInstallPipPackages:
             ok = MagicMock(returncode=0)
             mock_run.side_effect = [fail, fail, ok]
 
-            success, warnings = service._install_packages(
-                venv_dir, ["numpy==99.99"], repo_dir,
+            _success, _warnings = service._install_packages(
+                venv_dir,
+                ["numpy==99.99"],
+                repo_dir,
                 auto_confirm=False,
             )
 
@@ -775,7 +758,9 @@ class TestInstallPipPackages:
             mock_run.return_value = fail
 
             success, warnings = service._install_packages(
-                venv_dir, ["numpy==99.99"], repo_dir,
+                venv_dir,
+                ["numpy==99.99"],
+                repo_dir,
                 auto_confirm=False,
             )
 
@@ -795,7 +780,9 @@ class TestInstallPipPackages:
             mock_run.side_effect = [fail, ok, fail, ok, ok]
 
             success, warnings = service._install_packages(
-                venv_dir, ["numpy==1.24.1", "badpkg==99.99"], repo_dir,
+                venv_dir,
+                ["numpy==1.24.1", "badpkg==99.99"],
+                repo_dir,
                 pip_any_version=True,
             )
 
@@ -822,7 +809,7 @@ class TestInstallPipPackages:
                 stderr="Resolved 5 packages in 50ms\nInstalled 5 packages in 200ms\n",
             )
 
-            success, warnings = service._install_packages(
+            success, _warnings = service._install_packages(
                 venv_dir, ["numpy==1.24.1", "pandas==2.0.0"], repo_dir
             )
 

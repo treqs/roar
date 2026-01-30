@@ -32,9 +32,9 @@ from .models.config import (
 
 
 def _get_logger():
+    from ..services.logging import NullLogger
     from .di import resolve_or_default
     from .interfaces.logger import ILogger
-    from ..services.logging import NullLogger
 
     return resolve_or_default(ILogger, NullLogger)
 

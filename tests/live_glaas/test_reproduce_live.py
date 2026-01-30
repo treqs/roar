@@ -312,7 +312,9 @@ class TestReproduceLiveGlaas:
         assert reproduce_result.returncode == 0, f"Reproduce failed: {reproduce_result.stderr}"
 
         # Should show artifact info
-        assert "Artifact:" in reproduce_result.stdout or artifact_hash[:8] in reproduce_result.stdout
+        assert (
+            "Artifact:" in reproduce_result.stdout or artifact_hash[:8] in reproduce_result.stdout
+        )
 
         # Should show git info
         output = reproduce_result.stdout.lower()

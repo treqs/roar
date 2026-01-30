@@ -57,7 +57,7 @@ class JobRegistrationService(IJobRegistrar):
         self._secret_filter = secret_filter
         from ...services.logging import NullLogger
 
-        self._logger = logger or resolve_or_default(ILogger, NullLogger)
+        self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
 
     @property
     def client(self) -> GlaasClient:

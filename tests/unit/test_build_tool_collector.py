@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from roar.services.execution.provenance.build_tool_collector import (
-    BuildToolCollectorService,
     KNOWN_BUILD_TOOLS,
+    BuildToolCollectorService,
 )
 
 

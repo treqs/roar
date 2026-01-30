@@ -39,7 +39,7 @@ def _classify_ref(ref: str, cwd: Path) -> str:
     Returns:
         One of: "job_step", "file_path", "job_uid", "artifact_hash", "unknown"
     """
-    logger = get_container().try_resolve(ILogger)
+    logger = get_container().try_resolve(ILogger)  # type: ignore[type-abstract]
     if logger:
         logger.debug("_classify_ref: ref=%r, cwd=%s", ref, cwd)
 
@@ -82,7 +82,7 @@ def _resolve_job_ref(db_ctx, session_id: int, job_ref: str) -> dict | None:
     - @N or @BN notation (step number)
     - job_uid (full or prefix)
     """
-    logger = get_container().try_resolve(ILogger)
+    logger = get_container().try_resolve(ILogger)  # type: ignore[type-abstract]
     if logger:
         logger.debug("_resolve_job_ref: job_ref=%r, session_id=%d", job_ref, session_id)
 
@@ -101,7 +101,9 @@ def _resolve_job_ref(db_ctx, session_id: int, job_ref: str) -> dict | None:
                 logger.debug("_resolve_job_ref: looking up step_number=%d", step_number)
             job = db_ctx.sessions.get_step_by_number(session_id, step_number, job_type)
             if logger:
-                logger.debug("_resolve_job_ref: step lookup result=%s", "found" if job else "not found")
+                logger.debug(
+                    "_resolve_job_ref: step lookup result=%s", "found" if job else "not found"
+                )
             return job
         except ValueError:
             if logger:
@@ -374,7 +376,7 @@ def show(ctx: RoarContext, ref: str | None) -> None:
         roar show ./output/model.pkl       # Show artifact by path
     """
     bootstrap(ctx.roar_dir)
-    logger = get_container().try_resolve(ILogger)
+    logger = get_container().try_resolve(ILogger)  # type: ignore[type-abstract]
     if logger:
         logger.debug("show: entry with ref=%r", ref)
 
@@ -430,7 +432,9 @@ def show(ctx: RoarContext, ref: str | None) -> None:
                 logger.debug("show: resolved absolute path=%s", path)
             artifact = db_ctx.artifacts.get_by_path(path)
             if logger:
-                logger.debug("show: artifact lookup by path=%s", "found" if artifact else "not found")
+                logger.debug(
+                    "show: artifact lookup by path=%s", "found" if artifact else "not found"
+                )
             if not artifact:
                 click.echo(f"No artifact found for path: {ref}")
                 return
@@ -469,10 +473,14 @@ def show(ctx: RoarContext, ref: str | None) -> None:
                 logger.debug("show: trying artifact lookup for ref=%r", ref)
             artifact = db_ctx.artifacts.get_by_hash(ref)
             if logger:
-                logger.debug("show: artifact lookup by hash=%s", "found" if artifact else "not found")
+                logger.debug(
+                    "show: artifact lookup by hash=%s", "found" if artifact else "not found"
+                )
             if artifact:
                 if logger:
-                    logger.debug("show: calling _show_artifact for artifact_id=%s", artifact.get("id"))
+                    logger.debug(
+                        "show: calling _show_artifact for artifact_id=%s", artifact.get("id")
+                    )
                 _show_artifact(db_ctx, artifact)
                 return
             click.echo(f"Not found: {ref}")

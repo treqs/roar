@@ -255,9 +255,7 @@ class ReproductionService:
         if not pipeline.git_repo or not urls_match(origin_url, pipeline.git_repo):
             return None
 
-        self._print(
-            "Current repository matches artifact remote, using existing environment"
-        )
+        self._print("Current repository matches artifact remote, using existing environment")
 
         repo_dir = Path(repo_root)
 

@@ -21,10 +21,10 @@ from ....core.interfaces.provenance import (
 )
 from ....filters import FileClassifier
 from .assembler import ProvenanceAssemblerService
-from .data_loader import DataLoaderService
-from .file_filter import FileFilterService
 from .build_pip_collector import BuildPipCollectorService
 from .build_tool_collector import BuildToolCollectorService
+from .data_loader import DataLoaderService
+from .file_filter import FileFilterService
 from .package_collector import PackageCollectorService
 from .process_summarizer import ProcessSummarizerService
 from .runtime_collector import RuntimeCollectorService
@@ -198,7 +198,7 @@ class ProvenanceService:
         build_tool_collector = BuildToolCollectorService(logger=self._logger)
         build_dpkg = build_tool_collector.collect(tracer_data.processes, python_data.sys_prefix)
         if build_dpkg:
-            packages["build_dpkg"] = build_dpkg
+            packages["build_dpkg"] = build_dpkg  # type: ignore[assignment]
             self.logger.debug("Build tool dpkg packages: %d", len(build_dpkg))
 
         # 8c. Collect pip-installed build tool dependencies from process tree
@@ -206,7 +206,7 @@ class ProvenanceService:
         build_pip_collector = BuildPipCollectorService(logger=self._logger)
         build_pip = build_pip_collector.collect(tracer_data.processes, python_data.sys_prefix)
         if build_pip:
-            packages["build_pip"] = build_pip
+            packages["build_pip"] = build_pip  # type: ignore[assignment]
             self.logger.debug("Build tool pip packages: %d", len(build_pip))
 
         # 9. Run analyzers

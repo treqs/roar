@@ -22,7 +22,7 @@ from .interfaces.vcs import IVCSProvider
 def _get_logger() -> ILogger:
     from ..services.logging import NullLogger
 
-    return resolve_or_default(ILogger, NullLogger)
+    return resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
 
 
 def discover_plugins(package_name: str = "roar.plugins") -> None:

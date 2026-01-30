@@ -429,4 +429,4 @@ class OmitFilter:
         Returns:
             List of unique pattern IDs that were detected
         """
-        return list(set(d.pattern_id for d in detections))
+        return list({d.pattern_id for d in detections})

@@ -327,7 +327,9 @@ class TestRegisterService:
         )
         assert result.artifact_hash == "artifact456"
 
-    def test_register_artifact_lineage_dirty_repo_fails(self, service, tmp_path, mock_lineage_collector):
+    def test_register_artifact_lineage_dirty_repo_fails(
+        self, service, tmp_path, mock_lineage_collector
+    ):
         """Test that registration fails with uncommitted changes when tagging is enabled."""
         artifact_file = tmp_path / "file.csv"
         artifact_file.write_text("data")
@@ -443,12 +445,14 @@ class TestRegisterService:
 
                 # Mock config to enable tagging
                 with patch("roar.services.registration.register_service.config_get") as mock_config:
+
                     def config_side_effect(key):
                         if key == "registration.tagging.enabled":
                             return True
                         elif key == "registration.omit":
                             return {"enabled": False}  # Disable omit filter
                         return None
+
                     mock_config.side_effect = config_side_effect
 
                     result = service.register_artifact_lineage(

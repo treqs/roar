@@ -432,7 +432,9 @@ class GlaasClient:
                     )
             else:
                 detail = str(e)
-            _get_logger().debug("API error: %s %s -> HTTP %d: %s", method, path, e.code, detail[:200])
+            _get_logger().debug(
+                "API error: %s %s -> HTTP %d: %s", method, path, e.code, detail[:200]
+            )
             return None, f"HTTP {e.code}: {detail}"
         except urllib.error.URLError as e:
             _get_logger().debug("GLaaS connection error to %s: %s", url, e)

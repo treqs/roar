@@ -13,8 +13,8 @@ register_commands() function in roar.cli.
 from .auth import auth
 from .build import build
 from .config import config
-from .env import env
 from .dag import dag
+from .env import env
 from .init import init
 from .lineage import lineage
 from .log import log
@@ -50,8 +50,8 @@ __all__ = [
     "auth",
     "build",
     "config",
-    "env",
     "dag",
+    "env",
     "init",
     "lineage",
     "log",

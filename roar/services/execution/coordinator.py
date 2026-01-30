@@ -21,6 +21,7 @@ from ...core.interfaces.run import RunContext, RunResult
 from .signal_handler import ProcessSignalHandler
 from .tracer import TracerService
 
+
 def _get_logger():
     from ...core.di import resolve_or_default
     from ...core.interfaces.logger import ILogger

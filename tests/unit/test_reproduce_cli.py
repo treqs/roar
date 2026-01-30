@@ -50,9 +50,7 @@ class TestReproduceCLI:
         with (
             patch("roar.cli.commands.reproduce.load_config") as mock_config,
             patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch(
-                "roar.cli.commands.reproduce.ReproductionService"
-            ) as mock_service_cls,
+            patch("roar.cli.commands.reproduce.ReproductionService") as mock_service_cls,
             patch("roar.services.reproduction.PipelineExecutor") as mock_executor_cls,
         ):
             mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
@@ -98,9 +96,7 @@ class TestReproduceCLI:
         with (
             patch("roar.cli.commands.reproduce.load_config") as mock_config,
             patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch(
-                "roar.cli.commands.reproduce.ReproductionService"
-            ) as mock_service_cls,
+            patch("roar.cli.commands.reproduce.ReproductionService") as mock_service_cls,
         ):
             mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
             mock_glaas_cls.return_value = mock_glaas_client
@@ -148,9 +144,7 @@ class TestReproduceCLI:
         with (
             patch("roar.cli.commands.reproduce.load_config") as mock_config,
             patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch(
-                "roar.cli.commands.reproduce.ReproductionService"
-            ) as mock_service_cls,
+            patch("roar.cli.commands.reproduce.ReproductionService") as mock_service_cls,
         ):
             mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
             mock_glaas_cls.return_value = mock_glaas_client
@@ -215,9 +209,7 @@ class TestReproduceCLI:
         with (
             patch("roar.cli.commands.reproduce.load_config") as mock_config,
             patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch(
-                "roar.cli.commands.reproduce.ReproductionService"
-            ) as mock_service_cls,
+            patch("roar.cli.commands.reproduce.ReproductionService") as mock_service_cls,
             patch("roar.services.reproduction.PipelineExecutor") as mock_executor_cls,
         ):
             mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
@@ -257,9 +249,7 @@ class TestReproduceCLI:
         with (
             patch("roar.cli.commands.reproduce.load_config") as mock_config,
             patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch(
-                "roar.cli.commands.reproduce.ReproductionService"
-            ) as mock_service_cls,
+            patch("roar.cli.commands.reproduce.ReproductionService") as mock_service_cls,
             patch("roar.services.reproduction.PipelineExecutor") as mock_executor_cls,
         ):
             mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
@@ -287,6 +277,5 @@ class TestReproduceCLI:
         # Should explain what --run will do (clone, venv, install, run)
         output_lower = result.output.lower()
         assert any(
-            keyword in output_lower
-            for keyword in ["clone", "venv", "install", "reproduce"]
+            keyword in output_lower for keyword in ["clone", "venv", "install", "reproduce"]
         ), f"Output should describe what --run does. Got: {result.output}"

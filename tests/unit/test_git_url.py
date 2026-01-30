@@ -4,8 +4,6 @@ Unit tests for git URL utilities.
 Tests SSH URL detection and SSH-to-HTTPS conversion.
 """
 
-import pytest
-
 from roar.utils.git_url import is_ssh_url, normalize_git_url, ssh_to_https, urls_match
 
 

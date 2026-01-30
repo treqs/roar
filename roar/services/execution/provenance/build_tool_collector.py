@@ -12,30 +12,32 @@ from typing import Any
 
 from ....core.interfaces.logger import ILogger
 
-KNOWN_BUILD_TOOLS: frozenset[str] = frozenset({
-    "cmake",
-    "gcc",
-    "g++",
-    "cc",
-    "c++",
-    "make",
-    "gmake",
-    "ninja",
-    "meson",
-    "rustc",
-    "cargo",
-    "nvcc",
-    "ar",
-    "ld",
-    "as",
-    "ranlib",
-    "strip",
-    "pkg-config",
-    "autoconf",
-    "automake",
-    "libtool",
-    "nasm",
-})
+KNOWN_BUILD_TOOLS: frozenset[str] = frozenset(
+    {
+        "cmake",
+        "gcc",
+        "g++",
+        "cc",
+        "c++",
+        "make",
+        "gmake",
+        "ninja",
+        "meson",
+        "rustc",
+        "cargo",
+        "nvcc",
+        "ar",
+        "ld",
+        "as",
+        "ranlib",
+        "strip",
+        "pkg-config",
+        "autoconf",
+        "automake",
+        "libtool",
+        "nasm",
+    }
+)
 
 
 class BuildToolCollectorService:

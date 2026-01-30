@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from roar.services.execution.provenance.build_pip_collector import (
-    BuildPipCollectorService,
     KNOWN_PYTHON_BUILD_TOOLS,
+    BuildPipCollectorService,
 )
 
 
@@ -32,7 +32,9 @@ class TestBuildPipCollector:
         result = service.collect(processes, sys_prefix="/some/venv")
         assert result == {}
 
-    @patch("roar.services.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version")
+    @patch(
+        "roar.services.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version"
+    )
     @patch("roar.services.execution.provenance.build_pip_collector.shutil.which")
     def test_uv_detected(self, mock_which, mock_version, service):
         processes = [
@@ -57,7 +59,9 @@ class TestBuildPipCollector:
         result = service.collect(processes, sys_prefix="/some/venv")
         assert result == {}
 
-    @patch("roar.services.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version")
+    @patch(
+        "roar.services.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version"
+    )
     @patch("roar.services.execution.provenance.build_pip_collector.shutil.which")
     def test_pip_installed_tool_kept(self, mock_which, mock_version, service):
         """Tools under sys_prefix should be kept (inverse of build_dpkg)."""
@@ -70,7 +74,9 @@ class TestBuildPipCollector:
         result = service.collect(processes, sys_prefix="/venv")
         assert result == {"maturin": "1.4.0"}
 
-    @patch("roar.services.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version")
+    @patch(
+        "roar.services.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version"
+    )
     @patch("roar.services.execution.provenance.build_pip_collector.shutil.which")
     def test_site_packages_tool_kept(self, mock_which, mock_version, service):
         """Tools in site-packages should be kept."""
@@ -101,7 +107,9 @@ class TestBuildPipCollector:
         result = service.collect(processes, sys_prefix="/venv")
         assert result == {}
 
-    @patch("roar.services.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version")
+    @patch(
+        "roar.services.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version"
+    )
     @patch("roar.services.execution.provenance.build_pip_collector.shutil.which")
     def test_pip3_normalized_to_pip(self, mock_which, mock_version, service):
         """pip3 should be normalized to pip package name."""

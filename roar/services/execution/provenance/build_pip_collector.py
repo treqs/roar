@@ -13,18 +13,20 @@ from typing import Any
 
 from ....core.interfaces.logger import ILogger
 
-KNOWN_PYTHON_BUILD_TOOLS: frozenset[str] = frozenset({
-    "uv",
-    "pip",
-    "pip3",
-    "setuptools",
-    "maturin",
-    "hatch",
-    "flit",
-    "poetry",
-    "pdm",
-    "pipx",
-})
+KNOWN_PYTHON_BUILD_TOOLS: frozenset[str] = frozenset(
+    {
+        "uv",
+        "pip",
+        "pip3",
+        "setuptools",
+        "maturin",
+        "hatch",
+        "flit",
+        "poetry",
+        "pdm",
+        "pipx",
+    }
+)
 
 
 class BuildPipCollectorService:
@@ -131,7 +133,8 @@ class BuildPipCollectorService:
         try:
             result = subprocess.run(
                 [
-                    "python", "-c",
+                    "python",
+                    "-c",
                     f"import importlib.metadata; print(importlib.metadata.version('{package_name}'))",
                 ],
                 capture_output=True,

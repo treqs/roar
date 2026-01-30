@@ -52,7 +52,7 @@ class EnvironmentSetupService:
         self._presenter = presenter
         self._use_uv = self._check_uv_available()
         self._roar_executable = roar_executable or self._detect_roar_executable()
-        self._logger: "ILogger | None" = None
+        self._logger: ILogger | None = None
 
     @property
     def logger(self) -> "ILogger":
@@ -137,7 +137,7 @@ class EnvironmentSetupService:
             self.logger.debug("Found %d build_dpkg packages", len(build_dpkg_packages))
             if build_dpkg_packages:
                 self.logger.debug("build_dpkg packages: %s", build_dpkg_packages)
-                success, build_warnings = self._install_dpkg_packages(
+                success, _build_warnings = self._install_dpkg_packages(
                     build_dpkg_packages, auto_confirm, dpkg_any_version
                 )
                 self.logger.debug("build_dpkg installation complete, success=%s", success)
@@ -151,7 +151,7 @@ class EnvironmentSetupService:
             )
             if dpkg_packages:
                 self.logger.debug("dpkg packages: %s", dpkg_packages)
-                success, dpkg_warnings = self._install_dpkg_packages(
+                success, _dpkg_warnings = self._install_dpkg_packages(
                     dpkg_packages, auto_confirm, dpkg_any_version
                 )
                 self.logger.debug("dpkg installation complete, success=%s", success)
@@ -163,7 +163,9 @@ class EnvironmentSetupService:
         self.logger.debug("Found %d build_pip packages", len(build_pip_packages))
         if build_pip_packages:
             self.logger.debug("build_pip packages: %s", build_pip_packages)
-            self._install_build_pip_packages(venv_dir, build_pip_packages, repo_dir, pip_any_version)
+            self._install_build_pip_packages(
+                venv_dir, build_pip_packages, repo_dir, pip_any_version
+            )
 
         # Install pip packages
         packages = self._get_packages(pipeline)
@@ -284,10 +286,7 @@ class EnvironmentSetupService:
         self._print(f"Installing {len(packages)} build tool pip packages...")
 
         # Build versioned specifiers: "pkg==version"
-        specs = [
-            f"{name}=={version}" if version else name
-            for name, version in packages.items()
-        ]
+        specs = [f"{name}=={version}" if version else name for name, version in packages.items()]
 
         if self._use_uv:
             result = subprocess.run(
@@ -367,9 +366,7 @@ class EnvironmentSetupService:
         self.logger.debug("dpkg packages from run steps: %d", len(run_pkgs))
 
         packages = {**build_pkgs, **run_pkgs}
-        self.logger.debug(
-            "Total unique dpkg packages found: %d", len(packages)
-        )
+        self.logger.debug("Total unique dpkg packages found: %d", len(packages))
         return dict(sorted(packages.items()))
 
     def _install_dpkg_packages(
@@ -421,10 +418,7 @@ class EnvironmentSetupService:
                     return True, ["dpkg packages skipped by user"]
 
         # Build versioned package specifiers: "pkg=version" for apt-get
-        versioned = [
-            f"{name}={version}" if version else name
-            for name, version in packages.items()
-        ]
+        versioned = [f"{name}={version}" if version else name for name, version in packages.items()]
 
         self.logger.debug("Attempting versioned install: %s", versioned)
         self._print(f"Installing {len(packages)} system packages (exact versions)...")
@@ -513,15 +507,12 @@ class EnvironmentSetupService:
                     if r.stderr:
                         self._print(r.stderr.strip())
                     if r.returncode != 0:
-                        warnings.append(
-                            f"Some packages failed to install: {r.stderr.strip()}"
-                        )
+                        warnings.append(f"Some packages failed to install: {r.stderr.strip()}")
                         self.logger.warning("Fallback install failed: %s", r.stderr.strip())
                     else:
                         for name in failed_packages:
                             warnings.append(
-                                f"Installed {name} (any version) instead of "
-                                f"{name}={packages[name]}"
+                                f"Installed {name} (any version) instead of {name}={packages[name]}"
                             )
                 else:
                     for name in failed_packages:
@@ -536,7 +527,7 @@ class EnvironmentSetupService:
             warnings.append("dpkg installation timed out after 5 minutes")
             return True, warnings
         except Exception as e:
-            warnings.append(f"dpkg installation error: {str(e)}")
+            warnings.append(f"dpkg installation error: {e!s}")
             return True, warnings
 
     def _validate_environment(self, pipeline: "PipelineInfo") -> list[str]:
@@ -693,7 +684,7 @@ class EnvironmentSetupService:
             self._print(f"Cloning {git_repo}...")
             try:
                 self._run_git(["clone", git_repo, str(repo_dir)])
-            except RuntimeError as e:
+            except RuntimeError:
                 if is_ssh_url(git_repo):
                     https_url = ssh_to_https(git_repo)
                     if https_url:
@@ -773,7 +764,7 @@ class EnvironmentSetupService:
         self._print("Initializing roar for provenance tracking...")
         # Use the external roar executable
         # Handle both single executable and "python -m roar" formats
-        cmd = self._roar_executable.split() + ["init", "-y"]
+        cmd = [*self._roar_executable.split(), "init", "-y"]
         subprocess.run(
             cmd,
             cwd=repo_dir,
@@ -817,16 +808,14 @@ class EnvironmentSetupService:
 
         pip = self._get_pip(venv_dir)
 
-        def _run_pip(
-            args: list[str], show_output: bool = True
-        ) -> subprocess.CompletedProcess[str]:
+        def _run_pip(args: list[str], show_output: bool = True) -> subprocess.CompletedProcess[str]:
             capture_kwargs = (
                 {"stderr": subprocess.PIPE, "text": True}
                 if show_output
                 else {"capture_output": True, "text": True}
             )
             if self._use_uv:
-                result = subprocess.run(
+                result = subprocess.run(  # type: ignore[call-overload]
                     ["uv", "pip", *args],
                     cwd=repo_dir,
                     env={"VIRTUAL_ENV": str(venv_dir), "PATH": os.environ.get("PATH", "")},
@@ -836,7 +825,7 @@ class EnvironmentSetupService:
                     self._print(result.stderr.strip())
                 return result
             else:
-                return subprocess.run(
+                return subprocess.run(  # type: ignore[call-overload]
                     [str(pip), *args],
                     cwd=repo_dir,
                     **capture_kwargs,
@@ -865,9 +854,7 @@ class EnvironmentSetupService:
 
         # Step 3: Install the ones that work with exact versions
         if succeeded_packages:
-            self.logger.debug(
-                "Installing %d packages with exact versions", len(succeeded_packages)
-            )
+            self.logger.debug("Installing %d packages with exact versions", len(succeeded_packages))
             _run_pip(["install", *succeeded_packages])
 
         # Step 4: Handle failed packages — offer to install any version
@@ -890,14 +877,10 @@ class EnvironmentSetupService:
                 # Strip version pins (e.g. "numpy==1.24.1" -> "numpy")
                 unversioned = [pkg.split("==")[0] for pkg in failed_packages]
                 self.logger.debug("Installing any version of: %s", unversioned)
-                self._print(
-                    f"Installing any available version of {len(unversioned)} packages..."
-                )
+                self._print(f"Installing any available version of {len(unversioned)} packages...")
                 r = _run_pip(["install", *unversioned])
                 if r.returncode != 0:
-                    warnings.append(
-                        f"Some pip packages failed to install: {r.stderr.strip()}"
-                    )
+                    warnings.append(f"Some pip packages failed to install: {r.stderr.strip()}")
                     self.logger.warning("Fallback pip install failed: %s", r.stderr.strip())
                 else:
                     for pkg in failed_packages:
@@ -906,9 +889,7 @@ class EnvironmentSetupService:
                         )
             else:
                 for pkg in failed_packages:
-                    warnings.append(
-                        f"Skipped {pkg} (exact version not found)"
-                    )
+                    warnings.append(f"Skipped {pkg} (exact version not found)")
 
         self._print("Pip package installation complete")
         return True, warnings

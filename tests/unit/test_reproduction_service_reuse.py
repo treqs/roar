@@ -2,24 +2,21 @@
 Tests for ReproductionService reusing the current repo when remotes match.
 """
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from roar.core.interfaces.reproduction import EnvironmentInfo, PipelineInfo
+from roar.core.interfaces.reproduction import PipelineInfo
 from roar.services.reproduction.service import ReproductionService
 
 
 def _make_pipeline(**kwargs):
-    defaults = dict(
-        artifact_hash="abc123",
-        git_repo="https://github.com/user/repo.git",
-        git_commit="deadbeef",
-        build_steps=[],
-        run_steps=[],
-        total_steps=0,
-    )
+    defaults = {
+        "artifact_hash": "abc123",
+        "git_repo": "https://github.com/user/repo.git",
+        "git_commit": "deadbeef",
+        "build_steps": [],
+        "run_steps": [],
+        "total_steps": 0,
+    }
     defaults.update(kwargs)
     return PipelineInfo(**defaults)
 

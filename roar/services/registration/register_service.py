@@ -95,7 +95,7 @@ class RegisterService:
         self._omit_filter = omit_filter
         from ...services.logging import NullLogger
 
-        self._logger = logger or resolve_or_default(ILogger, NullLogger)
+        self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
 
     @property
     def omit_filter(self) -> OmitFilter | None:
@@ -213,7 +213,7 @@ class RegisterService:
             vcs = GitVCSProvider()
             repo_root = vcs.get_repo_root(str(cwd))
             if repo_root:
-                clean, changes = vcs.get_status(repo_root)
+                clean, _changes = vcs.get_status(repo_root)
                 if not clean:
                     return RegisterResult(
                         success=False,
@@ -453,10 +453,8 @@ class RegisterService:
 
             # Check metadata
             metadata = job.get("metadata")
-            if metadata:
-                # metadata is typically a JSON string
-                if isinstance(metadata, str):
-                    all_detections.extend(self.omit_filter.detect_secrets(metadata, "metadata"))
+            if metadata and isinstance(metadata, str):
+                all_detections.extend(self.omit_filter.detect_secrets(metadata, "metadata"))
 
         # Return unique pattern IDs
         return self.omit_filter.get_detection_summary(all_detections)
@@ -498,8 +496,8 @@ class RegisterService:
                     filtered_metadata, _ = self.omit_filter.filter_telemetry(metadata)
                     filtered_job["metadata"] = filtered_metadata
                 elif isinstance(metadata, dict):
-                    filtered_metadata, _ = self.omit_filter.filter_metadata(metadata)
-                    filtered_job["metadata"] = filtered_metadata
+                    filtered_metadata_dict, _ = self.omit_filter.filter_metadata(metadata)
+                    filtered_job["metadata"] = filtered_metadata_dict  # type: ignore[assignment]
 
             filtered_jobs.append(filtered_job)
 

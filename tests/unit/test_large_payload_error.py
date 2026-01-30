@@ -14,10 +14,8 @@ from roar.glaas_client import GlaasClient
 from roar.services.registration.artifact import ArtifactRegistrationService
 from roar.services.registration.job import (
     JobRegistrationService,
-    MAX_ARTIFACTS_PER_REQUEST,
     _batch_artifacts,
 )
-
 
 DEV_SERVER_URL = "http://localhost:3001"
 
@@ -261,7 +259,9 @@ class TestLargePayloadError:
         if not result.success and result.error:
             error_lower = result.error.lower()
             # Should NOT be a payload size error - batching should prevent that
-            assert "413" not in result.error, f"Batching failed to prevent payload error: {result.error}"
+            assert "413" not in result.error, (
+                f"Batching failed to prevent payload error: {result.error}"
+            )
             assert "large" not in error_lower or "payload" not in error_lower, (
                 f"Batching failed to prevent payload error: {result.error}"
             )

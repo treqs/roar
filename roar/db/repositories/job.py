@@ -35,7 +35,7 @@ class SQLAlchemyJobRepository(JobRepository):
         self._session = session
         from ...services.logging import NullLogger
 
-        self._logger = logger or resolve_or_default(ILogger, NullLogger)
+        self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
 
     @staticmethod
     def _extract_script(command: str) -> str | None:

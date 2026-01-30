@@ -55,7 +55,7 @@ class RegistrationCoordinator(IRegistrationCoordinator):
         self._job_service = job_service
         from ...services.logging import NullLogger
 
-        self._logger = logger or resolve_or_default(ILogger, NullLogger)
+        self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
 
     @property
     def session_service(self) -> SessionRegistrationService:

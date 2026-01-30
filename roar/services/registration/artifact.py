@@ -35,7 +35,7 @@ def _batch_by_size(
         return []
 
     batches = []
-    current_batch = []
+    current_batch: list[dict] = []
     current_size = 2  # Account for "[]" wrapper
 
     for artifact in artifacts:
@@ -87,7 +87,7 @@ class ArtifactRegistrationService(IArtifactRegistrar):
         self._client = client
         from ...services.logging import NullLogger
 
-        self._logger = logger or resolve_or_default(ILogger, NullLogger)
+        self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
 
     @property
     def client(self) -> GlaasClient:

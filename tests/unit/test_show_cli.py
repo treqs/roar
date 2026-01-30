@@ -8,13 +8,16 @@ Tests the CLI behavior with mocked dependencies:
 - Edge cases
 """
 
-from pathlib import Path
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
 
+import roar.cli.commands.show  # noqa: F401 - ensure module is in sys.modules
 from roar.cli.commands.show import show
+
+show_module = sys.modules["roar.cli.commands.show"]
 
 
 class TestShowArtifactByHash:
@@ -39,7 +42,7 @@ class TestShowArtifactByHash:
         """Full 64-char hash displays artifact information."""
         full_hash = "a1b2c3d4e5f67890" * 4  # 64 chars
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -70,7 +73,7 @@ class TestShowArtifactByHash:
         """16+ char hash prefix works for artifact lookup."""
         hash_prefix = "a1b2c3d4e5f67890"  # 16 chars
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -97,7 +100,7 @@ class TestShowArtifactByHash:
         """Shows 'not found' message for unknown hash."""
         unknown_hash = "deadbeef12345678"  # 16 chars, not found
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -113,7 +116,7 @@ class TestShowArtifactByHash:
         """Artifact display shows all hash algorithms."""
         full_hash = "a1b2c3d4e5f67890" * 4
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -141,7 +144,7 @@ class TestShowArtifactByHash:
         """Artifact display shows all file paths where artifact was seen."""
         full_hash = "a1b2c3d4e5f67890" * 4
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -170,7 +173,7 @@ class TestShowArtifactByHash:
         """Artifact display shows jobs that created the artifact."""
         full_hash = "a1b2c3d4e5f67890" * 4
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -201,7 +204,7 @@ class TestShowArtifactByHash:
         """Artifact display shows jobs that used the artifact as input."""
         full_hash = "a1b2c3d4e5f67890" * 4
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -251,7 +254,7 @@ class TestShowArtifactByPath:
         """/data/model.pkl absolute path works."""
         abs_path = "/data/model.pkl"
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -274,7 +277,7 @@ class TestShowArtifactByPath:
         """./data/model.pkl relative path works."""
         rel_path = "./data/model.pkl"
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -299,7 +302,7 @@ class TestShowArtifactByPath:
         # Expected: cwd/data/model.pkl (without the ./)
         expected_abs_path = str(mock_ctx.cwd / "data" / "model.pkl")
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -314,7 +317,7 @@ class TestShowArtifactByPath:
         """Shows 'not found' for paths not in the database."""
         unknown_path = "/unknown/file.txt"
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -331,7 +334,7 @@ class TestShowArtifactByPath:
         test_file = tmp_path / "model.pkl"
         test_file.touch()
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -356,7 +359,7 @@ class TestShowArtifactByPath:
         path_with_dotdot = str(mock_ctx.cwd / "subdir" / ".." / "data" / "model.pkl")
         expected_normalized = str(mock_ctx.cwd / "data" / "model.pkl")
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -377,7 +380,7 @@ class TestShowArtifactByPath:
         symlink_path = tmp_path / "link_to_model.pkl"
         symlink_path.symlink_to(real_file)
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -411,7 +414,7 @@ class TestShowReferenceDisambiguation:
         """8-char hex string tries job lookup first."""
         job_uid = "a1b2c3d4"  # 8 chars
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -448,7 +451,7 @@ class TestShowReferenceDisambiguation:
         """Long hex string falls back to artifact when no job found."""
         long_hash = "a1b2c3d4e5f67890"  # 16 chars
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -473,7 +476,7 @@ class TestShowReferenceDisambiguation:
 
     def test_at_notation_always_job_ref(self, runner, mock_ctx):
         """@1 is always treated as a job step reference."""
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -507,7 +510,7 @@ class TestShowReferenceDisambiguation:
         """data/file.csv with slash is treated as a path."""
         path_ref = "data/file.csv"
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -550,7 +553,7 @@ class TestShowEdgeCases:
         """Artifact without any lineage displays OK."""
         full_hash = "a1b2c3d4e5f67890" * 4
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -574,7 +577,7 @@ class TestShowEdgeCases:
 
     def test_show_existing_job_behavior_unchanged(self, runner, mock_ctx):
         """Existing @N notation still works for job lookup."""
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -606,7 +609,7 @@ class TestShowEdgeCases:
 
     def test_show_session_overview_unchanged(self, runner, mock_ctx):
         """No args still shows session overview."""
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__.return_value = db_ctx
 
@@ -629,15 +632,17 @@ class TestShowEdgeCases:
         """Job with dict-based packages displays grouped by package manager."""
         import json
 
-        metadata = json.dumps({
-            "packages": {
-                "pip": {"numpy": "1.24.1", "pandas": "2.0.0"},
-                "dpkg": {"libcudnn8": "8.6.0"},
-                "build_dpkg": {"gcc-12": "12.3.0"},
+        metadata = json.dumps(
+            {
+                "packages": {
+                    "pip": {"numpy": "1.24.1", "pandas": "2.0.0"},
+                    "dpkg": {"libcudnn8": "8.6.0"},
+                    "build_dpkg": {"gcc-12": "12.3.0"},
+                }
             }
-        })
+        )
 
-        with patch("roar.cli.commands.show.create_database_context") as mock_db:
+        with patch.object(show_module, "create_database_context") as mock_db:
             db_ctx = MagicMock()
             mock_db.return_value.__enter__ = MagicMock(return_value=db_ctx)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)

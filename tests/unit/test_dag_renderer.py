@@ -220,7 +220,7 @@ class TestDagRenderer:
         renderer = DagRenderer(use_color=False)
         output = renderer.render(dag)
 
-        assert "(1 stale)" in output
+        assert "(1 stale steps)" in output
         # The stale marker should appear
         assert "*" in output
         assert "Legend: * = stale" in output

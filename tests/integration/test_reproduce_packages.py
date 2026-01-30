@@ -7,8 +7,6 @@ bootstrap.
 """
 
 import json
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,13 +14,13 @@ import pytest
 from roar.core.bootstrap import bootstrap, reset
 from roar.core.container import get_container
 from roar.core.interfaces.logger import ILogger
-from roar.services.logging import NullLogger, RoarLogger
+from roar.services.logging import NullLogger
 from roar.services.reproduction.environment_setup import EnvironmentSetupService
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_pipeline(build_steps=None, run_steps=None):
     """Create a mock PipelineInfo with the given steps."""
@@ -38,12 +36,11 @@ def _make_pipeline(build_steps=None, run_steps=None):
 # TestReproducePackageExtraction — end-to-end via CLI
 # ---------------------------------------------------------------------------
 
+
 class TestReproducePackageExtraction:
     """Integration tests for package extraction during reproduction."""
 
-    def test_preview_shows_pip_packages(
-        self, temp_git_repo, roar_cli, git_commit, python_exe
-    ):
+    def test_preview_shows_pip_packages(self, temp_git_repo, roar_cli, git_commit, python_exe):
         """Running roar reproduce <hash> should show pip packages in preview."""
         # Create a script that imports a package (sys is always available)
         script = temp_git_repo / "use_pkg.py"
@@ -72,7 +69,9 @@ class TestReproducePackageExtraction:
         # Output should contain artifact hash info at minimum
         assert artifact_hash[:12] in preview.stdout or "Artifact" in preview.stdout
 
-    def test_preview_shows_dpkg_packages_when_present(self, temp_git_repo, roar_cli, git_commit, python_exe):
+    def test_preview_shows_dpkg_packages_when_present(
+        self, temp_git_repo, roar_cli, git_commit, python_exe
+    ):
         """Preview should show system packages when metadata has dpkg entries."""
         # We inject dpkg metadata directly into the DB since we can't
         # reliably trigger dpkg collection in CI.
@@ -130,9 +129,7 @@ class TestReproducePackageExtraction:
         """_get_packages should extract pip packages from locally stored metadata."""
         script = temp_git_repo / "use_json.py"
         script.write_text(
-            "import json\n"
-            "with open('data.json', 'w') as f:\n"
-            "    json.dump({'x': 1}, f)\n"
+            "import json\nwith open('data.json', 'w') as f:\n    json.dump({'x': 1}, f)\n"
         )
         git_commit("Add script")
 
@@ -152,9 +149,7 @@ class TestReproducePackageExtraction:
         from roar.services.reproduction import ReproductionService
 
         repro = ReproductionService(glaas_client=None, presenter=None)
-        pipeline, error = repro._lookup_pipeline(
-            artifact_hash[:12], None, temp_git_repo / ".roar"
-        )
+        pipeline, error = repro._lookup_pipeline(artifact_hash[:12], None, temp_git_repo / ".roar")
         assert error is None
         assert pipeline is not None
 
@@ -173,6 +168,7 @@ class TestReproducePackageExtraction:
 # ---------------------------------------------------------------------------
 # TestEnvironmentSetupWithRealMetadata — unit-level with realistic data
 # ---------------------------------------------------------------------------
+
 
 class TestRemoteMetadataMissing:
     """Verify that omitting metadata from remote API response loses packages."""
@@ -252,12 +248,14 @@ class TestEnvironmentSetupWithRealMetadata:
         service = EnvironmentSetupService()
         service._logger = MagicMock()
 
-        metadata_json = json.dumps({
-            "packages": {
-                "pip": {"numpy": "1.24.1", "pandas": "2.0.0"},
-                "dpkg": {"libc6": "2.35-0ubuntu3"},
+        metadata_json = json.dumps(
+            {
+                "packages": {
+                    "pip": {"numpy": "1.24.1", "pandas": "2.0.0"},
+                    "dpkg": {"libc6": "2.35-0ubuntu3"},
+                }
             }
-        })
+        )
 
         pipeline = _make_pipeline(
             run_steps=[{"metadata": metadata_json}],
@@ -299,6 +297,7 @@ class TestEnvironmentSetupWithRealMetadata:
 # TestDebugLoggingAvailable — verify bootstrap wires up the logger
 # ---------------------------------------------------------------------------
 
+
 class TestDebugLoggingAvailable:
     """Verify that debug logging works when bootstrap is called."""
 
@@ -336,9 +335,7 @@ class TestDebugLoggingAvailable:
         service._logger = mock_logger
 
         pipeline = _make_pipeline(
-            run_steps=[
-                {"metadata": json.dumps({"packages": {"pip": {"x": "1.0"}}})}
-            ],
+            run_steps=[{"metadata": json.dumps({"packages": {"pip": {"x": "1.0"}}})}],
         )
 
         service._get_packages(pipeline)
@@ -346,7 +343,5 @@ class TestDebugLoggingAvailable:
         # Should have called debug at least once
         assert mock_logger.debug.call_count >= 1
         # Check that metadata-related debug message was emitted
-        debug_messages = [
-            call.args[0] for call in mock_logger.debug.call_args_list
-        ]
+        debug_messages = [call.args[0] for call in mock_logger.debug.call_args_list]
         assert any("metadata" in m.lower() or "pip" in m.lower() for m in debug_messages)
