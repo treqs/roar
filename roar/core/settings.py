@@ -156,6 +156,7 @@ class RoarSettings(BaseSettings):
     hash: HashConfig = HashConfig()
     reversible: ReversibleConfig = ReversibleConfig()
     logging: LoggingConfig = LoggingConfig()
+    env: dict[str, str] = {}
 
     # Internal fields (not from config)
     _config_file: str | None = None
@@ -244,6 +245,7 @@ class RoarSettings(BaseSettings):
             "hash": self.hash.model_dump(),
             "reversible": self.reversible.model_dump(),
             "logging": self.logging.model_dump(),
+            "env": dict(self.env),
         }
         if self._config_file:
             result["_config_file"] = self._config_file

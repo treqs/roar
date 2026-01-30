@@ -13,6 +13,7 @@ register_commands() function in roar.cli.
 from .auth import auth
 from .build import build
 from .config import config
+from .env import env
 from .dag import dag
 from .init import init
 from .lineage import lineage
@@ -30,6 +31,7 @@ MIGRATED_COMMANDS = [
     auth,
     build,
     config,
+    env,
     dag,
     log,
     init,
@@ -48,6 +50,7 @@ __all__ = [
     "auth",
     "build",
     "config",
+    "env",
     "dag",
     "init",
     "lineage",

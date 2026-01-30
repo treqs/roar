@@ -427,6 +427,17 @@ def save_config(config: dict, config_path: Path):
         lines.extend(logging_lines)
         lines.append("")
 
+    # Env section (persistent environment variables)
+    env_vars = config.get("env", {})
+    if isinstance(env_vars, dict) and env_vars:
+        env_lines = []
+        for key, val in env_vars.items():
+            env_lines.append(f'{key} = "{val}"')
+        if env_lines:
+            lines.append("[env]")
+            lines.extend(env_lines)
+            lines.append("")
+
     config_path.write_text("\n".join(lines))
 
 

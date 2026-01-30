@@ -279,6 +279,17 @@ class RunCoordinator:
         metadata["git"] = git_info
         if cwd_relative is not None:
             metadata["cwd"] = cwd_relative
+        # Include persistent env vars in metadata for reproduction
+        try:
+            from ...config import load_config as _load_cfg
+
+            _cfg = _load_cfg(start_dir=ctx.repo_root)
+            _env = _cfg.get("env", {})
+            if isinstance(_env, dict) and _env:
+                metadata["env_vars"] = _env
+        except Exception:
+            pass
+
         metadata_json = json.dumps(metadata) if metadata else None
 
         # Collect telemetry

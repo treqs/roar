@@ -124,6 +124,17 @@ class TracerService:
 
         # Prepare environment for child process
         env = dict(os.environ)
+
+        # Inject persistent env vars from .roar/config.toml [env] section
+        try:
+            from ...config import load_config
+
+            config = load_config()
+            config_env = config.get("env", {})
+            if isinstance(config_env, dict):
+                env.update(config_env)
+        except Exception:
+            pass  # Best-effort
         # inject/ is now in the same directory as this file
         inject_dir = str(Path(__file__).parent / "inject")
         env["PYTHONPATH"] = inject_dir + os.pathsep + env.get("PYTHONPATH", "")

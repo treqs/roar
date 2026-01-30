@@ -139,8 +139,22 @@ class PipelineExecutor:
 
         self._print(f"  Command: roar {roar_cmd} {command}")
 
+        # Extract env vars from step metadata
+        step_env_vars: dict[str, str] = {}
+        metadata = step.get("metadata")
+        if metadata:
+            import json as _json
+
+            if isinstance(metadata, str):
+                try:
+                    metadata = _json.loads(metadata)
+                except (ValueError, TypeError):
+                    metadata = {}
+            if isinstance(metadata, dict):
+                step_env_vars = metadata.get("env_vars", {})
+
         # Set up environment
-        env = self._prepare_environment(environment)
+        env = self._prepare_environment(environment, env_vars=step_env_vars)
 
         # Run the command
         try:
@@ -200,7 +214,11 @@ class PipelineExecutor:
             return str(venv_dir / "Scripts" / "python.exe")
         return str(venv_dir / "bin" / "python")
 
-    def _prepare_environment(self, environment: "EnvironmentInfo") -> dict:
+    def _prepare_environment(
+        self,
+        environment: "EnvironmentInfo",
+        env_vars: dict[str, str] | None = None,
+    ) -> dict:
         """
         Prepare environment variables for step execution.
 
@@ -220,6 +238,10 @@ class PipelineExecutor:
 
             # Remove PYTHONHOME if set (can interfere with venv)
             env.pop("PYTHONHOME", None)
+
+        # Inject env vars from step metadata
+        if env_vars:
+            env.update(env_vars)
 
         return env
 
