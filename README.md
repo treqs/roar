@@ -206,11 +206,6 @@ GLAAS_HOST=0.0.0.0 GLAAS_PORT=8080 glaas-server
 ```
 
 The server provides:
-LAAS_PORT=8080 glaas-server
-
-````
-
-The server provides:
 
 - REST API for artifact and job registration
 - Web UI at `/` with artifact and job browsers
@@ -227,7 +222,7 @@ roar auth register
 
 # Test authentication
 roar auth test
-````
+```
 
 ## Development
 
