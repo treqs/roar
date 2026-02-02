@@ -9,8 +9,32 @@ import json
 import platform
 import shutil
 import sqlite3
+import subprocess
 
 import pytest
+
+
+def _uv_can_run() -> bool:
+    """Check if uv can actually execute (not just on PATH).
+    
+    Also checks if uv is a snap package, which is incompatible with
+    roar's ptrace-based tracer due to snap-confine restrictions.
+    """
+    uv_path = shutil.which("uv")
+    if uv_path is None:
+        return False
+    # Snap-installed uv is incompatible with ptrace tracer
+    if "/snap/" in uv_path:
+        return False
+    try:
+        result = subprocess.run(
+            ["uv", "--version"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
 
 pytestmark = [
     pytest.mark.integration,
@@ -51,7 +75,7 @@ def test_build_detects_cmake(temp_git_repo, roar_cli, git_commit):
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.skipif(shutil.which("uv") is None, reason="uv not on PATH")
+@pytest.mark.skipif(not _uv_can_run(), reason="uv not available or cannot execute")
 @pytest.mark.skipif(shutil.which("make") is None, reason="make not on PATH")
 def test_build_detects_cmake_from_uv_sync(temp_git_repo, roar_cli, git_commit):
     """``roar build uv sync`` with source builds should record make in build_dpkg."""
