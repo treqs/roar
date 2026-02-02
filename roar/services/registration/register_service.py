@@ -289,11 +289,12 @@ class RegisterService:
             )
 
         # Step 10: Health check
-        healthy, health_error = self.glaas_client.health_check()
-        if not healthy:
+        try:
+            self.glaas_client.health_check()
+        except Exception as e:
             return RegisterResult(
                 success=False,
-                error=f"GLaaS health check failed: {health_error}",
+                error=f"GLaaS health check failed: {e}",
             )
 
         # Step 11: Register session

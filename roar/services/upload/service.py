@@ -115,9 +115,10 @@ class UploadService:
 
         # Preflight: Check GLaaS connectivity
         if self._glaas:
-            health_ok, health_error = self._glaas.health_check()
-            if not health_ok:
-                return UploadResult(success=False, error=f"GLaaS not available: {health_error}")
+            try:
+                self._glaas.health_check()
+            except Exception as e:
+                return UploadResult(success=False, error=f"GLaaS not available: {e}")
 
         # Preflight: Check git push access (for tagging)
         if (tag or auto_tag) and git_repo and repo_root:

@@ -400,9 +400,10 @@ class ReproductionService:
             return None, "No GLaaS server configured"
 
         # Get artifact info
-        artifact, artifact_error = client.get_artifact(hash_prefix)
-        if artifact_error:
-            return None, artifact_error  # Propagate the actual error
+        try:
+            artifact = client.get_artifact(hash_prefix)
+        except Exception as e:
+            return None, str(e)  # Propagate the actual error
         if not artifact:
             return None, None  # Not found, not an error
 

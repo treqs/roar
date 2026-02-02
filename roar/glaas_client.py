@@ -325,24 +325,40 @@ class GlaasClient:
                 f"Invalid JSON in response (HTTP {http_status}) at position {e.pos}: '{preview}...'"
             )
 
-    def health_check(self) -> tuple[bool, str | None]:
-        """Check server health. Returns (ok, error_message)."""
+    def health_check(self) -> bool:
+        """
+        Check server health.
+
+        Returns:
+            True if server is healthy
+
+        Raises:
+            GlaasNotConfiguredError: If GLaaS URL is not configured
+            GlaasConnectionError: If connection to server fails
+            GlaasApiError: If server returns non-200 status
+        """
+        from .core.exceptions import (
+            GlaasApiError,
+            GlaasConnectionError,
+            GlaasNotConfiguredError,
+        )
+
         if not self.base_url:
-            return False, "GLaaS URL not configured"
+            raise GlaasNotConfiguredError("GLaaS URL not configured")
 
         try:
             url = f"{self.base_url}/api/v1/health"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=10) as resp:
                 if resp.status == 200:
-                    return True, None
-                return False, f"Server returned status {resp.status}"
+                    return True
+                raise GlaasApiError(
+                    f"Server returned status {resp.status}",
+                    status_code=resp.status,
+                )
         except urllib.error.URLError as e:
             _get_logger().debug("GLaaS health check connection error: %s", e)
-            return False, f"Connection error: {e}"
-        except Exception as e:
-            _get_logger().debug("GLaaS health check failed: %s", e)
-            return False, str(e)
+            raise GlaasConnectionError(f"Connection error: {e}") from e
 
     def _request(
         self,
@@ -516,14 +532,32 @@ class GlaasClient:
             return 0, 0, None
         return result.get("created", 0) + result.get("existing", 0), 0, None
 
-    def get_artifact(self, hash_prefix: str) -> tuple[dict | None, str | None]:
+    def get_artifact(self, hash_prefix: str) -> dict:
         """
         Look up artifact by hash prefix.
 
-        Returns (artifact_dict, error_message).
+        Args:
+            hash_prefix: Hash or hash prefix to look up
+
+        Returns:
+            Artifact dict from server
+
+        Raises:
+            GlaasError: If request fails (connection, auth, or API error)
         """
+        from .core.exceptions import GlaasApiError
+
         result, error = self._request("GET", f"/api/v1/artifacts/{hash_prefix}")
-        return result, error
+        if error:
+            # Parse status code from error message if present
+            status_code = None
+            if error.startswith("HTTP "):
+                try:
+                    status_code = int(error.split(":")[0].split()[1])
+                except (IndexError, ValueError):
+                    pass
+            raise GlaasApiError(error, status_code=status_code)
+        return result  # type: ignore[return-value]
 
     def get_artifact_lineage(
         self, hash_prefix: str, depth: int = 1

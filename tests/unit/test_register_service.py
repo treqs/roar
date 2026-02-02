@@ -209,7 +209,8 @@ class TestRegisterService:
         artifact_file.write_text("data")
 
         # Make health check fail
-        mock_glaas_client.health_check.return_value = (False, "Connection refused")
+        from roar.core.exceptions import GlaasConnectionError
+        mock_glaas_client.health_check.side_effect = GlaasConnectionError("Connection refused")
 
         # Mock LineageData
         from roar.core.interfaces.upload import LineageData

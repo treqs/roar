@@ -237,8 +237,7 @@ class EntityLookupService:
             if not glaas.is_configured():
                 return None
 
-            artifact, _error = glaas.get_artifact(hash_prefix)
-            return artifact
+            return glaas.get_artifact(hash_prefix)
         except Exception:
             return None
 

@@ -300,7 +300,23 @@ class RoarNetworkError(RoarException):
     pass
 
 
-class GlaasConnectionError(RoarNetworkError):
+class GlaasError(RoarNetworkError):
+    """Base exception for all GLaaS-related errors."""
+
+    pass
+
+
+class GlaasNotConfiguredError(GlaasError):
+    """
+    GLaaS URL is not configured.
+
+    Raised when a GLaaS operation is attempted but no server URL is set.
+    """
+
+    recoverable: bool = True
+
+
+class GlaasConnectionError(GlaasError):
     """
     Error connecting to GLaaS server.
 
@@ -321,7 +337,19 @@ class GlaasConnectionError(RoarNetworkError):
         super().__init__(message, context=ctx, cause=cause)
 
 
-class GlaasAPIError(RoarNetworkError):
+class GlaasAuthError(GlaasError):
+    """
+    GLaaS authentication failed.
+
+    Raised when authentication is required but credentials are missing,
+    invalid, or expired.
+    """
+
+    exit_code: int = 2
+    recoverable: bool = False
+
+
+class GlaasApiError(GlaasError):
     """
     GLaaS API returned an error response.
 
@@ -346,7 +374,11 @@ class GlaasAPIError(RoarNetworkError):
         self.status_code = status_code
 
 
-class GlaasTimeoutError(RoarNetworkError):
+# Backwards compatibility alias
+GlaasAPIError = GlaasApiError
+
+
+class GlaasTimeoutError(GlaasError):
     """
     GLaaS request timed out.
 
