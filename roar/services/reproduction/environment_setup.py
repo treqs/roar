@@ -58,15 +58,9 @@ class EnvironmentSetupService:
     def logger(self) -> "ILogger":
         """Lazy-load logger from container."""
         if self._logger is None:
-            from ...core.container import get_container
-            from ...services.logging import NullLogger
+            from ...core.logging import get_logger
 
-            container = get_container()
-            from ...core.interfaces.logger import ILogger
-
-            self._logger = container.try_resolve(ILogger)  # type: ignore[type-abstract]
-            if self._logger is None:
-                self._logger = NullLogger()
+            self._logger = get_logger()
         return self._logger
 
     def setup(
