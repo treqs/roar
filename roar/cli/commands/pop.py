@@ -68,7 +68,7 @@ def pop(ctx: RoarContext, yes: bool) -> None:
             return
 
         # Get output artifacts before deleting the job
-        outputs = db_ctx.jobs.get_outputs(job_id, db_ctx.artifacts)
+        outputs = db_ctx.jobs.get_outputs(job_id)
         artifact_ids = [o["artifact_id"] for o in outputs]
 
         # Delete safe output files from disk

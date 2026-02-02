@@ -88,7 +88,7 @@ def _get_dag_data(
 
     # First pass: collect all outputs from all steps (for latest runs)
     for num, step in latest_by_step.items():
-        outputs = db_ctx.jobs.get_outputs(step["id"], db_ctx.artifacts)
+        outputs = db_ctx.jobs.get_outputs(step["id"])
         for out in outputs:
             path = out.get("path") or out.get("first_seen_path")
             if not path:
@@ -123,7 +123,7 @@ def _get_dag_data(
 
     # Second pass: collect consumer relationships
     for num, step in latest_by_step.items():
-        inputs = db_ctx.jobs.get_inputs(step["id"], db_ctx.artifacts)
+        inputs = db_ctx.jobs.get_inputs(step["id"])
         for inp in inputs:
             artifact_id = str(inp.get("artifact_id", ""))
             if artifact_id and artifact_id in all_artifacts:
@@ -139,8 +139,8 @@ def _get_dag_data(
         step_number = step["step_number"]
 
         # Get inputs and outputs
-        inputs = db_ctx.jobs.get_inputs(job_id, db_ctx.artifacts)
-        outputs = db_ctx.jobs.get_outputs(job_id, db_ctx.artifacts)
+        inputs = db_ctx.jobs.get_inputs(job_id)
+        outputs = db_ctx.jobs.get_outputs(job_id)
 
         # Calculate consumed count (inputs that came from other tracked jobs)
         consumed = 0

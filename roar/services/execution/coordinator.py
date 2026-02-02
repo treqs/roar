@@ -313,8 +313,8 @@ class RunCoordinator:
             )
 
             # Get files with hashes for report
-            written_file_info = db_ctx.jobs.get_outputs(job_id, db_ctx.artifacts)
-            read_file_info = db_ctx.jobs.get_inputs(job_id, db_ctx.artifacts)
+            written_file_info = db_ctx.jobs.get_outputs(job_id)
+            read_file_info = db_ctx.jobs.get_inputs(job_id)
 
             # Check for stale steps
             session = db_ctx.sessions.get_active()
@@ -325,7 +325,7 @@ class RunCoordinator:
                     stale = set(db_ctx.session_service.get_stale_steps(session["id"]))
 
                     # Check stale upstream
-                    job_inputs = db_ctx.jobs.get_inputs(job_id, db_ctx.artifacts)
+                    job_inputs = db_ctx.jobs.get_inputs(job_id)
                     for inp in job_inputs:
                         artifact_hash = inp.get("artifact_hash")
                         if not artifact_hash:
@@ -380,7 +380,7 @@ class RunCoordinator:
                     return
 
                 previous_job = jobs[0]
-                outputs = db_ctx.jobs.get_outputs(previous_job["id"], db_ctx.artifacts)
+                outputs = db_ctx.jobs.get_outputs(previous_job["id"])
 
                 if not outputs:
                     return

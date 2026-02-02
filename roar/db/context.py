@@ -77,7 +77,7 @@ class DatabaseContext:
         # Initialize repositories
         self._hash_cache_repo = SQLAlchemyHashCacheRepository(self._session)
         self._artifact_repo = SQLAlchemyArtifactRepository(self._session)
-        self._job_repo = SQLAlchemyJobRepository(self._session)
+        self._job_repo = SQLAlchemyJobRepository(self._session, self._artifact_repo)
         self._session_repo = SQLAlchemySessionRepository(self._session)
         self._collection_repo = SQLAlchemyCollectionRepository(self._session)
 

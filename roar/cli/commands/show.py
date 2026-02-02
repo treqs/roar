@@ -287,7 +287,7 @@ def _show_job(db_ctx, job: dict) -> None:
             pass
 
     # Inputs
-    inputs = db_ctx.jobs.get_inputs(job["id"], db_ctx.artifacts)
+    inputs = db_ctx.jobs.get_inputs(job["id"])
     if inputs:
         click.echo(f"\nInputs ({len(inputs)}):")
         for inp in inputs:
@@ -298,7 +298,7 @@ def _show_job(db_ctx, job: dict) -> None:
                 click.echo(f"    {h['algorithm']}: {h['digest']}")
 
     # Outputs
-    outputs = db_ctx.jobs.get_outputs(job["id"], db_ctx.artifacts)
+    outputs = db_ctx.jobs.get_outputs(job["id"])
     if outputs:
         click.echo(f"\nOutputs ({len(outputs)}):")
         for out in outputs:

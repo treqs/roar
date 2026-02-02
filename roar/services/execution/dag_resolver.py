@@ -137,7 +137,7 @@ class DAGReferenceResolver:
             return []
 
         upstream_stale = []
-        job_inputs = self._jobs.get_inputs(step["id"], self._artifacts)
+        job_inputs = self._jobs.get_inputs(step["id"])
 
         for inp in job_inputs:
             artifact_hash = inp.get("artifact_hash")

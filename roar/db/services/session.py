@@ -65,7 +65,7 @@ class DefaultSessionService(SessionService):
         # Map output paths to their current artifact IDs
         output_path_to_current: dict[str, tuple] = {}
         for num, step in latest_by_step.items():
-            outputs = self._job_repo.get_outputs(step["id"], self._artifact_repo)
+            outputs = self._job_repo.get_outputs(step["id"])
             for out in outputs:
                 path = out.get("path") or out.get("first_seen_path")
                 if not path:
@@ -79,7 +79,7 @@ class DefaultSessionService(SessionService):
         for num, step in latest_by_step.items():
             depends_on[num] = set()
             consumed_artifacts[num] = {}
-            inputs = self._job_repo.get_inputs(step["id"], self._artifact_repo)
+            inputs = self._job_repo.get_inputs(step["id"])
 
             for inp in inputs:
                 path = inp.get("path") or inp.get("first_seen_path")
@@ -147,7 +147,7 @@ class DefaultSessionService(SessionService):
         # Collect artifact IDs from stale steps
         stale_artifact_ids: list[str] = []
         for _num, step in latest_by_step.items():
-            outputs = self._job_repo.get_outputs(step["id"], self._artifact_repo)
+            outputs = self._job_repo.get_outputs(step["id"])
             for out in outputs:
                 artifact_id = out.get("artifact_id")
                 if artifact_id:
@@ -185,7 +185,7 @@ class DefaultSessionService(SessionService):
 
         # Get output artifact IDs from source step
         source_step = latest_by_step[step_number]
-        source_outputs = self._job_repo.get_outputs(source_step["id"], self._artifact_repo)
+        source_outputs = self._job_repo.get_outputs(source_step["id"])
         source_artifact_ids = {out["artifact_id"] for out in source_outputs}
 
         if not source_artifact_ids:
@@ -196,7 +196,7 @@ class DefaultSessionService(SessionService):
         for num, step in latest_by_step.items():
             if num == step_number:
                 continue
-            inputs = self._job_repo.get_inputs(step["id"], self._artifact_repo)
+            inputs = self._job_repo.get_inputs(step["id"])
             input_artifact_ids = {inp["artifact_id"] for inp in inputs}
             if source_artifact_ids & input_artifact_ids:
                 downstream.append(num)

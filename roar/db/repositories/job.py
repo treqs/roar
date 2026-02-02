@@ -242,13 +242,12 @@ class SQLAlchemyJobRepository(JobRepository):
             )
         return results
 
-    def get_outputs(self, job_id: int, artifact_repo) -> list[dict[str, Any]]:
+    def get_outputs(self, job_id: int) -> list[dict[str, Any]]:
         """
         Get output artifacts for a job.
 
         Args:
             job_id: Job database ID
-            artifact_repo: Artifact repository for fetching hashes
 
         Returns:
             List of output dicts with path, artifact_id, size, hashes, artifact_hash, and first_seen_path.
@@ -262,7 +261,7 @@ class SQLAlchemyJobRepository(JobRepository):
 
         results = []
         for path, artifact_id, size, first_seen_path in rows:
-            hashes = artifact_repo.get_hashes(artifact_id)
+            hashes = self._artifact_repository.get_hashes(artifact_id)
             results.append(
                 {
                     "path": path or first_seen_path,  # Use artifact path as fallback
@@ -367,12 +366,9 @@ class SQLAlchemyJobRepository(JobRepository):
         )
         return [self._job_to_dict(j) for j in jobs]
 
-    def get_all_written_files(self, artifact_repo) -> list[dict[str, Any]]:
+    def get_all_written_files(self) -> list[dict[str, Any]]:
         """
         Get all unique written files (outputs) from all jobs.
-
-        Args:
-            artifact_repo: Artifact repository for fetching hashes
 
         Returns:
             List of dicts with path, artifact_id, size, and hashes.
@@ -392,7 +388,7 @@ class SQLAlchemyJobRepository(JobRepository):
                     "path": path,
                     "artifact_id": artifact_id,
                     "size": size,
-                    "hashes": artifact_repo.get_hashes(artifact_id),
+                    "hashes": self._artifact_repository.get_hashes(artifact_id),
                 }
             )
         return results

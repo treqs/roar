@@ -50,7 +50,7 @@ def status(ctx: RoarContext) -> None:
         seen_artifact_ids: set[int] = set()
         artifacts: list[dict] = []
         for job in jobs:
-            for output in db_ctx.jobs.get_outputs(job["id"], db_ctx.artifacts):
+            for output in db_ctx.jobs.get_outputs(job["id"]):
                 aid = output["artifact_id"]
                 if aid not in seen_artifact_ids:
                     seen_artifact_ids.add(aid)

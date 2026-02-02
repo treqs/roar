@@ -364,8 +364,8 @@ class ReproductionService:
             for step in steps:
                 step_dict = dict(step)
                 # Add inputs/outputs
-                inputs = ctx.jobs.get_inputs(step["id"], ctx.artifacts)
-                outputs = ctx.jobs.get_outputs(step["id"], ctx.artifacts)
+                inputs = ctx.jobs.get_inputs(step["id"])
+                outputs = ctx.jobs.get_outputs(step["id"])
                 step_dict["_inputs"] = inputs
                 step_dict["_outputs"] = outputs
 

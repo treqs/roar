@@ -138,8 +138,8 @@ class LineageCollector:
         for bj in build_jobs:
             job_dict = dict(bj._mapping) if hasattr(bj, "_mapping") else dict(bj)
             job_id = bj.id if hasattr(bj, "id") else bj["id"]
-            inputs = ctx_db.jobs.get_inputs(job_id, ctx_db.artifacts)
-            outputs = ctx_db.jobs.get_outputs(job_id, ctx_db.artifacts)
+            inputs = ctx_db.jobs.get_inputs(job_id)
+            outputs = ctx_db.jobs.get_outputs(job_id)
 
             job_dict["_input_hashes"] = [h for h in (_get_blake3(inp) for inp in inputs) if h]
             job_dict["_output_hashes"] = [h for h in (_get_blake3(out) for out in outputs) if h]

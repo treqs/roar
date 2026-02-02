@@ -78,7 +78,7 @@ class DefaultLineageService(LineageService):
             }
 
             if producer:
-                inputs = self._job_repo.get_inputs(producer["id"], self._artifact_repo)
+                inputs = self._job_repo.get_inputs(producer["id"])
                 result["produced_by"] = {
                     "job_id": producer["id"],
                     "command": producer["command"],
@@ -138,7 +138,7 @@ class DefaultLineageService(LineageService):
                 job_dict = dict(producer)
 
                 # Get inputs and trace upstream
-                inputs = self._job_repo.get_inputs(producer["id"], self._artifact_repo)
+                inputs = self._job_repo.get_inputs(producer["id"])
                 job_dict["_input_artifact_ids"] = [inp["artifact_id"] for inp in inputs]
                 job_dict["_input_hashes"] = [
                     h for h in (self._get_blake3(inp) for inp in inputs) if h
@@ -154,7 +154,7 @@ class DefaultLineageService(LineageService):
                     trace_upstream(inp["artifact_id"], current_depth + 1)
 
                 # Get outputs
-                outputs = self._job_repo.get_outputs(producer["id"], self._artifact_repo)
+                outputs = self._job_repo.get_outputs(producer["id"])
                 job_dict["_output_artifact_ids"] = [out["artifact_id"] for out in outputs]
                 job_dict["_output_hashes"] = [
                     h for h in (self._get_blake3(out) for out in outputs) if h
@@ -227,7 +227,7 @@ class DefaultLineageService(LineageService):
                 job_dict = dict(producer)
 
                 # Get inputs and add ALL of them to on-path set
-                inputs = self._job_repo.get_inputs(producer["id"], self._artifact_repo)
+                inputs = self._job_repo.get_inputs(producer["id"])
                 job_dict["_all_inputs"] = inputs
 
                 for inp in inputs:
@@ -238,7 +238,7 @@ class DefaultLineageService(LineageService):
                     trace_upstream(inp["artifact_id"], current_depth + 1)
 
                 # Get all outputs for later filtering
-                outputs = self._job_repo.get_outputs(producer["id"], self._artifact_repo)
+                outputs = self._job_repo.get_outputs(producer["id"])
                 job_dict["_all_outputs"] = outputs
 
                 jobs.append(job_dict)
