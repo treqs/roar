@@ -8,6 +8,8 @@ Orchestrates the 4-phase registration pattern:
 4. Link Artifacts - Link job inputs/outputs to artifacts
 """
 
+from functools import cached_property
+
 from ...core.di import resolve_or_default
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
@@ -57,26 +59,20 @@ class RegistrationCoordinator(IRegistrationCoordinator):
 
         self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
 
-    @property
+    @cached_property
     def session_service(self) -> SessionRegistrationService:
         """Get or create session service."""
-        if self._session_service is None:
-            self._session_service = SessionRegistrationService()
-        return self._session_service
+        return self._session_service or SessionRegistrationService()
 
-    @property
+    @cached_property
     def artifact_service(self) -> ArtifactRegistrationService:
         """Get or create artifact service."""
-        if self._artifact_service is None:
-            self._artifact_service = ArtifactRegistrationService()
-        return self._artifact_service
+        return self._artifact_service or ArtifactRegistrationService()
 
-    @property
+    @cached_property
     def job_service(self) -> JobRegistrationService:
         """Get or create job service."""
-        if self._job_service is None:
-            self._job_service = JobRegistrationService()
-        return self._job_service
+        return self._job_service or JobRegistrationService()
 
     def register_lineage(
         self,
