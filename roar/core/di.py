@@ -116,39 +116,3 @@ def require_bootstrap() -> None:
         raise RuntimeError(
             "Service container not bootstrapped. Call bootstrap() before using container services."
         )
-
-
-class LazyService:
-    """Descriptor for lazy service resolution.
-
-    Use this as a class attribute to defer service resolution until
-    first access. This is useful for avoiding import cycles and
-    ensuring services are only resolved when needed.
-
-    Example:
-        class MyCommand:
-            _logger = LazyService(ILogger, NullLogger)
-
-            @property
-            def logger(self) -> ILogger:
-                return self._logger
-    """
-
-    def __init__(
-        self,
-        interface: type[T],
-        default_factory: Callable[[], T],
-    ) -> None:
-        self.interface = interface
-        self.default_factory = default_factory
-        self._instance: T | None = None
-        self._resolved = False
-
-    def __get__(self, obj: object, objtype: type | None = None) -> T:  # type: ignore[type-var]
-        if not self._resolved:
-            self._instance = resolve_or_default(
-                self.interface,
-                self.default_factory,
-            )
-            self._resolved = True
-        return self._instance  # type: ignore[return-value]
