@@ -2,7 +2,7 @@
 
 **Run Observation & Artifact Registration**
 
-A local front-end to TReqs' Graph Lineage-as-a-Service (GLaaS). Roar tracks data artifacts and execution steps in ML pipelines, enabling reproducibility and lineage queries.
+A local front-end to TReqs' Global Lineage-as-a-Service (GLaaS). Roar tracks data artifacts and execution steps in ML pipelines, enabling reproducibility and lineage queries.
 
 ## Installation
 
@@ -55,10 +55,12 @@ roar run python evaluate.py --model model.pt --output metrics.json
 
 ### `roar init`
 
-Initialize roar in the current directory. Creates a `.roar/` directory to store the local database.
+Initialize roar in the current directory. Creates a `.roar/` directory to store the local database and a `config.toml` with default settings.
 
 ```bash
-roar init
+roar init           # Initialize, prompt for gitignore
+roar init -y        # Initialize and auto-add to gitignore
+roar init -n        # Initialize without modifying gitignore
 ```
 
 ### `roar run <command>`
@@ -73,6 +75,10 @@ Run a command with provenance tracking. Roar captures:
 roar run python train.py --epochs 10 --lr 0.001
 roar run ./scripts/preprocess.sh
 roar run torchrun --nproc_per_node=4 train.py
+
+# Re-run a previous DAG step
+roar run @2                    # Re-run DAG node 2
+roar run @2 --epochs=10        # Re-run with parameter override
 ```
 
 ### `roar reproduce <hash>`
@@ -80,15 +86,23 @@ roar run torchrun --nproc_per_node=4 train.py
 Reproduce an artifact by tracing its lineage.
 
 ```bash
-# Show the reproduction plan
+# Show the reproduction plan (preview)
 roar reproduce abc123de
 
-# Run reproduction immediately
+# Run full reproduction
 roar reproduce abc123de --run
 
 # Run without prompts
 roar reproduce abc123de --run -y
+
+# Include system packages during setup
+roar reproduce abc123de --run --package-sync
+
+# Show all required packages (no truncation)
+roar reproduce abc123de --list-requirements
 ```
+
+Full reproduction clones the git repository, creates a virtual environment, installs recorded packages, and runs the pipeline steps.
 
 ### `roar build <command>`
 
@@ -107,13 +121,18 @@ Use for setup that should run before the main pipeline (compiling, installing).
 
 ### `roar auth`
 
-Manage GLaaS (Graph Lineage-as-a-Service) authentication.
+Manage GLaaS authentication.
 
 ```bash
-roar auth register    # Register SSH key with GLaaS server
-roar auth test        # Test authentication
-roar auth status      # Show authentication status
+roar auth register    # Show SSH public key for registration
+roar auth test        # Test connection to GLaaS server
+roar auth status      # Show current auth status
 ```
+
+To register with GLaaS:
+1. Run `roar auth register` to display your public key
+2. Sign up at https://glaas.ai where you can paste your public key
+3. Run `roar auth test` to verify
 
 ### `roar config`
 
@@ -125,17 +144,90 @@ roar config get <key>
 roar config set <key> <value>
 ```
 
-Available configuration options:
+Run `roar config list` to see all available options with descriptions. Common options:
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `output.track_repo_files` | false | Include repo files in provenance |
 | `output.quiet` | false | Suppress written files report |
-| `filters.ignore_system_reads` | true | Ignore /sys, /etc reads |
+| `filters.ignore_system_reads` | true | Ignore /sys, /etc, /sbin reads |
 | `filters.ignore_package_reads` | true | Ignore installed package reads |
 | `filters.ignore_torch_cache` | true | Ignore torch/triton cache |
 | `filters.ignore_tmp_files` | true | Ignore /tmp files |
-| `glaas.url` | (none) | GLaaS server URL |
+| `glaas.url` | https://api.glaas.ai | GLaaS server URL |
+| `glaas.web_url` | https://glaas.ai | GLaaS web UI URL |
+| `registration.omit.enabled` | true | Enable secret filtering |
+| `hash.primary` | blake3 | Primary hash algorithm |
+| `logging.level` | warning | Log level (debug, info, warning, error) |
+
+### `roar dag`
+
+Display the pipeline DAG for the current session.
+
+```bash
+roar dag                  # Compact view with colors
+roar dag --expanded       # Show all executions including reruns
+roar dag --json           # Machine-readable JSON output
+roar dag --show-artifacts # Show intermediate artifacts
+```
+
+### `roar env`
+
+Manage persistent environment variables injected into `roar run` and `roar build`.
+
+```bash
+roar env set FOO bar      # Set FOO=bar
+roar env get FOO          # Print value of FOO
+roar env list             # List all env vars
+roar env unset FOO        # Remove FOO
+```
+
+### `roar log`
+
+Display recent job execution history.
+
+```bash
+roar log                  # Show recent job history
+```
+
+### `roar register`
+
+Register artifact lineage with GLaaS.
+
+```bash
+roar register model.pt              # Register model lineage
+roar register --dry-run model.pt    # Preview without registering
+roar register -y model.pt           # Skip confirmation prompt
+```
+
+### `roar reset`
+
+Start a fresh session. Previous session data is preserved in the database.
+
+```bash
+roar reset                # Reset with confirmation prompt
+roar reset -y             # Reset without confirmation
+```
+
+### `roar show`
+
+Show session, job, or artifact details.
+
+```bash
+roar show                          # Show active session overview
+roar show @1                       # Show details for step 1
+roar show @B1                      # Show details for build step 1
+roar show a1b2c3d4                 # Show job by UID
+roar show ./output/model.pkl       # Show artifact by path
+```
+
+### `roar status`
+
+Show a summary of the active session.
+
+```bash
+roar status
+```
 
 ## Concepts
 
@@ -181,7 +273,7 @@ Add `.roar/` to your `.gitignore` (roar offers to do this during `roar init`).
 
 ## GLaaS Server
 
-Roar can register artifacts and jobs with a GLaaS (Graph Lineage-as-a-Service) server using the `roar register` command.
+Roar can register artifacts and jobs with a GLaaS (Global Lineage-as-a-Service) server using the `roar register` command.
 
 ### Server Setup
 
@@ -209,7 +301,7 @@ The server provides:
 # Set the GLaaS server URL
 roar config set glaas.url http://localhost:8000
 
-# Register your SSH key
+# Show your SSH key (copy to GLaaS web UI)
 roar auth register
 
 # Test authentication
