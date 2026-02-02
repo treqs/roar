@@ -251,10 +251,12 @@ class TestDagCommand:
         # When no commands have been run, there's no active session
         result = roar_cli("dag", "--no-color", check=False)
         # Either no session message or empty pipeline is acceptable
+        # Error messages may be in stdout or stderr depending on error handling
+        combined = result.stdout + result.stderr
         assert (
-            "No active session" in result.stdout
-            or "No steps in pipeline" in result.stdout
-            or "Pipeline: 0 steps" in result.stdout
+            "No active session" in combined
+            or "No steps in pipeline" in combined
+            or "Pipeline: 0 steps" in combined
         )
 
     # =========================================================================
