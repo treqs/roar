@@ -7,7 +7,7 @@ Consolidates job registration logic from put.py and coordinator.py.
 import json
 from functools import cached_property
 
-from ...core.di import resolve_or_default
+from ...core.logging import get_logger
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
     IJobRegistrar,
@@ -56,9 +56,8 @@ class JobRegistrationService(IJobRegistrar):
         """
         self._client = client
         self._secret_filter = secret_filter
-        from ...services.logging import NullLogger
 
-        self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
+        self._logger = logger or get_logger()
 
     @cached_property
     def client(self) -> GlaasClient:

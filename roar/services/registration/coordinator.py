@@ -10,7 +10,7 @@ Orchestrates the 4-phase registration pattern:
 
 from functools import cached_property
 
-from ...core.di import resolve_or_default
+from ...core.logging import get_logger
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
     BatchRegistrationResult,
@@ -55,9 +55,8 @@ class RegistrationCoordinator(IRegistrationCoordinator):
         self._session_service = session_service
         self._artifact_service = artifact_service
         self._job_service = job_service
-        from ...services.logging import NullLogger
 
-        self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
+        self._logger = logger or get_logger()
 
     @cached_property
     def session_service(self) -> SessionRegistrationService:

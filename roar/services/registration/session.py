@@ -9,7 +9,7 @@ import hashlib
 from functools import cached_property
 from pathlib import Path
 
-from ...core.di import resolve_or_default
+from ...core.logging import get_logger
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
     GitContext,
@@ -37,9 +37,8 @@ class SessionRegistrationService(ISessionRegistrar):
             logger: Logger instance. If None, resolves from DI container.
         """
         self._client = client
-        from ...services.logging import NullLogger
 
-        self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
+        self._logger = logger or get_logger()
 
     @cached_property
     def client(self) -> GlaasClient:

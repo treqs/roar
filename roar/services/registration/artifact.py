@@ -7,7 +7,7 @@ Consolidates artifact registration logic from put.py and coordinator.py.
 import json
 from functools import cached_property
 
-from ...core.di import resolve_or_default
+from ...core.logging import get_logger
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
     ArtifactRegistrationResult,
@@ -86,9 +86,8 @@ class ArtifactRegistrationService(IArtifactRegistrar):
             logger: Logger instance. If None, resolves from DI container.
         """
         self._client = client
-        from ...services.logging import NullLogger
 
-        self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
+        self._logger = logger or get_logger()
 
     @cached_property
     def client(self) -> GlaasClient:

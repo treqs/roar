@@ -18,7 +18,7 @@ from functools import cached_property
 from pathlib import Path
 
 from ...config import config_get
-from ...core.di import resolve_or_default
+from ...core.logging import get_logger
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
 from ...core.interfaces.upload import LineageData
@@ -94,9 +94,8 @@ class RegisterService:
         self._coordinator = coordinator
         self._session_service = session_service
         self._omit_filter = omit_filter
-        from ...services.logging import NullLogger
 
-        self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
+        self._logger = logger or get_logger()
 
     @property
     def omit_filter(self) -> OmitFilter | None:
