@@ -2,7 +2,11 @@
 
 **Run Observation & Artifact Registration**
 
-A local front-end to TReqs' Global Lineage-as-a-Service (GLaaS). Roar tracks data artifacts and execution steps in ML pipelines, enabling reproducibility and lineage queries.
+`roar` tracks data artifacts and execution steps in ML pipelines, enabling reproducibility and lineage queries. `roar` tracking happens automagically by observing your commands as they run, capturing essential context without requiring you to define a pipeline explicitly.
+
+By identifying files based on their actual content rather than their names, it ensures you can always trace a result back to the exact inputs and code that produced it. This gives you reliable reproducibility and a clear history of your artifacts, all derived naturally from your workflow.
+
+While `roar` captures your work locally, connecting it to a GLaaS (Global Lineage-as-a-Service) server like [glaas.ai](https://glaas.ai) allows you to publish your lineage graphs to a shared global registry for easy visualization and collaboration. Now your team can search for any artifact by its hash to see exactly how it was made and generate the precise commands needed to reproduce it on another machine.
 
 ## Installation
 
@@ -16,12 +20,12 @@ Requires Python 3.10+ and Linux (x86_64 or aarch64) for full functionality.
 
 ### Platform Support
 
-| Platform | `roar run` | Other commands |
-|----------|------------|----------------|
-| Linux x86_64 | Full support | Full support |
-| Linux aarch64 | Full support | Full support |
-| macOS | Not supported | Full support |
-| Windows | Not supported | Full support |
+| Platform      | `roar run`    | Other commands |
+| ------------- | ------------- | -------------- |
+| Linux x86_64  | Full support  | Full support   |
+| Linux aarch64 | Full support  | Full support   |
+| macOS         | Not supported | Full support   |
+| Windows       | Not supported | Full support   |
 
 The `roar run` command uses a native tracer binary that requires Linux. Other commands work on all platforms.
 
@@ -66,6 +70,7 @@ roar init -n        # Initialize without modifying gitignore
 ### `roar run <command>`
 
 Run a command with provenance tracking. Roar captures:
+
 - Files read and written
 - Git commit and branch
 - Execution time and exit code
@@ -130,8 +135,9 @@ roar auth status      # Show current auth status
 ```
 
 To register with GLaaS:
+
 1. Run `roar auth register` to display your public key
-2. Sign up at https://glaas.ai where you can paste your public key
+2. Sign up at <https://glaas.ai> where you can paste your public key
 3. Run `roar auth test` to verify
 
 ### `roar config`
@@ -146,19 +152,19 @@ roar config set <key> <value>
 
 Run `roar config list` to see all available options with descriptions. Common options:
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `output.track_repo_files` | false | Include repo files in provenance |
-| `output.quiet` | false | Suppress written files report |
-| `filters.ignore_system_reads` | true | Ignore /sys, /etc, /sbin reads |
-| `filters.ignore_package_reads` | true | Ignore installed package reads |
-| `filters.ignore_torch_cache` | true | Ignore torch/triton cache |
-| `filters.ignore_tmp_files` | true | Ignore /tmp files |
-| `glaas.url` | https://api.glaas.ai | GLaaS server URL |
-| `glaas.web_url` | https://glaas.ai | GLaaS web UI URL |
-| `registration.omit.enabled` | true | Enable secret filtering |
-| `hash.primary` | blake3 | Primary hash algorithm |
-| `logging.level` | warning | Log level (debug, info, warning, error) |
+| Key                            | Default              | Description                             |
+| ------------------------------ | -------------------- | --------------------------------------- |
+| `output.track_repo_files`      | false                | Include repo files in provenance        |
+| `output.quiet`                 | false                | Suppress written files report           |
+| `filters.ignore_system_reads`  | true                 | Ignore /sys, /etc, /sbin reads          |
+| `filters.ignore_package_reads` | true                 | Ignore installed package reads          |
+| `filters.ignore_torch_cache`   | true                 | Ignore torch/triton cache               |
+| `filters.ignore_tmp_files`     | true                 | Ignore /tmp files                       |
+| `glaas.url`                    | <https://api.glaas.ai> | GLaaS server URL                        |
+| `glaas.web_url`                | <https://glaas.ai>     | GLaaS web UI URL                        |
+| `registration.omit.enabled`    | true                 | Enable secret filtering                 |
+| `hash.primary`                 | blake3               | Primary hash algorithm                  |
+| `logging.level`                | warning              | Log level (debug, info, warning, error) |
 
 ### `roar dag`
 
@@ -258,6 +264,7 @@ roar reproduce <model-hash> --run
 ## Git Integration
 
 Roar automatically captures git metadata:
+
 - Current commit hash
 - Branch name
 - Repository path
@@ -265,6 +272,7 @@ Roar automatically captures git metadata:
 ## Data Storage
 
 All data is stored locally in `.roar/roar.db` (SQLite). The database includes:
+
 - Artifact hashes and metadata
 - Job records with inputs/outputs
 - Hash cache for performance
@@ -291,6 +299,7 @@ GLAAS_HOST=0.0.0.0 GLAAS_PORT=8080 glaas-server
 ```
 
 The server provides:
+
 - REST API for artifact and job registration
 - Web UI at `/` with artifact and job browsers
 - Search and filtering by command, GPU, file type, etc.
@@ -313,7 +322,7 @@ roar auth test
 ### Prerequisites
 
 - Python 3.10+
-- Rust toolchain (for building the tracer) - install from https://rustup.rs/
+- Rust toolchain (for building the tracer) - install from <https://rustup.rs/>
 
 ### Setup
 
