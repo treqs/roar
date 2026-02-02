@@ -67,6 +67,7 @@ struct TracerState {
     fd_table: HashMap<(i32, i32), String>, // (pid, fd) -> path
     in_syscall: HashMap<i32, bool>,
     pending_opens: HashMap<i32, (String, u64)>, // pid -> (path, flags)
+    pending_writes: HashMap<i32, String>,       // pid -> path (write syscalls pending confirmation)
     active_pids: HashSet<i32>,
 
     // Track file access
@@ -85,6 +86,7 @@ impl TracerState {
             fd_table: HashMap::new(),
             in_syscall: HashMap::new(),
             pending_opens: HashMap::new(),
+            pending_writes: HashMap::new(),
             active_pids: HashSet::new(),
             opened_files: HashSet::new(),
             read_files: HashSet::new(),
@@ -244,9 +246,10 @@ fn handle_syscall_entry(
         }
         SYS_WRITE | SYS_PWRITE64 | SYS_WRITEV | SYS_PWRITEV | SYS_PWRITEV2 => {
             // All write variants have fd in rdi
+            // Track as pending - only confirm at exit if bytes > 0 were written
             let fd = regs.rdi as i32;
             if let Some(path) = state.fd_table.get(&(pid_raw, fd)).cloned() {
-                state.written_files.insert(path);
+                state.pending_writes.insert(pid_raw, path);
             }
         }
         SYS_SENDFILE => {
@@ -256,8 +259,9 @@ fn handle_syscall_entry(
             if let Some(path) = state.fd_table.get(&(pid_raw, in_fd)).cloned() {
                 state.read_files.insert(path);
             }
+            // Track write as pending - confirm at exit if bytes > 0
             if let Some(path) = state.fd_table.get(&(pid_raw, out_fd)).cloned() {
-                state.written_files.insert(path);
+                state.pending_writes.insert(pid_raw, path);
             }
         }
         SYS_COPY_FILE_RANGE => {
@@ -267,8 +271,9 @@ fn handle_syscall_entry(
             if let Some(path) = state.fd_table.get(&(pid_raw, in_fd)).cloned() {
                 state.read_files.insert(path);
             }
+            // Track write as pending - confirm at exit if bytes > 0
             if let Some(path) = state.fd_table.get(&(pid_raw, out_fd)).cloned() {
-                state.written_files.insert(path);
+                state.pending_writes.insert(pid_raw, path);
             }
         }
         SYS_MMAP => {
@@ -343,6 +348,15 @@ fn handle_syscall_exit(
             if ret_val == 0 {
                 // We don't have the fd from entry, so we can't clean up properly
                 // This is a known limitation
+            }
+        }
+        SYS_WRITE | SYS_PWRITE64 | SYS_WRITEV | SYS_PWRITEV | SYS_PWRITEV2
+        | SYS_SENDFILE | SYS_COPY_FILE_RANGE => {
+            // Only count as written if bytes were actually written (ret_val > 0)
+            if let Some(path) = state.pending_writes.remove(&pid_raw) {
+                if ret_val > 0 {
+                    state.written_files.insert(path);
+                }
             }
         }
         _ => {}
