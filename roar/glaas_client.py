@@ -552,10 +552,8 @@ class GlaasClient:
             # Parse status code from error message if present
             status_code = None
             if error.startswith("HTTP "):
-                try:
+                with contextlib.suppress(IndexError, ValueError):
                     status_code = int(error.split(":")[0].split()[1])
-                except (IndexError, ValueError):
-                    pass
             raise GlaasApiError(error, status_code=status_code)
         return result  # type: ignore[return-value]
 

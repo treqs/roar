@@ -13,12 +13,8 @@ Usage:
 from __future__ import annotations
 
 from importlib import import_module
-from typing import TYPE_CHECKING
 
 import click
-
-if TYPE_CHECKING:
-    from .context import RoarContext
 
 # Version is loaded from package metadata
 try:
@@ -81,10 +77,16 @@ class LazyCommand(click.Command):
         real_cmd = self._load()
         return real_cmd.get_params(ctx)
 
-    def make_context(self, info_name: str | None, args: list[str], **kwargs) -> click.Context:
+    def make_context(
+        self,
+        info_name: str | None,
+        args: list[str],
+        parent: click.Context | None = None,
+        **extra,
+    ) -> click.Context:
         """Load the real command to make context."""
         real_cmd = self._load()
-        return real_cmd.make_context(info_name, args, **kwargs)
+        return real_cmd.make_context(info_name, args, parent=parent, **extra)
 
 
 class LazyGroup(click.Group):
@@ -94,7 +96,9 @@ class LazyGroup(click.Group):
     command modules when they are actually invoked.
     """
 
-    def __init__(self, *args, lazy_commands: dict[str, tuple[str, str, str]] | None = None, **kwargs):
+    def __init__(
+        self, *args, lazy_commands: dict[str, tuple[str, str, str]] | None = None, **kwargs
+    ):
         super().__init__(*args, **kwargs)
         self._lazy_commands = lazy_commands or {}
         # Create placeholder commands for help rendering
