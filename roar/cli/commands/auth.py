@@ -95,13 +95,12 @@ def auth_register() -> None:
     key_info = _find_ssh_pubkey()
 
     if not key_info:
-        click.echo("No SSH public key found.")
-        click.echo("")
-        click.echo("Generate one with:")
-        click.echo("  ssh-keygen -t ed25519")
-        click.echo("")
-        click.echo("Then run 'roar auth register' again.")
-        raise SystemExit(1)
+        raise click.ClickException(
+            "No SSH public key found.\n\n"
+            "Generate one with:\n"
+            "  ssh-keygen -t ed25519\n\n"
+            "Then run 'roar auth register' again."
+        )
 
     key_type, pubkey, path = key_info
     click.echo("Your SSH public key:")
@@ -123,13 +122,12 @@ def auth_test() -> None:
         glaas_url = os.environ.get("GLAAS_URL")
 
     if not glaas_url:
-        click.echo("GLaaS server URL not configured.")
-        click.echo("")
-        click.echo("Set it with:")
-        click.echo("  roar config set glaas.url https://glaas.example.com")
-        click.echo("")
-        click.echo("Or set GLAAS_URL environment variable.")
-        raise SystemExit(1)
+        raise click.ClickException(
+            "GLaaS server URL not configured.\n\n"
+            "Set it with:\n"
+            "  roar config set glaas.url https://glaas.example.com\n\n"
+            "Or set GLAAS_URL environment variable."
+        )
 
     click.echo(f"Testing connection to {glaas_url}...")
 
@@ -141,11 +139,9 @@ def auth_test() -> None:
             if resp.status == 200:
                 click.echo("Server is reachable.")
             else:
-                click.echo(f"Server returned status {resp.status}")
-                raise SystemExit(1)
+                raise click.ClickException(f"Server returned status {resp.status}")
     except urllib.error.URLError as e:
-        click.echo(f"Failed to connect: {e}")
-        raise SystemExit(1) from e
+        raise click.ClickException(f"Failed to connect: {e}") from e
 
     # Test authenticated endpoint
     click.echo("Testing authentication...")
@@ -155,8 +151,7 @@ def auth_test() -> None:
 
     key_info = glaas_find_ssh_pubkey()
     if not key_info:
-        click.echo("No SSH key found. Run 'roar auth register' first.")
-        raise SystemExit(1)
+        raise click.ClickException("No SSH key found. Run 'roar auth register' first.")
 
     _, pubkey, key_path = key_info
     fingerprint = compute_pubkey_fingerprint(pubkey)
@@ -168,8 +163,7 @@ def auth_test() -> None:
     auth_header = make_auth_header("GET", test_path, None)
 
     if not auth_header:
-        click.echo("Failed to create signature. Check your SSH key.")
-        raise SystemExit(1)
+        raise click.ClickException("Failed to create signature. Check your SSH key.")
 
     try:
         test_url = f"{glaas_url.rstrip('/')}{test_path}"
@@ -192,18 +186,16 @@ def auth_test() -> None:
                 detail = error_data.get("detail", "Unknown error")
             except Exception:
                 detail = str(e)
-            click.echo(f"Authentication failed: {detail}")
-            click.echo("")
-            click.echo("Your key may not be registered with the server.")
-            click.echo("Sign up for GLaaS at https://glaas.ai where you can paste your public key.")
-            raise SystemExit(1) from e
+            raise click.ClickException(
+                f"Authentication failed: {detail}\n\n"
+                "Your key may not be registered with the server.\n"
+                "Sign up for GLaaS at https://glaas.ai where you can paste your public key."
+            ) from e
         else:
-            click.echo(f"Server error: {e.code}")
-            raise SystemExit(1) from e
+            raise click.ClickException(f"Server error: {e.code}") from e
 
     except urllib.error.URLError as e:
-        click.echo(f"Connection failed: {e}")
-        raise SystemExit(1) from e
+        raise click.ClickException(f"Connection failed: {e}") from e
 
 
 @auth.command("status")

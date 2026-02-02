@@ -381,8 +381,7 @@ def dag(
         # Get active session
         session = db_ctx.sessions.get_active()
         if not session:
-            click.echo("No active session. Run 'roar init' or 'roar run' first.")
-            raise SystemExit(1)
+            raise click.ClickException("No active session. Run 'roar init' or 'roar run' first.")
 
         session_id = session["id"]
 
