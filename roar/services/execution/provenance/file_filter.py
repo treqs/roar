@@ -118,8 +118,12 @@ class FileFilterService:
         # Create filter function for reads
         sys_prefix = python_data.sys_prefix
         sys_base_prefix = python_data.sys_base_prefix
+        roar_inject_dir = python_data.roar_inject_dir
 
         def should_include_read(path: str) -> bool:
+            # Always filter roar's inject directory (sitecustomize.py, etc.)
+            if roar_inject_dir and path.startswith(roar_inject_dir):
+                return False
             if ignore_system_reads and self._is_system_read(path):
                 return False
             if ignore_torch_cache and self._is_torch_cache(path):
@@ -148,6 +152,9 @@ class FileFilterService:
         filtered_written_files: list[str] = []
 
         for f in tracer_data.written_files:
+            # Skip roar's inject directory (sitecustomize.py output, etc.)
+            if roar_inject_dir and f.startswith(roar_inject_dir):
+                continue
             # Skip noise (device files, proc, sys, etc.)
             if self._is_write_noise(f):
                 continue

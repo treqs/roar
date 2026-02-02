@@ -172,7 +172,8 @@ class ProvenanceAssemblerService:
             return True
         if ".triton" in path:
             return True
-        if "roar/roar/inject" in path:
+        # roar's inject directory (sitecustomize.py)
+        if "/roar/services/execution/inject" in path or "sitecustomize.py" in path:
             return True
         # System libraries (covered by dpkg packages)
         return bool(path.startswith(("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/")))
