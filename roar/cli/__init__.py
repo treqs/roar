@@ -2,7 +2,7 @@
 Click-based CLI for roar.
 
 This module provides the main Click command group and serves as the
-entry point for the roar CLI. All 7 commands are implemented as
+entry point for the roar CLI. All commands are implemented as
 native Click commands.
 
 Usage:
