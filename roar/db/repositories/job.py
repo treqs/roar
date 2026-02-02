@@ -11,9 +11,9 @@ from typing import Any
 from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
-from ...core.di import resolve_or_default
 from ...core.interfaces.logger import ILogger
-from ...core.interfaces.repositories import JobRepository
+from ...core.interfaces.repositories import ArtifactRepository, JobRepository
+from ...core.logging import get_logger
 from ..models import Artifact, CollectionMember, Job, JobInput, JobOutput
 
 
@@ -24,18 +24,23 @@ class SQLAlchemyJobRepository(JobRepository):
     Manages job records and their input/output artifact associations.
     """
 
-    def __init__(self, session: Session, logger: ILogger | None = None):
+    def __init__(
+        self,
+        session: Session,
+        artifact_repository: ArtifactRepository,
+        logger: ILogger | None = None,
+    ):
         """
-        Initialize repository with database session.
+        Initialize repository with database session and artifact repository.
 
         Args:
             session: SQLAlchemy session
+            artifact_repository: Repository for artifact lookups (injected)
             logger: Logger instance. If None, resolves from DI container.
         """
         self._session = session
-        from ...services.logging import NullLogger
-
-        self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
+        self._artifact_repository = artifact_repository
+        self._logger = logger or get_logger()
 
     @staticmethod
     def _extract_script(command: str) -> str | None:
@@ -204,13 +209,12 @@ class SQLAlchemyJobRepository(JobRepository):
             self._session.add(job_output)
             self._session.flush()
 
-    def get_inputs(self, job_id: int, artifact_repo) -> list[dict[str, Any]]:
+    def get_inputs(self, job_id: int) -> list[dict[str, Any]]:
         """
         Get input artifacts for a job.
 
         Args:
             job_id: Job database ID
-            artifact_repo: Artifact repository for fetching hashes
 
         Returns:
             List of input dicts with path, artifact_id, size, hashes, and first_seen_path.
@@ -224,7 +228,7 @@ class SQLAlchemyJobRepository(JobRepository):
 
         results = []
         for path, artifact_id, size, first_seen_path in rows:
-            hashes = artifact_repo.get_hashes(artifact_id)
+            hashes = self._artifact_repository.get_hashes(artifact_id)
             results.append(
                 {
                     "path": path or first_seen_path,  # Use artifact path as fallback
