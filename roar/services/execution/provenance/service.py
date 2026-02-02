@@ -75,12 +75,9 @@ class ProvenanceService:
     def logger(self) -> ILogger:
         """Get logger, resolving from container or creating NullLogger."""
         if self._logger is None:
-            from ....services.logging import NullLogger
+            from ....core.logging import get_logger
 
-            container = get_container()
-            self._logger = container.try_resolve(ILogger)  # type: ignore[type-abstract]
-            if self._logger is None:
-                self._logger = NullLogger()
+            self._logger = get_logger()
         return self._logger
 
     def collect(
