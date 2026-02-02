@@ -6,6 +6,7 @@ from put.py and coordinator.py.
 """
 
 import hashlib
+from functools import cached_property
 from pathlib import Path
 
 from ...core.di import resolve_or_default
@@ -40,12 +41,10 @@ class SessionRegistrationService(ISessionRegistrar):
 
         self._logger = logger or resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
 
-    @property
+    @cached_property
     def client(self) -> GlaasClient:
         """Get or create GLaaS client."""
-        if self._client is None:
-            self._client = GlaasClient()
-        return self._client
+        return self._client or GlaasClient()
 
     def compute_session_hash(
         self,

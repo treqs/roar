@@ -14,6 +14,7 @@ Orchestrates the workflow:
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 
 from ...config import config_get
@@ -106,33 +107,25 @@ class RegisterService:
                 self._omit_filter = OmitFilter(omit_config)
         return self._omit_filter
 
-    @property
+    @cached_property
     def glaas_client(self) -> GlaasClient:
         """Get or create GLaaS client."""
-        if self._glaas_client is None:
-            self._glaas_client = GlaasClient()
-        return self._glaas_client
+        return self._glaas_client or GlaasClient()
 
-    @property
+    @cached_property
     def lineage_collector(self) -> LineageCollector:
         """Get or create lineage collector."""
-        if self._lineage_collector is None:
-            self._lineage_collector = LineageCollector()
-        return self._lineage_collector
+        return self._lineage_collector or LineageCollector()
 
-    @property
+    @cached_property
     def coordinator(self) -> RegistrationCoordinator:
         """Get or create registration coordinator."""
-        if self._coordinator is None:
-            self._coordinator = RegistrationCoordinator()
-        return self._coordinator
+        return self._coordinator or RegistrationCoordinator()
 
-    @property
+    @cached_property
     def session_service(self) -> SessionRegistrationService:
         """Get or create session service."""
-        if self._session_service is None:
-            self._session_service = SessionRegistrationService()
-        return self._session_service
+        return self._session_service or SessionRegistrationService()
 
     def register_artifact_lineage(
         self,
