@@ -32,11 +32,9 @@ from .models.config import (
 
 
 def _get_logger():
-    from ..services.logging import NullLogger
-    from .di import resolve_or_default
-    from .interfaces.logger import ILogger
+    from .logging import get_logger
 
-    return resolve_or_default(ILogger, NullLogger)
+    return get_logger()
 
 
 def find_config_file(start_dir: str | None = None) -> Path | None:

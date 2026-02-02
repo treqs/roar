@@ -12,11 +12,9 @@ from typing import Any
 
 
 def _get_logger():
-    from ..core.di import resolve_or_default
-    from ..core.interfaces.logger import ILogger
-    from ..services.logging import NullLogger
+    from ..core.logging import get_logger
 
-    return resolve_or_default(ILogger, NullLogger)
+    return get_logger()
 
 
 @dataclass

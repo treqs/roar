@@ -11,18 +11,12 @@ import importlib
 import pkgutil
 
 from .container import get_container
-from .di import resolve_or_default
 from .interfaces.cloud import ICloudStorageProvider
 from .interfaces.command import ICommand
 from .interfaces.logger import ILogger
 from .interfaces.telemetry import ITelemetryProvider
 from .interfaces.vcs import IVCSProvider
-
-
-def _get_logger() -> ILogger:
-    from ..services.logging import NullLogger
-
-    return resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
+from .logging import get_logger as _get_logger
 
 
 def discover_plugins(package_name: str = "roar.plugins") -> None:
