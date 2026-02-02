@@ -235,6 +235,20 @@ Show a summary of the active session.
 roar status
 ```
 
+### `roar pop`
+
+Remove the most recent job from the active session. Useful for undoing a mistaken `roar run` or correcting the pipeline before registration.
+
+```bash
+roar pop              # Pop with confirmation prompt
+roar pop -y           # Pop without confirmation (skip prompt)
+```
+
+**What it does:**
+- Removes the last job from the session history
+- Deletes output artifacts created by that job (unless they're packages/system files)
+- Does not affect the original input files
+
 ## Concepts
 
 ### Artifacts

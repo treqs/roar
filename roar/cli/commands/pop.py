@@ -19,7 +19,7 @@ from ..decorators import require_init
 _SAFE_CLASSIFICATIONS = {"unmanaged", "repo"}
 
 
-@click.command("pop", hidden=True)
+@click.command("pop")
 @click.option(
     "--yes",
     "-y",
