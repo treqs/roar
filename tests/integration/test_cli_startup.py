@@ -25,7 +25,7 @@ def test_cli_help_startup_time():
         capture_output=True,
         check=True,
     )
-    
+
     # Measure actual time (average of 3 runs)
     times = []
     for _ in range(3):
@@ -37,9 +37,9 @@ def test_cli_help_startup_time():
         elapsed_ms = (time.perf_counter() - start) * 1000
         times.append(elapsed_ms)
         assert result.returncode == 0
-    
+
     avg_ms = sum(times) / len(times)
-    
+
     # This test will fail until we implement lazy loading
     assert avg_ms < HELP_TIME_TARGET_MS, (
         f"CLI --help took {avg_ms:.0f}ms average, target is <{HELP_TIME_TARGET_MS}ms. "
@@ -55,7 +55,7 @@ def test_cli_version_startup_time():
         capture_output=True,
         check=True,
     )
-    
+
     # Measure
     times = []
     for _ in range(3):
@@ -67,9 +67,9 @@ def test_cli_version_startup_time():
         elapsed_ms = (time.perf_counter() - start) * 1000
         times.append(elapsed_ms)
         assert result.returncode == 0
-    
+
     avg_ms = sum(times) / len(times)
-    
+
     # Version should be fast - even less than help target
     assert avg_ms < HELP_TIME_TARGET_MS, (
         f"CLI --version took {avg_ms:.0f}ms average, target is <{HELP_TIME_TARGET_MS}ms"

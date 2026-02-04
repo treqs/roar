@@ -16,18 +16,18 @@ pip install roar-cli
 uv pip install roar-cli
 ```
 
-Requires Python 3.10+ and Linux (x86_64 or aarch64) for full functionality.
+Requires Python 3.10+ and Linux (x86_64 or aarch64).
 
 ### Platform Support
 
-| Platform      | `roar run`    | Other commands |
-| ------------- | ------------- | -------------- |
-| Linux x86_64  | Full support  | Full support   |
-| Linux aarch64 | Full support  | Full support   |
-| macOS         | Not supported | Full support   |
-| Windows       | Not supported | Full support   |
+| Platform      | Status         |
+| ------------- | -------------- |
+| Linux x86_64  | ✅ Full support |
+| Linux aarch64 | ✅ Full support |
+| macOS         | Coming soon    |
+| Windows       | Coming soon    |
 
-The `roar run` command uses a native tracer binary that requires Linux. Other commands work on all platforms.
+macOS and Windows support are planned for future releases.
 
 ### Development Installation
 

@@ -117,12 +117,21 @@ class BuildToolCollectorService:
         return self._query_dpkg_versions(pkg_names)
 
     def _is_under_prefix(self, path: str, sys_prefix: str) -> bool:
-        """Check if path is under sys_prefix."""
+        """Check if path is under a Python-managed prefix (venv or non-system install).
+
+        Skips filtering when sys_prefix is a common system prefix like /usr
+        or /usr/local, since those contain system tools that aren't pip-installed.
+        """
         if not sys_prefix:
             return False
+        # System prefixes contain both Python and system tools — don't filter
+        if sys_prefix in ("/usr", "/usr/local", "/"):
+            return False
         try:
-            os.path.relpath(path, sys_prefix)
-            return path.startswith(sys_prefix)
+            from pathlib import PurePosixPath
+
+            PurePosixPath(path).relative_to(sys_prefix)
+            return True
         except ValueError:
             return False
 

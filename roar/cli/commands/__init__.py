@@ -19,6 +19,7 @@ from .init import init
 from .lineage import lineage
 from .log import log
 from .pop import pop
+from .put import put
 from .register import register
 from .reproduce import reproduce
 from .reset import reset
@@ -36,6 +37,7 @@ MIGRATED_COMMANDS = [
     log,
     init,
     pop,
+    put,
     lineage,
     register,
     reproduce,
@@ -56,6 +58,7 @@ __all__ = [
     "lineage",
     "log",
     "pop",
+    "put",
     "register",
     "reproduce",
     "reset",

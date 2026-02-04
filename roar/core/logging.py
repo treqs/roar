@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from .interfaces.logger import ILogger
 
 
-def get_logger() -> "ILogger":
+def get_logger() -> ILogger:
     """Get the configured logger instance.
 
     Resolves from DI container if available, otherwise returns NullLogger.
@@ -28,7 +28,6 @@ def get_logger() -> "ILogger":
         ILogger instance
     """
     from ..services.logging import NullLogger
-
     from .di import resolve_or_default
     from .interfaces.logger import ILogger
 

@@ -9,13 +9,13 @@ import hashlib
 from functools import cached_property
 from pathlib import Path
 
-from ...core.logging import get_logger
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
     GitContext,
     ISessionRegistrar,
     SessionRegistrationResult,
 )
+from ...core.logging import get_logger
 from ...core.validation import validate_session_registration
 from ...glaas_client import GlaasClient
 

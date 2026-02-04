@@ -37,6 +37,7 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "lineage": ("roar.cli.commands.lineage", "lineage", "Show lineage for an artifact"),
     "log": ("roar.cli.commands.log", "log", "Show execution log"),
     "pop": ("roar.cli.commands.pop", "pop", "Pop the last step from the session"),
+    "put": ("roar.cli.commands.put", "put", "Publish artifacts to cloud storage"),
     "register": ("roar.cli.commands.register", "register", "Register artifacts or jobs"),
     "reproduce": ("roar.cli.commands.reproduce", "reproduce", "Reproduce an artifact"),
     "reset": ("roar.cli.commands.reset", "reset", "Reset roar state"),

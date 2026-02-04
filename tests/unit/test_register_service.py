@@ -210,6 +210,7 @@ class TestRegisterService:
 
         # Make health check fail
         from roar.core.exceptions import GlaasConnectionError
+
         mock_glaas_client.health_check.side_effect = GlaasConnectionError("Connection refused")
 
         # Mock LineageData

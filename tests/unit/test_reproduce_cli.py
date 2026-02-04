@@ -6,13 +6,18 @@ Tests the CLI behavior with mocked dependencies:
 - --run flag triggers full reproduction
 """
 
+import importlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
 
-from roar.cli.commands.reproduce import reproduce
+# Import the module explicitly — the package __init__.py shadows the module name
+# with the Click command object, so patch("roar.cli.commands.reproduce.X") fails
+# on Python 3.10+. Use patch.object(reproduce_module, "X") instead.
+reproduce_module = importlib.import_module("roar.cli.commands.reproduce")
+reproduce = reproduce_module.reproduce
 
 
 class TestReproduceCLI:
@@ -48,9 +53,9 @@ class TestReproduceCLI:
         hash_prefix = "abc123def456"
 
         with (
-            patch("roar.cli.commands.reproduce.load_config") as mock_config,
+            patch.object(reproduce_module, "load_config") as mock_config,
             patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch("roar.cli.commands.reproduce.ReproductionService") as mock_service_cls,
+            patch.object(reproduce_module, "ReproductionService") as mock_service_cls,
             patch("roar.services.reproduction.PipelineExecutor") as mock_executor_cls,
         ):
             mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
@@ -94,9 +99,9 @@ class TestReproduceCLI:
         hash_prefix = "abc123def456"
 
         with (
-            patch("roar.cli.commands.reproduce.load_config") as mock_config,
+            patch.object(reproduce_module, "load_config") as mock_config,
             patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch("roar.cli.commands.reproduce.ReproductionService") as mock_service_cls,
+            patch.object(reproduce_module, "ReproductionService") as mock_service_cls,
         ):
             mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
             mock_glaas_cls.return_value = mock_glaas_client
@@ -142,9 +147,9 @@ class TestReproduceCLI:
         hash_prefix = "abc123def456"
 
         with (
-            patch("roar.cli.commands.reproduce.load_config") as mock_config,
+            patch.object(reproduce_module, "load_config") as mock_config,
             patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch("roar.cli.commands.reproduce.ReproductionService") as mock_service_cls,
+            patch.object(reproduce_module, "ReproductionService") as mock_service_cls,
         ):
             mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
             mock_glaas_cls.return_value = mock_glaas_client
@@ -207,9 +212,9 @@ class TestReproduceCLI:
         reproduce_dir = tmp_path / "reproduce"
 
         with (
-            patch("roar.cli.commands.reproduce.load_config") as mock_config,
+            patch.object(reproduce_module, "load_config") as mock_config,
             patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch("roar.cli.commands.reproduce.ReproductionService") as mock_service_cls,
+            patch.object(reproduce_module, "ReproductionService") as mock_service_cls,
             patch("roar.services.reproduction.PipelineExecutor") as mock_executor_cls,
         ):
             mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
@@ -247,9 +252,9 @@ class TestReproduceCLI:
         hash_prefix = "abc123def456"
 
         with (
-            patch("roar.cli.commands.reproduce.load_config") as mock_config,
+            patch.object(reproduce_module, "load_config") as mock_config,
             patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch("roar.cli.commands.reproduce.ReproductionService") as mock_service_cls,
+            patch.object(reproduce_module, "ReproductionService") as mock_service_cls,
             patch("roar.services.reproduction.PipelineExecutor") as mock_executor_cls,
         ):
             mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}

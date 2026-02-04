@@ -18,10 +18,10 @@ from functools import cached_property
 from pathlib import Path
 
 from ...config import config_get
-from ...core.logging import get_logger
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
 from ...core.interfaces.upload import LineageData
+from ...core.logging import get_logger
 from ...db.context import create_database_context
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient

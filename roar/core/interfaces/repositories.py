@@ -91,11 +91,11 @@ class JobRepository(Protocol):
         """Get job by UID."""
         ...
 
-    def get_inputs(self, job_id: int, artifact_repo: "ArtifactRepository") -> list[dict[str, Any]]:
+    def get_inputs(self, job_id: int) -> list[dict[str, Any]]:
         """Get job input artifacts."""
         ...
 
-    def get_outputs(self, job_id: int, artifact_repo: "ArtifactRepository") -> list[dict[str, Any]]:
+    def get_outputs(self, job_id: int) -> list[dict[str, Any]]:
         """Get job output artifacts."""
         ...
 

@@ -7,12 +7,12 @@ Consolidates artifact registration logic from put.py and coordinator.py.
 import json
 from functools import cached_property
 
-from ...core.logging import get_logger
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
     ArtifactRegistrationResult,
     IArtifactRegistrar,
 )
+from ...core.logging import get_logger
 from ...core.validation import validate_artifact_registration
 from ...glaas_client import GlaasClient
 
