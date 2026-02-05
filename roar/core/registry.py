@@ -13,7 +13,6 @@ import pkgutil
 from .container import get_container
 from .interfaces.cloud import ICloudStorageProvider
 from .interfaces.command import ICommand
-from .interfaces.logger import ILogger
 from .interfaces.telemetry import ITelemetryProvider
 from .interfaces.vcs import IVCSProvider
 from .logging import get_logger as _get_logger

@@ -10,13 +10,13 @@ Orchestrates the 4-phase registration pattern:
 
 from functools import cached_property
 
-from ...core.logging import get_logger
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
     BatchRegistrationResult,
     GitContext,
     IRegistrationCoordinator,
 )
+from ...core.logging import get_logger
 from .artifact import ArtifactRegistrationService
 from .job import JobRegistrationService
 from .session import SessionRegistrationService

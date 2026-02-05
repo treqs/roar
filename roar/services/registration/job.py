@@ -7,7 +7,6 @@ Consolidates job registration logic from put.py and coordinator.py.
 import json
 from functools import cached_property
 
-from ...core.logging import get_logger
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
     IJobRegistrar,
@@ -15,6 +14,7 @@ from ...core.interfaces.registration import (
     JobLinkResult,
     JobRegistrationResult,
 )
+from ...core.logging import get_logger
 from ...core.validation import validate_job_registration
 from ...glaas_client import GlaasClient
 
