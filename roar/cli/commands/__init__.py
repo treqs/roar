@@ -15,6 +15,7 @@ from .build import build
 from .config import config
 from .dag import dag
 from .env import env
+from .get import get
 from .init import init
 from .lineage import lineage
 from .log import log
@@ -34,6 +35,7 @@ MIGRATED_COMMANDS = [
     config,
     env,
     dag,
+    get,
     log,
     init,
     pop,
@@ -54,6 +56,7 @@ __all__ = [
     "config",
     "dag",
     "env",
+    "get",
     "init",
     "lineage",
     "log",

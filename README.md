@@ -206,6 +206,47 @@ roar register --dry-run model.pt    # Preview without registering
 roar register -y model.pt           # Skip confirmation prompt
 ```
 
+### `roar put`
+
+Upload artifacts to cloud storage and register lineage with GLaaS.
+
+```bash
+roar put model.pt s3://bucket/models/ -m "Final model"
+roar put ./checkpoints/ gs://bucket/run-42/ -m "All checkpoints"
+roar put @2 s3://bucket/outputs/ -m "Step 2 outputs"
+```
+
+**Options:**
+- `-m, --message` — Description of the upload (required)
+- `--dry-run` — Preview without uploading
+- `--no-tag` — Skip git tagging
+
+**Source formats:**
+- File path: `model.pt`, `./data/output.csv`
+- Directory: `./checkpoints/` (uploads all files recursively)
+- Job reference: `@2` (uploads outputs from step 2)
+- No source: uploads all outputs from the current session
+
+### `roar get`
+
+Download artifacts from cloud storage.
+
+```bash
+roar get s3://bucket/models/model.pt ./local/
+roar get gs://bucket/data/train.csv
+roar get https://example.com/weights.pt --hash abc123...
+roar get s3://bucket/checkpoints/ ./local/ # Download all files under prefix
+```
+
+**Options:**
+- `-m, --message` — Annotation for this download
+- `--hash` — Expected BLAKE3 hash (for verification)
+- `--tag` — Create a git tag for this download
+- `--force` — Overwrite existing files
+- `--dry-run` — Preview without downloading
+
+Downloads are registered locally as source nodes in the DAG (outputs only, no inputs). They appear in GLaaS when downstream jobs are registered via `roar put` or `roar register`.
+
 ### `roar reset`
 
 Start a fresh session. Previous session data is preserved in the database.
