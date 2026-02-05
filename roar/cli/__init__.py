@@ -33,6 +33,7 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "config": ("roar.cli.commands.config", "config", "View or set configuration"),
     "dag": ("roar.cli.commands.dag", "dag", "Show the execution DAG"),
     "env": ("roar.cli.commands.env", "env", "Show environment information"),
+    "get": ("roar.cli.commands.get", "get", "Download artifacts from cloud storage"),
     "init": ("roar.cli.commands.init", "init", "Initialize roar in current directory"),
     "lineage": ("roar.cli.commands.lineage", "lineage", "Show lineage for an artifact"),
     "log": ("roar.cli.commands.log", "log", "Show execution log"),
