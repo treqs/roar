@@ -68,6 +68,7 @@ struct TracerState {
     in_syscall: HashMap<i32, bool>,
     pending_opens: HashMap<i32, (String, u64)>, // pid -> (path, flags)
     pending_writes: HashMap<i32, String>,       // pid -> path (write syscalls pending confirmation)
+    pending_closes: HashMap<i32, i32>,          // pid -> fd (close syscalls pending confirmation)
     active_pids: HashSet<i32>,
 
     // Track file access
@@ -87,6 +88,7 @@ impl TracerState {
             in_syscall: HashMap::new(),
             pending_opens: HashMap::new(),
             pending_writes: HashMap::new(),
+            pending_closes: HashMap::new(),
             active_pids: HashSet::new(),
             opened_files: HashSet::new(),
             read_files: HashSet::new(),
@@ -237,6 +239,11 @@ fn handle_syscall_entry(
                 state.pending_opens.insert(pid_raw, (abs_path, flags));
             }
         }
+        SYS_CLOSE => {
+            // Capture the fd argument on entry so we can clean up fd_table on exit
+            let fd = regs.rdi as i32;
+            state.pending_closes.insert(pid_raw, fd);
+        }
         SYS_READ | SYS_PREAD64 | SYS_READV | SYS_PREADV | SYS_PREADV2 => {
             // All read variants have fd in rdi
             let fd = regs.rdi as i32;
@@ -345,9 +352,10 @@ fn handle_syscall_exit(
             }
         }
         SYS_CLOSE => {
-            if ret_val == 0 {
-                // We don't have the fd from entry, so we can't clean up properly
-                // This is a known limitation
+            if let Some(fd) = state.pending_closes.remove(&pid_raw) {
+                if ret_val == 0 {
+                    state.fd_table.remove(&(pid_raw, fd));
+                }
             }
         }
         SYS_WRITE | SYS_PWRITE64 | SYS_WRITEV | SYS_PWRITEV | SYS_PWRITEV2
