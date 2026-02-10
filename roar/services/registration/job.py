@@ -9,6 +9,7 @@ from functools import cached_property
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
+    GitContext,
     IJobRegistrar,
     ISecretFilter,
     JobLinkResult,
@@ -192,6 +193,127 @@ class JobRegistrationService(IJobRegistrar):
             job_uid=job_uid,
             job_id=str(job_id) if job_id else None,
         )
+
+    def create_jobs_batch(
+        self,
+        jobs: list[dict],
+        session_hash: str,
+        git_context: GitContext,
+    ) -> list[JobRegistrationResult]:
+        """
+        Create multiple jobs in a single batch request WITHOUT artifact links.
+
+        Validates and filters each job, then sends all valid jobs in one
+        ``register_jobs_batch`` call.  Jobs that fail validation are returned
+        as individual failure results without hitting the server.
+
+        Args:
+            jobs: List of job dicts (same format as ``register_lineage`` jobs).
+            session_hash: Session these jobs belong to.
+            git_context: Fallback git context for jobs missing git fields.
+
+        Returns:
+            One ``JobRegistrationResult`` per input job, in the same order.
+        """
+        if not jobs:
+            return []
+
+        results: list[JobRegistrationResult | None] = [None] * len(jobs)
+        payloads: list[dict] = []
+        payload_indices: list[int] = []  # maps payload position → original index
+
+        for i, job in enumerate(jobs):
+            job_uid = job.get("job_uid")
+            if not job_uid:
+                self._logger.warning("Skipping job without job_uid")
+                results[i] = JobRegistrationResult(
+                    success=False, job_uid="", error="Job missing job_uid"
+                )
+                continue
+
+            command = job.get("command", "")
+            git_commit = job.get("git_commit") or git_context.commit or ""
+            git_branch = job.get("git_branch") or git_context.branch or ""
+            metadata = job.get("metadata")
+
+            # Filter sensitive data
+            filtered_command, _, filtered_metadata = self._filter_job_data(command, None, metadata)
+
+            # Validate
+            validation = validate_job_registration(
+                command=filtered_command,
+                timestamp=job.get("timestamp", 0.0),
+                session_hash=session_hash,
+                job_uid=job_uid,
+                git_commit=git_commit,
+                git_branch=git_branch,
+                job_type=job.get("job_type"),
+                step_number=job.get("step_number", 0),
+            )
+            if not validation:
+                error_msg = "; ".join(validation.errors)
+                self._logger.warning("Job validation failed for %s: %s", job_uid, error_msg)
+                results[i] = JobRegistrationResult(success=False, job_uid=job_uid, error=error_msg)
+                continue
+
+            payload: dict = {
+                "command": filtered_command,
+                "timestamp": job.get("timestamp", 0.0),
+                "job_uid": job_uid,
+                "git_commit": git_commit,
+                "git_branch": git_branch,
+                "duration_seconds": job.get("duration_seconds", 0.0),
+                "exit_code": job.get("exit_code", 0),
+                "job_type": job.get("job_type") or "run",
+                "step_number": job.get("step_number", 0),
+            }
+            if filtered_metadata:
+                payload["metadata"] = filtered_metadata
+
+            payloads.append(payload)
+            payload_indices.append(i)
+
+        if not payloads:
+            return [r for r in results if r is not None]
+
+        self._logger.debug(
+            "Batch registering %d jobs under session %s", len(payloads), session_hash[:12]
+        )
+
+        job_ids, errors, overall_error = self.client.register_jobs_batch(
+            session_hash=session_hash,
+            jobs=payloads,
+        )
+
+        if overall_error:
+            # Entire batch failed — mark all payload jobs as failed
+            for idx in payload_indices:
+                job_uid = jobs[idx].get("job_uid", "")
+                results[idx] = JobRegistrationResult(
+                    success=False, job_uid=job_uid, error=overall_error
+                )
+        else:
+            for pos, idx in enumerate(payload_indices):
+                job_uid = payloads[pos]["job_uid"]
+                if pos < len(errors) and errors[pos]:
+                    results[idx] = JobRegistrationResult(
+                        success=False, job_uid=job_uid, error=errors[pos]
+                    )
+                else:
+                    job_id = job_ids[pos] if pos < len(job_ids) else None
+                    results[idx] = JobRegistrationResult(
+                        success=True,
+                        job_uid=job_uid,
+                        job_id=str(job_id) if job_id else None,
+                    )
+
+        self._logger.debug(
+            "Batch job registration complete: %d succeeded, %d failed",
+            sum(1 for r in results if r and r.success),
+            sum(1 for r in results if r and not r.success),
+        )
+
+        return [r for r in results if r is not None]
 
     def link_job_artifacts(
         self,

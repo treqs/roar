@@ -113,39 +113,24 @@ class RegistrationCoordinator(IRegistrationCoordinator):
             len(artifacts),
         )
 
-        # Phase 2: Create all jobs WITHOUT artifact links
-        self._logger.debug("Phase 2: Creating %d jobs without artifact links", len(jobs))
+        # Phase 2: Create all jobs WITHOUT artifact links (batch)
+        self._logger.debug("Phase 2: Batch-creating %d jobs without artifact links", len(jobs))
         job_uids_created = []
 
-        for job in jobs:
-            job_uid = job.get("job_uid")
-            if not job_uid:
-                self._logger.warning("Skipping job without job_uid")
-                jobs_failed += 1
-                errors.append("Job missing job_uid")
-                continue
-
-            result = self.job_service.create_job(
-                command=job.get("command", ""),
-                timestamp=job.get("timestamp", 0.0),
+        if jobs:
+            batch_results = self.job_service.create_jobs_batch(
+                jobs=jobs,
                 session_hash=session_hash,
-                job_uid=job_uid,
-                git_commit=job.get("git_commit") or git_context.commit or "",
-                git_branch=job.get("git_branch") or git_context.branch or "",
-                duration_seconds=job.get("duration_seconds", 0.0),
-                exit_code=job.get("exit_code", 0),
-                job_type=job.get("job_type") or "run",  # Normalize None to "run"
-                step_number=job.get("step_number", 0),
-                metadata=job.get("metadata"),
+                git_context=git_context,
             )
-
-            if result.success:
-                jobs_created += 1
-                job_uids_created.append(job_uid)
-            else:
-                jobs_failed += 1
-                if result.error:
-                    errors.append(f"Job {job_uid}: {result.error}")
+            for result in batch_results:
+                if result.success:
+                    jobs_created += 1
+                    job_uids_created.append(result.job_uid)
+                else:
+                    jobs_failed += 1
+                    if result.error:
+                        errors.append(f"Job {result.job_uid}: {result.error}")
 
         self._logger.debug(
             "Phase 2 complete: %d jobs created, %d failed",
