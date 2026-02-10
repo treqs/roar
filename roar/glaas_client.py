@@ -378,10 +378,8 @@ class GlaasClient:
             len(body_bytes) if body_bytes else 0,
         )
 
-        # Create auth header
+        # Create auth header (None if no SSH keys available)
         auth_header = make_auth_header(method, path, body_bytes)
-        if not auth_header:
-            return None, "Failed to create authentication signature"
 
         # Build request
         req = urllib.request.Request(
@@ -389,7 +387,8 @@ class GlaasClient:
             data=body_bytes,
             method=method,
         )
-        req.add_header("Authorization", auth_header)
+        if auth_header:
+            req.add_header("Authorization", auth_header)
         if body_bytes:
             req.add_header("Content-Type", "application/json")
 

@@ -144,6 +144,15 @@ class IJobRegistrar(Protocol):
         """Create a job WITHOUT artifact links."""
         ...
 
+    def create_jobs_batch(
+        self,
+        jobs: list[dict],
+        session_hash: str,
+        git_context: "GitContext",
+    ) -> list[JobRegistrationResult]:
+        """Create multiple jobs in batch WITHOUT artifact links."""
+        ...
+
     def link_job_artifacts(
         self,
         session_hash: str,
