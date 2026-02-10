@@ -1,19 +1,21 @@
 """
 Data loader service for provenance collection.
 
-Loads tracer JSON output and Python inject data with proper error handling.
+Loads tracer output (MessagePack) and Python inject data with proper error handling.
 """
 
 import json
 import os
 import sys
 
+import msgpack
+
 from ....core.interfaces.logger import ILogger
 from ....core.interfaces.provenance import PythonInjectData, TracerData
 
 
 class DataLoaderService:
-    """Loads tracer and Python inject data from JSON files."""
+    """Loads tracer and Python inject data."""
 
     def __init__(self, logger: ILogger | None = None) -> None:
         """Initialize data loader with optional logger."""
@@ -30,23 +32,22 @@ class DataLoaderService:
 
     def load_tracer_data(self, path: str) -> TracerData:
         """
-        Load tracer JSON output.
+        Load tracer output (MessagePack).
 
         Args:
-            path: Path to the tracer JSON file
+            path: Path to the tracer MessagePack file
 
         Returns:
             TracerData with parsed values
 
         Raises:
             FileNotFoundError: If the tracer file doesn't exist
-            json.JSONDecodeError: If the file is not valid JSON
         """
         self.logger.debug("Loading tracer data from: %s", path)
-        with open(path) as f:
-            data = json.load(f)
+        with open(path, "rb") as f:
+            data = msgpack.unpack(f, raw=False)
 
-        self.logger.debug("Tracer JSON parsed successfully: %d keys", len(data))
+        self.logger.debug("Tracer data parsed successfully: %d keys", len(data))
         return TracerData(
             opened_files=data.get("opened_files", []),
             read_files=data.get("read_files", []),

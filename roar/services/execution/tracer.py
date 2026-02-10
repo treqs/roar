@@ -43,42 +43,85 @@ class TracerService:
             self._logger = get_logger()
         return self._logger
 
+    def _get_tracer_mode(self) -> str:
+        """Get the configured tracer mode (auto, ebpf, ptrace)."""
+        try:
+            from ...config import config_get
+
+            mode = config_get("tracer.mode")
+            if mode in ("auto", "ebpf", "ptrace"):
+                return mode
+        except Exception:
+            pass
+        return "auto"
+
+    def _find_ptrace_tracer(self) -> str | None:
+        """Find the roar-tracer (ptrace) binary."""
+        candidates = [
+            self._package_path.parent / "tracer" / "target" / "release" / "roar-tracer",
+            self._package_path / "bin" / "roar-tracer",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+        result = subprocess.run(["which", "roar-tracer"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        return None
+
+    def _find_ebpf_tracer(self) -> str | None:
+        """Find the roar-tracer-ebpf binary."""
+        candidates = [
+            self._package_path.parent / "tracer-ebpf" / "target" / "release" / "roar-tracer-ebpf",
+            self._package_path / "bin" / "roar-tracer-ebpf",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+        result = subprocess.run(["which", "roar-tracer-ebpf"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        return None
+
     def find_tracer(self) -> str | None:
         """
-        Find the roar-tracer binary.
+        Find the tracer binary based on configured mode.
 
-        Searches in:
-        1. Development location (tracer/target/release/)
-        2. Installed location (roar/bin/)
-        3. System PATH
+        Mode behavior:
+        - "ptrace": Only look for roar-tracer
+        - "ebpf": Only look for roar-tracer-ebpf
+        - "auto": Prefer roar-tracer-ebpf, fall back to roar-tracer
 
         Returns:
             Path to tracer binary, or None if not found
         """
-        self.logger.debug("Searching for roar-tracer binary")
-        candidates = [
-            # Development: relative to roar package
-            self._package_path.parent / "tracer" / "target" / "release" / "roar-tracer",
-            # Installed alongside roar package
-            self._package_path / "bin" / "roar-tracer",
-        ]
+        mode = self._get_tracer_mode()
+        self.logger.debug("Tracer mode: %s", mode)
 
-        for candidate in candidates:
-            self.logger.debug("Checking tracer path: %s", candidate)
-            if candidate.exists():
-                self.logger.debug("Found tracer at: %s", candidate)
-                return str(candidate)
-
-        # Check if it's in PATH
-        self.logger.debug("Checking system PATH for roar-tracer")
-        result = subprocess.run(["which", "roar-tracer"], capture_output=True, text=True)
-        if result.returncode == 0:
-            path = result.stdout.strip()
-            self.logger.debug("Found tracer in PATH: %s", path)
+        if mode == "ptrace":
+            self.logger.debug("Searching for ptrace tracer only")
+            path = self._find_ptrace_tracer()
+            if path:
+                self.logger.debug("Found ptrace tracer: %s", path)
             return path
 
-        self.logger.debug("Tracer binary not found")
-        return None
+        if mode == "ebpf":
+            self.logger.debug("Searching for eBPF tracer only")
+            path = self._find_ebpf_tracer()
+            if path:
+                self.logger.debug("Found eBPF tracer: %s", path)
+            return path
+
+        # auto: prefer eBPF, fall back to ptrace
+        self.logger.debug("Auto mode: trying eBPF first, then ptrace")
+        path = self._find_ebpf_tracer()
+        if path:
+            self.logger.debug("Found eBPF tracer: %s", path)
+            return path
+        path = self._find_ptrace_tracer()
+        if path:
+            self.logger.debug("Falling back to ptrace tracer: %s", path)
+        return path
 
     def execute(
         self,
@@ -104,14 +147,28 @@ class TracerService:
         tracer_path = self.find_tracer()
         if not tracer_path:
             self.logger.debug("Tracer binary not found, raising error")
-            raise TracerNotFoundError(
-                "roar-tracer binary not found. Please build it with:\n"
-                "  cd roar/tracer && cargo build --release"
-            )
+            mode = self._get_tracer_mode()
+            if mode == "ebpf":
+                hint = (
+                    "roar-tracer-ebpf binary not found. Build it with:\n"
+                    "  cd tracer-ebpf && cargo build --release"
+                )
+            elif mode == "ptrace":
+                hint = (
+                    "roar-tracer binary not found. Build it with:\n"
+                    "  cd tracer && cargo build --release"
+                )
+            else:
+                hint = (
+                    "No tracer binary found. Build one with:\n"
+                    "  cd tracer-ebpf && cargo build --release  (eBPF, recommended)\n"
+                    "  cd tracer && cargo build --release        (ptrace, fallback)"
+                )
+            raise TracerNotFoundError(hint)
 
         # Generate log file paths
         pid = os.getpid()
-        tracer_log_file = str(roar_dir / f"run_{pid}_tracer.json")
+        tracer_log_file = str(roar_dir / f"run_{pid}_tracer.msgpack")
         inject_log_file = str(roar_dir / f"run_{pid}_inject.json")
         self.logger.debug("Log files: tracer=%s, inject=%s", tracer_log_file, inject_log_file)
 
@@ -185,6 +242,6 @@ class TracerService:
             Tuple of (tracer_log_path, inject_log_path)
         """
         pid = os.getpid()
-        tracer_log = str(roar_dir / f"run_{pid}_tracer.json")
+        tracer_log = str(roar_dir / f"run_{pid}_tracer.msgpack")
         inject_log = str(roar_dir / f"run_{pid}_inject.json")
         return tracer_log, inject_log

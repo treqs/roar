@@ -1,0 +1,13 @@
+[package]
+name = "roar-tracer-ebpf-ebpf"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aya-ebpf = "0.1"
+aya-log-ebpf = "0.1"
+roar-ebpf-common = { path = "../common" }
+
+[[bin]]
+name = "roar-tracer-ebpf"
+path = "src/main.rs"

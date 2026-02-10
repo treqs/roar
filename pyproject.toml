@@ -39,6 +39,7 @@ dependencies = [
     "blake3>=0.3.0",
     "click>=8.1.0",
     "dependency-injector>=4.40.0",
+    "msgpack>=1.0.0",
     "sqlalchemy>=2.0.0",
     "pysqlite3-binary>=0.5.0",  # Fallback when stdlib sqlite3 unavailable
     "pydantic>=2.0.0",

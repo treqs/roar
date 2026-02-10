@@ -695,10 +695,10 @@ fn run_tracer(command: Vec<String>, output_file: &str) -> i32 {
                 end_time,
             };
 
-            // Write output
+            // Write output (MessagePack)
             if let Ok(mut file) = File::create(output_file) {
-                if let Ok(json) = serde_json::to_string_pretty(&output) {
-                    let _ = file.write_all(json.as_bytes());
+                if let Ok(msgpack) = rmp_serde::to_vec_named(&output) {
+                    let _ = file.write_all(&msgpack);
                 }
             }
 
