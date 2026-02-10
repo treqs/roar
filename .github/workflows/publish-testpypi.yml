@@ -22,13 +22,34 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Set up Rust
+      - name: Set up Rust (stable)
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Rust (nightly with rust-src)
+        run: |
+          rustup install nightly
+          rustup component add rust-src --toolchain nightly
+
+      - name: Install bpf-linker
+        run: cargo install bpf-linker
 
       - name: Install build tools
         run: |
           python -m pip install --upgrade pip
           pip install build twine
+
+      - name: Build proxy
+        run: cargo build --release --manifest-path proxy/Cargo.toml
+
+      - name: Build eBPF tracer
+        run: cargo build --release --manifest-path tracer-ebpf/Cargo.toml
+
+      - name: Copy binaries to roar/bin
+        run: |
+          mkdir -p roar/bin
+          cp proxy/target/release/roar-proxy roar/bin/
+          cp tracer-ebpf/target/release/roar-tracer-ebpf roar/bin/
+          cp tracer-ebpf/target/release/roard roar/bin/
 
       - name: Clean previous builds
         run: rm -rf dist/ build/ *.egg-info/

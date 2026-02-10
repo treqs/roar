@@ -63,9 +63,53 @@ jobs:
           name: roar-tracer
           path: tracer/target/release/roar-tracer
 
+  build-proxy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build proxy
+        run: cargo build --release --manifest-path proxy/Cargo.toml
+
+      - name: Upload proxy artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: roar-proxy
+          path: proxy/target/release/roar-proxy
+
+  build-tracer-ebpf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Rust (nightly with rust-src)
+        run: |
+          rustup install nightly
+          rustup component add rust-src --toolchain nightly
+
+      - name: Install bpf-linker
+        run: cargo install bpf-linker
+
+      - name: Build eBPF tracer
+        run: cargo build --release --manifest-path tracer-ebpf/Cargo.toml
+
+      - name: Upload eBPF tracer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: roar-tracer-ebpf
+          path: |
+            tracer-ebpf/target/release/roar-tracer-ebpf
+            tracer-ebpf/target/release/roard
+
   test:
     runs-on: ubuntu-latest
-    needs: build-tracer
+    needs: [build-tracer, build-proxy, build-tracer-ebpf]
     strategy:
       fail-fast: false
       matrix:
@@ -87,6 +131,24 @@ jobs:
 
       - name: Make tracer executable
         run: chmod +x tracer/target/release/roar-tracer
+
+      - name: Download proxy
+        uses: actions/download-artifact@v4
+        with:
+          name: roar-proxy
+          path: proxy/target/release/
+
+      - name: Make proxy executable
+        run: chmod +x proxy/target/release/roar-proxy
+
+      - name: Download eBPF tracer
+        uses: actions/download-artifact@v4
+        with:
+          name: roar-tracer-ebpf
+          path: tracer-ebpf/target/release/
+
+      - name: Make eBPF tracer executables
+        run: chmod +x tracer-ebpf/target/release/roar-tracer-ebpf tracer-ebpf/target/release/roard
 
       - name: Check ptrace availability
         run: |

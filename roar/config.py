@@ -122,6 +122,11 @@ CONFIGURABLE_KEYS = {
         "default": [],
         "description": "Additional algorithms for roar run (comma-separated)",
     },
+    "proxy.enabled": {
+        "type": bool,
+        "default": False,
+        "description": "Enable S3 proxy for lineage tracking during roar run",
+    },
     "tracer.mode": {
         "type": str,
         "default": "auto",
@@ -397,6 +402,23 @@ def save_config(config: dict, config_path: Path):
     if hash_lines:
         lines.append("[hash]")
         lines.extend(hash_lines)
+        lines.append("")
+
+    # Proxy section
+    proxy_lines = []
+    for key, val in config.get("proxy", {}).items():
+        default_val = defaults.get("proxy", {}).get(key)
+        if val != default_val:
+            if isinstance(val, bool):
+                proxy_lines.append(f"{key} = {str(val).lower()}")
+            elif isinstance(val, str):
+                proxy_lines.append(f'{key} = "{val}"')
+            else:
+                proxy_lines.append(f"{key} = {val}")
+
+    if proxy_lines:
+        lines.append("[proxy]")
+        lines.extend(proxy_lines)
         lines.append("")
 
     # Tracer section

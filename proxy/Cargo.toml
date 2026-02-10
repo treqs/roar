@@ -1,0 +1,29 @@
+[package]
+name = "roar-proxy"
+version = "0.1.0"
+edition = "2021"
+description = "S3 reverse proxy for roar lineage tracking"
+
+[[bin]]
+name = "roar-proxy"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+aws-config = { version = "1", default-features = false, features = ["rustls", "rt-tokio", "credentials-process", "sso"] }
+aws-sigv4 = "1"
+aws-credential-types = "1"
+aws-smithy-runtime-api = "1"
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+bytes = "1"
+http = "1"
+url = "2"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "allow"
+too_many_arguments = "allow"

@@ -24,6 +24,7 @@ class JobInput(ImmutableModel):
     path: Annotated[str, Field(min_length=1)]
     hash: str | None = None
     size: Annotated[int, Field(ge=0)] | None = None
+    byte_ranges: list[list[int]] | None = None
 
 
 class JobOutput(ImmutableModel):
@@ -33,6 +34,7 @@ class JobOutput(ImmutableModel):
     path: Annotated[str, Field(min_length=1)]
     hash: str | None = None
     size: Annotated[int, Field(ge=0)] | None = None
+    byte_ranges: list[list[int]] | None = None
 
 
 class Job(RoarBaseModel):
@@ -110,6 +112,7 @@ class Job(RoarBaseModel):
                         path=i["path"],
                         hash=i.get("hash"),
                         size=i.get("size"),
+                        byte_ranges=i.get("byte_ranges"),
                     )
                 )
 
@@ -122,6 +125,7 @@ class Job(RoarBaseModel):
                         path=o["path"],
                         hash=o.get("hash"),
                         size=o.get("size"),
+                        byte_ranges=o.get("byte_ranges"),
                     )
                 )
 

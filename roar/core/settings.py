@@ -26,6 +26,7 @@ from .models.config import (
     HashConfig,
     LoggingConfig,
     OutputConfig,
+    ProxyConfig,
     RegisterConfig,
     ReversibleConfig,
     TracerConfig,
@@ -153,6 +154,7 @@ class RoarSettings(BaseSettings):
     glaas: GlaasConfig = GlaasConfig()
     registration: RegisterConfig = RegisterConfig()
     hash: HashConfig = HashConfig()
+    proxy: ProxyConfig = ProxyConfig()
     tracer: TracerConfig = TracerConfig()
     reversible: ReversibleConfig = ReversibleConfig()
     logging: LoggingConfig = LoggingConfig()
@@ -243,6 +245,7 @@ class RoarSettings(BaseSettings):
             "glaas": self.glaas.model_dump(),
             "registration": self.registration.model_dump(),
             "hash": self.hash.model_dump(),
+            "proxy": self.proxy.model_dump(),
             "tracer": self.tracer.model_dump(),
             "reversible": self.reversible.model_dump(),
             "logging": self.logging.model_dump(),

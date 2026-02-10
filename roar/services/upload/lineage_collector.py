@@ -144,14 +144,22 @@ class LineageCollector:
             job_dict["_input_hashes"] = [h for h in (_get_blake3(inp) for inp in inputs) if h]
             job_dict["_output_hashes"] = [h for h in (_get_blake3(out) for out in outputs) if h]
 
-            # Structured inputs/outputs with hash and path
+            # Structured inputs/outputs with hash, path, and byte_ranges
             job_dict["_inputs"] = [
-                {"hash": h, "path": inp.get("path") or inp.get("first_seen_path", "")}
+                {
+                    "hash": h,
+                    "path": inp.get("path") or inp.get("first_seen_path", ""),
+                    "byte_ranges": inp.get("byte_ranges"),
+                }
                 for inp in inputs
                 if (h := _get_blake3(inp))
             ]
             job_dict["_outputs"] = [
-                {"hash": h, "path": out.get("path") or out.get("first_seen_path", "")}
+                {
+                    "hash": h,
+                    "path": out.get("path") or out.get("first_seen_path", ""),
+                    "byte_ranges": out.get("byte_ranges"),
+                }
                 for out in outputs
                 if (h := _get_blake3(out))
             ]

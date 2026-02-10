@@ -26,10 +26,14 @@ class JobIODTO:
 
     hash: str
     path: str
+    byte_ranges: list[list[int]] | None = None
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict:
         """Convert to dict for API calls."""
-        return {"hash": self.hash, "path": self.path}
+        d: dict = {"hash": self.hash, "path": self.path}
+        if self.byte_ranges is not None:
+            d["byte_ranges"] = self.byte_ranges
+        return d
 
 
 @dataclass
@@ -124,11 +128,15 @@ class JobDTO:
         # Handle _inputs/_outputs format from lineage queries
         for inp in data.get("_inputs", []):
             if inp.get("hash") and inp.get("path"):
-                inputs.append(JobIODTO(hash=inp["hash"], path=inp["path"]))
+                inputs.append(
+                    JobIODTO(hash=inp["hash"], path=inp["path"], byte_ranges=inp.get("byte_ranges"))
+                )
 
         for out in data.get("_outputs", []):
             if out.get("hash") and out.get("path"):
-                outputs.append(JobIODTO(hash=out["hash"], path=out["path"]))
+                outputs.append(
+                    JobIODTO(hash=out["hash"], path=out["path"], byte_ranges=out.get("byte_ranges"))
+                )
 
         return cls(
             job_uid=data.get("job_uid", ""),

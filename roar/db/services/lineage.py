@@ -143,9 +143,13 @@ class DefaultLineageService(LineageService):
                 job_dict["_input_hashes"] = [
                     h for h in (self._get_blake3(inp) for inp in inputs) if h
                 ]
-                # Structured inputs with hash and path
+                # Structured inputs with hash, path, and byte_ranges
                 job_dict["_inputs"] = [
-                    {"hash": h, "path": inp.get("path") or inp.get("first_seen_path", "")}
+                    {
+                        "hash": h,
+                        "path": inp.get("path") or inp.get("first_seen_path", ""),
+                        "byte_ranges": inp.get("byte_ranges"),
+                    }
                     for inp in inputs
                     if (h := self._get_blake3(inp))
                 ]
@@ -159,9 +163,13 @@ class DefaultLineageService(LineageService):
                 job_dict["_output_hashes"] = [
                     h for h in (self._get_blake3(out) for out in outputs) if h
                 ]
-                # Structured outputs with hash and path
+                # Structured outputs with hash, path, and byte_ranges
                 job_dict["_outputs"] = [
-                    {"hash": h, "path": out.get("path") or out.get("first_seen_path", "")}
+                    {
+                        "hash": h,
+                        "path": out.get("path") or out.get("first_seen_path", ""),
+                        "byte_ranges": out.get("byte_ranges"),
+                    }
                     for out in outputs
                     if (h := self._get_blake3(out))
                 ]
@@ -256,6 +264,7 @@ class DefaultLineageService(LineageService):
                             "hash": inp_hash,
                             "path": inp.get("path") or inp.get("first_seen_path", ""),
                             "size": inp.get("size", 0),
+                            "byte_ranges": inp.get("byte_ranges"),
                         }
                     )
 
@@ -268,6 +277,7 @@ class DefaultLineageService(LineageService):
                             "hash": out_hash,
                             "path": out.get("path") or out.get("first_seen_path", ""),
                             "size": out.get("size", 0),
+                            "byte_ranges": out.get("byte_ranges"),
                         }
                     )
 

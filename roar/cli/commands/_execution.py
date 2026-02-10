@@ -128,9 +128,24 @@ def execute_and_report(
     """
     from typing import Literal, cast
 
+    from ...config import config_get
     from ...core.interfaces.run import RunContext
     from ...presenters.run_report import RunReportPresenter
     from ...services.execution import RunCoordinator
+    from ...services.execution.proxy import ProxyService
+
+    # Check if S3 proxy is enabled
+    proxy_service = None
+    if config_get("proxy.enabled"):
+        proxy_service = ProxyService()
+        if not proxy_service.find_proxy():
+            click.echo(
+                "Error: S3 proxy is enabled but roar-proxy binary not found.\n"
+                "Build it with: cd proxy && cargo build --release\n"
+                "Or disable: roar proxy disable",
+                err=True,
+            )
+            return 1
 
     # Create run context
     hash_algos = cast(list[Literal["blake3", "sha256", "sha512", "md5"]], hash_algorithms)
@@ -148,7 +163,7 @@ def execute_and_report(
     )
 
     # Execute via coordinator
-    coordinator = RunCoordinator()
+    coordinator = RunCoordinator(proxy_service=proxy_service)
     result = coordinator.execute(run_ctx)
 
     # Present report

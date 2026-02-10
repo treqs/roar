@@ -158,6 +158,12 @@ class HashConfig(ConfigBaseModel):
         return v if v else []
 
 
+class ProxyConfig(ConfigBaseModel):
+    """S3 proxy configuration section."""
+
+    enabled: bool = False
+
+
 class TracerConfig(ConfigBaseModel):
     """Tracer backend configuration section."""
 
@@ -186,6 +192,7 @@ class RoarConfig(ConfigBaseModel):
     glaas: GlaasConfig = Field(default_factory=GlaasConfig)
     registration: RegisterConfig = Field(default_factory=RegisterConfig)
     hash: HashConfig = Field(default_factory=HashConfig)
+    proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     tracer: TracerConfig = Field(default_factory=TracerConfig)
     reversible: ReversibleConfig = Field(default_factory=ReversibleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

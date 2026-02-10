@@ -5,6 +5,8 @@ Coordinates all services to execute commands with provenance tracking.
 Follows SRP: coordinates, doesn't implement details.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import shlex
@@ -12,7 +14,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...core.exceptions import TracerNotFoundError
 from ...core.interfaces.logger import ILogger
@@ -20,6 +22,9 @@ from ...core.interfaces.presenter import IPresenter
 from ...core.interfaces.run import RunContext, RunResult
 from .signal_handler import ProcessSignalHandler
 from .tracer import TracerService
+
+if TYPE_CHECKING:
+    from .proxy import ProxyService
 
 
 def _get_logger():
@@ -64,6 +69,7 @@ class RunCoordinator:
     def __init__(
         self,
         tracer_service: TracerService | None = None,
+        proxy_service: ProxyService | None = None,
         presenter: IPresenter | None = None,
         logger: ILogger | None = None,
     ) -> None:
@@ -72,10 +78,12 @@ class RunCoordinator:
 
         Args:
             tracer_service: Service for process tracing
+            proxy_service: Optional S3 proxy service for lineage tracking
             presenter: Presenter for output
             logger: Logger for internal diagnostics
         """
         self._tracer = tracer_service or TracerService()
+        self._proxy = proxy_service
         self._presenter = presenter
         self._logger = logger
 
@@ -126,6 +134,21 @@ class RunCoordinator:
         # Backup previous outputs if reversibility is enabled
         self._backup_previous_outputs(ctx)
 
+        # Start proxy if configured
+        proxy_handle = None
+        extra_env: dict[str, str] | None = None
+        if self._proxy:
+            try:
+                # Capture existing AWS_ENDPOINT_URL so the proxy can chain to it
+                existing_endpoint = os.environ.get("AWS_ENDPOINT_URL")
+                proxy_handle = self._proxy.start_for_run(
+                    upstream_url=existing_endpoint,
+                )
+                extra_env = {"AWS_ENDPOINT_URL": f"http://127.0.0.1:{proxy_handle.port}"}
+                self.logger.debug("Proxy started on port %d", proxy_handle.port)
+            except Exception as e:
+                self.logger.warning("Failed to start proxy: %s", e)
+
         # Execute via tracer
         self.logger.debug("Starting tracer execution")
         try:
@@ -133,6 +156,7 @@ class RunCoordinator:
                 ctx.command,
                 ctx.roar_dir,
                 signal_handler,
+                extra_env=extra_env,
             )
             self.logger.debug(
                 "Tracer completed: exit_code=%d, duration=%.2fs, interrupted=%s",
@@ -196,10 +220,19 @@ class RunCoordinator:
             len(prov.get("data", {}).get("written_files", [])),
         )
 
+        # Stop proxy and collect S3 entries
+        s3_entries: list = []
+        if proxy_handle and self._proxy:
+            try:
+                s3_entries = self._proxy.stop_for_run(proxy_handle)
+                self.logger.debug("Proxy stopped, collected %d S3 entries", len(s3_entries))
+            except Exception as e:
+                self.logger.warning("Failed to stop proxy cleanly: %s", e)
+
         # Record in database
         self.logger.debug("Recording job in database")
         job_id, job_uid, read_file_info, written_file_info, stale_upstream, stale_downstream = (
-            self._record_job(ctx, prov, tracer_result, start_time, is_build)
+            self._record_job(ctx, prov, tracer_result, start_time, is_build, s3_entries)
         )
         self.logger.debug(
             "Job recorded: id=%d, uid=%s, inputs=%d, outputs=%d",
@@ -238,6 +271,7 @@ class RunCoordinator:
         tracer_result,
         start_time: float,
         is_build: bool,
+        s3_entries: list | None = None,
     ) -> tuple:
         """Record job in database and return file info."""
         from ...db.context import create_database_context
@@ -347,6 +381,28 @@ class RunCoordinator:
                         session["id"], step_num
                     )
                     stale_downstream = [s for s in downstream if s in stale]
+
+            # Register S3 artifacts from proxy
+            if s3_entries:
+                for entry in s3_entries:
+                    if entry.operation not in ("GetObject", "PutObject", "CompleteMultipartUpload"):
+                        continue
+                    if not entry.etag:
+                        continue
+                    s3_url = f"s3://{entry.bucket}/{entry.key}"
+                    artifact_id, _ = db_ctx.artifacts.register(
+                        hashes={"etag": entry.etag},
+                        size=entry.size_bytes or 0,
+                        path=s3_url,
+                        source_type="s3",
+                        source_url=s3_url,
+                    )
+                    if entry.operation == "GetObject":
+                        db_ctx.jobs.add_input(
+                            job_id, artifact_id, s3_url, byte_ranges=entry.byte_ranges
+                        )
+                    else:  # PutObject, CompleteMultipartUpload
+                        db_ctx.jobs.add_output(job_id, artifact_id, s3_url)
 
         stale_upstream.sort()
 

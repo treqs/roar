@@ -4,6 +4,7 @@ SQLAlchemy job repository implementation.
 Handles job recording and retrieval operations.
 """
 
+import json
 import os
 import secrets
 from typing import Any
@@ -165,16 +166,21 @@ class SQLAlchemyJobRepository(JobRepository):
 
         return None
 
-    def add_input(self, job_id: int, artifact_id: str, path: str) -> None:
+    def add_input(
+        self, job_id: int, artifact_id: str, path: str, byte_ranges: list[list[int]] | None = None
+    ) -> None:
         """
         Record an input artifact for a job.
+
+        If the same (job_id, artifact_id, path) already exists and byte_ranges
+        are provided, the new ranges are accumulated into the existing row.
 
         Args:
             job_id: Job database ID
             artifact_id: Artifact UUID
             path: File path where artifact was read
+            byte_ranges: Optional list of [start, end] byte range tuples
         """
-        # Check if already exists (composite PK)
         existing = self._session.execute(
             select(JobInput).where(
                 JobInput.job_id == job_id,
@@ -182,21 +188,37 @@ class SQLAlchemyJobRepository(JobRepository):
                 JobInput.path == path,
             )
         ).scalar_one_or_none()
-        if not existing:
-            job_input = JobInput(job_id=job_id, artifact_id=artifact_id, path=path)
+        if existing:
+            if byte_ranges:
+                current = json.loads(existing.byte_ranges) if existing.byte_ranges else []
+                current.extend(byte_ranges)
+                existing.byte_ranges = json.dumps(current)
+                self._session.flush()
+        else:
+            job_input = JobInput(
+                job_id=job_id,
+                artifact_id=artifact_id,
+                path=path,
+                byte_ranges=json.dumps(byte_ranges) if byte_ranges else None,
+            )
             self._session.add(job_input)
             self._session.flush()
 
-    def add_output(self, job_id: int, artifact_id: str, path: str) -> None:
+    def add_output(
+        self, job_id: int, artifact_id: str, path: str, byte_ranges: list[list[int]] | None = None
+    ) -> None:
         """
         Record an output artifact for a job.
+
+        If the same (job_id, artifact_id, path) already exists and byte_ranges
+        are provided, the new ranges are accumulated into the existing row.
 
         Args:
             job_id: Job database ID
             artifact_id: Artifact UUID
             path: File path where artifact was written
+            byte_ranges: Optional list of [start, end] byte range tuples
         """
-        # Check if already exists (composite PK)
         existing = self._session.execute(
             select(JobOutput).where(
                 JobOutput.job_id == job_id,
@@ -204,8 +226,19 @@ class SQLAlchemyJobRepository(JobRepository):
                 JobOutput.path == path,
             )
         ).scalar_one_or_none()
-        if not existing:
-            job_output = JobOutput(job_id=job_id, artifact_id=artifact_id, path=path)
+        if existing:
+            if byte_ranges:
+                current = json.loads(existing.byte_ranges) if existing.byte_ranges else []
+                current.extend(byte_ranges)
+                existing.byte_ranges = json.dumps(current)
+                self._session.flush()
+        else:
+            job_output = JobOutput(
+                job_id=job_id,
+                artifact_id=artifact_id,
+                path=path,
+                byte_ranges=json.dumps(byte_ranges) if byte_ranges else None,
+            )
             self._session.add(job_output)
             self._session.flush()
 
@@ -217,17 +250,23 @@ class SQLAlchemyJobRepository(JobRepository):
             job_id: Job database ID
 
         Returns:
-            List of input dicts with path, artifact_id, size, hashes, and first_seen_path.
+            List of input dicts with path, artifact_id, size, hashes, byte_ranges, and first_seen_path.
         """
         query = (
-            select(JobInput.path, JobInput.artifact_id, Artifact.size, Artifact.first_seen_path)
+            select(
+                JobInput.path,
+                JobInput.artifact_id,
+                JobInput.byte_ranges,
+                Artifact.size,
+                Artifact.first_seen_path,
+            )
             .join(Artifact, JobInput.artifact_id == Artifact.id)
             .where(JobInput.job_id == job_id)
         )
         rows = self._session.execute(query).all()
 
         results = []
-        for path, artifact_id, size, first_seen_path in rows:
+        for path, artifact_id, byte_ranges, size, first_seen_path in rows:
             hashes = self._artifact_repository.get_hashes(artifact_id)
             results.append(
                 {
@@ -238,6 +277,7 @@ class SQLAlchemyJobRepository(JobRepository):
                     # Backward compatibility: artifact_hash is the primary hash digest
                     "artifact_hash": hashes[0]["digest"] if hashes else None,
                     "first_seen_path": first_seen_path,
+                    "byte_ranges": json.loads(byte_ranges) if byte_ranges else None,
                 }
             )
         return results
@@ -250,17 +290,23 @@ class SQLAlchemyJobRepository(JobRepository):
             job_id: Job database ID
 
         Returns:
-            List of output dicts with path, artifact_id, size, hashes, artifact_hash, and first_seen_path.
+            List of output dicts with path, artifact_id, size, hashes, artifact_hash, byte_ranges, and first_seen_path.
         """
         query = (
-            select(JobOutput.path, JobOutput.artifact_id, Artifact.size, Artifact.first_seen_path)
+            select(
+                JobOutput.path,
+                JobOutput.artifact_id,
+                JobOutput.byte_ranges,
+                Artifact.size,
+                Artifact.first_seen_path,
+            )
             .join(Artifact, JobOutput.artifact_id == Artifact.id)
             .where(JobOutput.job_id == job_id)
         )
         rows = self._session.execute(query).all()
 
         results = []
-        for path, artifact_id, size, first_seen_path in rows:
+        for path, artifact_id, byte_ranges, size, first_seen_path in rows:
             hashes = self._artifact_repository.get_hashes(artifact_id)
             results.append(
                 {
@@ -271,6 +317,7 @@ class SQLAlchemyJobRepository(JobRepository):
                     # Backward compatibility: artifact_hash is the primary hash digest
                     "artifact_hash": hashes[0]["digest"] if hashes else None,
                     "first_seen_path": first_seen_path,
+                    "byte_ranges": json.loads(byte_ranges) if byte_ranges else None,
                 }
             )
         return results

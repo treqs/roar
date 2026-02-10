@@ -128,6 +128,7 @@ class TracerService:
         command: list[str],
         roar_dir: Path,
         signal_handler: ISignalHandler,
+        extra_env: dict[str, str] | None = None,
     ) -> TracerResult:
         """
         Execute command with tracing.
@@ -136,6 +137,7 @@ class TracerService:
             command: Command and arguments to execute
             roar_dir: Path to .roar directory for log files
             signal_handler: Signal handler for interrupt management
+            extra_env: Additional environment variables to set in the child process
 
         Returns:
             TracerResult with execution details
@@ -188,6 +190,11 @@ class TracerService:
                 env.update(config_env)
         except Exception:
             pass  # Best-effort
+
+        # Merge extra env (e.g. AWS_ENDPOINT_URL from proxy)
+        if extra_env:
+            env.update(extra_env)
+
         # inject/ is now in the same directory as this file
         inject_dir = str(Path(__file__).parent / "inject")
         env["PYTHONPATH"] = inject_dir + os.pathsep + env.get("PYTHONPATH", "")
