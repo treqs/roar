@@ -6,6 +6,7 @@ from .core.settings import find_config_file, load_settings
 
 # Valid hash algorithms
 VALID_HASH_ALGORITHMS = {"blake3", "sha256", "sha512", "md5"}
+VALID_TRACER_MODES = {"auto", "ebpf", "ptrace"}
 
 # Config keys that can be set via `roar config`
 CONFIGURABLE_KEYS = {
@@ -120,6 +121,11 @@ CONFIGURABLE_KEYS = {
         "type": list,
         "default": [],
         "description": "Additional algorithms for roar run (comma-separated)",
+    },
+    "tracer.mode": {
+        "type": str,
+        "default": "auto",
+        "description": "Tracer backend (auto, ebpf, ptrace)",
     },
     "logging.level": {
         "type": str,
@@ -393,6 +399,21 @@ def save_config(config: dict, config_path: Path):
         lines.extend(hash_lines)
         lines.append("")
 
+    # Tracer section
+    tracer_lines = []
+    for key, val in config.get("tracer", {}).items():
+        default_val = defaults.get("tracer", {}).get(key)
+        if val != default_val:
+            if isinstance(val, str):
+                tracer_lines.append(f'{key} = "{val}"')
+            else:
+                tracer_lines.append(f"{key} = {val}")
+
+    if tracer_lines:
+        lines.append("[tracer]")
+        lines.extend(tracer_lines)
+        lines.append("")
+
     # Reversible section
     reversible_lines = []
     for key, val in config.get("reversible", {}).items():
@@ -487,6 +508,13 @@ def config_set(key: str, value: str, start_dir: str | None = None):
             raise ValueError(
                 f"Invalid hash algorithm: {value}. "
                 f"Valid algorithms: {', '.join(sorted(VALID_HASH_ALGORITHMS))}"
+            )
+        typed_value = value
+    elif key == "tracer.mode":
+        if value not in VALID_TRACER_MODES:
+            raise ValueError(
+                f"Invalid tracer mode: {value}. "
+                f"Valid modes: {', '.join(sorted(VALID_TRACER_MODES))}"
             )
         typed_value = value
     else:

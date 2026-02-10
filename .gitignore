@@ -213,5 +213,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-roar/bin/roar-tracer
+
+# claude
 CLAUDE.md
+.claude/
+
+# roar
+roar/bin/roar-tracer
+.roar/

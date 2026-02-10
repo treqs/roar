@@ -15,6 +15,7 @@ from .base import RoarBaseModel
 # Type aliases
 HashAlgorithm = Literal["blake3", "sha256", "sha512", "md5"]
 LogLevel = Literal["debug", "info", "warning", "error"]
+TracerMode = Literal["auto", "ebpf", "ptrace"]
 
 
 class ConfigBaseModel(RoarBaseModel):
@@ -157,6 +158,12 @@ class HashConfig(ConfigBaseModel):
         return v if v else []
 
 
+class TracerConfig(ConfigBaseModel):
+    """Tracer backend configuration section."""
+
+    mode: TracerMode = "auto"
+
+
 class LoggingConfig(ConfigBaseModel):
     """Logging configuration section."""
 
@@ -179,6 +186,7 @@ class RoarConfig(ConfigBaseModel):
     glaas: GlaasConfig = Field(default_factory=GlaasConfig)
     registration: RegisterConfig = Field(default_factory=RegisterConfig)
     hash: HashConfig = Field(default_factory=HashConfig)
+    tracer: TracerConfig = Field(default_factory=TracerConfig)
     reversible: ReversibleConfig = Field(default_factory=ReversibleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 

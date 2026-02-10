@@ -1,0 +1,36 @@
+[package]
+name = "roar-tracer-ebpf"
+version = "0.1.0"
+edition = "2021"
+description = "eBPF-based syscall tracer for roar provenance tracking"
+
+[[bin]]
+name = "roar-tracer-ebpf"
+path = "src/main.rs"
+
+[[bin]]
+name = "roard"
+path = "src/bin/roard.rs"
+
+[lib]
+name = "roar_tracer_ebpf"
+path = "src/lib.rs"
+
+[build-dependencies]
+aya-build = "0.1"
+
+[dependencies]
+aya = "0.13"
+aya-log = "0.2"
+roar-ebpf-common = { path = "../common", features = ["user"] }
+rmp-serde = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+nix = { version = "0.29", features = ["process", "signal"] }
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -28,6 +28,7 @@ from .models.config import (
     OutputConfig,
     RegisterConfig,
     ReversibleConfig,
+    TracerConfig,
 )
 
 
@@ -152,6 +153,7 @@ class RoarSettings(BaseSettings):
     glaas: GlaasConfig = GlaasConfig()
     registration: RegisterConfig = RegisterConfig()
     hash: HashConfig = HashConfig()
+    tracer: TracerConfig = TracerConfig()
     reversible: ReversibleConfig = ReversibleConfig()
     logging: LoggingConfig = LoggingConfig()
     env: dict[str, str] = {}
@@ -241,6 +243,7 @@ class RoarSettings(BaseSettings):
             "glaas": self.glaas.model_dump(),
             "registration": self.registration.model_dump(),
             "hash": self.hash.model_dump(),
+            "tracer": self.tracer.model_dump(),
             "reversible": self.reversible.model_dump(),
             "logging": self.logging.model_dump(),
             "env": dict(self.env),
