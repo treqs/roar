@@ -56,16 +56,19 @@ class RoarContext:
         if cwd is None:
             cwd = Path.cwd()
 
-        # Determine .roar directory
-        roar_dir = cwd / ".roar"
+        # Get VCS provider and find repo root.
+        repo_root = cls._get_repo_root(cwd)
 
-        # Get VCS provider and find repo root
-        repo_root = cls._get_repo_root()
+        # Determine .roar directory by searching upward from cwd, bounded to workspace.
+        from ..core.settings import find_roar_dir
+
+        search_stop = str(repo_root) if repo_root is not None else str(cwd)
+        roar_dir = find_roar_dir(str(cwd), stop_dir=search_stop) or (cwd / ".roar")
 
         # Load config if roar is initialized
         config: dict[str, Any] = {}
         if roar_dir.exists():
-            config = cls._load_config(cwd)
+            config = cls._load_config(roar_dir.parent)
 
         return cls(
             roar_dir=roar_dir,
@@ -76,7 +79,7 @@ class RoarContext:
         )
 
     @staticmethod
-    def _get_repo_root() -> Path | None:
+    def _get_repo_root(start_dir: Path | None = None) -> Path | None:
         """Get the git repository root, if in a git repo.
 
         Returns:
@@ -87,7 +90,7 @@ class RoarContext:
 
             container = get_container()
             vcs: IVCSProvider = container.get_vcs_provider("git")
-            root = vcs.get_repo_root()
+            root = vcs.get_repo_root(str(start_dir) if start_dir else None)
             return Path(root) if root else None
         except Exception:
             # Container not bootstrapped yet — fall back to direct git call
@@ -97,6 +100,7 @@ class RoarContext:
                 out = subprocess.check_output(
                     ["git", "rev-parse", "--show-toplevel"],
                     stderr=subprocess.DEVNULL,
+                    cwd=start_dir,
                 )
                 return Path(out.decode().strip())
             except Exception:

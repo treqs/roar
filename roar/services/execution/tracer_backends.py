@@ -12,6 +12,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from ...core.tracer_modes import TRACER_BACKEND_ORDER
+
 EXPECTED_EBPF_CAP_NAMES = {
     "cap_bpf",
     "cap_dac_read_search",
@@ -20,7 +22,7 @@ EXPECTED_EBPF_CAP_NAMES = {
     "cap_sys_resource",
 }
 
-AUTO_BACKEND_ORDER = ("ebpf", "preload", "ptrace")
+AUTO_BACKEND_ORDER = TRACER_BACKEND_ORDER
 
 
 def find_ptrace_tracer(package_path: Path) -> str | None:
@@ -167,6 +169,21 @@ def preload_is_ready(
 
 def backend_ready(package_path: Path, backend: str) -> tuple[bool, str]:
     """Check readiness for backend policy: auto|ptrace|ebpf|preload."""
+    if backend in ("ptrace", "ebpf", "preload"):
+        return _backend_ready_non_auto(package_path, backend)
+
+    # auto: first ready backend in preferred order
+    for candidate in AUTO_BACKEND_ORDER:
+        ok, _detail = _backend_ready_non_auto(package_path, candidate)
+        if ok:
+            if candidate == "ptrace":
+                return True, "ptrace available"
+            return True, f"{candidate} ready"
+
+    return False, "no usable tracer found (eBPF/preload not ready, ptrace not found)"
+
+
+def _backend_ready_non_auto(package_path: Path, backend: str) -> tuple[bool, str]:
     if backend == "ptrace":
         ptrace = find_ptrace_tracer(package_path)
         return (True, ptrace) if ptrace else (False, "ptrace tracer not found")
@@ -178,31 +195,11 @@ def backend_ready(package_path: Path, backend: str) -> tuple[bool, str]:
         ok, reason = ebpf_is_ready(ebpf)
         return ok, reason or "ready"
 
-    if backend == "preload":
-        preload = find_preload_tracer(package_path)
-        if not preload:
-            return False, "preload tracer not found"
-        ok, reason = preload_is_ready(package_path, preload)
-        return ok, reason or "ready"
-
-    # auto: first ready backend in preferred order
-    ebpf = find_ebpf_tracer(package_path)
-    if ebpf:
-        ok, _ = ebpf_is_ready(ebpf)
-        if ok:
-            return True, "eBPF ready"
-
     preload = find_preload_tracer(package_path)
-    if preload:
-        ok, _ = preload_is_ready(package_path, preload)
-        if ok:
-            return True, "preload ready"
-
-    ptrace = find_ptrace_tracer(package_path)
-    if ptrace:
-        return True, "ptrace available"
-
-    return False, "no usable tracer found (eBPF/preload not ready, ptrace not found)"
+    if not preload:
+        return False, "preload tracer not found"
+    ok, reason = preload_is_ready(package_path, preload)
+    return ok, reason or "ready"
 
 
 def _find_binary(package_path: Path, binary_name: str) -> str | None:

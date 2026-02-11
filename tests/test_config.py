@@ -21,6 +21,7 @@ from roar.config import (
     _get_default_config,
     config_get,
     config_set,
+    get_roar_dir,
     load_config,
     save_config,
 )
@@ -87,6 +88,17 @@ class TestRoarInit:
         assert found is not None, "find_config_file should find the config"
         assert found.name == "config.toml"
         assert found.parent.name == ".roar"
+
+    def test_get_roar_dir_reuses_parent_roar_directory(self, tmp_path: Path) -> None:
+        root = tmp_path / "repo"
+        nested = root / "nested" / "deep"
+        roar_dir = root / ".roar"
+        roar_dir.mkdir(parents=True)
+        nested.mkdir(parents=True)
+        subprocess.run(["git", "init", str(root)], check=True, capture_output=True)
+
+        resolved = get_roar_dir(str(nested))
+        assert resolved == roar_dir
 
 
 class TestDefaultConfigTemplate:

@@ -6,6 +6,7 @@ Usage: roar build [options] <command>
 
 import click
 
+from ...core.tracer_modes import TRACER_MODE_VALUES
 from ..context import RoarContext
 from ..decorators import require_init
 from ._execution import (
@@ -30,7 +31,7 @@ from ._execution import (
 @click.option(
     "--tracer",
     "tracer_mode",
-    type=click.Choice(["auto", "ebpf", "preload", "ptrace"]),
+    type=click.Choice(list(TRACER_MODE_VALUES)),
     default=None,
     help="Tracer backend policy for this build",
 )
@@ -84,6 +85,7 @@ def build(
         ctx=ctx,
         command=args_list,
         job_type="build",
+        step_name=step_name,
         quiet=quiet_setting,
         hash_algorithms=algorithms,
         git_info=git_info,

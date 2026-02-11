@@ -9,6 +9,7 @@ import shlex
 
 import click
 
+from ...core.tracer_modes import TRACER_MODE_VALUES
 from ...db.context import create_database_context
 from ...presenters.console import ConsolePresenter
 from ...presenters.run_report import RunReportPresenter
@@ -37,7 +38,7 @@ from ._execution import (
 @click.option(
     "--tracer",
     "tracer_mode",
-    type=click.Choice(["auto", "ebpf", "preload", "ptrace"]),
+    type=click.Choice(list(TRACER_MODE_VALUES)),
     default=None,
     help="Tracer backend policy for this run",
 )
@@ -134,6 +135,7 @@ def run(
         ctx=ctx,
         command=command,
         job_type=job_type,
+        step_name=step_name,
         quiet=quiet_setting,
         hash_algorithms=algorithms,
         git_info=git_info,

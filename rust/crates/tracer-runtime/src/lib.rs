@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tracer_schema::ProcessInfo;
+use tracer_schema::{FileRecord, ProcessInfo, TracerReport};
 
 pub fn timestamp_now() -> f64 {
     SystemTime::now()
@@ -37,6 +37,37 @@ pub fn capture_process_info(pid: u32, parent_pid: Option<u32>) -> Option<Process
         command,
         env,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_tracer_report(
+    tracer_mode: &str,
+    chunk_size: Option<u64>,
+    mut processes: Vec<ProcessInfo>,
+    files: Vec<FileRecord>,
+    opened_files: Vec<String>,
+    read_files: Vec<String>,
+    written_files: Vec<String>,
+    env_accessed: HashMap<String, String>,
+    start_time: f64,
+    end_time: f64,
+    events_dropped: Option<u64>,
+) -> TracerReport {
+    processes.sort_by_key(|p| p.pid);
+    TracerReport {
+        version: 1,
+        chunk_size,
+        processes,
+        files,
+        opened_files,
+        read_files,
+        written_files,
+        env_accessed,
+        start_time,
+        end_time,
+        tracer_mode: tracer_mode.to_string(),
+        events_dropped,
+    }
 }
 
 pub fn resolve_path_with_cache(

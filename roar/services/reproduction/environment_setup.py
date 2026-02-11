@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...utils.git_url import is_ssh_url, ssh_to_https
+from .installers import AptInstaller, PythonPackageInstaller
+from .pipeline_metadata import PipelineMetadataParser, RequirementSummary
 
 if TYPE_CHECKING:
     from ...core.interfaces.logger import ILogger
@@ -53,6 +55,13 @@ class EnvironmentSetupService:
         self._use_uv = self._check_uv_available()
         self._roar_executable = roar_executable or self._detect_roar_executable()
         self._logger: ILogger | None = None
+        self._metadata_parser = PipelineMetadataParser()
+        self._apt_installer = AptInstaller(presenter=presenter, print_fn=self._print)
+        self._python_installer = PythonPackageInstaller(
+            use_uv=self._use_uv,
+            presenter=presenter,
+            print_fn=self._print,
+        )
 
     @property
     def logger(self) -> "ILogger":
@@ -125,9 +134,11 @@ class EnvironmentSetupService:
         self._initialize_roar(repo_dir, venv_dir)
         self.logger.debug("Roar initialized")
 
+        requirements = self.get_requirement_summary(pipeline)
+
         # Install build tool dpkg packages first (needed for source compilations)
         if package_sync:
-            build_dpkg_packages = self._get_build_dpkg_packages(pipeline)
+            build_dpkg_packages = requirements.build_dpkg
             self.logger.debug("Found %d build_dpkg packages", len(build_dpkg_packages))
             if build_dpkg_packages:
                 self.logger.debug("build_dpkg packages: %s", build_dpkg_packages)
@@ -137,7 +148,7 @@ class EnvironmentSetupService:
                 self.logger.debug("build_dpkg installation complete, success=%s", success)
 
             # Install dpkg packages BEFORE pip packages (system deps first)
-            dpkg_packages = self._get_dpkg_packages(pipeline)
+            dpkg_packages = requirements.dpkg
             self.logger.debug(
                 "Found %d dpkg packages on job, intending to install: %d",
                 len(dpkg_packages),
@@ -153,7 +164,7 @@ class EnvironmentSetupService:
             self.logger.debug("Skipping system package installation (--package-sync not set)")
 
         # Install pip-installed build tools (before regular pip packages)
-        build_pip_packages = self._get_build_pip_packages(pipeline)
+        build_pip_packages = requirements.build_pip
         self.logger.debug("Found %d build_pip packages", len(build_pip_packages))
         if build_pip_packages:
             self.logger.debug("build_pip packages: %s", build_pip_packages)
@@ -162,7 +173,7 @@ class EnvironmentSetupService:
             )
 
         # Install pip packages
-        packages = self._get_packages(pipeline)
+        packages = requirements.pip
         self.logger.debug(
             "Found %d pip packages on job, intending to install: %d",
             len(packages),
@@ -186,6 +197,13 @@ class EnvironmentSetupService:
             packages=packages,
         )
 
+    def get_requirement_summary(self, pipeline: "PipelineInfo") -> RequirementSummary:
+        """Return parsed package requirements for reproduction preview/setup."""
+        summary = self._metadata_parser.summarize_requirements(
+            pipeline.build_steps, pipeline.run_steps
+        )
+        return summary
+
     def _is_debian_based(self) -> bool:
         """Check if the current system is Debian-based Linux."""
         if platform.system() != "Linux":
@@ -202,69 +220,15 @@ class EnvironmentSetupService:
 
     def _get_build_dpkg_packages(self, pipeline: "PipelineInfo") -> dict[str, str]:
         """Extract build_dpkg package dict {name: version} from pipeline metadata."""
-        import json
-
-        packages: dict[str, str] = {}
-
-        def _extract_build_dpkg_from_steps(steps: list) -> dict[str, str]:
-            result: dict[str, str] = {}
-            for step in steps:
-                metadata = step.get("metadata") or {}
-                if isinstance(metadata, str):
-                    try:
-                        metadata = json.loads(metadata)
-                    except json.JSONDecodeError:
-                        continue
-
-                pkgs_by_manager = metadata.get("packages", {})
-                build_dpkg_pkgs = pkgs_by_manager.get("build_dpkg", {})
-
-                if isinstance(build_dpkg_pkgs, dict):
-                    for name, version in build_dpkg_pkgs.items():
-                        if name and name not in result:
-                            result[name] = version or ""
-            return result
-
-        build_pkgs = _extract_build_dpkg_from_steps(pipeline.build_steps)
-        run_pkgs = _extract_build_dpkg_from_steps(pipeline.run_steps)
-        self.logger.debug("build_dpkg packages from build steps: %d", len(build_pkgs))
-        self.logger.debug("build_dpkg packages from run steps: %d", len(run_pkgs))
-
-        packages = {**build_pkgs, **run_pkgs}
-        return dict(sorted(packages.items()))
+        return self._metadata_parser.collect_manager_packages(
+            pipeline.build_steps, pipeline.run_steps, "build_dpkg"
+        )
 
     def _get_build_pip_packages(self, pipeline: "PipelineInfo") -> dict[str, str]:
         """Extract build_pip package dict {name: version} from pipeline metadata."""
-        import json
-
-        packages: dict[str, str] = {}
-
-        def _extract_build_pip_from_steps(steps: list) -> dict[str, str]:
-            result: dict[str, str] = {}
-            for step in steps:
-                metadata = step.get("metadata") or {}
-                if isinstance(metadata, str):
-                    try:
-                        metadata = json.loads(metadata)
-                    except json.JSONDecodeError:
-                        continue
-
-                pkgs_by_manager = metadata.get("packages", {})
-                build_pip_pkgs = pkgs_by_manager.get("build_pip", {})
-
-                if isinstance(build_pip_pkgs, dict):
-                    for name, version in build_pip_pkgs.items():
-                        if name and name not in result:
-                            result[name] = version or ""
-            return result
-
-        build_pkgs = _extract_build_pip_from_steps(pipeline.build_steps)
-        run_pkgs = _extract_build_pip_from_steps(pipeline.run_steps)
-        self.logger.debug("build_pip packages from build steps: %d", len(build_pkgs))
-        self.logger.debug("build_pip packages from run steps: %d", len(run_pkgs))
-
-        packages = {**build_pkgs, **run_pkgs}
-        return dict(sorted(packages.items()))
+        return self._metadata_parser.collect_manager_packages(
+            pipeline.build_steps, pipeline.run_steps, "build_pip"
+        )
 
     def _install_build_pip_packages(
         self,
@@ -274,94 +238,22 @@ class EnvironmentSetupService:
         pip_any_version: bool = False,
     ) -> None:
         """Install pip-installed build tools into the venv before regular packages."""
-        if not packages:
-            return
-
-        self._print(f"Installing {len(packages)} build tool pip packages...")
-
-        # Build versioned specifiers: "pkg==version"
-        specs = [f"{name}=={version}" if version else name for name, version in packages.items()]
-
-        if self._use_uv:
-            result = subprocess.run(
-                ["uv", "pip", "install", *specs],
-                cwd=repo_dir,
-                env={"VIRTUAL_ENV": str(venv_dir), "PATH": os.environ.get("PATH", "")},
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        else:
-            pip = self._get_pip(venv_dir)
-            result = subprocess.run(
-                [str(pip), "install", *specs],
-                cwd=repo_dir,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-
-        if result.returncode != 0:
-            self.logger.warning("Build pip install failed: %s", result.stderr.strip())
-            if pip_any_version:
-                # Retry without version pins
-                unversioned = list(packages.keys())
-                self._print("Retrying build tool pip packages without version pins...")
-                if self._use_uv:
-                    subprocess.run(
-                        ["uv", "pip", "install", *unversioned],
-                        cwd=repo_dir,
-                        env={"VIRTUAL_ENV": str(venv_dir), "PATH": os.environ.get("PATH", "")},
-                        stderr=subprocess.PIPE,
-                        text=True,
-                    )
-                else:
-                    pip = self._get_pip(venv_dir)
-                    subprocess.run(
-                        [str(pip), "install", *unversioned],
-                        cwd=repo_dir,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                    )
-        else:
-            self._print("Build tool pip packages installed successfully")
+        self._python_installer.install_build_tools(
+            venv_dir=venv_dir,
+            packages=packages,
+            repo_dir=repo_dir,
+            allow_any_version=pip_any_version,
+            logger=self.logger,
+            presenter=self._presenter,
+        )
 
     def _get_dpkg_packages(self, pipeline: "PipelineInfo") -> dict[str, str]:
         """Extract dpkg package dict {name: version} from pipeline metadata."""
-        import json
-
-        packages: dict[str, str] = {}
-
-        def _extract_dpkg_from_steps(steps: list) -> dict[str, str]:
-            result: dict[str, str] = {}
-            for step in steps:
-                metadata = step.get("metadata") or {}
-                self.logger.debug(
-                    "Step metadata type=%s, value=%s",
-                    type(metadata).__name__,
-                    repr(metadata)[:200] if metadata else "None",
-                )
-                if isinstance(metadata, str):
-                    try:
-                        metadata = json.loads(metadata)
-                    except json.JSONDecodeError:
-                        continue
-
-                pkgs_by_manager = metadata.get("packages", {})
-                dpkg_pkgs = pkgs_by_manager.get("dpkg", {})
-
-                if isinstance(dpkg_pkgs, dict):
-                    for name, version in dpkg_pkgs.items():
-                        if name and name not in result:
-                            result[name] = version or ""
-            return result
-
-        build_pkgs = _extract_dpkg_from_steps(pipeline.build_steps)
-        run_pkgs = _extract_dpkg_from_steps(pipeline.run_steps)
-        self.logger.debug("dpkg packages from build steps: %d", len(build_pkgs))
-        self.logger.debug("dpkg packages from run steps: %d", len(run_pkgs))
-
-        packages = {**build_pkgs, **run_pkgs}
+        packages = self._metadata_parser.collect_manager_packages(
+            pipeline.build_steps, pipeline.run_steps, "dpkg"
+        )
         self.logger.debug("Total unique dpkg packages found: %d", len(packages))
-        return dict(sorted(packages.items()))
+        return packages
 
     def _install_dpkg_packages(
         self,
@@ -369,184 +261,27 @@ class EnvironmentSetupService:
         auto_confirm: bool,
         dpkg_any_version: bool = False,
     ) -> tuple[bool, list[str]]:
-        """Install dpkg packages via apt-get. Returns (success, warnings).
-
-        Strategy:
-        1. Try installing all packages with exact versions
-        2. For any that fail, warn and prompt to install without version pin
-        3. If --dpkg-any-version, skip prompt and install any available version
-        """
-        warnings: list[str] = []
-        self.logger.debug("_install_dpkg_packages: starting with %d packages", len(packages))
-
-        if not self._is_debian_based():
-            self.logger.debug("Skipping: not Debian-based system")
-            self._print("Skipping dpkg packages: not a Debian-based system")
-            return True, ["dpkg packages skipped: non-Debian system"]
-
-        needs_sudo = not self._is_root()
-        self.logger.debug("Running as root: %s, needs sudo: %s", not needs_sudo, needs_sudo)
-
-        if needs_sudo and not self._is_interactive() and not auto_confirm:
-            self.logger.debug("Skipping: non-interactive terminal, sudo required")
-            self._print("Skipping dpkg packages: sudo required but not in interactive mode")
-            return True, ["dpkg packages skipped: non-interactive terminal"]
-
-        # Confirmation prompt
-        if not auto_confirm:
-            self._print(f"\nSystem packages required ({len(packages)}):")
-            for name, version in list(packages.items())[:10]:
-                self._print(f"  - {name}={version}" if version else f"  - {name}")
-            if len(packages) > 10:
-                self._print(f"  ... and {len(packages) - 10} more")
-
-            if needs_sudo:
-                self._print("\nThese packages require sudo to install.")
-
-            if self._presenter:
-                if not self._presenter.confirm("Install system packages?", default=False):
-                    return True, ["dpkg packages skipped by user"]
-            else:
-                response = input("Install system packages? [y/N] ").strip().lower()
-                if response not in ("y", "yes"):
-                    return True, ["dpkg packages skipped by user"]
-
-        # Build versioned package specifiers: "pkg=version" for apt-get
-        versioned = [f"{name}={version}" if version else name for name, version in packages.items()]
-
-        self.logger.debug("Attempting versioned install: %s", versioned)
-        self._print(f"Installing {len(packages)} system packages (exact versions)...")
-
-        cmd_prefix = ["sudo"] if needs_sudo else []
-        try:
-            cmd = [*cmd_prefix, "apt-get", "install", "-y", *versioned]
-            self.logger.debug("Running command: %s", " ".join(cmd))
-            result = subprocess.run(
-                cmd,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=300,
-            )
-            self.logger.debug("apt-get returned: %d", result.returncode)
-            if result.stderr:
-                self._print(result.stderr.strip())
-
-            if result.returncode == 0:
-                self.logger.debug("All dpkg packages installed with exact versions")
-                self._print("System packages installed successfully")
-                return True, warnings
-
-            # Exact version failed — identify which packages failed
-            self.logger.debug("Versioned install failed: %s", result.stderr.strip())
-
-            # Try each package individually to find failures
-            failed_packages: list[str] = []
-            succeeded_packages: list[str] = []
-
-            for name, version in packages.items():
-                spec = f"{name}={version}" if version else name
-                r = subprocess.run(
-                    [*cmd_prefix, "apt-get", "install", "-y", "--dry-run", spec],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if r.returncode != 0:
-                    failed_packages.append(name)
-                    self.logger.debug("Package %s version %s not available", name, version)
-                else:
-                    succeeded_packages.append(spec)
-
-            # Install the ones that work with exact versions
-            if succeeded_packages:
-                self.logger.debug(
-                    "Installing %d packages with exact versions", len(succeeded_packages)
-                )
-                result = subprocess.run(
-                    [*cmd_prefix, "apt-get", "install", "-y", *succeeded_packages],
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=300,
-                )
-                if result.stderr:
-                    self._print(result.stderr.strip())
-
-            # Handle failed packages — offer to install any version
-            if failed_packages:
-                self._print(f"\nExact versions not found for {len(failed_packages)} packages:")
-                for name in failed_packages:
-                    self._print(f"  - {name}={packages[name]}")
-
-                install_any = dpkg_any_version
-                if not install_any and not auto_confirm:
-                    if self._presenter:
-                        install_any = self._presenter.confirm(
-                            "Install available versions instead?", default=True
-                        )
-                    else:
-                        resp = input("Install available versions instead? [Y/n] ").strip().lower()
-                        install_any = resp not in ("n", "no")
-
-                if install_any:
-                    self.logger.debug("Installing any version of: %s", failed_packages)
-                    self._print(
-                        f"Installing any available version of {len(failed_packages)} packages..."
-                    )
-                    r = subprocess.run(
-                        [*cmd_prefix, "apt-get", "install", "-y", *failed_packages],
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        timeout=300,
-                    )
-                    if r.stderr:
-                        self._print(r.stderr.strip())
-                    if r.returncode != 0:
-                        warnings.append(f"Some packages failed to install: {r.stderr.strip()}")
-                        self.logger.warning("Fallback install failed: %s", r.stderr.strip())
-                    else:
-                        for name in failed_packages:
-                            warnings.append(
-                                f"Installed {name} (any version) instead of {name}={packages[name]}"
-                            )
-                else:
-                    for name in failed_packages:
-                        warnings.append(
-                            f"Skipped {name}={packages[name]} (exact version not found)"
-                        )
-
-            self._print("System package installation complete")
-            return True, warnings
-
-        except subprocess.TimeoutExpired:
-            warnings.append("dpkg installation timed out after 5 minutes")
-            return True, warnings
-        except Exception as e:
-            warnings.append(f"dpkg installation error: {e!s}")
-            return True, warnings
+        return self._apt_installer.install(
+            packages=packages,
+            auto_confirm=auto_confirm,
+            allow_any_version=dpkg_any_version,
+            logger=self.logger,
+            presenter=self._presenter,
+            is_debian_based=self._is_debian_based,
+            is_root=self._is_root,
+            is_interactive=self._is_interactive,
+        )
 
     def _validate_environment(self, pipeline: "PipelineInfo") -> list[str]:
         """
         Compare current system with the original execution environment.
         Returns list of warning messages for mismatches.
         """
-        import json
-
         warnings: list[str] = []
-
-        # Collect runtime info from all steps
-        original_runtime: dict = {}
-        for step in pipeline.build_steps + pipeline.run_steps:
-            metadata = step.get("metadata") or {}
-            if isinstance(metadata, str):
-                try:
-                    metadata = json.loads(metadata)
-                except json.JSONDecodeError:
-                    continue
-
-            runtime = metadata.get("runtime", {})
-            if runtime and not original_runtime:
-                original_runtime = runtime
-                break
+        original_runtime = self._metadata_parser.first_runtime(
+            pipeline.build_steps,
+            pipeline.run_steps,
+        )
 
         if not original_runtime:
             self.logger.debug("No runtime metadata found in pipeline steps")
@@ -785,146 +520,24 @@ class EnvironmentSetupService:
         auto_confirm: bool = False,
         pip_any_version: bool = False,
     ) -> tuple[bool, list[str]]:
-        """Install packages into virtual environment. Returns (success, warnings).
-
-        Strategy:
-        1. Try installing all packages with exact versions
-        2. For any that fail, identify which ones and prompt to install without version pin
-        3. If --pip-any-version, skip prompt and install any available version
-        """
-        warnings: list[str] = []
-
-        if not packages:
-            self._print("No packages to install from provenance.")
-            return True, warnings
-
-        self._print(f"Installing {len(packages)} packages from provenance...")
-
-        pip = self._get_pip(venv_dir)
-
-        def _run_pip(args: list[str], show_output: bool = True) -> subprocess.CompletedProcess[str]:
-            capture_kwargs = (
-                {"stderr": subprocess.PIPE, "text": True}
-                if show_output
-                else {"capture_output": True, "text": True}
-            )
-            if self._use_uv:
-                result = subprocess.run(  # type: ignore[call-overload]
-                    ["uv", "pip", *args],
-                    cwd=repo_dir,
-                    env={"VIRTUAL_ENV": str(venv_dir), "PATH": os.environ.get("PATH", "")},
-                    **capture_kwargs,
-                )
-                if show_output and result.stderr:
-                    self._print(result.stderr.strip())
-                return result
-            else:
-                return subprocess.run(  # type: ignore[call-overload]
-                    [str(pip), *args],
-                    cwd=repo_dir,
-                    **capture_kwargs,
-                )
-
-        # Step 1: Try installing all packages at once
-        result = _run_pip(["install", *packages])
-
-        if result.returncode == 0:
-            self._print("All pip packages installed successfully")
-            return True, warnings
-
-        # Step 2: Batch install failed — identify which packages failed
-        self.logger.debug("Batch pip install failed: %s", result.stderr.strip())
-
-        failed_packages: list[str] = []
-        succeeded_packages: list[str] = []
-
-        for pkg in packages:
-            r = _run_pip(["install", "--dry-run", pkg], show_output=True)
-            if r.returncode != 0:
-                failed_packages.append(pkg)
-                self.logger.debug("Package %s not available", pkg)
-            else:
-                succeeded_packages.append(pkg)
-
-        # Step 3: Install the ones that work with exact versions
-        if succeeded_packages:
-            self.logger.debug("Installing %d packages with exact versions", len(succeeded_packages))
-            _run_pip(["install", *succeeded_packages])
-
-        # Step 4: Handle failed packages — offer to install any version
-        if failed_packages:
-            self._print(f"\nExact versions not found for {len(failed_packages)} pip packages:")
-            for pkg in failed_packages:
-                self._print(f"  - {pkg}")
-
-            install_any = pip_any_version
-            if not install_any and not auto_confirm:
-                if self._presenter:
-                    install_any = self._presenter.confirm(
-                        "Install available versions instead?", default=True
-                    )
-                else:
-                    resp = input("Install available versions instead? [Y/n] ").strip().lower()
-                    install_any = resp not in ("n", "no")
-
-            if install_any:
-                # Strip version pins (e.g. "numpy==1.24.1" -> "numpy")
-                unversioned = [pkg.split("==")[0] for pkg in failed_packages]
-                self.logger.debug("Installing any version of: %s", unversioned)
-                self._print(f"Installing any available version of {len(unversioned)} packages...")
-                r = _run_pip(["install", *unversioned])
-                if r.returncode != 0:
-                    warnings.append(f"Some pip packages failed to install: {r.stderr.strip()}")
-                    self.logger.warning("Fallback pip install failed: %s", r.stderr.strip())
-                else:
-                    for pkg in failed_packages:
-                        warnings.append(
-                            f"Installed {pkg.split('==')[0]} (any version) instead of {pkg}"
-                        )
-            else:
-                for pkg in failed_packages:
-                    warnings.append(f"Skipped {pkg} (exact version not found)")
-
-        self._print("Pip package installation complete")
-        return True, warnings
+        return self._python_installer.install_packages(
+            venv_dir=venv_dir,
+            packages=packages,
+            repo_dir=repo_dir,
+            auto_confirm=auto_confirm,
+            allow_any_version=pip_any_version,
+            logger=self.logger,
+            presenter=self._presenter,
+        )
 
     def _get_packages(self, pipeline: "PipelineInfo") -> list[str]:
         """Extract pip package list from pipeline metadata."""
-        import json
-
-        def _extract_pip_from_steps(steps: list) -> set[str]:
-            result: set[str] = set()
-            for step in steps:
-                metadata = step.get("metadata") or {}
-                self.logger.debug(
-                    "Step metadata type=%s, value=%s",
-                    type(metadata).__name__,
-                    repr(metadata)[:200] if metadata else "None",
-                )
-                if isinstance(metadata, str):
-                    try:
-                        metadata = json.loads(metadata)
-                    except json.JSONDecodeError:
-                        continue
-
-                # Format: {"packages": {"pip": {"numpy": "1.24.1"}, "dpkg": {...}}}
-                pkgs_by_manager = metadata.get("packages", {})
-                pip_packages = pkgs_by_manager.get("pip", {})
-
-                if isinstance(pip_packages, dict):
-                    for name, version in pip_packages.items():
-                        if name:
-                            result.add(f"{name}=={version}" if version else name)
-            return result
-
-        build_pkgs = _extract_pip_from_steps(pipeline.build_steps)
-        run_pkgs = _extract_pip_from_steps(pipeline.run_steps)
-        self.logger.debug("pip packages from build steps: %d", len(build_pkgs))
-        self.logger.debug("pip packages from run steps: %d", len(run_pkgs))
-
-        packages = build_pkgs | run_pkgs
+        packages = self._metadata_parser.collect_pip_specifiers(
+            pipeline.build_steps,
+            pipeline.run_steps,
+        )
         self.logger.debug("Total unique pip packages found: %d", len(packages))
-        return sorted(packages)
+        return packages
 
     def _run_git(self, args: list[str], cwd: Path | None = None) -> None:
         """Run a git command."""

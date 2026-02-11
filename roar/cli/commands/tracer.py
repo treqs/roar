@@ -10,6 +10,7 @@ from pathlib import Path
 import click
 
 from ...config import config_get, config_set
+from ...core.tracer_modes import TRACER_MODE_VALUES, is_valid_tracer_mode
 from ...services.execution import tracer_backends
 
 REQUIRED_CAPS = "cap_bpf,cap_perfmon,cap_sys_resource,cap_sys_ptrace,cap_dac_read_search+ep"
@@ -59,7 +60,10 @@ def _get_perf_event_paranoid() -> int | None:
 
 def _get_default_mode() -> str:
     """Get configured default tracer mode."""
-    return config_get("tracer.default") or "auto"
+    mode = config_get("tracer.default")
+    if isinstance(mode, str) and is_valid_tracer_mode(mode):
+        return mode
+    return "auto"
 
 
 def _set_tracer_default(mode: str) -> None:
@@ -154,7 +158,7 @@ def tracer_status() -> None:
 
 
 @tracer.command("set-default")
-@click.argument("mode", type=click.Choice(["auto", "ebpf", "preload", "ptrace"]))
+@click.argument("mode", type=click.Choice(list(TRACER_MODE_VALUES)))
 def tracer_set_default(mode: str) -> None:
     """Set default tracer backend policy."""
     _set_tracer_default(mode)
@@ -187,7 +191,7 @@ def tracer_preload() -> None:
 @tracer.command("check")
 @click.option(
     "--backend",
-    type=click.Choice(["auto", "ebpf", "preload", "ptrace"]),
+    type=click.Choice(list(TRACER_MODE_VALUES)),
     default=None,
     help="Backend policy to validate (defaults to configured default tracer).",
 )

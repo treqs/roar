@@ -9,37 +9,24 @@ roar put ALWAYS registers lineage with GLaaS. This is not optional.
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any
 
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
-from ...db.hashing.backend import compute_hashes_batch
 from ...glaas_client import GlaasClient, get_glaas_url
-from ...plugins.vcs.git import GitVCSProvider
 from ...services.registration import RegistrationCoordinator, SessionRegistrationService
+from ...services.transfer import (
+    DatabaseContext,
+    build_operation_metadata_json,
+    hash_files_blake3,
+    resolve_git_context,
+)
 from ...services.upload.lineage_collector import LineageCollector
 from .backends.base import StorageBackend
 from .resolver import SourceResolver
-
-if TYPE_CHECKING:
-    pass
-
-
-class DatabaseContext(Protocol):
-    """Protocol for database context dependency."""
-
-    @property
-    def artifacts(self) -> Any: ...
-
-    @property
-    def jobs(self) -> Any: ...
-
-    @property
-    def sessions(self) -> Any: ...
 
 
 @dataclass
@@ -335,8 +322,9 @@ class PutService:
         destination_type = parsed.scheme.lower()
 
         # Build metadata
-        metadata = {
-            "put": {
+        metadata_json = build_operation_metadata_json(
+            "put",
+            {
                 "message": message,
                 "destination": self._destination,
                 "destination_type": destination_type,
@@ -344,8 +332,8 @@ class PutService:
                 "git_commit": git_commit,
                 "git_tag": git_tag,
                 "timestamp": time.time(),
-            }
-        }
+            },
+        )
         self._logger.debug(
             "Job metadata: destination_type=%s, artifacts=%d", destination_type, len(artifact_urls)
         )
@@ -357,7 +345,7 @@ class PutService:
             timestamp=time.time(),
             session_id=session_id,
             step_number=step_number,
-            metadata=json.dumps(metadata),
+            metadata=metadata_json,
             job_type="put",
             exit_code=0,
         )
@@ -386,7 +374,7 @@ class PutService:
             exit_code=0,
             job_type="put",
             step_number=step_number,
-            metadata=json.dumps(metadata),
+            metadata=metadata_json,
         )
         if not put_job_result.success:
             self._logger.debug("Put job GLaaS registration failed: %s", put_job_result.error)
@@ -471,14 +459,7 @@ class PutService:
             return {}
 
         self._logger.debug("Hashing %d file(s) in batch", len(paths))
-        raw_result = compute_hashes_batch(paths, ["blake3"])
-        result: dict[str, str] = {}
-        for path in paths:
-            key = str(path)
-            digest = raw_result.get(key, {}).get("blake3")
-            if digest:
-                result[key] = digest
-
+        result = hash_files_blake3(paths)
         self._logger.debug("Batch hash completed: %d/%d file(s)", len(result), len(paths))
         return result
 
@@ -502,25 +483,11 @@ class PutService:
     def _get_git_context(self, git_commit: str | None = None) -> GitContext:
         """Get git context from repository."""
         self._logger.debug("Resolving git context from %s", self._repo_root)
-        try:
-            vcs = GitVCSProvider()
-            repo_root = vcs.get_repo_root(str(self._repo_root))
-            if not repo_root:
-                self._logger.debug("Not a git repository: %s", self._repo_root)
-                return GitContext(repo=None, commit=git_commit, branch=None)
-
-            ctx = GitContext(
-                repo=vcs.get_remote_url(repo_root),
-                commit=git_commit or vcs.get_commit_hash(repo_root),
-                branch=vcs.get_branch(repo_root),
-            )
-            self._logger.debug(
-                "Git context resolved: repo=%s, commit=%s, branch=%s",
-                ctx.repo,
-                ctx.commit[:12] if ctx.commit else None,
-                ctx.branch,
-            )
-            return ctx
-        except Exception as e:
-            self._logger.debug("Failed to resolve git context: %s", e)
-            return GitContext(repo=None, commit=git_commit, branch=None)
+        ctx = resolve_git_context(self._repo_root, git_commit)
+        self._logger.debug(
+            "Git context resolved: repo=%s, commit=%s, branch=%s",
+            ctx.repo,
+            ctx.commit[:12] if ctx.commit else None,
+            ctx.branch,
+        )
+        return ctx

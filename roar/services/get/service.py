@@ -11,29 +11,14 @@ or roar register.
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from ...core.logging import get_logger
-from ...db.hashing.backend import compute_hashes_batch
-from ...plugins.vcs.git import GitVCSProvider
+from ..transfer import DatabaseContext, build_operation_metadata_json, hash_files_blake3
 from .backends.base import DownloadBackend, Source
-
-
-class DatabaseContext(Protocol):
-    """Protocol for database context dependency."""
-
-    @property
-    def artifacts(self) -> Any: ...
-
-    @property
-    def jobs(self) -> Any: ...
-
-    @property
-    def sessions(self) -> Any: ...
 
 
 @dataclass
@@ -391,8 +376,9 @@ class GetService:
             command += f' -m "{message}"'
 
         # Build job metadata
-        metadata = {
-            "get": {
+        metadata_json = build_operation_metadata_json(
+            "get",
+            {
                 "source": self._source.original_url,
                 "source_type": source_type,
                 "message": message,
@@ -400,8 +386,8 @@ class GetService:
                 "git_commit": git_commit,
                 "git_tag": git_tag,
                 "timestamp": time.time(),
-            }
-        }
+            },
+        )
 
         # Create job record
         step_number = self._db.sessions.get_next_step_number(session_id)
@@ -410,7 +396,7 @@ class GetService:
             timestamp=time.time(),
             session_id=session_id,
             step_number=step_number,
-            metadata=json.dumps(metadata),
+            metadata=metadata_json,
             job_type="get",
             exit_code=0,
             duration_seconds=duration_seconds,
@@ -453,27 +439,4 @@ class GetService:
     @staticmethod
     def _hash_files_batch(paths: list[Path]) -> dict[str, str]:
         """Compute BLAKE3 hash for paths in one backend batch call."""
-        raw_result = compute_hashes_batch(paths, ["blake3"])
-        result: dict[str, str] = {}
-        for path in paths:
-            key = str(path)
-            digest = raw_result.get(key, {}).get("blake3")
-            if digest:
-                result[key] = digest
-        return result
-
-    def _get_git_context(self, git_commit: str | None = None) -> dict[str, str | None]:
-        """Get git context from repository."""
-        try:
-            vcs = GitVCSProvider()
-            repo_root = vcs.get_repo_root(str(self._repo_root))
-            if not repo_root:
-                return {"repo": None, "commit": git_commit, "branch": None}
-
-            return {
-                "repo": vcs.get_remote_url(repo_root),
-                "commit": git_commit or vcs.get_commit_hash(repo_root),
-                "branch": vcs.get_branch(repo_root),
-            }
-        except Exception:
-            return {"repo": None, "commit": git_commit, "branch": None}
+        return hash_files_blake3(paths)

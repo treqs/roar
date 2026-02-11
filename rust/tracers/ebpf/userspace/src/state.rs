@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use tracer_fd::FdTracker;
 use tracer_runtime::{
-    capture_process_info as capture_proc_info, resolve_path as resolve_runtime_path,
+    build_tracer_report, capture_process_info as capture_proc_info,
+    resolve_path as resolve_runtime_path,
 };
 pub use tracer_schema::ProcessInfo;
 use tracer_schema::TracerReport;
@@ -113,26 +114,26 @@ impl TracerState {
         let summary = self.fd.build_summary();
 
         let processes: Vec<ProcessInfo> = self.processes.values().cloned().collect();
+        let env_accessed = self
+            .processes
+            .values()
+            .next()
+            .map(|p| p.env.clone())
+            .unwrap_or_default();
 
-        TracerOutput {
-            version: 1,
-            chunk_size: self.chunk_size,
+        build_tracer_report(
+            "ebpf",
+            self.chunk_size,
             processes,
-            files: summary.files,
-            opened_files: summary.opened_files,
-            read_files: summary.read_files,
-            written_files: summary.written_files,
-            env_accessed: self
-                .processes
-                .values()
-                .next()
-                .map(|p| p.env.clone())
-                .unwrap_or_default(),
-            start_time: self.start_time,
-            end_time: self.end_time,
-            tracer_mode: "ebpf".to_string(),
-            events_dropped: Some(self.events_dropped),
-        }
+            summary.files,
+            summary.opened_files,
+            summary.read_files,
+            summary.written_files,
+            env_accessed,
+            self.start_time,
+            self.end_time,
+            Some(self.events_dropped),
+        )
     }
 }
 

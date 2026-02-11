@@ -32,7 +32,15 @@ class TestRunTracerFlags:
         ):
             result = runner.invoke(
                 run,
-                ["--tracer", "ptrace", "--no-tracer-fallback", "python", "train.py"],
+                [
+                    "--tracer",
+                    "ptrace",
+                    "--no-tracer-fallback",
+                    "--name",
+                    "preprocess",
+                    "python",
+                    "train.py",
+                ],
                 obj=_ctx(),
             )
 
@@ -40,6 +48,7 @@ class TestRunTracerFlags:
         kwargs = mock_exec.call_args.kwargs
         assert kwargs["tracer_mode"] == "ptrace"
         assert kwargs["tracer_fallback"] is False
+        assert kwargs["step_name"] == "preprocess"
 
 
 class TestBuildTracerFlags:
@@ -54,7 +63,7 @@ class TestBuildTracerFlags:
         ):
             result = runner.invoke(
                 build,
-                ["--tracer", "ebpf", "--tracer-fallback", "make", "-j4"],
+                ["--tracer", "ebpf", "--tracer-fallback", "--name", "bootstrap", "make", "-j4"],
                 obj=_ctx(),
             )
 
@@ -62,6 +71,7 @@ class TestBuildTracerFlags:
         kwargs = mock_exec.call_args.kwargs
         assert kwargs["tracer_mode"] == "ebpf"
         assert kwargs["tracer_fallback"] is True
+        assert kwargs["step_name"] == "bootstrap"
 
     def test_build_accepts_preload_tracer_mode(self):
         runner = CliRunner()

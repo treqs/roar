@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use tracer_fd::FdTracker;
-use tracer_runtime::{capture_process_info, timestamp_now};
+use tracer_runtime::{build_tracer_report, capture_process_info, timestamp_now};
 use tracer_schema::{ProcessInfo, TracerReport};
 
 use roar_tracer_preload::TraceEvent;
@@ -94,8 +94,7 @@ impl CollectorState {
         self.ensure_process(self.root_pid);
 
         let summary = self.fd.build_summary();
-        let mut processes: Vec<ProcessInfo> = self.processes.values().cloned().collect();
-        processes.sort_by_key(|p| p.pid);
+        let processes: Vec<ProcessInfo> = self.processes.values().cloned().collect();
 
         let env_accessed = self
             .processes
@@ -103,20 +102,19 @@ impl CollectorState {
             .map(|p| p.env.clone())
             .unwrap_or_else(|| self.root_env.clone());
 
-        TracerReport {
-            version: 1,
-            chunk_size: None,
+        build_tracer_report(
+            "preload",
+            None,
             processes,
-            files: summary.files,
-            opened_files: summary.opened_files,
-            read_files: summary.read_files,
-            written_files: summary.written_files,
+            summary.files,
+            summary.opened_files,
+            summary.read_files,
+            summary.written_files,
             env_accessed,
             start_time,
             end_time,
-            tracer_mode: "preload".to_string(),
-            events_dropped: Some(self.events_dropped),
-        }
+            Some(self.events_dropped),
+        )
     }
 }
 

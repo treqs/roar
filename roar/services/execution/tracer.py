@@ -12,6 +12,7 @@ from pathlib import Path
 from ...core.exceptions import TracerNotFoundError
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.run import ISignalHandler, TracerResult
+from ...core.tracer_modes import TRACER_BACKEND_ORDER, is_valid_tracer_mode
 from . import tracer_backends
 
 
@@ -50,7 +51,7 @@ class TracerService:
             from ...config import config_get
 
             mode = config_get("tracer.default")
-            if mode in ("auto", "ebpf", "preload", "ptrace"):
+            if isinstance(mode, str) and is_valid_tracer_mode(mode):
                 return mode
         except Exception:
             pass
@@ -115,40 +116,58 @@ class TracerService:
 
         In auto mode we include only backends likely to be usable.
         """
+        if not is_valid_tracer_mode(mode):
+            self.logger.warning("Unknown tracer mode %r, falling back to auto", mode)
+            mode = "auto"
+
         candidates: list[tuple[str, str]] = []
 
-        if mode in ("ebpf", "auto"):
-            ebpf = self._find_ebpf_tracer()
-            if ebpf:
-                if mode == "ebpf":
-                    candidates.append(("ebpf", ebpf))
-                else:
-                    ready, reason = self._ebpf_is_ready(ebpf)
-                    if ready:
-                        candidates.append(("ebpf", ebpf))
-                    else:
-                        self.logger.debug("Skipping eBPF tracer in auto mode: %s", reason)
-
-        if mode in ("preload", "auto"):
-            preload = self._find_preload_tracer()
-            if preload:
-                if mode == "preload":
-                    candidates.append(("preload", preload))
-                else:
-                    ready, reason = self._preload_is_ready(preload)
-                    if ready:
-                        candidates.append(("preload", preload))
-                    else:
-                        self.logger.debug("Skipping preload tracer in auto mode: %s", reason)
-
-        if mode in ("ptrace", "auto"):
-            ptrace = self._find_ptrace_tracer()
-            if ptrace:
-                candidates.append(("ptrace", ptrace))
+        if mode == "auto":
+            for backend in TRACER_BACKEND_ORDER:
+                candidate = self._resolve_backend_candidate(backend, require_ready=True)
+                if candidate:
+                    candidates.append(candidate)
+        else:
+            candidate = self._resolve_backend_candidate(mode, require_ready=False)
+            if candidate:
+                candidates.append(candidate)
 
         if not fallback_enabled and candidates:
             return [candidates[0]]
         return candidates
+
+    def _resolve_backend_candidate(
+        self,
+        backend: str,
+        require_ready: bool,
+    ) -> tuple[str, str] | None:
+        if backend == "ebpf":
+            ebpf = self._find_ebpf_tracer()
+            if not ebpf:
+                return None
+            if require_ready:
+                ready, reason = self._ebpf_is_ready(ebpf)
+                if not ready:
+                    self.logger.debug("Skipping eBPF tracer in auto mode: %s", reason)
+                    return None
+            return "ebpf", ebpf
+
+        if backend == "preload":
+            preload = self._find_preload_tracer()
+            if not preload:
+                return None
+            if require_ready:
+                ready, reason = self._preload_is_ready(preload)
+                if not ready:
+                    self.logger.debug("Skipping preload tracer in auto mode: %s", reason)
+                    return None
+            return "preload", preload
+
+        if backend == "ptrace":
+            ptrace = self._find_ptrace_tracer()
+            if ptrace:
+                return "ptrace", ptrace
+        return None
 
     def find_tracer(self) -> str | None:
         """

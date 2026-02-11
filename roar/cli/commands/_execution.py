@@ -99,6 +99,7 @@ def execute_and_report(
     ctx: "RoarContext",
     command: list[str],
     job_type: str | None,
+    step_name: str | None,
     quiet: bool,
     hash_algorithms: list[str],
     git_info: dict,
@@ -120,6 +121,7 @@ def execute_and_report(
         ctx: RoarContext with roar_dir and other context
         command: Command to execute as list of strings
         job_type: Job type - None for run, "build" for build
+        step_name: Optional user-defined step label
         quiet: Whether to suppress output
         hash_algorithms: List of hash algorithms to use
         git_info: Git info dict with commit, branch, remote_url
@@ -157,6 +159,7 @@ def execute_and_report(
         repo_root=repo_root,
         command=command,
         job_type=job_type_literal,
+        step_name=step_name,
         quiet=quiet,
         hash_algorithms=hash_algos,
         tracer_mode=tracer_mode,  # type: ignore[arg-type]

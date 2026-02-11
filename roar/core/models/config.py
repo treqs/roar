@@ -10,12 +10,12 @@ from typing import Annotated, Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator
 
+from ..tracer_modes import TracerMode
 from .base import RoarBaseModel
 
 # Type aliases
 HashAlgorithm = Literal["blake3", "sha256", "sha512", "md5"]
 LogLevel = Literal["debug", "info", "warning", "error"]
-TracerMode = Literal["auto", "ebpf", "preload", "ptrace"]
 
 
 class ConfigBaseModel(RoarBaseModel):

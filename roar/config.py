@@ -1,12 +1,13 @@
 """Configuration loading and management for roar."""
 
 from pathlib import Path
+from typing import Any, cast
 
-from .core.settings import find_config_file, load_settings
+from .core.settings import find_config_file, find_roar_dir, load_settings
+from .core.tracer_modes import VALID_TRACER_MODES
 
 # Valid hash algorithms
 VALID_HASH_ALGORITHMS = {"blake3", "sha256", "sha512", "md5"}
-VALID_TRACER_MODES = {"auto", "ebpf", "preload", "ptrace"}
 
 # Config keys that can be set via `roar config`
 CONFIGURABLE_KEYS = {
@@ -205,6 +206,10 @@ def get_roar_dir(start_dir: str | None = None) -> Path:
     Returns:
         Path to .roar directory in start_dir or cwd.
     """
+    existing = find_roar_dir(start_dir)
+    if existing is not None:
+        return existing
+
     base = Path(start_dir) if start_dir else Path.cwd()
     roar_dir = base / ".roar"
     roar_dir.mkdir(exist_ok=True)
@@ -226,265 +231,105 @@ def get_config_path_for_write(start_dir: str | None = None) -> Path:
     return roar_dir / "config.toml"
 
 
+def _format_toml_string(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _format_toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, str):
+        return _format_toml_string(value)
+    if isinstance(value, list):
+        items = ", ".join(_format_toml_value(item) for item in value)
+        return f"[{items}]"
+    return str(value)
+
+
+def _emit_toml_table(
+    lines: list[str],
+    table_path: str,
+    table_data: dict[str, Any],
+    default_data: dict[str, Any],
+) -> None:
+    if not isinstance(table_data, dict):
+        return
+
+    scalar_items: list[tuple[str, Any]] = []
+    nested_tables: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    array_tables: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] = []
+
+    for key, value in table_data.items():
+        default_value = default_data.get(key)
+        if value == default_value:
+            continue
+
+        if isinstance(value, dict):
+            nested_tables.append(
+                (key, value, default_value if isinstance(default_value, dict) else {})
+            )
+            continue
+
+        if isinstance(value, list) and all(isinstance(item, dict) for item in value):
+            if isinstance(default_value, list) and all(
+                isinstance(item, dict) for item in default_value
+            ):
+                default_array = default_value
+            else:
+                default_array = []
+            array_tables.append(
+                (
+                    key,
+                    cast(list[dict[str, Any]], value),
+                    cast(list[dict[str, Any]], default_array),
+                )
+            )
+            continue
+
+        if value is None:
+            continue
+        scalar_items.append((key, value))
+
+    if scalar_items:
+        lines.append(f"[{table_path}]")
+        for key, value in scalar_items:
+            lines.append(f"{key} = {_format_toml_value(value)}")
+        lines.append("")
+
+    for key, nested_value, nested_defaults in nested_tables:
+        _emit_toml_table(lines, f"{table_path}.{key}", nested_value, nested_defaults)
+
+    for key, array_values, array_defaults in array_tables:
+        if array_values == array_defaults or not array_values:
+            continue
+        for item in array_values:
+            lines.append(f"[[{table_path}.{key}]]")
+            for item_key, item_value in item.items():
+                if item_value is None:
+                    continue
+                lines.append(f"{item_key} = {_format_toml_value(item_value)}")
+            lines.append("")
+
+
 def save_config(config: dict, config_path: Path):
     """
     Save configuration to a .roar.toml file.
 
     Only saves non-default values.
     """
-    # Build TOML content manually (to avoid adding tomlkit dependency)
-    lines = []
-
+    lines: list[str] = []
     defaults = _get_default_config()
+    section_order = list(defaults.keys()) + [key for key in config if key not in defaults]
 
-    # Output section
-    output_lines = []
-    for key, val in config.get("output", {}).items():
-        default_val = defaults.get("output", {}).get(key)
-        if val != default_val:
-            if isinstance(val, bool):
-                output_lines.append(f"{key} = {str(val).lower()}")
-            elif isinstance(val, str):
-                output_lines.append(f'{key} = "{val}"')
-            else:
-                output_lines.append(f"{key} = {val}")
-
-    if output_lines:
-        lines.append("[output]")
-        lines.extend(output_lines)
-        lines.append("")
-
-    # Analyzers section
-    analyzers_lines = []
-    for key, val in config.get("analyzers", {}).items():
-        default_val = defaults.get("analyzers", {}).get(key)
-        if val != default_val:
-            if isinstance(val, bool):
-                analyzers_lines.append(f"{key} = {str(val).lower()}")
-            elif isinstance(val, str):
-                analyzers_lines.append(f'{key} = "{val}"')
-            else:
-                analyzers_lines.append(f"{key} = {val}")
-
-    if analyzers_lines:
-        lines.append("[analyzers]")
-        lines.extend(analyzers_lines)
-        lines.append("")
-
-    # Filters section
-    filters_lines = []
-    for key, val in config.get("filters", {}).items():
-        default_val = defaults.get("filters", {}).get(key)
-        if val != default_val:
-            if isinstance(val, bool):
-                filters_lines.append(f"{key} = {str(val).lower()}")
-            elif isinstance(val, str):
-                filters_lines.append(f'{key} = "{val}"')
-            else:
-                filters_lines.append(f"{key} = {val}")
-
-    if filters_lines:
-        lines.append("[filters]")
-        lines.extend(filters_lines)
-        lines.append("")
-
-    # Cleanup section
-    cleanup_lines = []
-    for key, val in config.get("cleanup", {}).items():
-        default_val = defaults.get("cleanup", {}).get(key)
-        if val != default_val:
-            if isinstance(val, bool):
-                cleanup_lines.append(f"{key} = {str(val).lower()}")
-            elif isinstance(val, str):
-                cleanup_lines.append(f'{key} = "{val}"')
-            else:
-                cleanup_lines.append(f"{key} = {val}")
-
-    if cleanup_lines:
-        lines.append("[cleanup]")
-        lines.extend(cleanup_lines)
-        lines.append("")
-
-    # GLaaS section
-    glaas_lines = []
-    for key, val in config.get("glaas", {}).items():
-        default_val = defaults.get("glaas", {}).get(key)
-        if val != default_val and val is not None:
-            if isinstance(val, bool):
-                glaas_lines.append(f"{key} = {str(val).lower()}")
-            elif isinstance(val, str):
-                glaas_lines.append(f'{key} = "{val}"')
-            else:
-                glaas_lines.append(f"{key} = {val}")
-
-    if glaas_lines:
-        lines.append("[glaas]")
-        lines.extend(glaas_lines)
-        lines.append("")
-
-    # Registration section (for secret filtering config)
-    register_config = config.get("registration", {})
-    register_defaults = defaults.get("registration", {})
-
-    # Registration.omit section
-    omit_config = register_config.get("omit", {})
-    omit_defaults = register_defaults.get("omit", {})
-
-    # [registration.omit] enabled
-    if omit_config.get("enabled") != omit_defaults.get("enabled"):
-        lines.append("[registration.omit]")
-        lines.append(f"enabled = {str(omit_config.get('enabled')).lower()}")
-        lines.append("")
-
-    # [registration.omit.secrets]
-    secrets_vals = omit_config.get("secrets", {}).get("values", [])
-    secrets_defaults = omit_defaults.get("secrets", {}).get("values", [])
-    if secrets_vals != secrets_defaults and secrets_vals:
-        lines.append("[registration.omit.secrets]")
-        items = ", ".join(f'"{v}"' for v in secrets_vals)
-        lines.append(f"values = [{items}]")
-        lines.append("")
-
-    # [registration.omit.env_vars]
-    env_vars_names = omit_config.get("env_vars", {}).get("names", [])
-    env_vars_defaults = omit_defaults.get("env_vars", {}).get("names", [])
-    if env_vars_names != env_vars_defaults and env_vars_names:
-        lines.append("[registration.omit.env_vars]")
-        items = ", ".join(f'"{v}"' for v in env_vars_names)
-        lines.append(f"names = [{items}]")
-        lines.append("")
-
-    # [registration.omit.allowlist]
-    allowlist_patterns = omit_config.get("allowlist", {}).get("patterns", [])
-    allowlist_defaults = omit_defaults.get("allowlist", {}).get("patterns", [])
-    if allowlist_patterns != allowlist_defaults and allowlist_patterns:
-        lines.append("[registration.omit.allowlist]")
-        items = ", ".join(f'"{v}"' for v in allowlist_patterns)
-        lines.append(f"patterns = [{items}]")
-        lines.append("")
-
-    # [[registration.omit.patterns]] - custom patterns as array of tables
-    custom_patterns = omit_config.get("patterns", [])
-    patterns_defaults = omit_defaults.get("patterns", [])
-    if custom_patterns != patterns_defaults and custom_patterns:
-        for p in custom_patterns:
-            if isinstance(p, dict):
-                lines.append("[[registration.omit.patterns]]")
-                if "id" in p:
-                    lines.append(f'id = "{p["id"]}"')
-                if "pattern" in p:
-                    # Escape backslashes for TOML
-                    pattern_escaped = p["pattern"].replace("\\", "\\\\")
-                    lines.append(f'pattern = "{pattern_escaped}"')
-                if "description" in p:
-                    lines.append(f'description = "{p["description"]}"')
-                lines.append("")
-
-    # [registration.tagging] section
-    tagging_config = register_config.get("tagging", {})
-    tagging_defaults = register_defaults.get("tagging", {})
-    if tagging_config.get("enabled") != tagging_defaults.get("enabled"):
-        lines.append("[registration.tagging]")
-        lines.append(f"enabled = {str(tagging_config.get('enabled')).lower()}")
-        lines.append("")
-
-    # Hash section
-    hash_lines = []
-    for key, val in config.get("hash", {}).items():
-        default_val = defaults.get("hash", {}).get(key)
-        if val != default_val:
-            if isinstance(val, bool):
-                hash_lines.append(f"{key} = {str(val).lower()}")
-            elif isinstance(val, str):
-                hash_lines.append(f'{key} = "{val}"')
-            elif isinstance(val, list):
-                # Format as TOML array
-                items = ", ".join(f'"{v}"' for v in val)
-                hash_lines.append(f"{key} = [{items}]")
-            else:
-                hash_lines.append(f"{key} = {val}")
-
-    if hash_lines:
-        lines.append("[hash]")
-        lines.extend(hash_lines)
-        lines.append("")
-
-    # Proxy section
-    proxy_lines = []
-    for key, val in config.get("proxy", {}).items():
-        default_val = defaults.get("proxy", {}).get(key)
-        if val != default_val:
-            if isinstance(val, bool):
-                proxy_lines.append(f"{key} = {str(val).lower()}")
-            elif isinstance(val, str):
-                proxy_lines.append(f'{key} = "{val}"')
-            else:
-                proxy_lines.append(f"{key} = {val}")
-
-    if proxy_lines:
-        lines.append("[proxy]")
-        lines.extend(proxy_lines)
-        lines.append("")
-
-    # Tracer section
-    tracer_lines = []
-    for key, val in config.get("tracer", {}).items():
-        default_val = defaults.get("tracer", {}).get(key)
-        if val != default_val:
-            if isinstance(val, str):
-                tracer_lines.append(f'{key} = "{val}"')
-            else:
-                tracer_lines.append(f"{key} = {val}")
-
-    if tracer_lines:
-        lines.append("[tracer]")
-        lines.extend(tracer_lines)
-        lines.append("")
-
-    # Reversible section
-    reversible_lines = []
-    for key, val in config.get("reversible", {}).items():
-        default_val = defaults.get("reversible", {}).get(key)
-        if val != default_val:
-            if isinstance(val, bool):
-                reversible_lines.append(f"{key} = {str(val).lower()}")
-            elif isinstance(val, str):
-                reversible_lines.append(f'{key} = "{val}"')
-            else:
-                reversible_lines.append(f"{key} = {val}")
-
-    if reversible_lines:
-        lines.append("[reversible]")
-        lines.extend(reversible_lines)
-        lines.append("")
-
-    # Logging section
-    logging_lines = []
-    for key, val in config.get("logging", {}).items():
-        default_val = defaults.get("logging", {}).get(key)
-        if val != default_val:
-            if isinstance(val, bool):
-                logging_lines.append(f"{key} = {str(val).lower()}")
-            elif isinstance(val, str):
-                logging_lines.append(f'{key} = "{val}"')
-            else:
-                logging_lines.append(f"{key} = {val}")
-
-    if logging_lines:
-        lines.append("[logging]")
-        lines.extend(logging_lines)
-        lines.append("")
-
-    # Env section (persistent environment variables)
-    env_vars = config.get("env", {})
-    if isinstance(env_vars, dict) and env_vars:
-        env_lines = []
-        for key, val in env_vars.items():
-            env_lines.append(f'{key} = "{val}"')
-        if env_lines:
-            lines.append("[env]")
-            lines.extend(env_lines)
-            lines.append("")
+    for section in section_order:
+        section_data = config.get(section)
+        if not isinstance(section_data, dict):
+            continue
+        section_defaults = defaults.get(section, {})
+        if not isinstance(section_defaults, dict):
+            section_defaults = {}
+        _emit_toml_table(lines, section, section_data, section_defaults)
 
     config_path.write_text("\n".join(lines))
 

@@ -117,9 +117,10 @@ class ReproductionService:
 
         # Show full package lists if requested
         if list_requirements:
-            build_dpkg_packages = self._env_setup._get_build_dpkg_packages(pipeline)
-            dpkg_packages = self._env_setup._get_dpkg_packages(pipeline)
-            pip_packages = self._env_setup._get_packages(pipeline)
+            requirements = self._env_setup.get_requirement_summary(pipeline)
+            build_dpkg_packages = requirements.build_dpkg
+            dpkg_packages = requirements.dpkg
+            pip_packages = requirements.pip
             if build_dpkg_packages:
                 self._print(f"\nBuild tool packages ({len(build_dpkg_packages)}):")
                 for name in sorted(build_dpkg_packages):

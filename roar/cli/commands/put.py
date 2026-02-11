@@ -21,6 +21,7 @@ from ...services.put.backends import (
     parse_destination,
     should_skip_upload,
 )
+from ...services.transfer import load_backend_class, resolve_backend_for_scheme
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -41,27 +42,30 @@ def _get_backend(destination: str):
             scheme=parsed.scheme,
         )
 
-    if parsed.scheme == "s3":
-        try:
-            from ...services.put.backends import S3Backend
-        except ImportError as e:
-            raise click.ClickException(
-                "S3 backend requires boto3. Install with: pip install boto3"
-            ) from e
-        return S3Backend(bucket=parsed.bucket, prefix=parsed.prefix)
-    elif parsed.scheme == "gs":
-        try:
-            from ...services.put.backends import GCSBackend
-        except ImportError as e:
-            raise click.ClickException(
-                "GCS backend requires google-cloud-storage. "
-                "Install with: pip install google-cloud-storage"
-            ) from e
-        return GCSBackend(bucket=parsed.bucket, prefix=parsed.prefix)
-    elif parsed.scheme == "memory":
-        return MemoryBackend(bucket=parsed.bucket, prefix=parsed.prefix)
-    else:
-        raise click.ClickException(f"Unsupported destination scheme: {parsed.scheme}")
+    builders = {
+        "s3": lambda: load_backend_class(
+            "roar.services.put.backends.s3",
+            "S3Backend",
+            "S3 backend requires boto3. Install with: pip install boto3",
+        )(bucket=parsed.bucket, prefix=parsed.prefix),
+        "gs": lambda: load_backend_class(
+            "roar.services.put.backends.gcs",
+            "GCSBackend",
+            "GCS backend requires google-cloud-storage. Install with: pip install google-cloud-storage",
+        )(bucket=parsed.bucket, prefix=parsed.prefix),
+        "memory": lambda: MemoryBackend(bucket=parsed.bucket, prefix=parsed.prefix),
+    }
+
+    try:
+        return resolve_backend_for_scheme(
+            parsed.scheme,
+            builders,
+            f"Unsupported destination scheme: {parsed.scheme}",
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    except ImportError as e:
+        raise click.ClickException(str(e)) from e
 
 
 @click.command("put")

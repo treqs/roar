@@ -484,15 +484,11 @@ class TestGetServicePrefix:
 
         calls = {"count": 0}
 
-        def fake_batch(paths, algorithms):
+        def fake_hashes(paths):
             calls["count"] += 1
-            assert algorithms == ["blake3"]
-            return {
-                str(path): {"blake3": blake3.blake3(Path(path).read_bytes()).hexdigest()}
-                for path in paths
-            }
+            return {str(path): blake3.blake3(Path(path).read_bytes()).hexdigest() for path in paths}
 
-        with patch("roar.services.get.service.compute_hashes_batch", side_effect=fake_batch):
+        with patch("roar.services.get.service.hash_files_blake3", side_effect=fake_hashes):
             result = service.get(destination=tmp_path / "out", is_prefix=True)
 
         assert result.success is True

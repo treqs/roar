@@ -9,9 +9,10 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 use tracer_fd::FdTracker;
 use tracer_runtime::{
-    capture_process_info as capture_proc_info, resolve_path_with_cache, timestamp_now,
+    build_tracer_report, capture_process_info as capture_proc_info, resolve_path_with_cache,
+    timestamp_now,
 };
-use tracer_schema::{ProcessInfo, TracerReport};
+use tracer_schema::ProcessInfo;
 
 // Syscall numbers for x86_64
 const SYS_READ: u64 = 0;
@@ -618,20 +619,19 @@ fn run_tracer(command: Vec<String>, output_file: &str) -> i32 {
             // Build output
             let summary = state.fd_tracker.build_summary();
 
-            let output = TracerReport {
-                version: 1,
-                chunk_size: None,
-                processes: state.processes.into_values().collect(),
-                files: summary.files,
-                opened_files: summary.opened_files,
-                read_files: summary.read_files,
-                written_files: summary.written_files,
+            let output = build_tracer_report(
+                "ptrace",
+                None,
+                state.processes.into_values().collect(),
+                summary.files,
+                summary.opened_files,
+                summary.read_files,
+                summary.written_files,
                 env_accessed,
                 start_time,
                 end_time,
-                tracer_mode: "ptrace".to_string(),
-                events_dropped: None,
-            };
+                None,
+            );
 
             // Write output (MessagePack)
             if let Ok(mut file) = File::create(output_file) {

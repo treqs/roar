@@ -250,17 +250,13 @@ class TestPutServiceBasic:
         glaas_deps = create_mock_glaas_deps()
         calls = {"count": 0}
 
-        def fake_batch(paths, algorithms):
+        def fake_hashes(paths):
             calls["count"] += 1
-            assert algorithms == ["blake3"]
-            return {
-                str(path): {"blake3": blake3.blake3(Path(path).read_bytes()).hexdigest()}
-                for path in paths
-            }
+            return {str(path): blake3.blake3(Path(path).read_bytes()).hexdigest() for path in paths}
 
         with (
             patch("roar.services.put.service.get_glaas_url", return_value="http://glaas.test"),
-            patch("roar.services.put.service.compute_hashes_batch", side_effect=fake_batch),
+            patch("roar.services.put.service.hash_files_blake3", side_effect=fake_hashes),
         ):
             service = PutService(
                 db_context=mock_db,
