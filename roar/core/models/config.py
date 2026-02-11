@@ -167,7 +167,8 @@ class ProxyConfig(ConfigBaseModel):
 class TracerConfig(ConfigBaseModel):
     """Tracer backend configuration section."""
 
-    mode: TracerMode = "auto"
+    default: TracerMode = "auto"
+    fallback_enabled: bool = True
 
 
 class LoggingConfig(ConfigBaseModel):

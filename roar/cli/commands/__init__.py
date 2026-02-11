@@ -27,6 +27,7 @@ from .reset import reset
 from .run import run
 from .show import show
 from .status import status
+from .tracer import tracer
 
 # List of migrated commands for registration
 MIGRATED_COMMANDS = [
@@ -47,6 +48,7 @@ MIGRATED_COMMANDS = [
     run,
     show,
     status,
+    tracer,
 ]
 
 __all__ = [
@@ -68,4 +70,5 @@ __all__ = [
     "run",
     "show",
     "status",
+    "tracer",
 ]

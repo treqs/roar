@@ -22,9 +22,13 @@ class TracerData(RoarBaseModel):
     opened_files: list[str] = Field(default_factory=list)
     read_files: list[str] = Field(default_factory=list)
     written_files: list[str] = Field(default_factory=list)
+    files: list[dict[str, Any]] = Field(default_factory=list)
     processes: list[dict[str, Any]] = Field(default_factory=list)
     start_time: Annotated[float, Field(ge=0)] = 0
     end_time: Annotated[float, Field(ge=0)] = 0
+    version: Annotated[int, Field(ge=1)] = 1
+    tracer_mode: str = "ptrace"
+    events_dropped: Annotated[int, Field(ge=0)] = 0
 
     @field_validator("opened_files", "read_files", "written_files", mode="before")
     @classmethod

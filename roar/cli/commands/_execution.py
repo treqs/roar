@@ -103,6 +103,8 @@ def execute_and_report(
     hash_algorithms: list[str],
     git_info: dict,
     repo_root: str,
+    tracer_mode: str | None = None,
+    tracer_fallback: bool | None = None,
 ) -> int:
     """
     Execute command via coordinator and show report.
@@ -157,6 +159,8 @@ def execute_and_report(
         job_type=job_type_literal,
         quiet=quiet,
         hash_algorithms=hash_algos,
+        tracer_mode=tracer_mode,  # type: ignore[arg-type]
+        tracer_fallback=tracer_fallback,
         git_commit=git_info.get("commit"),
         git_branch=git_info.get("branch"),
         git_repo=git_info.get("remote_url"),

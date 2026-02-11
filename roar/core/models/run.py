@@ -16,6 +16,7 @@ from .base import ImmutableModel, RoarBaseModel
 # Type aliases
 HashAlgorithm = Literal["blake3", "sha256", "sha512", "md5"]
 JobType = Literal["run", "build"]
+TracerMode = Literal["auto", "ebpf", "ptrace"]
 
 
 class RunArguments(ImmutableModel):
@@ -79,6 +80,8 @@ class RunContext(RoarBaseModel):
     job_type: JobType | None = None
     quiet: bool = False
     hash_algorithms: list[HashAlgorithm] = Field(default_factory=lambda: ["blake3"])  # type: ignore[arg-type]
+    tracer_mode: TracerMode | None = None
+    tracer_fallback: bool | None = None
     git_commit: str | None = None
     git_branch: str | None = None
     git_repo: str | None = None

@@ -46,6 +46,7 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "run": ("roar.cli.commands.run", "run", "Run a command with provenance tracking"),
     "show": ("roar.cli.commands.show", "show", "Show details of a job or artifact"),
     "status": ("roar.cli.commands.status", "status", "Show current session status"),
+    "tracer": ("roar.cli.commands.tracer", "tracer", "Manage tracer backend defaults"),
 }
 
 

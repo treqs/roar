@@ -137,6 +137,8 @@ class RunCoordinator:
         # Start proxy if configured
         proxy_handle = None
         extra_env: dict[str, str] | None = None
+        s3_entries: list = []
+        proxy_stopped = False
         if self._proxy:
             try:
                 # Capture existing AWS_ENDPOINT_URL so the proxy can chain to it
@@ -149,6 +151,23 @@ class RunCoordinator:
             except Exception as e:
                 self.logger.warning("Failed to start proxy: %s", e)
 
+        def stop_proxy_if_running() -> list:
+            """Stop per-run proxy exactly once and return parsed entries."""
+            nonlocal proxy_stopped, s3_entries
+
+            if proxy_stopped:
+                return s3_entries
+            proxy_stopped = True
+
+            if proxy_handle and self._proxy:
+                try:
+                    s3_entries = self._proxy.stop_for_run(proxy_handle)
+                    self.logger.debug("Proxy stopped, collected %d S3 entries", len(s3_entries))
+                except Exception as e:
+                    self.logger.warning("Failed to stop proxy cleanly: %s", e)
+
+            return s3_entries
+
         # Execute via tracer
         self.logger.debug("Starting tracer execution")
         try:
@@ -157,6 +176,8 @@ class RunCoordinator:
                 ctx.roar_dir,
                 signal_handler,
                 extra_env=extra_env,
+                tracer_mode_override=ctx.tracer_mode,
+                fallback_enabled_override=ctx.tracer_fallback,
             )
             self.logger.debug(
                 "Tracer completed: exit_code=%d, duration=%.2fs, interrupted=%s",
@@ -165,6 +186,7 @@ class RunCoordinator:
                 tracer_result.interrupted,
             )
         except TracerNotFoundError as e:
+            stop_proxy_if_running()
             self.logger.debug("Tracer not found: %s", e)
             self.presenter.print_error(str(e))
             return RunResult(
@@ -180,6 +202,7 @@ class RunCoordinator:
 
         # Check if we should abort (double Ctrl-C)
         if signal_handler.should_abort():
+            stop_proxy_if_running()
             self._cleanup_logs(tracer_result.tracer_log_path, tracer_result.inject_log_path)
             sys.exit(130)
 
@@ -190,6 +213,7 @@ class RunCoordinator:
         if not os.path.exists(tracer_result.tracer_log_path):
             self.logger.warning("Tracer log not found at %s", tracer_result.tracer_log_path)
             self.logger.warning("The tracer may have failed to start. Run was not recorded.")
+            stop_proxy_if_running()
             self._cleanup_logs(tracer_result.tracer_log_path, tracer_result.inject_log_path)
             return RunResult(
                 exit_code=tracer_result.exit_code,
@@ -220,14 +244,8 @@ class RunCoordinator:
             len(prov.get("data", {}).get("written_files", [])),
         )
 
-        # Stop proxy and collect S3 entries
-        s3_entries: list = []
-        if proxy_handle and self._proxy:
-            try:
-                s3_entries = self._proxy.stop_for_run(proxy_handle)
-                self.logger.debug("Proxy stopped, collected %d S3 entries", len(s3_entries))
-            except Exception as e:
-                self.logger.warning("Failed to stop proxy cleanly: %s", e)
+        # Stop proxy and collect S3 entries before DB recording.
+        s3_entries = stop_proxy_if_running()
 
         # Record in database
         self.logger.debug("Recording job in database")

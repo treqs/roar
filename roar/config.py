@@ -127,10 +127,15 @@ CONFIGURABLE_KEYS = {
         "default": False,
         "description": "Enable S3 proxy for lineage tracking during roar run",
     },
-    "tracer.mode": {
+    "tracer.default": {
         "type": str,
         "default": "auto",
-        "description": "Tracer backend (auto, ebpf, ptrace)",
+        "description": "Default tracer backend (auto, ebpf, ptrace)",
+    },
+    "tracer.fallback_enabled": {
+        "type": bool,
+        "default": True,
+        "description": "Allow fallback to another tracer backend when the preferred backend fails",
     },
     "logging.level": {
         "type": str,
@@ -532,7 +537,7 @@ def config_set(key: str, value: str, start_dir: str | None = None):
                 f"Valid algorithms: {', '.join(sorted(VALID_HASH_ALGORITHMS))}"
             )
         typed_value = value
-    elif key == "tracer.mode":
+    elif key == "tracer.default":
         if value not in VALID_TRACER_MODES:
             raise ValueError(
                 f"Invalid tracer mode: {value}. "

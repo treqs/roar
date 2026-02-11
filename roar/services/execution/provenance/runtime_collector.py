@@ -50,10 +50,12 @@ class RuntimeCollectorService:
         """
         self.logger.debug("RuntimeCollectorService.collect: collecting runtime info")
 
-        # Get command from first process
+        # Get command from root process (parent_pid is None), falling back to first process.
         command = []
         if tracer_data.processes:
-            command = tracer_data.processes[0].get("command", [])
+            root = next((p for p in tracer_data.processes if p.get("parent_pid") is None), None)
+            source = root if root is not None else tracer_data.processes[0]
+            command = source.get("command", [])
 
         self.logger.debug("Collecting container info")
         container_info = self._get_container_info()

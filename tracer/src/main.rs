@@ -2,7 +2,7 @@ use nix::sys::ptrace;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{fork, ForkResult, Pid};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs::File;
 use std::io::Write;
@@ -56,7 +56,10 @@ struct FileAccess {
 
 #[derive(Debug, Serialize)]
 struct TracerOutput {
+    version: u32,
+    tracer_mode: String,
     processes: Vec<ProcessInfo>,
+    files: Vec<FileAccess>,
     opened_files: Vec<String>,
     read_files: Vec<String>,
     written_files: Vec<String>,
@@ -685,11 +688,31 @@ fn run_tracer(command: Vec<String>, output_file: &str) -> i32 {
                 .unwrap_or_default();
 
             // Build output
+            let opened_files: Vec<String> = state.opened_files.iter().cloned().collect();
+            let read_files: Vec<String> = state.read_files.iter().cloned().collect();
+            let written_files: Vec<String> = state.written_files.iter().cloned().collect();
+
+            let mut all_paths: BTreeSet<String> = BTreeSet::new();
+            all_paths.extend(opened_files.iter().cloned());
+            all_paths.extend(read_files.iter().cloned());
+            all_paths.extend(written_files.iter().cloned());
+            let files: Vec<FileAccess> = all_paths
+                .into_iter()
+                .map(|path| FileAccess {
+                    read: state.read_files.contains(&path),
+                    written: state.written_files.contains(&path),
+                    path,
+                })
+                .collect();
+
             let output = TracerOutput {
+                version: 1,
+                tracer_mode: "ptrace".to_string(),
                 processes: state.processes.into_values().collect(),
-                opened_files: state.opened_files.into_iter().collect(),
-                read_files: state.read_files.into_iter().collect(),
-                written_files: state.written_files.into_iter().collect(),
+                files,
+                opened_files,
+                read_files,
+                written_files,
                 env_accessed,
                 start_time,
                 end_time,
