@@ -1,0 +1,22 @@
+[package]
+name = "artifact-hash-py"
+version = "0.1.0"
+edition = "2021"
+description = "PyO3 bindings for roar artifact hashing"
+
+[lib]
+name = "artifact_hash_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+artifact-hash-core = { path = "../artifact-hash-core" }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+
+[package.metadata.maturin]
+name = "roar._hash_native"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "allow"
+too_many_arguments = "allow"

@@ -1,0 +1,32 @@
+{
+  "timestamp": 1770842288.2651641,
+  "cwd": "/home/trevor/dev/roar",
+  "dataset": {
+    "small_files": 600,
+    "small_bytes": 8192,
+    "large_files": 8,
+    "large_bytes": 8388608,
+    "total_files": 608,
+    "total_bytes": 72024064
+  },
+  "algorithms": [
+    "blake3",
+    "sha256"
+  ],
+  "workers": 8,
+  "python": {
+    "mean_seconds": 0.05556794516742229,
+    "median_seconds": 0.055555181577801704,
+    "min_seconds": 0.05528127960860729,
+    "max_seconds": 0.055840831249952316,
+    "stdev_seconds": 0.0002127494244977544
+  },
+  "native": {
+    "mean_seconds": 0.01768779680132866,
+    "median_seconds": 0.017634542658925056,
+    "min_seconds": 0.01744125224649906,
+    "max_seconds": 0.018014896661043167,
+    "stdev_seconds": 0.0002174341167407368
+  },
+  "speedup_mean": 3.1415978932575808
+}

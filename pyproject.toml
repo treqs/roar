@@ -45,6 +45,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "tomli>=2.0.0; python_version < '3.11'",
+    "maturin>=1.11.5",
 ]
 
 [project.urls]
@@ -75,22 +76,23 @@ where = ["."]
 include = ["roar", "roar.*"]
 
 [tool.setuptools.package-data]
-roar = ["bin/*"]
+roar = ["bin/*", "_hash_native*.so", "_hash_native*.pyd", "_hash_native*.dylib"]
 
 [tool.pytest.ini_options]
 # Parallel execution enabled by default with pytest-xdist
 # - Uses --dist loadfile to keep same-file tests in same worker (avoids cwd race conditions)
-# - live_glaas tests must be run separately with --dist no (sequential)
+# - Default profile excludes tests requiring root/eBPF and live GLaaS dependencies
 testpaths = ["tests"]
 markers = [
     "integration: Integration tests (uses fixtures)",
     "e2e: End-to-end tests (full workflows)",
     "glaas: Tests requiring GLaaS server",
     "live_glaas: Tests requiring live GLaaS API running locally",
+    "ebpf: Tests requiring eBPF daemon/root privileges",
     "cloud: Tests for cloud storage operations",
     "happy_path: Happy path tests for core functionality",
 ]
-addopts = "-v --strict-markers -n auto --dist loadfile"
+addopts = "-v --strict-markers -n auto --dist loadfile --ignore=tests/ebpf --ignore=tests/live_glaas"
 timeout = 60
 filterwarnings = [
     "ignore::DeprecationWarning",

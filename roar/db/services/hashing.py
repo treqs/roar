@@ -8,70 +8,36 @@ import os
 
 from ...core.interfaces.repositories import HashCacheRepository
 from ...core.interfaces.services import HashingService
-from ..hashing import HashAlgorithmRegistry
+from ..hashing.backend import (
+    compute_hashes_batch as compute_hashes_batch_backend,
+)
+from ..hashing.backend import (
+    normalize_algorithms,
+)
 
 
 class DefaultHashingService(HashingService):
     """
     Default implementation of hashing service.
 
-    Uses hash algorithm registry for pluggable hash algorithms
-    and hash cache repository for performance optimization.
+    Uses a native-backed hashing backend with repository-based cache
+    for performance optimization.
     """
 
-    def __init__(
-        self, hash_cache: HashCacheRepository, registry: HashAlgorithmRegistry | None = None
-    ):
+    def __init__(self, hash_cache: HashCacheRepository):
         """
         Initialize hashing service.
 
         Args:
             hash_cache: Repository for caching hashes
-            registry: Hash algorithm registry (defaults to standard registry)
         """
         self._hash_cache = hash_cache
-        self._registry = registry or HashAlgorithmRegistry()
 
     def compute_hash(self, path: str, algorithm: str = "blake3") -> str | None:
-        """
-        Compute a single hash for a file.
-
-        Uses cache if available, computes and caches if not.
-
-        Args:
-            path: File path
-            algorithm: Hash algorithm ('blake3', 'sha256', 'sha512', 'md5')
-
-        Returns:
-            Hash digest, or None if file doesn't exist.
-        """
-        try:
-            stat = os.stat(path)
-            size = stat.st_size
-            mtime = stat.st_mtime
-        except OSError:
-            return None
-
-        # Check cache first
-        cached = self._hash_cache.get_cached_hash(path, algorithm)
-        if cached:
-            return cached
-
-        # Compute hash
-        hasher = self._registry.create_hasher(algorithm)
-        try:
-            with open(path, "rb") as f:
-                for chunk in iter(lambda: f.read(8192 * 1024), b""):  # 8MB chunks
-                    hasher.update(chunk)
-        except OSError:
-            return None
-
-        digest = hasher.hexdigest()
-
-        # Cache it
-        self._hash_cache.cache_hash(path, algorithm, digest, size, mtime)
-
-        return digest
+        """Compute a single hash for a file."""
+        selected = normalize_algorithms([algorithm])[0]
+        batch = self.compute_hashes_batch([path], [selected])
+        return batch.get(path, {}).get(selected)
 
     def compute_file_hash(self, path: str, algorithm: str = "blake3") -> str | None:
         """
@@ -91,56 +57,76 @@ class DefaultHashingService(HashingService):
     def compute_hashes(
         self, path: str, algorithms: list[str] | None = None
     ) -> dict[str, str] | None:
-        """
-        Compute multiple hashes for a file in a single pass.
+        """Compute multiple hashes for a file in a single pass."""
+        batch = self.compute_hashes_batch([path], algorithms)
+        return batch.get(path)
 
-        Args:
-            path: File path
-            algorithms: List of algorithms. Defaults to ['blake3'].
+    def compute_hashes_batch(
+        self,
+        paths: list[str],
+        algorithms: list[str] | None = None,
+    ) -> dict[str, dict[str, str]]:
+        """
+        Compute hashes for multiple files in batch.
 
         Returns:
-            Dict of {algorithm: digest}, or None if file doesn't exist.
+            Dict[path] -> {algorithm: digest}. Files that are missing/unreadable
+            are omitted from the result.
         """
-        if algorithms is None:
-            algorithms = ["blake3"]
+        normalized = normalize_algorithms(algorithms)
 
-        try:
-            stat = os.stat(path)
-            size = stat.st_size
-            mtime = stat.st_mtime
-        except OSError:
-            return None
+        # De-duplicate while preserving order.
+        unique_paths: list[str] = []
+        seen_paths: set[str] = set()
+        for path in paths:
+            if path not in seen_paths:
+                seen_paths.add(path)
+                unique_paths.append(path)
 
-        # Check what's already cached
-        cached = self._hash_cache.get_cached_hashes(path)
-        needed = [algo for algo in algorithms if algo not in cached]
+        fully_cached: dict[str, dict[str, str]] = {}
+        to_compute: list[str] = []
+        stats_by_path: dict[str, tuple[int, float]] = {}
+        partial_cache: dict[str, dict[str, str]] = {}
 
-        if not needed:
-            # All algorithms cached
-            return {algo: cached[algo] for algo in algorithms}
+        for path in unique_paths:
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
 
-        # Compute missing hashes in single pass
-        hashers = {algo: self._registry.create_hasher(algo) for algo in needed}
-        try:
-            with open(path, "rb") as f:
-                for chunk in iter(lambda: f.read(8192 * 1024), b""):  # 8MB chunks
-                    for hasher in hashers.values():
-                        hasher.update(chunk)
-        except OSError:
-            return None
+            cached = self._hash_cache.get_cached_hashes(path)
+            missing = [algo for algo in normalized if algo not in cached]
 
-        # Collect results and cache new hashes
-        new_hashes = {}
-        for algo, hasher in hashers.items():
-            digest = hasher.hexdigest()
-            cached[algo] = digest
-            new_hashes[algo] = digest
+            if not missing:
+                fully_cached[path] = {algo: cached[algo] for algo in normalized}
+                continue
 
-        # Cache new hashes
-        if new_hashes:
-            self._hash_cache.cache_hashes(path, new_hashes, size, mtime)
+            to_compute.append(path)
+            stats_by_path[path] = (stat.st_size, stat.st_mtime)
+            partial_cache[path] = dict(cached)
 
-        return {algo: cached[algo] for algo in algorithms}
+        if not to_compute:
+            return fully_cached
+
+        computed_batch = compute_hashes_batch_backend(to_compute, normalized)
+        if not computed_batch:
+            return fully_cached
+
+        output = dict(fully_cached)
+        for path in to_compute:
+            computed = computed_batch.get(path)
+            if not computed:
+                continue
+
+            size, mtime = stats_by_path[path]
+            self._hash_cache.cache_hashes(path, computed, size, mtime)
+
+            merged = partial_cache.get(path, {})
+            merged.update(computed)
+            if all(algo in merged for algo in normalized):
+                output[path] = {algo: merged[algo] for algo in normalized}
+
+        return output
 
     def get_cached_hash(self, path: str, algorithm: str = "blake3") -> str | None:
         """

@@ -123,6 +123,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Download tracer
         uses: actions/download-artifact@v4
         with:
@@ -171,5 +174,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
+      - name: Build native hash extension
+        run: ./scripts/build_hash_native.sh
+
+      - name: Verify native hash extension import
+        run: python -c "import roar._hash_native as m; print(m.__name__)"
+
       - name: Run tests (parallel)
-        run: pytest tests/ -v --tb=short -x -n auto --dist loadfile -m "not glaas and not live_glaas"
+        run: pytest --tb=short -x -m "not glaas and not live_glaas"

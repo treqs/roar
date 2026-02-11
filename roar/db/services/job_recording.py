@@ -23,7 +23,7 @@ class JobRecordingService:
     Service for recording job executions with full lineage tracking.
 
     Handles:
-    - Filtering hashable input/output files
+    - Batch filtering/hash computation for input/output files
     - Computing step identity for deduplication
     - Session assignment and step numbering
     - Artifact registration and linking
@@ -103,9 +103,26 @@ class JobRecordingService:
         if hash_algorithms is None:
             hash_algorithms = ["blake3"]
 
-        # Filter to only files that can be hashed
-        hashable_inputs = self._filter_hashable_files(input_files)
-        hashable_outputs = self._filter_hashable_files(output_files)
+        input_candidates = input_files or []
+        output_candidates = output_files or []
+        all_paths = self._unique_paths([*input_candidates, *output_candidates])
+
+        # Always include blake3 for hashability checks used by lineage lookups.
+        batch_algorithms = list(hash_algorithms)
+        if "blake3" not in batch_algorithms:
+            batch_algorithms.append("blake3")
+
+        hashes_by_path = self._hashing_service.compute_hashes_batch(all_paths, batch_algorithms)
+        hashable_inputs = [
+            path
+            for path in input_candidates
+            if path in hashes_by_path and "blake3" in hashes_by_path[path]
+        ]
+        hashable_outputs = [
+            path
+            for path in output_candidates
+            if path in hashes_by_path and "blake3" in hashes_by_path[path]
+        ]
 
         # Compute step identity for deduplication
         step_identity = self._session_service.compute_step_identity(
@@ -136,10 +153,22 @@ class JobRecordingService:
         )
 
         # Register and link input artifacts
-        self._register_artifacts(job_id, hashable_inputs, hash_algorithms, is_input=True)
+        self._register_artifacts(
+            job_id,
+            hashable_inputs,
+            hashes_by_path,
+            hash_algorithms,
+            is_input=True,
+        )
 
         # Register and link output artifacts
-        self._register_artifacts(job_id, hashable_outputs, hash_algorithms, is_input=False)
+        self._register_artifacts(
+            job_id,
+            hashable_outputs,
+            hashes_by_path,
+            hash_algorithms,
+            is_input=False,
+        )
 
         # Commit transaction
         self._session.commit()
@@ -149,18 +178,6 @@ class JobRecordingService:
             self._session_repo.update_hash(session_id, self._job_repo)
 
         return job_id, job_uid
-
-    def _filter_hashable_files(self, files: list[str] | None) -> list[str]:
-        """Filter files to only those that can be hashed."""
-        if not files:
-            return []
-
-        hashable = []
-        for path in files:
-            file_hash = self._hashing_service.compute_hash(path, "blake3")
-            if file_hash:
-                hashable.append(path)
-        return hashable
 
     def _assign_to_session(
         self,
@@ -192,21 +209,39 @@ class JobRecordingService:
         self,
         job_id: int,
         file_paths: list[str],
+        hashes_by_path: dict[str, dict[str, str]],
         hash_algorithms: list[str],
         is_input: bool,
     ) -> None:
         """Register artifacts and link them to the job."""
         for path in file_paths:
-            hashes = self._hashing_service.compute_hashes(path, hash_algorithms)
-            if hashes:
-                try:
-                    size = os.path.getsize(path)
-                except OSError:
-                    size = 0
+            path_hashes = hashes_by_path.get(path)
+            if not path_hashes:
+                continue
 
-                artifact_id, _ = self._artifact_repo.register(hashes, size, path)
+            hashes = {algo: digest for algo in hash_algorithms if (digest := path_hashes.get(algo))}
+            if not hashes:
+                continue
 
-                if is_input:
-                    self._job_repo.add_input(job_id, artifact_id, path)
-                else:
-                    self._job_repo.add_output(job_id, artifact_id, path)
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+
+            artifact_id, _ = self._artifact_repo.register(hashes, size, path)
+
+            if is_input:
+                self._job_repo.add_input(job_id, artifact_id, path)
+            else:
+                self._job_repo.add_output(job_id, artifact_id, path)
+
+    @staticmethod
+    def _unique_paths(paths: list[str]) -> list[str]:
+        """Return unique paths preserving input order."""
+        unique: list[str] = []
+        seen: set[str] = set()
+        for path in paths:
+            if path not in seen:
+                seen.add(path)
+                unique.append(path)
+        return unique

@@ -15,10 +15,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
-import blake3
-
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
+from ...db.hashing.backend import compute_hashes_batch
 from ...glaas_client import GlaasClient, get_glaas_url
 from ...plugins.vcs.git import GitVCSProvider
 from ...services.registration import RegistrationCoordinator, SessionRegistrationService
@@ -228,12 +227,15 @@ class PutService:
         artifact_urls: dict[str, str] = {}  # artifact_id -> remote_url
         artifact_hashes: list[str] = []  # For lineage collection
         artifacts_info: list[tuple[str, str]] = []  # (artifact_id, path)
+        hashes_by_path = self._hash_files_batch([source.path for source in resolved])
 
         for i, source in enumerate(resolved):
             file_path = source.path
 
-            # Hash the file
-            file_hash = self._hash_file(file_path)
+            # Hashes are computed in one batch call up front.
+            file_hash = hashes_by_path.get(str(file_path))
+            if not file_hash:
+                raise OSError(f"Failed to hash file: {file_path}")
             self._logger.debug(
                 "File %d/%d: %s, blake3=%s",
                 i + 1,
@@ -455,17 +457,22 @@ class PutService:
             )
         return prepared
 
-    def _hash_file(self, path: Path) -> str:
-        """Compute BLAKE3 hash of a file (matches tracer algorithm)."""
-        size = path.stat().st_size
-        self._logger.debug("Hashing file: %s (%d bytes)", path.name, size)
-        hasher = blake3.blake3()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                hasher.update(chunk)
-        digest = hasher.hexdigest()
-        self._logger.debug("Hash result: %s -> blake3:%s", path.name, digest[:12])
-        return digest
+    def _hash_files_batch(self, paths: list[Path]) -> dict[str, str]:
+        """Compute BLAKE3 hashes for paths in one backend batch call."""
+        if not paths:
+            return {}
+
+        self._logger.debug("Hashing %d file(s) in batch", len(paths))
+        raw_result = compute_hashes_batch(paths, ["blake3"])
+        result: dict[str, str] = {}
+        for path in paths:
+            key = str(path)
+            digest = raw_result.get(key, {}).get("blake3")
+            if digest:
+                result[key] = digest
+
+        self._logger.debug("Batch hash completed: %d/%d file(s)", len(result), len(paths))
+        return result
 
     def _find_or_create_artifact(self, path: Path, file_hash: str) -> str:
         """Find existing artifact by hash or create new one."""

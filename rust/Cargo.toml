@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/artifact-hash-core",
+    "crates/artifact-hash-py",
     "crates/tracer-schema",
     "crates/tracer-runtime",
     "crates/tracer-fd",

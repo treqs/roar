@@ -69,6 +69,9 @@ jobs:
       - name: Build eBPF tracer
         run: cargo build --release --manifest-path rust/Cargo.toml -p roar-tracer-ebpf
 
+      - name: Build native hash extension
+        run: ./scripts/build_hash_native.sh
+
       - name: Copy binaries to roar/bin
         run: |
           mkdir -p roar/bin
@@ -77,11 +80,49 @@ jobs:
           cp rust/target/release/roar-tracer-ebpf roar/bin/
           cp rust/target/release/roard roar/bin/
 
+      - name: Verify native hash extension import
+        run: python -c "import roar._hash_native as m; print(m.__name__)"
+
       - name: Clean previous builds
         run: rm -rf dist/ build/ *.egg-info/
 
       - name: Build distribution
         run: python -m build
+
+      - name: Verify distribution contains native extension and binaries
+        run: |
+          python - <<'PY'
+          import glob
+          import zipfile
+
+          wheels = sorted(glob.glob("dist/*.whl"))
+          if not wheels:
+              raise SystemExit("No wheel produced in dist/")
+
+          wheel = wheels[-1]
+          with zipfile.ZipFile(wheel) as zf:
+              names = set(zf.namelist())
+
+          required_bins = {
+              "roar/bin/roar-tracer",
+              "roar/bin/roar-proxy",
+              "roar/bin/roar-tracer-ebpf",
+              "roar/bin/roard",
+          }
+          missing_bins = sorted(path for path in required_bins if path not in names)
+          if missing_bins:
+              raise SystemExit(f"Missing binaries in wheel: {missing_bins}")
+
+          has_native = any(
+              name.startswith("roar/_hash_native")
+              and (name.endswith(".so") or name.endswith(".pyd") or name.endswith(".dylib"))
+              for name in names
+          )
+          if not has_native:
+              raise SystemExit("Missing native hash extension in wheel (roar/_hash_native*)")
+
+          print(f"Verified wheel contents: {wheel}")
+          PY
 
       - name: Check distribution
         run: twine check dist/*

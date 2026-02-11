@@ -17,9 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-import blake3
-
 from ...core.logging import get_logger
+from ...db.hashing.backend import compute_hashes_batch
 from ...plugins.vcs.git import GitVCSProvider
 from .backends.base import DownloadBackend, Source
 
@@ -197,7 +196,7 @@ class GetService:
             self._backend.download(remote_key, tmp_path)
 
             # Hash the downloaded file
-            file_hash = self._hash_file(tmp_path)
+            file_hash = self._hash_files_batch([tmp_path])[str(tmp_path)]
             file_size = tmp_path.stat().st_size
 
             # Verify hash if expected
@@ -272,32 +271,53 @@ class GetService:
                 would_download=would_download,
             )
 
-        # Download each file
+        # Download each file then hash all files in one batch.
         start_time = time.time()
         downloaded_files: list[dict[str, Any]] = []
-        for key in keys:
-            relative = self._relative_to_prefix(key, prefix)
-            local_path = destination / relative
+        pending_downloads: list[dict[str, Any]] = []
+        try:
+            for key in keys:
+                relative = self._relative_to_prefix(key, prefix)
+                local_path = destination / relative
 
-            if local_path.exists() and not force:
-                raise FileExistsError(
-                    f"Destination already exists: {local_path}. Use --force to overwrite."
+                if local_path.exists() and not force:
+                    raise FileExistsError(
+                        f"Destination already exists: {local_path}. Use --force to overwrite."
+                    )
+
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = local_path.with_suffix(local_path.suffix + ".roar_tmp")
+                self._backend.download(key, tmp_path)
+                remote_url = f"{self._source.scheme}://{self._source.bucket}/{key}"
+                pending_downloads.append(
+                    {
+                        "tmp_path": tmp_path,
+                        "local_path": local_path,
+                        "remote_url": remote_url,
+                        "relative_key": relative,
+                    }
                 )
 
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = local_path.with_suffix(local_path.suffix + ".roar_tmp")
+            hashes_by_tmp_path = self._hash_files_batch(
+                [entry["tmp_path"] for entry in pending_downloads]
+            )
 
-            try:
-                self._backend.download(key, tmp_path)
+            for entry in pending_downloads:
+                tmp_path = entry["tmp_path"]
+                local_path = entry["local_path"]
+                remote_url = entry["remote_url"]
+                relative = entry["relative_key"]
+                key = str(tmp_path)
+                if key not in hashes_by_tmp_path:
+                    raise OSError(f"Failed to hash downloaded file: {tmp_path}")
 
-                file_hash = self._hash_file(tmp_path)
+                file_hash = hashes_by_tmp_path[key]
                 file_size = tmp_path.stat().st_size
 
                 if local_path.exists():
                     local_path.unlink()
                 tmp_path.rename(local_path)
 
-                remote_url = f"{self._source.scheme}://{self._source.bucket}/{key}"
                 downloaded_files.append(
                     {
                         "remote_url": remote_url,
@@ -307,10 +327,13 @@ class GetService:
                         "relative_key": relative,
                     }
                 )
-            except Exception:
+        except Exception:
+            # Clean up any pending temp files on failure.
+            for entry in pending_downloads:
+                tmp_path = entry["tmp_path"]
                 if tmp_path.exists():
                     tmp_path.unlink()
-                raise
+            raise
 
         duration = time.time() - start_time
 
@@ -428,13 +451,16 @@ class GetService:
         return key
 
     @staticmethod
-    def _hash_file(path: Path) -> str:
-        """Compute BLAKE3 hash of a file (matches tracer algorithm)."""
-        hasher = blake3.blake3()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                hasher.update(chunk)
-        return hasher.hexdigest()
+    def _hash_files_batch(paths: list[Path]) -> dict[str, str]:
+        """Compute BLAKE3 hash for paths in one backend batch call."""
+        raw_result = compute_hashes_batch(paths, ["blake3"])
+        result: dict[str, str] = {}
+        for path in paths:
+            key = str(path)
+            digest = raw_result.get(key, {}).get("blake3")
+            if digest:
+                result[key] = digest
+        return result
 
     def _get_git_context(self, git_commit: str | None = None) -> dict[str, str | None]:
         """Get git context from repository."""
