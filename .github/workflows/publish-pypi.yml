@@ -12,9 +12,8 @@ on:
         type: boolean
 
 jobs:
-  build-and-publish:
+  build-rust-binaries:
     runs-on: ubuntu-latest
-    environment: pypi
 
     steps:
       - uses: actions/checkout@v4
@@ -35,30 +34,31 @@ jobs:
       - name: Install bpf-linker
         run: cargo install bpf-linker
 
-      - name: Install build tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install build twine tomli
-
       - name: Verify version matches release tag
         if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          # Extract version from pyproject.toml
-          PACKAGE_VERSION=$(python -c "import tomli; print(tomli.load(open('pyproject.toml', 'rb'))['project']['version'])")
-          # Extract version from release tag (strip 'v' prefix if present)
-          RELEASE_TAG="${{ github.event.release.tag_name }}"
-          TAG_VERSION="${RELEASE_TAG#v}"
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
 
-          echo "Package version: $PACKAGE_VERSION"
-          echo "Release tag version: $TAG_VERSION"
+          pkg = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          tag = os.environ["RELEASE_TAG"]
+          if tag.startswith("v"):
+              tag = tag[1:]
 
-          if [ "$PACKAGE_VERSION" != "$TAG_VERSION" ]; then
-            echo "ERROR: Version mismatch!"
-            echo "pyproject.toml version ($PACKAGE_VERSION) does not match release tag ($TAG_VERSION)"
-            exit 1
-          fi
+          print(f"Package version: {pkg}")
+          print(f"Release tag version: {tag}")
 
-          echo "Version verified successfully"
+          if pkg != tag:
+              raise SystemExit(
+                  f"Version mismatch: pyproject.toml={pkg} release_tag={tag}"
+              )
+
+          print("Version verified successfully")
+          PY
 
       - name: Build proxy
         run: cargo build --release --manifest-path rust/Cargo.toml -p roar-proxy
@@ -69,37 +69,81 @@ jobs:
       - name: Build eBPF tracer
         run: cargo build --release --manifest-path rust/Cargo.toml -p roar-tracer-ebpf
 
-      - name: Build native hash extension
-        run: ./scripts/build_hash_native.sh
+      - name: Stage Rust binaries
+        run: |
+          mkdir -p rust-bin
+          cp rust/target/release/roar-tracer rust-bin/
+          cp rust/target/release/roar-proxy rust-bin/
+          cp rust/target/release/roar-tracer-ebpf rust-bin/
+          cp rust/target/release/roard rust-bin/
+
+      - name: Upload Rust binaries artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: roar-rust-binaries
+          path: rust-bin/*
+
+  build-wheel:
+    runs-on: ubuntu-latest
+    needs: build-rust-binaries
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.10"
+            py-tag: "cp310"
+          - python-version: "3.11"
+            py-tag: "cp311"
+          - python-version: "3.12"
+            py-tag: "cp312"
+          - python-version: "3.13"
+            py-tag: "cp313"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install maturin
+
+      - name: Download Rust binaries artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: roar-rust-binaries
+          path: rust-bin/
 
       - name: Copy binaries to roar/bin
         run: |
           mkdir -p roar/bin
-          cp rust/target/release/roar-tracer roar/bin/
-          cp rust/target/release/roar-proxy roar/bin/
-          cp rust/target/release/roar-tracer-ebpf roar/bin/
-          cp rust/target/release/roard roar/bin/
+          cp rust-bin/roar-tracer roar/bin/
+          cp rust-bin/roar-proxy roar/bin/
+          cp rust-bin/roar-tracer-ebpf roar/bin/
+          cp rust-bin/roard roar/bin/
+          chmod +x roar/bin/roar-tracer roar/bin/roar-proxy roar/bin/roar-tracer-ebpf roar/bin/roard
 
-      - name: Verify native hash extension import
-        run: python -c "import roar._hash_native as m; print(m.__name__)"
+      - name: Build wheel via maturin
+        run: maturin build --release --manifest-path rust/crates/artifact-hash-py/Cargo.toml --interpreter python --out dist
 
-      - name: Clean previous builds
-        run: rm -rf dist/ build/ *.egg-info/
-
-      - name: Build distribution
-        run: python -m build
-
-      - name: Verify distribution contains native extension and binaries
+      - name: Verify wheel contains native extension and binaries
         run: |
           python - <<'PY'
           import glob
           import zipfile
 
           wheels = sorted(glob.glob("dist/*.whl"))
-          if not wheels:
-              raise SystemExit("No wheel produced in dist/")
+          if len(wheels) != 1:
+              raise SystemExit(f"Expected exactly one wheel, found: {wheels}")
 
-          wheel = wheels[-1]
+          wheel = wheels[0]
           with zipfile.ZipFile(wheel) as zf:
               names = set(zf.namelist())
 
@@ -122,6 +166,101 @@ jobs:
               raise SystemExit("Missing native hash extension in wheel (roar/_hash_native*)")
 
           print(f"Verified wheel contents: {wheel}")
+          PY
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.py-tag }}
+          path: dist/*.whl
+
+  build-sdist:
+    runs-on: ubuntu-latest
+    needs: build-rust-binaries
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install maturin
+
+      - name: Download Rust binaries artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: roar-rust-binaries
+          path: rust-bin/
+
+      - name: Copy binaries to roar/bin
+        run: |
+          mkdir -p roar/bin
+          cp rust-bin/roar-tracer roar/bin/
+          cp rust-bin/roar-proxy roar/bin/
+          cp rust-bin/roar-tracer-ebpf roar/bin/
+          cp rust-bin/roard roar/bin/
+
+      - name: Build sdist via maturin
+        run: maturin sdist --manifest-path rust/crates/artifact-hash-py/Cargo.toml --out dist
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [build-wheel, build-sdist]
+    environment: pypi
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install upload tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install twine
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Download sdist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist/
+
+      - name: Verify expected wheel matrix
+        run: |
+          python - <<'PY'
+          import glob
+
+          wheels = sorted(glob.glob("dist/*.whl"))
+          expected = {"cp310", "cp311", "cp312", "cp313"}
+          found = {wheel.split("-")[2] for wheel in wheels}
+
+          print("Found wheels:")
+          for wheel in wheels:
+              print(f"  - {wheel}")
+
+          if found != expected:
+              raise SystemExit(f"Expected wheel tags {sorted(expected)}, found {sorted(found)}")
           PY
 
       - name: Check distribution

@@ -26,7 +26,7 @@ Key issues observed:
 - tracepoint attach helpers and program attach lists are duplicated between `userspace/src/main.rs` and `userspace/src/daemon.rs`
 4. Build/deploy drift risk:
 - CI and publish workflows hardcode different manifest paths and artifact locations
-- `setup.py` hardcodes `tracer/Cargo.toml` for ptrace build fallback
+- legacy `setup.py` fallback path assumptions can drift from workspace builds
 
 ## Goals
 1. Move tracer-related Rust code under one top-level directory.
@@ -197,12 +197,12 @@ Result:
 3. easier backend expansion by adding package names to one matrix/list
 
 ### Publish Workflows (`publish-pypi.yml`, `publish-testpypi.yml`)
-Current publish jobs build `proxy` and `tracer-ebpf` explicitly and rely on `setup.py` fallback for ptrace.
+Current publish jobs should build all Rust binaries explicitly from workspace packages and package with a single maturin backend.
 
 Proposed update:
 1. build proxy + tracer binaries explicitly from workspace packages before Python wheel build
 2. copy binaries from `rust/target/release/` to `roar/bin/`
-3. update `setup.py` fallback path from `tracer/Cargo.toml` to workspace package build command
+3. build wheel/sdist through root maturin config (no setuptools fallback)
 4. avoid hidden coupling to old path assumptions
 
 Result:
@@ -223,7 +223,7 @@ Then use this script in:
 1. local docs
 2. CI workflows
 3. publish workflows
-4. optional `setup.py` fallback
+4. no setuptools fallback path
 
 ## Risk Assessment and Mitigations
 1. Risk: path breakage in Python tracer binary discovery.
@@ -256,6 +256,6 @@ Then use this script in:
 4. `tracer-fd` scope:
 - Decision: land chunk-aware fd/path aggregation in `tracer-fd` now and use it from both ptrace and eBPF userspace.
 - Rationale: this removes duplicate state machines immediately and aligns lineage semantics across tracer backends.
-
-## Open Questions
-1. Do we keep `setup.py` auto-build fallback long-term, or move fully to explicit prebuild in release workflows?
+5. Python build backend:
+- Decision: move fully to root `maturin` backend and remove `setup.py`.
+- Rationale: one build path is easier to reason about, avoids hidden fallback behavior, and aligns Rust extension packaging with release workflows.

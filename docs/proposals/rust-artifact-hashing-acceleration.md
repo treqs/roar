@@ -249,6 +249,15 @@ Design notes:
 - `.github/workflows/ci.yml` now builds and import-smoke-tests `roar._hash_native` in the test matrix.
 - `.github/workflows/publish-pypi.yml` and `.github/workflows/publish-testpypi.yml` now build `roar._hash_native` and verify wheels contain both tracer binaries and the native hashing module.
 - `scripts/build_hash_native.sh` now supports CI/global Python while still preferring `.venv` locally.
+9. Build backend consolidation to maturin:
+- Root `pyproject.toml` now uses `maturin` as the package build backend (`setuptools` backend removed).
+- Root `[tool.maturin]` now points at `rust/crates/artifact-hash-py/Cargo.toml` for wheel/sdist builds.
+- `setup.py` was removed to eliminate deprecated dual build paths.
+- Publish workflows now build wheel/sdist with `maturin build`/`maturin sdist`.
+10. Linux wheel matrix for release packaging:
+- Publish workflows now build one Linux wheel per supported Python version (`cp310`, `cp311`, `cp312`, `cp313`) and aggregate them before upload.
+- Rust tracer/proxy binaries are built once and reused across wheel jobs via workflow artifacts.
+- Release gating now verifies all expected wheel tags are present before upload.
 
 ### Benchmark Snapshot
 Run date: 2026-02-11

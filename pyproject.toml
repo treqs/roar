@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.11.5,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "roar-cli"
-version = "0.2.4"
+version = "0.2.5"
 description = "Reproducibility and provenance tracker for ML training pipelines"
 authors = [
     { name="TReqs Team", email="info@treqs.ai" }
@@ -45,7 +45,6 @@ dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "tomli>=2.0.0; python_version < '3.11'",
-    "maturin>=1.11.5",
 ]
 
 [project.urls]
@@ -71,12 +70,15 @@ dev = [
 # This registers `roar` on PATH after pip install
 roar = "roar.__main__:main"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["roar", "roar.*"]
-
-[tool.setuptools.package-data]
-roar = ["bin/*", "_hash_native*.so", "_hash_native*.pyd", "_hash_native*.dylib"]
+[tool.maturin]
+manifest-path = "rust/crates/artifact-hash-py/Cargo.toml"
+python-source = "."
+module-name = "roar._hash_native"
+bindings = "pyo3"
+include = [
+    { path = "roar/bin/*", format = "sdist" },
+    { path = "roar/bin/*", format = "wheel" },
+]
 
 [tool.pytest.ini_options]
 # Parallel execution enabled by default with pytest-xdist
