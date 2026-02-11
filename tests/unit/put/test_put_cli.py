@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,8 @@ from click.testing import CliRunner
 
 from roar.cli.commands.put import put
 from roar.services.put.service import PutResult
+
+put_module = importlib.import_module("roar.cli.commands.put")
 
 
 def _make_ctx(tmp_path: Path) -> SimpleNamespace:
@@ -57,11 +60,11 @@ def test_put_uses_service_session_url_for_dag_link(tmp_path: Path) -> None:
     )
 
     with (
-        patch("roar.cli.commands.put.bootstrap"),
-        patch("roar.cli.commands.put.create_database_context", return_value=nullcontext(db_ctx)),
-        patch("roar.cli.commands.put.PutService", return_value=service),
-        patch("roar.cli.commands.put.GitOperations", return_value=_make_git_ops()),
-        patch("roar.cli.commands.put.config_get", return_value="https://glaas.example"),
+        patch.object(put_module, "bootstrap"),
+        patch.object(put_module, "create_database_context", return_value=nullcontext(db_ctx)),
+        patch.object(put_module, "PutService", return_value=service),
+        patch.object(put_module, "GitOperations", return_value=_make_git_ops()),
+        patch.object(put_module, "config_get", return_value="https://glaas.example"),
     ):
         result = runner.invoke(
             put,
@@ -94,11 +97,11 @@ def test_put_falls_back_to_web_url_plus_service_session_hash(tmp_path: Path) -> 
     )
 
     with (
-        patch("roar.cli.commands.put.bootstrap"),
-        patch("roar.cli.commands.put.create_database_context", return_value=nullcontext(db_ctx)),
-        patch("roar.cli.commands.put.PutService", return_value=service),
-        patch("roar.cli.commands.put.GitOperations", return_value=_make_git_ops()),
-        patch("roar.cli.commands.put.config_get", return_value="https://glaas.example"),
+        patch.object(put_module, "bootstrap"),
+        patch.object(put_module, "create_database_context", return_value=nullcontext(db_ctx)),
+        patch.object(put_module, "PutService", return_value=service),
+        patch.object(put_module, "GitOperations", return_value=_make_git_ops()),
+        patch.object(put_module, "config_get", return_value="https://glaas.example"),
     ):
         result = runner.invoke(
             put,
