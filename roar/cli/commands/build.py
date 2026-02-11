@@ -30,7 +30,7 @@ from ._execution import (
 @click.option(
     "--tracer",
     "tracer_mode",
-    type=click.Choice(["auto", "ebpf", "ptrace"]),
+    type=click.Choice(["auto", "ebpf", "preload", "ptrace"]),
     default=None,
     help="Tracer backend policy for this build",
 )
@@ -110,7 +110,7 @@ Use for:
 
 Options:
   --quiet, -q    Suppress output summary
-  --tracer       Tracer policy: auto, ebpf, ptrace
+  --tracer       Tracer policy: auto, ebpf, preload, ptrace
   --tracer-fallback / --no-tracer-fallback
                  Enable/disable runtime tracer fallback
   --hash <algo>  Add hash algorithm (can be repeated)

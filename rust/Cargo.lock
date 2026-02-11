@@ -2185,6 +2185,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "roar-tracer-preload"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "rmp-serde",
+ "serde",
+ "tracer-fd",
+ "tracer-runtime",
+ "tracer-schema",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -395,3 +395,7 @@ default = "ebpf"
     def test_fallback_enabled_default_is_true(self, tmp_path: Path) -> None:
         config = load_config(start_dir=str(tmp_path))
         assert config["tracer"]["fallback_enabled"] is True
+
+    def test_config_set_preload_mode(self, tmp_path: Path) -> None:
+        config_set("tracer.default", "preload", start_dir=str(tmp_path))
+        assert config_get("tracer.default", start_dir=str(tmp_path)) == "preload"

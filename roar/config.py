@@ -6,7 +6,7 @@ from .core.settings import find_config_file, load_settings
 
 # Valid hash algorithms
 VALID_HASH_ALGORITHMS = {"blake3", "sha256", "sha512", "md5"}
-VALID_TRACER_MODES = {"auto", "ebpf", "ptrace"}
+VALID_TRACER_MODES = {"auto", "ebpf", "preload", "ptrace"}
 
 # Config keys that can be set via `roar config`
 CONFIGURABLE_KEYS = {
@@ -130,7 +130,7 @@ CONFIGURABLE_KEYS = {
     "tracer.default": {
         "type": str,
         "default": "auto",
-        "description": "Default tracer backend (auto, ebpf, ptrace)",
+        "description": "Default tracer backend (auto, ebpf, preload, ptrace)",
     },
     "tracer.fallback_enabled": {
         "type": bool,

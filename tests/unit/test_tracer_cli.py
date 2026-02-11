@@ -22,7 +22,9 @@ class TestTracerCli:
 
     def test_check_ptrace_fails_when_binary_missing(self):
         runner = CliRunner()
-        with patch.object(tracer_cli_module, "_find_ptrace_tracer", return_value=None):
+        with patch.object(
+            tracer_cli_module, "_backend_ready", return_value=(False, "ptrace tracer not found")
+        ):
             result = runner.invoke(tracer_cli_module.tracer, ["check", "--backend", "ptrace"])
 
         assert result.exit_code == 1
@@ -31,12 +33,23 @@ class TestTracerCli:
     def test_check_ptrace_passes_when_binary_present(self):
         runner = CliRunner()
         with patch.object(
-            tracer_cli_module, "_find_ptrace_tracer", return_value="/usr/bin/roar-tracer"
+            tracer_cli_module, "_backend_ready", return_value=(True, "/usr/bin/roar-tracer")
         ):
             result = runner.invoke(tracer_cli_module.tracer, ["check", "--backend", "ptrace"])
 
         assert result.exit_code == 0
         assert "Tracer check passed for 'ptrace'" in result.output
+
+    def test_set_default_preload_via_alias(self):
+        runner = CliRunner()
+        with patch.object(
+            tracer_cli_module, "config_set", return_value=("/tmp/config.toml", "preload")
+        ) as mock_set:
+            result = runner.invoke(tracer_cli_module.tracer, ["preload"])
+
+        assert result.exit_code == 0
+        mock_set.assert_called_once_with("tracer.default", "preload")
+        assert "Default tracer set to: preload" in result.output
 
     def test_status_shows_default_and_fallback(self):
         runner = CliRunner()
@@ -44,6 +57,7 @@ class TestTracerCli:
             patch.object(tracer_cli_module, "config_get") as mock_get,
             patch.object(tracer_cli_module, "_find_ptrace_tracer", return_value=None),
             patch.object(tracer_cli_module, "_find_ebpf_tracer", return_value=None),
+            patch.object(tracer_cli_module, "_find_preload_tracer", return_value=None),
             patch.object(tracer_cli_module, "_find_roard", return_value=None),
             patch.object(tracer_cli_module, "_get_perf_event_paranoid", return_value=2),
         ):

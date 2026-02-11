@@ -105,7 +105,7 @@ put = []
 run = []
 
 [tracer]
-# Default tracer backend policy (auto, ebpf, ptrace)
+# Default tracer backend policy (auto, ebpf, preload, ptrace)
 default = "auto"
 # Allow runtime fallback to another tracer backend
 fallback_enabled = true

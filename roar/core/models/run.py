@@ -16,7 +16,7 @@ from .base import ImmutableModel, RoarBaseModel
 # Type aliases
 HashAlgorithm = Literal["blake3", "sha256", "sha512", "md5"]
 JobType = Literal["run", "build"]
-TracerMode = Literal["auto", "ebpf", "ptrace"]
+TracerMode = Literal["auto", "ebpf", "preload", "ptrace"]
 
 
 class RunArguments(ImmutableModel):

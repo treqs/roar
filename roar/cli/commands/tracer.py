@@ -4,86 +4,57 @@ CLI commands for tracer backend configuration and diagnostics.
 Usage: roar tracer [status|set-default|check|setup ebpf]
 """
 
-import shutil
 import subprocess
 from pathlib import Path
 
 import click
 
 from ...config import config_get, config_set
+from ...services.execution import tracer_backends
 
 REQUIRED_CAPS = "cap_bpf,cap_perfmon,cap_sys_resource,cap_sys_ptrace,cap_dac_read_search+ep"
-EXPECTED_CAP_NAMES = {
-    "cap_bpf",
-    "cap_dac_read_search",
-    "cap_perfmon",
-    "cap_sys_ptrace",
-    "cap_sys_resource",
-}
+EXPECTED_CAP_NAMES = tracer_backends.EXPECTED_EBPF_CAP_NAMES
+
+
+def _package_path() -> Path:
+    """Resolve roar package root path."""
+    return Path(__file__).parent.parent.parent
 
 
 def _find_ebpf_tracer() -> str | None:
     """Find the roar-tracer-ebpf binary."""
-    package_path = Path(__file__).parent.parent.parent
-    candidates = [
-        package_path.parent / "rust" / "target" / "release" / "roar-tracer-ebpf",
-        package_path / "bin" / "roar-tracer-ebpf",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return str(candidate.resolve())
-    return shutil.which("roar-tracer-ebpf")
+    return tracer_backends.find_ebpf_tracer(_package_path())
 
 
 def _find_roard() -> str | None:
     """Find the roard daemon binary."""
-    package_path = Path(__file__).parent.parent.parent
-    candidates = [
-        package_path.parent / "rust" / "target" / "release" / "roard",
-        package_path / "bin" / "roard",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return str(candidate.resolve())
-    return shutil.which("roard")
+    return tracer_backends.find_roard(_package_path())
 
 
 def _find_ptrace_tracer() -> str | None:
     """Find the roar-tracer (ptrace) binary."""
-    package_path = Path(__file__).parent.parent.parent
-    candidates = [
-        package_path.parent / "rust" / "target" / "release" / "roar-tracer",
-        package_path / "bin" / "roar-tracer",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return str(candidate.resolve())
-    return shutil.which("roar-tracer")
+    return tracer_backends.find_ptrace_tracer(_package_path())
+
+
+def _find_preload_tracer() -> str | None:
+    """Find the roar-tracer-preload binary."""
+    return tracer_backends.find_preload_tracer(_package_path())
+
+
+def _find_preload_library() -> str | None:
+    """Find preload interposer shared library."""
+    return tracer_backends.find_preload_library(_package_path())
 
 
 def _get_current_caps(path: str) -> set[str]:
     """Get current Linux capabilities set on a binary."""
-    if not shutil.which("getcap"):
-        return set()
-    try:
-        result = subprocess.run(["getcap", path], capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip():
-            parts = result.stdout.strip().split()
-            if len(parts) >= 2:
-                caps_str = parts[-1].split("=")[0]
-                return {c.strip() for c in caps_str.split(",")}
-    except Exception:
-        pass
-    return set()
+    caps = tracer_backends.get_binary_caps(path)
+    return caps if caps is not None else set()
 
 
 def _get_perf_event_paranoid() -> int | None:
     """Read current perf_event_paranoid sysctl value."""
-    try:
-        value = Path("/proc/sys/kernel/perf_event_paranoid").read_text().strip()
-        return int(value)
-    except Exception:
-        return None
+    return tracer_backends.get_perf_event_paranoid()
 
 
 def _get_default_mode() -> str:
@@ -103,43 +74,19 @@ def _set_tracer_default(mode: str) -> None:
 
 def _ebpf_readiness(path: str) -> tuple[bool, str]:
     """Check eBPF readiness and return (ok, reason)."""
-    caps = _get_current_caps(path)
-    if not caps:
-        return False, "no capabilities set"
-    missing = EXPECTED_CAP_NAMES - caps
-    if missing:
-        return False, f"missing {', '.join(sorted(missing))}"
+    ok, reason = tracer_backends.ebpf_is_ready(path)
+    return ok, reason or "ready"
 
-    paranoid = _get_perf_event_paranoid()
-    if paranoid is not None and paranoid > 1:
-        return False, f"perf_event_paranoid={paranoid} (needs <= 1)"
 
-    return True, "ready"
+def _preload_readiness(path: str) -> tuple[bool, str]:
+    """Check preload readiness and return (ok, reason)."""
+    ok, reason = tracer_backends.preload_is_ready(_package_path(), path)
+    return ok, reason or "ready"
 
 
 def _backend_ready(backend: str) -> tuple[bool, str]:
-    """Check readiness for backend: auto|ptrace|ebpf."""
-    if backend == "ptrace":
-        ptrace = _find_ptrace_tracer()
-        return (True, ptrace) if ptrace else (False, "ptrace tracer not found")
-
-    if backend == "ebpf":
-        ebpf = _find_ebpf_tracer()
-        if not ebpf:
-            return False, "eBPF tracer not found"
-        ok, reason = _ebpf_readiness(ebpf)
-        return ok, reason
-
-    # auto: eBPF if ready, otherwise ptrace
-    ebpf = _find_ebpf_tracer()
-    if ebpf:
-        ok, _reason = _ebpf_readiness(ebpf)
-        if ok:
-            return True, "eBPF ready"
-    ptrace = _find_ptrace_tracer()
-    if ptrace:
-        return True, "ptrace available"
-    return False, "no usable tracer found (eBPF not ready, ptrace not found)"
+    """Check readiness for backend: auto|ptrace|ebpf|preload."""
+    return tracer_backends.backend_ready(_package_path(), backend)
 
 
 def _print_status() -> None:
@@ -171,6 +118,15 @@ def _print_status() -> None:
     else:
         click.echo("  ebpf:    not found")
 
+    preload = _find_preload_tracer()
+    if preload:
+        ok, reason = _preload_readiness(preload)
+        status = "ready" if ok else reason
+        preload_lib = _find_preload_library() or "library not found"
+        click.echo(f"  preload: {preload} ({status}; lib={preload_lib})")
+    else:
+        click.echo("  preload: not found")
+
     roard = _find_roard()
     if roard:
         click.echo(f"  roard:   {roard}")
@@ -198,7 +154,7 @@ def tracer_status() -> None:
 
 
 @tracer.command("set-default")
-@click.argument("mode", type=click.Choice(["auto", "ebpf", "ptrace"]))
+@click.argument("mode", type=click.Choice(["auto", "ebpf", "preload", "ptrace"]))
 def tracer_set_default(mode: str) -> None:
     """Set default tracer backend policy."""
     _set_tracer_default(mode)
@@ -222,10 +178,16 @@ def tracer_ptrace() -> None:
     _set_tracer_default("ptrace")
 
 
+@tracer.command("preload")
+def tracer_preload() -> None:
+    """Convenience alias for set-default preload."""
+    _set_tracer_default("preload")
+
+
 @tracer.command("check")
 @click.option(
     "--backend",
-    type=click.Choice(["auto", "ebpf", "ptrace"]),
+    type=click.Choice(["auto", "ebpf", "preload", "ptrace"]),
     default=None,
     help="Backend policy to validate (defaults to configured default tracer).",
 )

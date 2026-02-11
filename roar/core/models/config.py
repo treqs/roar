@@ -15,7 +15,7 @@ from .base import RoarBaseModel
 # Type aliases
 HashAlgorithm = Literal["blake3", "sha256", "sha512", "md5"]
 LogLevel = Literal["debug", "info", "warning", "error"]
-TracerMode = Literal["auto", "ebpf", "ptrace"]
+TracerMode = Literal["auto", "ebpf", "preload", "ptrace"]
 
 
 class ConfigBaseModel(RoarBaseModel):

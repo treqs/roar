@@ -5,7 +5,6 @@ Handles tracer binary discovery and process execution via the tracer.
 """
 
 import os
-import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -13,6 +12,7 @@ from pathlib import Path
 from ...core.exceptions import TracerNotFoundError
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.run import ISignalHandler, TracerResult
+from . import tracer_backends
 
 
 class TracerService:
@@ -45,12 +45,12 @@ class TracerService:
         return self._logger
 
     def _get_tracer_mode(self) -> str:
-        """Get the configured tracer mode (auto, ebpf, ptrace)."""
+        """Get the configured tracer mode (auto, ebpf, preload, ptrace)."""
         try:
             from ...config import config_get
 
             mode = config_get("tracer.default")
-            if mode in ("auto", "ebpf", "ptrace"):
+            if mode in ("auto", "ebpf", "preload", "ptrace"):
                 return mode
         except Exception:
             pass
@@ -70,56 +70,27 @@ class TracerService:
 
     def _find_ptrace_tracer(self) -> str | None:
         """Find the roar-tracer (ptrace) binary."""
-        candidates = [
-            self._package_path.parent / "rust" / "target" / "release" / "roar-tracer",
-            self._package_path / "bin" / "roar-tracer",
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                return str(candidate)
-        result = subprocess.run(["which", "roar-tracer"], capture_output=True, text=True)
-        if result.returncode == 0:
-            return result.stdout.strip()
-        return None
+        return tracer_backends.find_ptrace_tracer(self._package_path)
 
     def _find_ebpf_tracer(self) -> str | None:
         """Find the roar-tracer-ebpf binary."""
-        candidates = [
-            self._package_path.parent / "rust" / "target" / "release" / "roar-tracer-ebpf",
-            self._package_path / "bin" / "roar-tracer-ebpf",
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                return str(candidate)
-        result = subprocess.run(["which", "roar-tracer-ebpf"], capture_output=True, text=True)
-        if result.returncode == 0:
-            return result.stdout.strip()
-        return None
+        return tracer_backends.find_ebpf_tracer(self._package_path)
+
+    def _find_preload_tracer(self) -> str | None:
+        """Find the roar-tracer-preload launcher binary."""
+        return tracer_backends.find_preload_tracer(self._package_path)
+
+    def _find_preload_library(self) -> str | None:
+        """Find the preload interposer shared library."""
+        return tracer_backends.find_preload_library(self._package_path)
 
     def _get_perf_event_paranoid(self) -> int | None:
         """Read perf_event_paranoid (Linux only)."""
-        try:
-            value = Path("/proc/sys/kernel/perf_event_paranoid").read_text().strip()
-            return int(value)
-        except Exception:
-            return None
+        return tracer_backends.get_perf_event_paranoid()
 
     def _get_binary_caps(self, path: str) -> set[str] | None:
         """Read Linux capabilities from a binary via getcap."""
-        if not shutil.which("getcap"):
-            return None
-
-        try:
-            result = subprocess.run(["getcap", path], capture_output=True, text=True)
-            if result.returncode != 0 or not result.stdout.strip():
-                return set()
-            parts = result.stdout.strip().split()
-            if len(parts) < 2:
-                return set()
-            caps_str = parts[-1].split("=")[0]
-            return {c.strip() for c in caps_str.split(",") if c.strip()}
-        except Exception:
-            return None
+        return tracer_backends.get_binary_caps(path)
 
     def _ebpf_is_ready(self, path: str) -> tuple[bool, str | None]:
         """
@@ -128,31 +99,11 @@ class TracerService:
         Returns:
             (is_ready, reason_if_not_ready)
         """
-        if os.geteuid() == 0:
-            return True, None
+        return tracer_backends.ebpf_is_ready(path)
 
-        paranoid = self._get_perf_event_paranoid()
-        if paranoid is not None and paranoid > 1:
-            return False, f"perf_event_paranoid={paranoid} (needs <= 1)"
-
-        required_caps = {
-            "cap_bpf",
-            "cap_dac_read_search",
-            "cap_perfmon",
-            "cap_sys_ptrace",
-            "cap_sys_resource",
-        }
-        caps = self._get_binary_caps(path)
-        if caps is None:
-            # Unable to determine; let runtime decide.
-            return True, None
-        if required_caps.issubset(caps):
-            return True, None
-
-        missing = sorted(required_caps - caps)
-        if missing:
-            return False, f"missing capabilities: {', '.join(missing)}"
-        return False, "no capabilities set"
+    def _preload_is_ready(self, launcher_path: str) -> tuple[bool, str | None]:
+        """Check whether preload launcher and library are available."""
+        return tracer_backends.preload_is_ready(self._package_path, launcher_path)
 
     def _get_tracer_candidates(
         self,
@@ -162,7 +113,7 @@ class TracerService:
         """
         Resolve ordered tracer candidates as (backend_name, binary_path).
 
-        In auto mode we only include eBPF when it's likely usable.
+        In auto mode we include only backends likely to be usable.
         """
         candidates: list[tuple[str, str]] = []
 
@@ -177,6 +128,18 @@ class TracerService:
                         candidates.append(("ebpf", ebpf))
                     else:
                         self.logger.debug("Skipping eBPF tracer in auto mode: %s", reason)
+
+        if mode in ("preload", "auto"):
+            preload = self._find_preload_tracer()
+            if preload:
+                if mode == "preload":
+                    candidates.append(("preload", preload))
+                else:
+                    ready, reason = self._preload_is_ready(preload)
+                    if ready:
+                        candidates.append(("preload", preload))
+                    else:
+                        self.logger.debug("Skipping preload tracer in auto mode: %s", reason)
 
         if mode in ("ptrace", "auto"):
             ptrace = self._find_ptrace_tracer()
@@ -193,8 +156,9 @@ class TracerService:
 
         Mode behavior:
         - "ptrace": Only look for roar-tracer
+        - "preload": Only look for roar-tracer-preload
         - "ebpf": Only look for roar-tracer-ebpf
-        - "auto": Prefer roar-tracer-ebpf, fall back to roar-tracer
+        - "auto": Prefer roar-tracer-ebpf, then preload, then roar-tracer
 
         Returns:
             Path to tracer binary, or None if not found
@@ -249,6 +213,11 @@ class TracerService:
                     "roar-tracer-ebpf binary not found. Build it with:\n"
                     "  cd rust && cargo build --release -p roar-tracer-ebpf"
                 )
+            elif mode == "preload":
+                hint = (
+                    "roar-tracer-preload or preload library not found. Build it with:\n"
+                    "  cd rust && cargo build --release -p roar-tracer-preload"
+                )
             elif mode == "ptrace":
                 hint = (
                     "roar-tracer binary not found. Build it with:\n"
@@ -258,6 +227,7 @@ class TracerService:
                 hint = (
                     "No tracer binary found. Build one with:\n"
                     "  cd rust && cargo build --release -p roar-tracer-ebpf  (eBPF, recommended)\n"
+                    "  cd rust && cargo build --release -p roar-tracer-preload (preload)\n"
                     "  cd rust && cargo build --release -p roar-tracer       (ptrace, fallback)"
                 )
             raise TracerNotFoundError(hint)
@@ -319,7 +289,12 @@ class TracerService:
 
                 proc = None
                 try:
-                    proc = subprocess.Popen(tracer_cmd, env=env)
+                    attempt_env = dict(env)
+                    if backend == "preload":
+                        preload_lib = self._find_preload_library()
+                        if preload_lib:
+                            attempt_env["ROAR_PRELOAD_LIB"] = preload_lib
+                    proc = subprocess.Popen(tracer_cmd, env=attempt_env)
                     self.logger.debug("Process started (%s): pid=%d", backend, proc.pid)
                     exit_code = proc.wait()
                     self.logger.debug("Process exited (%s): code=%d", backend, exit_code)

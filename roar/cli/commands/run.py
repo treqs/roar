@@ -37,7 +37,7 @@ from ._execution import (
 @click.option(
     "--tracer",
     "tracer_mode",
-    type=click.Choice(["auto", "ebpf", "ptrace"]),
+    type=click.Choice(["auto", "ebpf", "preload", "ptrace"]),
     default=None,
     help="Tracer backend policy for this run",
 )
@@ -201,7 +201,7 @@ Run a command with provenance tracking.
 
 Options:
   --quiet, -q             Suppress output summary
-  --tracer <mode>         Tracer policy: auto, ebpf, ptrace
+  --tracer <mode>         Tracer policy: auto, ebpf, preload, ptrace
   --tracer-fallback       Enable runtime tracer fallback
   --no-tracer-fallback    Disable runtime tracer fallback
   --hash <algo>           Add hash algorithm (can be repeated)

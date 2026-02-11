@@ -12,6 +12,19 @@ def _make_signal_handler():
 
 
 class TestTracerSelection:
+    def test_auto_prefers_preload_when_ebpf_unready(self, tmp_path):
+        svc = TracerService(package_path=tmp_path / "roar")
+        with (
+            patch.object(svc, "_get_tracer_mode", return_value="auto"),
+            patch.object(svc, "_get_fallback_enabled", return_value=True),
+            patch.object(svc, "_find_ebpf_tracer", return_value="/bin/roar-tracer-ebpf"),
+            patch.object(svc, "_ebpf_is_ready", return_value=(False, "missing capabilities")),
+            patch.object(svc, "_find_preload_tracer", return_value="/bin/roar-tracer-preload"),
+            patch.object(svc, "_preload_is_ready", return_value=(True, None)),
+            patch.object(svc, "_find_ptrace_tracer", return_value="/bin/roar-tracer"),
+        ):
+            assert svc.find_tracer() == "/bin/roar-tracer-preload"
+
     def test_auto_skips_unready_ebpf_and_selects_ptrace(self, tmp_path):
         svc = TracerService(package_path=tmp_path / "roar")
         with (
@@ -31,6 +44,15 @@ class TestTracerSelection:
             patch.object(svc, "_find_ebpf_tracer", return_value="/bin/roar-tracer-ebpf"),
         ):
             assert svc.find_tracer() == "/bin/roar-tracer-ebpf"
+
+    def test_forced_preload_selects_preload_launcher(self, tmp_path):
+        svc = TracerService(package_path=tmp_path / "roar")
+        with (
+            patch.object(svc, "_get_tracer_mode", return_value="preload"),
+            patch.object(svc, "_get_fallback_enabled", return_value=True),
+            patch.object(svc, "_find_preload_tracer", return_value="/bin/roar-tracer-preload"),
+        ):
+            assert svc.find_tracer() == "/bin/roar-tracer-preload"
 
     def test_execute_falls_back_when_first_backend_fails_without_report(self, tmp_path):
         svc = TracerService(package_path=tmp_path / "roar")

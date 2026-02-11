@@ -62,3 +62,22 @@ class TestBuildTracerFlags:
         kwargs = mock_exec.call_args.kwargs
         assert kwargs["tracer_mode"] == "ebpf"
         assert kwargs["tracer_fallback"] is True
+
+    def test_build_accepts_preload_tracer_mode(self):
+        runner = CliRunner()
+
+        with (
+            patch.object(build_module, "validate_git_clean", return_value=("/tmp/repo", {})),
+            patch.object(build_module, "get_quiet_setting", return_value=False),
+            patch.object(build_module, "get_hash_algorithms", return_value=["blake3"]),
+            patch.object(build_module, "execute_and_report", return_value=0) as mock_exec,
+        ):
+            result = runner.invoke(
+                build,
+                ["--tracer", "preload", "make", "-j4"],
+                obj=_ctx(),
+            )
+
+        assert result.exit_code == 0
+        kwargs = mock_exec.call_args.kwargs
+        assert kwargs["tracer_mode"] == "preload"
