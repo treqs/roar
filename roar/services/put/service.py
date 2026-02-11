@@ -49,6 +49,8 @@ class PutResult:
     success: bool
     job_id: int | None = None
     job_uid: str | None = None
+    session_hash: str | None = None
+    session_url: str | None = None
     uploaded_files: list[dict[str, Any]] = field(default_factory=list)
     dry_run: bool = False
     would_upload: list[dict[str, Any]] = field(default_factory=list)
@@ -218,6 +220,8 @@ class PutService:
             self._logger.debug("Dry run mode — skipping upload and registration")
             return PutResult(
                 success=True,
+                session_hash=session_hash,
+                session_url=session_result.session_url,
                 dry_run=True,
                 would_upload=[{"path": str(r.path), "exists": r.exists} for r in resolved],
             )
@@ -414,6 +418,8 @@ class PutService:
                 success=False,
                 job_id=job_id,
                 job_uid=job_uid,
+                session_hash=session_hash,
+                session_url=session_result.session_url,
                 uploaded_files=uploaded_files,
                 error=registration_error,
             )
@@ -427,6 +433,8 @@ class PutService:
             success=True,
             job_id=job_id,
             job_uid=job_uid,
+            session_hash=session_hash,
+            session_url=session_result.session_url,
             uploaded_files=uploaded_files,
         )
 

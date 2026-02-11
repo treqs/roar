@@ -283,7 +283,10 @@ def put(
 
         # Show GLaaS registration info
         web_url = config_get("glaas.web_url") or "https://glaas.ai"
-        session_hash = active_session.get("hash", "")
+        session_hash = result.session_hash or ""
+        session_url = result.session_url or (
+            f"{web_url}/dag/{session_hash}" if session_hash else ""
+        )
         click.echo("\nRegistered with GLaaS:")
-        click.echo(f"  View: {web_url}/dag/{session_hash}")
+        click.echo(f"  View: {session_url}")
         logger.debug("Put command completed successfully")

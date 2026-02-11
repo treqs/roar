@@ -1,5 +1,6 @@
 """Tests for run/build tracer flag plumbing into execution helper."""
 
+import importlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -7,6 +8,9 @@ from click.testing import CliRunner
 
 from roar.cli.commands.build import build
 from roar.cli.commands.run import run
+
+run_module = importlib.import_module("roar.cli.commands.run")
+build_module = importlib.import_module("roar.cli.commands.build")
 
 
 def _ctx():
@@ -21,10 +25,10 @@ class TestRunTracerFlags:
         runner = CliRunner()
 
         with (
-            patch("roar.cli.commands.run.validate_git_clean", return_value=("/tmp/repo", {})),
-            patch("roar.cli.commands.run.get_quiet_setting", return_value=False),
-            patch("roar.cli.commands.run.get_hash_algorithms", return_value=["blake3"]),
-            patch("roar.cli.commands.run.execute_and_report", return_value=0) as mock_exec,
+            patch.object(run_module, "validate_git_clean", return_value=("/tmp/repo", {})),
+            patch.object(run_module, "get_quiet_setting", return_value=False),
+            patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
+            patch.object(run_module, "execute_and_report", return_value=0) as mock_exec,
         ):
             result = runner.invoke(
                 run,
@@ -43,10 +47,10 @@ class TestBuildTracerFlags:
         runner = CliRunner()
 
         with (
-            patch("roar.cli.commands.build.validate_git_clean", return_value=("/tmp/repo", {})),
-            patch("roar.cli.commands.build.get_quiet_setting", return_value=False),
-            patch("roar.cli.commands.build.get_hash_algorithms", return_value=["blake3"]),
-            patch("roar.cli.commands.build.execute_and_report", return_value=0) as mock_exec,
+            patch.object(build_module, "validate_git_clean", return_value=("/tmp/repo", {})),
+            patch.object(build_module, "get_quiet_setting", return_value=False),
+            patch.object(build_module, "get_hash_algorithms", return_value=["blake3"]),
+            patch.object(build_module, "execute_and_report", return_value=0) as mock_exec,
         ):
             result = runner.invoke(
                 build,
