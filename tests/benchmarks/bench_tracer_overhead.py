@@ -22,11 +22,11 @@ PYTHON_BIN = ".venv/bin/python"
 TRACER_BIN = "roar/bin/roar-tracer"
 EBPF_TRACER_BIN = os.environ.get(
     "EBPF_TRACER_BIN",
-    os.path.join(os.path.dirname(__file__), "../../tracer-ebpf/target/release/roar-tracer-ebpf"),
+    os.path.join(os.path.dirname(__file__), "../../rust/target/release/roar-tracer-ebpf"),
 )
 ROARD_BIN = os.environ.get(
     "ROARD_BIN",
-    os.path.join(os.path.dirname(__file__), "../../tracer-ebpf/target/release/roard"),
+    os.path.join(os.path.dirname(__file__), "../../rust/target/release/roard"),
 )
 NUM_ITERATIONS = 10
 NUM_WARMUP = 2

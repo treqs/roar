@@ -27,21 +27,29 @@ def find_cargo():
 
 def ensure_tracer():
     """Ensure tracer binary exists before package data is collected."""
-    tracer_src = Path("tracer/Cargo.toml")
-    tracer_built = Path("tracer/target/release/roar-tracer")
+    workspace_manifest = Path("rust/Cargo.toml")
+    tracer_built = Path("rust/target/release/roar-tracer")
     tracer_dst = Path("roar/bin/roar-tracer")
 
     if tracer_dst.exists():
         return  # Already in place
 
-    if not tracer_src.exists():
+    if not workspace_manifest.exists():
         return  # Not a full source checkout
 
     cargo = find_cargo()
     if cargo:
         print("Building roar-tracer...")
         subprocess.run(
-            [cargo, "build", "--release", "--manifest-path", str(tracer_src)],
+            [
+                cargo,
+                "build",
+                "--release",
+                "--manifest-path",
+                str(workspace_manifest),
+                "-p",
+                "roar-tracer",
+            ],
             check=True,
         )
         tracer_dst.parent.mkdir(parents=True, exist_ok=True)
@@ -54,7 +62,7 @@ def ensure_tracer():
         print(f"Copied tracer to {tracer_dst}")
     else:
         print("Warning: cargo not found and no pre-built tracer binary")
-        print("Run 'cargo build --release' in tracer/ directory first,")
+        print("Run 'cargo build --release --manifest-path rust/Cargo.toml -p roar-tracer' first,")
         print("or install Rust from https://rustup.rs/")
 
 

@@ -27,7 +27,10 @@ def proxy_binary():
 
     path = ProxyService().find_proxy()
     if path is None:
-        pytest.skip("roar-proxy binary not found — build with: cd proxy && cargo build")
+        pytest.skip(
+            "roar-proxy binary not found — build with: "
+            "cargo build --release --manifest-path rust/Cargo.toml -p roar-proxy"
+        )
     return path
 
 

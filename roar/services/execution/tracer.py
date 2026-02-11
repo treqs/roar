@@ -71,7 +71,7 @@ class TracerService:
     def _find_ptrace_tracer(self) -> str | None:
         """Find the roar-tracer (ptrace) binary."""
         candidates = [
-            self._package_path.parent / "tracer" / "target" / "release" / "roar-tracer",
+            self._package_path.parent / "rust" / "target" / "release" / "roar-tracer",
             self._package_path / "bin" / "roar-tracer",
         ]
         for candidate in candidates:
@@ -85,7 +85,7 @@ class TracerService:
     def _find_ebpf_tracer(self) -> str | None:
         """Find the roar-tracer-ebpf binary."""
         candidates = [
-            self._package_path.parent / "tracer-ebpf" / "target" / "release" / "roar-tracer-ebpf",
+            self._package_path.parent / "rust" / "target" / "release" / "roar-tracer-ebpf",
             self._package_path / "bin" / "roar-tracer-ebpf",
         ]
         for candidate in candidates:
@@ -247,18 +247,18 @@ class TracerService:
             if mode == "ebpf":
                 hint = (
                     "roar-tracer-ebpf binary not found. Build it with:\n"
-                    "  cd tracer-ebpf && cargo build --release"
+                    "  cd rust && cargo build --release -p roar-tracer-ebpf"
                 )
             elif mode == "ptrace":
                 hint = (
                     "roar-tracer binary not found. Build it with:\n"
-                    "  cd tracer && cargo build --release"
+                    "  cd rust && cargo build --release -p roar-tracer"
                 )
             else:
                 hint = (
                     "No tracer binary found. Build one with:\n"
-                    "  cd tracer-ebpf && cargo build --release  (eBPF, recommended)\n"
-                    "  cd tracer && cargo build --release        (ptrace, fallback)"
+                    "  cd rust && cargo build --release -p roar-tracer-ebpf  (eBPF, recommended)\n"
+                    "  cd rust && cargo build --release -p roar-tracer       (ptrace, fallback)"
                 )
             raise TracerNotFoundError(hint)
 

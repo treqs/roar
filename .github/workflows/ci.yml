@@ -55,13 +55,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build tracer
-        run: cargo build --release --manifest-path tracer/Cargo.toml
+        run: cargo build --release --manifest-path rust/Cargo.toml -p roar-tracer
 
       - name: Upload tracer artifact
         uses: actions/upload-artifact@v4
         with:
           name: roar-tracer
-          path: tracer/target/release/roar-tracer
+          path: rust/target/release/roar-tracer
 
   build-proxy:
     runs-on: ubuntu-latest
@@ -72,13 +72,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build proxy
-        run: cargo build --release --manifest-path proxy/Cargo.toml
+        run: cargo build --release --manifest-path rust/Cargo.toml -p roar-proxy
 
       - name: Upload proxy artifact
         uses: actions/upload-artifact@v4
         with:
           name: roar-proxy
-          path: proxy/target/release/roar-proxy
+          path: rust/target/release/roar-proxy
 
   build-tracer-ebpf:
     runs-on: ubuntu-latest
@@ -97,15 +97,15 @@ jobs:
         run: cargo install bpf-linker
 
       - name: Build eBPF tracer
-        run: cargo build --release --manifest-path tracer-ebpf/Cargo.toml
+        run: cargo build --release --manifest-path rust/Cargo.toml -p roar-tracer-ebpf
 
       - name: Upload eBPF tracer artifacts
         uses: actions/upload-artifact@v4
         with:
           name: roar-tracer-ebpf
           path: |
-            tracer-ebpf/target/release/roar-tracer-ebpf
-            tracer-ebpf/target/release/roard
+            rust/target/release/roar-tracer-ebpf
+            rust/target/release/roard
 
   test:
     runs-on: ubuntu-latest
@@ -127,33 +127,33 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: roar-tracer
-          path: tracer/target/release/
+          path: rust/target/release/
 
       - name: Make tracer executable
-        run: chmod +x tracer/target/release/roar-tracer
+        run: chmod +x rust/target/release/roar-tracer
 
       - name: Download proxy
         uses: actions/download-artifact@v4
         with:
           name: roar-proxy
-          path: proxy/target/release/
+          path: rust/target/release/
 
       - name: Make proxy executable
-        run: chmod +x proxy/target/release/roar-proxy
+        run: chmod +x rust/target/release/roar-proxy
 
       - name: Download eBPF tracer
         uses: actions/download-artifact@v4
         with:
           name: roar-tracer-ebpf
-          path: tracer-ebpf/target/release/
+          path: rust/target/release/
 
       - name: Make eBPF tracer executables
-        run: chmod +x tracer-ebpf/target/release/roar-tracer-ebpf tracer-ebpf/target/release/roard
+        run: chmod +x rust/target/release/roar-tracer-ebpf rust/target/release/roard
 
       - name: Check ptrace availability
         run: |
           echo "Testing if ptrace is available on this runner..."
-          TRACER=tracer/target/release/roar-tracer
+          TRACER=rust/target/release/roar-tracer
           TEST_LOG=/tmp/ptrace_test.json
           if $TRACER $TEST_LOG echo "ptrace test" 2>&1; then
             if [ -f "$TEST_LOG" ] && [ -s "$TEST_LOG" ]; then

@@ -19,8 +19,8 @@ from roar.config import (
     CONFIGURABLE_KEYS,
     VALID_HASH_ALGORITHMS,
     _get_default_config,
-    config_set,
     config_get,
+    config_set,
     load_config,
     save_config,
 )
@@ -389,7 +389,7 @@ default = "ebpf"
         assert config_get("tracer.default", start_dir=str(tmp_path)) == "ebpf"
 
     def test_config_set_legacy_mode_is_rejected(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="Unknown config key: tracer.mode"):
+        with pytest.raises(ValueError, match=r"Unknown config key: tracer\.mode"):
             config_set("tracer.mode", "ptrace", start_dir=str(tmp_path))
 
     def test_fallback_enabled_default_is_true(self, tmp_path: Path) -> None:

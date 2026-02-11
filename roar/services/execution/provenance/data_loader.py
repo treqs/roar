@@ -135,7 +135,11 @@ class DataLoaderService:
         explicit_read = _explicit_list("read_files")
         explicit_written = _explicit_list("written_files")
 
-        if explicit_opened is not None and explicit_read is not None and explicit_written is not None:
+        if (
+            explicit_opened is not None
+            and explicit_read is not None
+            and explicit_written is not None
+        ):
             return explicit_opened, explicit_read, explicit_written
 
         opened_files: list[str] = []

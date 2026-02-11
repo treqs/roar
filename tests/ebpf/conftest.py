@@ -11,8 +11,8 @@ import pytest
 
 # Possible locations for the built binaries
 _SEARCH_DIRS = [
-    Path(__file__).resolve().parents[2] / "tracer-ebpf" / "target" / "release",
-    Path(__file__).resolve().parents[2] / "tracer-ebpf" / "target" / "debug",
+    Path(__file__).resolve().parents[2] / "rust" / "target" / "release",
+    Path(__file__).resolve().parents[2] / "rust" / "target" / "debug",
 ]
 
 

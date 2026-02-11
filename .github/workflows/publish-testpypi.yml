@@ -39,17 +39,21 @@ jobs:
           pip install build twine
 
       - name: Build proxy
-        run: cargo build --release --manifest-path proxy/Cargo.toml
+        run: cargo build --release --manifest-path rust/Cargo.toml -p roar-proxy
+
+      - name: Build ptrace tracer
+        run: cargo build --release --manifest-path rust/Cargo.toml -p roar-tracer
 
       - name: Build eBPF tracer
-        run: cargo build --release --manifest-path tracer-ebpf/Cargo.toml
+        run: cargo build --release --manifest-path rust/Cargo.toml -p roar-tracer-ebpf
 
       - name: Copy binaries to roar/bin
         run: |
           mkdir -p roar/bin
-          cp proxy/target/release/roar-proxy roar/bin/
-          cp tracer-ebpf/target/release/roar-tracer-ebpf roar/bin/
-          cp tracer-ebpf/target/release/roard roar/bin/
+          cp rust/target/release/roar-tracer roar/bin/
+          cp rust/target/release/roar-proxy roar/bin/
+          cp rust/target/release/roar-tracer-ebpf roar/bin/
+          cp rust/target/release/roard roar/bin/
 
       - name: Clean previous builds
         run: rm -rf dist/ build/ *.egg-info/

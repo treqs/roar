@@ -114,14 +114,14 @@ class ProxyService:
         """Find the roar-proxy binary.
 
         Search order:
-          1. ../proxy/target/release/roar-proxy  (dev build)
-          2. ../proxy/target/debug/roar-proxy     (dev debug build)
+          1. ../rust/target/release/roar-proxy  (dev build)
+          2. ../rust/target/debug/roar-proxy    (dev debug build)
           3. ./bin/roar-proxy                      (installed)
           4. PATH via `which`
         """
         candidates = [
-            self._package_path.parent / "proxy" / "target" / "release" / "roar-proxy",
-            self._package_path.parent / "proxy" / "target" / "debug" / "roar-proxy",
+            self._package_path.parent / "rust" / "target" / "release" / "roar-proxy",
+            self._package_path.parent / "rust" / "target" / "debug" / "roar-proxy",
             self._package_path / "bin" / "roar-proxy",
         ]
         for candidate in candidates:
@@ -149,7 +149,8 @@ class ProxyService:
         proxy_path = self.find_proxy()
         if not proxy_path:
             raise RuntimeError(
-                "roar-proxy binary not found. Build it with:\n  cd proxy && cargo build --release"
+                "roar-proxy binary not found. Build it with:\n"
+                "  cargo build --release --manifest-path rust/Cargo.toml -p roar-proxy"
             )
 
         # Find a free port
@@ -247,7 +248,8 @@ class ProxyService:
         proxy_path = self.find_proxy()
         if not proxy_path:
             raise RuntimeError(
-                "roar-proxy binary not found. Build it with:\n  cd proxy && cargo build --release"
+                "roar-proxy binary not found. Build it with:\n"
+                "  cargo build --release --manifest-path rust/Cargo.toml -p roar-proxy"
             )
 
         # Find a free port

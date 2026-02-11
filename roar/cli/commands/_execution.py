@@ -143,7 +143,7 @@ def execute_and_report(
         if not proxy_service.find_proxy():
             click.echo(
                 "Error: S3 proxy is enabled but roar-proxy binary not found.\n"
-                "Build it with: cd proxy && cargo build --release\n"
+                "Build it with: cargo build --release --manifest-path rust/Cargo.toml -p roar-proxy\n"
                 "Or disable: roar proxy disable",
                 err=True,
             )

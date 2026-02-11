@@ -26,7 +26,7 @@ def _find_ebpf_tracer() -> str | None:
     """Find the roar-tracer-ebpf binary."""
     package_path = Path(__file__).parent.parent.parent
     candidates = [
-        package_path.parent / "tracer-ebpf" / "target" / "release" / "roar-tracer-ebpf",
+        package_path.parent / "rust" / "target" / "release" / "roar-tracer-ebpf",
         package_path / "bin" / "roar-tracer-ebpf",
     ]
     for candidate in candidates:
@@ -39,7 +39,7 @@ def _find_roard() -> str | None:
     """Find the roard daemon binary."""
     package_path = Path(__file__).parent.parent.parent
     candidates = [
-        package_path.parent / "tracer-ebpf" / "target" / "release" / "roard",
+        package_path.parent / "rust" / "target" / "release" / "roard",
         package_path / "bin" / "roard",
     ]
     for candidate in candidates:
@@ -52,7 +52,7 @@ def _find_ptrace_tracer() -> str | None:
     """Find the roar-tracer (ptrace) binary."""
     package_path = Path(__file__).parent.parent.parent
     candidates = [
-        package_path.parent / "tracer" / "target" / "release" / "roar-tracer",
+        package_path.parent / "rust" / "target" / "release" / "roar-tracer",
         package_path / "bin" / "roar-tracer",
     ]
     for candidate in candidates:
@@ -259,6 +259,7 @@ def tracer_setup(ctx: click.Context) -> None:
 )
 def tracer_setup_ebpf(binary_path: str | None) -> None:
     """Set up eBPF tracer capabilities (needs sudo)."""
+    ebpf: str | None
     if binary_path:
         ebpf = str(Path(binary_path).resolve())
     else:
@@ -268,9 +269,10 @@ def tracer_setup_ebpf(binary_path: str | None) -> None:
         click.echo("Error: roar-tracer-ebpf binary not found.", err=True)
         click.echo("", err=True)
         click.echo("Build it with:", err=True)
-        click.echo("  cd tracer-ebpf && cargo build --release", err=True)
+        click.echo("  cd rust && cargo build --release -p roar-tracer-ebpf", err=True)
         raise SystemExit(1)
 
+    assert ebpf is not None
     click.echo(f"Binary: {ebpf}")
     current_caps = _get_current_caps(ebpf)
 
@@ -326,7 +328,9 @@ def tracer_setup_ebpf(binary_path: str | None) -> None:
         click.echo("  sudo sysctl kernel.perf_event_paranoid=1")
         click.echo("")
         click.echo("Fix permanently (survives reboot):")
-        click.echo('  echo "kernel.perf_event_paranoid=1" | sudo tee /etc/sysctl.d/99-ebpf-tracer.conf')
+        click.echo(
+            '  echo "kernel.perf_event_paranoid=1" | sudo tee /etc/sysctl.d/99-ebpf-tracer.conf'
+        )
         click.echo("  sudo sysctl --system")
         raise SystemExit(1)
 

@@ -10,7 +10,7 @@ from roar.services.execution.proxy import ProxyHandle, ProxyService
 
 class TestFindProxy:
     def test_finds_release_binary(self, tmp_path):
-        proxy_dir = tmp_path / "proxy" / "target" / "release"
+        proxy_dir = tmp_path / "rust" / "target" / "release"
         proxy_dir.mkdir(parents=True)
         (proxy_dir / "roar-proxy").touch()
 
@@ -20,7 +20,7 @@ class TestFindProxy:
         assert "release" in result
 
     def test_finds_debug_binary(self, tmp_path):
-        proxy_dir = tmp_path / "proxy" / "target" / "debug"
+        proxy_dir = tmp_path / "rust" / "target" / "debug"
         proxy_dir.mkdir(parents=True)
         (proxy_dir / "roar-proxy").touch()
 
@@ -61,7 +61,7 @@ class TestFindProxy:
 
     def test_prefers_release_over_debug(self, tmp_path):
         for variant in ("release", "debug"):
-            proxy_dir = tmp_path / "proxy" / "target" / variant
+            proxy_dir = tmp_path / "rust" / "target" / variant
             proxy_dir.mkdir(parents=True)
             (proxy_dir / "roar-proxy").touch()
 
@@ -220,7 +220,17 @@ class TestDaemonMethods:
         mock_proc = MagicMock()
         mock_proc.pid = 42
 
-        with patch("subprocess.Popen", return_value=mock_proc), patch("builtins.open", MagicMock()):
+        with (
+            patch("subprocess.Popen", return_value=mock_proc),
+            patch("builtins.open", MagicMock()),
+            patch("socket.socket") as mock_socket,
+        ):
+            mock_socket.return_value.__enter__ = MagicMock()
+            mock_socket.return_value.__exit__ = MagicMock(return_value=False)
+            mock_socket.return_value.__enter__.return_value.getsockname.return_value = (
+                "127.0.0.1",
+                9090,
+            )
             info = svc.start_daemon(tmp_path)
 
         assert info["pid"] == 42

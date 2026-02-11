@@ -30,7 +30,9 @@ class TestTracerCli:
 
     def test_check_ptrace_passes_when_binary_present(self):
         runner = CliRunner()
-        with patch.object(tracer_cli_module, "_find_ptrace_tracer", return_value="/usr/bin/roar-tracer"):
+        with patch.object(
+            tracer_cli_module, "_find_ptrace_tracer", return_value="/usr/bin/roar-tracer"
+        ):
             result = runner.invoke(tracer_cli_module.tracer, ["check", "--backend", "ptrace"])
 
         assert result.exit_code == 0
