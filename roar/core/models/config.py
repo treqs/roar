@@ -10,6 +10,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator
 
+from ..execution_backends import ExecutionBackend
 from ..tracer_modes import TracerMode
 from .base import RoarBaseModel
 
@@ -164,6 +165,14 @@ class ProxyConfig(ConfigBaseModel):
     enabled: bool = False
 
 
+class ExecutionConfig(ConfigBaseModel):
+    """Execution backend configuration section."""
+
+    backend: ExecutionBackend = "local"
+    ray_address: str | None = None
+    ray_namespace: str = "roar"
+
+
 class TracerConfig(ConfigBaseModel):
     """Tracer backend configuration section."""
 
@@ -194,6 +203,7 @@ class RoarConfig(ConfigBaseModel):
     registration: RegisterConfig = Field(default_factory=RegisterConfig)
     hash: HashConfig = Field(default_factory=HashConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     tracer: TracerConfig = Field(default_factory=TracerConfig)
     reversible: ReversibleConfig = Field(default_factory=ReversibleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

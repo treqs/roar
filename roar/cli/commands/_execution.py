@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 
 import click
 
+from ...core.execution_backends import is_valid_execution_backend
+
 if TYPE_CHECKING:
     from ..context import RoarContext
 
@@ -104,6 +106,9 @@ def execute_and_report(
     hash_algorithms: list[str],
     git_info: dict,
     repo_root: str,
+    execution_backend: str | None = None,
+    ray_address: str | None = None,
+    ray_namespace: str | None = None,
     tracer_mode: str | None = None,
     tracer_fallback: bool | None = None,
 ) -> int:
@@ -133,7 +138,9 @@ def execute_and_report(
     from typing import Literal, cast
 
     from ...config import config_get
+    from ...core.execution_backends import ExecutionBackend
     from ...core.interfaces.run import RunContext
+    from ...core.tracer_modes import TracerMode
     from ...presenters.run_report import RunReportPresenter
     from ...services.execution import RunCoordinator
     from ...services.execution.proxy import ProxyService
@@ -151,6 +158,16 @@ def execute_and_report(
             )
             return 1
 
+    # Resolve execution backend and distributed settings
+    backend = execution_backend or str(config_get("execution.backend") or "local")
+    if not is_valid_execution_backend(backend):
+        raise click.ClickException(
+            f"Invalid execution backend: {backend}. Valid backends: local, ray"
+        )
+    backend_typed = cast(ExecutionBackend, backend)
+    effective_ray_address = ray_address or config_get("execution.ray_address")
+    effective_ray_namespace = ray_namespace or config_get("execution.ray_namespace")
+
     # Create run context
     hash_algos = cast(list[Literal["blake3", "sha256", "sha512", "md5"]], hash_algorithms)
     job_type_literal = cast(Literal["run", "build"] | None, job_type)
@@ -162,7 +179,10 @@ def execute_and_report(
         step_name=step_name,
         quiet=quiet,
         hash_algorithms=hash_algos,
-        tracer_mode=tracer_mode,  # type: ignore[arg-type]
+        execution_backend=backend_typed,
+        ray_address=effective_ray_address,
+        ray_namespace=effective_ray_namespace,
+        tracer_mode=cast(TracerMode | None, tracer_mode),
         tracer_fallback=tracer_fallback,
         git_commit=git_info.get("commit"),
         git_branch=git_info.get("branch"),

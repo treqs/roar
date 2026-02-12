@@ -104,6 +104,14 @@ put = []
 # Additional algorithms for roar run
 run = []
 
+[execution]
+# Execution backend (local, ray)
+backend = "local"
+# Ray cluster address (used when backend = "ray")
+# ray_address = "127.0.0.1:6379"
+# Ray namespace for distributed lineage actor discovery
+ray_namespace = "roar"
+
 [tracer]
 # Default tracer backend policy (auto, ebpf, preload, ptrace)
 default = "auto"

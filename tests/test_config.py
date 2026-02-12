@@ -219,6 +219,7 @@ class TestDefaultsMatchPydanticModels:
             "filters",
             "cleanup",
             "hash",
+            "execution",
             "reversible",
             "logging",
         ]:
@@ -411,3 +412,19 @@ default = "ebpf"
     def test_config_set_preload_mode(self, tmp_path: Path) -> None:
         config_set("tracer.default", "preload", start_dir=str(tmp_path))
         assert config_get("tracer.default", start_dir=str(tmp_path)) == "preload"
+
+
+class TestExecutionConfig:
+    def test_execution_defaults(self, tmp_path: Path) -> None:
+        config = load_config(start_dir=str(tmp_path))
+        assert config["execution"]["backend"] == "local"
+        assert config["execution"]["ray_address"] is None
+        assert config["execution"]["ray_namespace"] == "roar"
+
+    def test_config_set_execution_backend(self, tmp_path: Path) -> None:
+        config_set("execution.backend", "ray", start_dir=str(tmp_path))
+        assert config_get("execution.backend", start_dir=str(tmp_path)) == "ray"
+
+    def test_config_set_invalid_execution_backend(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="Invalid execution backend"):
+            config_set("execution.backend", "spark", start_dir=str(tmp_path))

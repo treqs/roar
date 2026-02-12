@@ -50,6 +50,36 @@ class TestRunTracerFlags:
         assert kwargs["tracer_fallback"] is False
         assert kwargs["step_name"] == "preprocess"
 
+    def test_run_forwards_execution_backend_flags(self):
+        runner = CliRunner()
+
+        with (
+            patch.object(run_module, "validate_git_clean", return_value=("/tmp/repo", {})),
+            patch.object(run_module, "get_quiet_setting", return_value=False),
+            patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
+            patch.object(run_module, "execute_and_report", return_value=0) as mock_exec,
+        ):
+            result = runner.invoke(
+                run,
+                [
+                    "--backend",
+                    "ray",
+                    "--ray-address",
+                    "127.0.0.1:6379",
+                    "--ray-namespace",
+                    "ml-pipeline",
+                    "python",
+                    "train.py",
+                ],
+                obj=_ctx(),
+            )
+
+        assert result.exit_code == 0
+        kwargs = mock_exec.call_args.kwargs
+        assert kwargs["execution_backend"] == "ray"
+        assert kwargs["ray_address"] == "127.0.0.1:6379"
+        assert kwargs["ray_namespace"] == "ml-pipeline"
+
 
 class TestBuildTracerFlags:
     def test_build_forwards_tracer_flags(self):
@@ -91,3 +121,33 @@ class TestBuildTracerFlags:
         assert result.exit_code == 0
         kwargs = mock_exec.call_args.kwargs
         assert kwargs["tracer_mode"] == "preload"
+
+    def test_build_forwards_execution_backend_flags(self):
+        runner = CliRunner()
+
+        with (
+            patch.object(build_module, "validate_git_clean", return_value=("/tmp/repo", {})),
+            patch.object(build_module, "get_quiet_setting", return_value=False),
+            patch.object(build_module, "get_hash_algorithms", return_value=["blake3"]),
+            patch.object(build_module, "execute_and_report", return_value=0) as mock_exec,
+        ):
+            result = runner.invoke(
+                build,
+                [
+                    "--backend",
+                    "ray",
+                    "--ray-address",
+                    "10.0.0.9:6379",
+                    "--ray-namespace",
+                    "build-cluster",
+                    "make",
+                    "-j4",
+                ],
+                obj=_ctx(),
+            )
+
+        assert result.exit_code == 0
+        kwargs = mock_exec.call_args.kwargs
+        assert kwargs["execution_backend"] == "ray"
+        assert kwargs["ray_address"] == "10.0.0.9:6379"
+        assert kwargs["ray_namespace"] == "build-cluster"

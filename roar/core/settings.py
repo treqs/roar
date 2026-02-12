@@ -22,6 +22,7 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from .models.config import (
     AnalyzersConfig,
     CleanupConfig,
+    ExecutionConfig,
     FiltersConfig,
     GlaasConfig,
     HashConfig,
@@ -205,6 +206,7 @@ class RoarSettings(BaseSettings):
     registration: RegisterConfig = RegisterConfig()
     hash: HashConfig = HashConfig()
     proxy: ProxyConfig = ProxyConfig()
+    execution: ExecutionConfig = ExecutionConfig()
     tracer: TracerConfig = TracerConfig()
     reversible: ReversibleConfig = ReversibleConfig()
     logging: LoggingConfig = LoggingConfig()
@@ -296,6 +298,7 @@ class RoarSettings(BaseSettings):
             "registration": self.registration.model_dump(),
             "hash": self.hash.model_dump(),
             "proxy": self.proxy.model_dump(),
+            "execution": self.execution.model_dump(),
             "tracer": self.tracer.model_dump(),
             "reversible": self.reversible.model_dump(),
             "logging": self.logging.model_dump(),

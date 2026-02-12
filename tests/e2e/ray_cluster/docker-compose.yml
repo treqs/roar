@@ -1,0 +1,22 @@
+services:
+  ray-head:
+    image: rayproject/ray:2.53.0-py312
+    command: >
+      bash -lc "ray start --head --port=6379 --ray-client-server-port=10001 --dashboard-host=0.0.0.0
+      --disable-usage-stats --block"
+    ports:
+      - "${ROAR_RAY_HEAD_PORT:-16379}:6379"
+      - "${ROAR_RAY_CLIENT_PORT:-17001}:10001"
+    healthcheck:
+      test: ["CMD-SHELL", "ray status --address=127.0.0.1:6379 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  ray-worker:
+    image: rayproject/ray:2.53.0-py312
+    depends_on:
+      ray-head:
+        condition: service_healthy
+    command: >
+      bash -lc "ray start --address=ray-head:6379 --disable-usage-stats --block"

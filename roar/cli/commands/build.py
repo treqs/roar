@@ -6,6 +6,7 @@ Usage: roar build [options] <command>
 
 import click
 
+from ...core.execution_backends import EXECUTION_BACKEND_VALUES
 from ...core.tracer_modes import TRACER_MODE_VALUES
 from ..context import RoarContext
 from ..decorators import require_init
@@ -29,6 +30,25 @@ from ._execution import (
 @click.option("-q", "--quiet", is_flag=True, default=None, help="Suppress output summary")
 @click.option("-n", "--name", "step_name", help="Name for this step")
 @click.option(
+    "--backend",
+    "execution_backend",
+    type=click.Choice(list(EXECUTION_BACKEND_VALUES)),
+    default=None,
+    help="Execution backend policy for this build",
+)
+@click.option(
+    "--ray-address",
+    "ray_address",
+    default=None,
+    help="Ray cluster address (used when backend=ray)",
+)
+@click.option(
+    "--ray-namespace",
+    "ray_namespace",
+    default=None,
+    help="Ray namespace for distributed lineage actor discovery",
+)
+@click.option(
     "--tracer",
     "tracer_mode",
     type=click.Choice(list(TRACER_MODE_VALUES)),
@@ -49,6 +69,9 @@ def build(
     args: tuple[str, ...],
     quiet: bool | None,
     step_name: str | None,
+    execution_backend: str | None,
+    ray_address: str | None,
+    ray_namespace: str | None,
     tracer_mode: str | None,
     tracer_fallback: bool | None,
     hash_algorithms: tuple[str, ...],
@@ -90,6 +113,9 @@ def build(
         hash_algorithms=algorithms,
         git_info=git_info,
         repo_root=repo_root,
+        execution_backend=execution_backend,
+        ray_address=ray_address,
+        ray_namespace=ray_namespace,
         tracer_mode=tracer_mode,
         tracer_fallback=tracer_fallback,
     )
@@ -112,6 +138,10 @@ Use for:
 
 Options:
   --quiet, -q    Suppress output summary
+  --backend      Execution backend: local, ray
+  --ray-address  Ray cluster address when backend=ray
+  --ray-namespace
+                 Ray namespace for distributed lineage actor
   --tracer       Tracer policy: auto, ebpf, preload, ptrace
   --tracer-fallback / --no-tracer-fallback
                  Enable/disable runtime tracer fallback

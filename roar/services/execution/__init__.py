@@ -5,6 +5,7 @@ from .coordinator import RunCoordinator
 from .dag_resolver import DAGReferenceResolver
 from .execution_service import ExecutionRequest, ExecutionService, GitValidationResult
 from .proxy import ProxyService
+from .ray_lineage import RayLineageRecorder
 from .signal_handler import ProcessSignalHandler
 from .tracer import TracerService
 
@@ -15,6 +16,7 @@ __all__ = [
     "GitValidationResult",
     "ProcessSignalHandler",
     "ProxyService",
+    "RayLineageRecorder",
     "RunArgumentParser",
     "RunCoordinator",
     "TracerService",

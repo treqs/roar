@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field, computed_field, field_validator, model_validator
 
+from ..execution_backends import ExecutionBackend
 from ..tracer_modes import TracerMode
 from .base import ImmutableModel, RoarBaseModel
 
@@ -81,6 +82,9 @@ class RunContext(RoarBaseModel):
     step_name: str | None = None
     quiet: bool = False
     hash_algorithms: list[HashAlgorithm] = Field(default_factory=lambda: ["blake3"])  # type: ignore[arg-type]
+    execution_backend: ExecutionBackend = "local"
+    ray_address: str | None = None
+    ray_namespace: str | None = None
     tracer_mode: TracerMode | None = None
     tracer_fallback: bool | None = None
     git_commit: str | None = None

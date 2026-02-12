@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Any, cast
 
+from .core.execution_backends import VALID_EXECUTION_BACKENDS
 from .core.settings import find_config_file, find_roar_dir, load_settings
 from .core.tracer_modes import VALID_TRACER_MODES
 
@@ -127,6 +128,21 @@ CONFIGURABLE_KEYS = {
         "type": bool,
         "default": False,
         "description": "Enable S3 proxy for lineage tracking during roar run",
+    },
+    "execution.backend": {
+        "type": str,
+        "default": "local",
+        "description": "Execution backend (local, ray)",
+    },
+    "execution.ray_address": {
+        "type": str,
+        "default": None,
+        "description": "Ray cluster address for distributed execution backend",
+    },
+    "execution.ray_namespace": {
+        "type": str,
+        "default": "roar",
+        "description": "Ray namespace for distributed lineage actor discovery",
     },
     "tracer.default": {
         "type": str,
@@ -387,6 +403,13 @@ def config_set(key: str, value: str, start_dir: str | None = None):
             raise ValueError(
                 f"Invalid tracer mode: {value}. "
                 f"Valid modes: {', '.join(sorted(VALID_TRACER_MODES))}"
+            )
+        typed_value = value
+    elif key == "execution.backend":
+        if value not in VALID_EXECUTION_BACKENDS:
+            raise ValueError(
+                f"Invalid execution backend: {value}. "
+                f"Valid backends: {', '.join(sorted(VALID_EXECUTION_BACKENDS))}"
             )
         typed_value = value
     else:
