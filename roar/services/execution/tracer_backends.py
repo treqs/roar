@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from ...core.tracer_modes import TRACER_BACKEND_ORDER
@@ -23,6 +24,28 @@ EXPECTED_EBPF_CAP_NAMES = {
 }
 
 AUTO_BACKEND_ORDER = TRACER_BACKEND_ORDER
+
+
+@dataclass(frozen=True)
+class TracerReadiness:
+    """Typed readiness result for a concrete backend."""
+
+    ok: bool
+    reason: str | None = None
+
+    def as_tuple(self) -> tuple[bool, str | None]:
+        return self.ok, self.reason
+
+
+@dataclass(frozen=True)
+class BackendReadiness:
+    """Typed readiness result for backend policy checks."""
+
+    ok: bool
+    detail: str
+
+    def as_tuple(self) -> tuple[bool, str]:
+        return self.ok, self.detail
 
 
 def find_ptrace_tracer(package_path: Path) -> str | None:
@@ -120,86 +143,108 @@ def get_binary_caps(path: str) -> set[str] | None:
         return None
 
 
-def ebpf_is_ready(path: str) -> tuple[bool, str | None]:
+def ebpf_readiness(path: str) -> TracerReadiness:
     """
     Check whether eBPF tracer is likely to start.
 
     Returns:
-        (is_ready, reason_if_not_ready)
+        Typed readiness result for eBPF backend.
     """
     if os.geteuid() == 0:
-        return True, None
+        return TracerReadiness(ok=True, reason=None)
 
     paranoid = get_perf_event_paranoid()
     if paranoid is not None and paranoid > 1:
-        return False, f"perf_event_paranoid={paranoid} (needs <= 1)"
+        return TracerReadiness(ok=False, reason=f"perf_event_paranoid={paranoid} (needs <= 1)")
 
     caps = get_binary_caps(path)
     if caps is None:
         # Unable to determine; let runtime decide.
-        return True, None
+        return TracerReadiness(ok=True, reason=None)
     if EXPECTED_EBPF_CAP_NAMES.issubset(caps):
-        return True, None
+        return TracerReadiness(ok=True, reason=None)
 
     missing = sorted(EXPECTED_EBPF_CAP_NAMES - caps)
     if missing:
-        return False, f"missing capabilities: {', '.join(missing)}"
-    return False, "no capabilities set"
+        return TracerReadiness(ok=False, reason=f"missing capabilities: {', '.join(missing)}")
+    return TracerReadiness(ok=False, reason="no capabilities set")
+
+
+def ebpf_is_ready(path: str) -> tuple[bool, str | None]:
+    """Backward-compatible tuple wrapper for eBPF readiness."""
+    return ebpf_readiness(path).as_tuple()
+
+
+def preload_readiness(package_path: Path, launcher_path: str | None = None) -> TracerReadiness:
+    """
+    Check whether preload tracer launcher + library are available.
+
+    Returns:
+        Typed readiness result for preload backend.
+    """
+    if not launcher_path:
+        launcher_path = find_preload_tracer(package_path)
+    if not launcher_path:
+        return TracerReadiness(ok=False, reason="preload tracer not found")
+
+    library_path = find_preload_library(package_path)
+    if not library_path:
+        return TracerReadiness(ok=False, reason="preload library not found")
+    return TracerReadiness(ok=True, reason=None)
 
 
 def preload_is_ready(
     package_path: Path, launcher_path: str | None = None
 ) -> tuple[bool, str | None]:
-    """
-    Check whether preload tracer launcher + library are available.
-
-    Returns:
-        (is_ready, reason_if_not_ready)
-    """
-    if not launcher_path:
-        launcher_path = find_preload_tracer(package_path)
-    if not launcher_path:
-        return False, "preload tracer not found"
-
-    library_path = find_preload_library(package_path)
-    if not library_path:
-        return False, "preload library not found"
-    return True, None
+    """Backward-compatible tuple wrapper for preload readiness."""
+    return preload_readiness(package_path, launcher_path).as_tuple()
 
 
-def backend_ready(package_path: Path, backend: str) -> tuple[bool, str]:
+def backend_readiness(package_path: Path, backend: str) -> BackendReadiness:
     """Check readiness for backend policy: auto|ptrace|ebpf|preload."""
     if backend in ("ptrace", "ebpf", "preload"):
         return _backend_ready_non_auto(package_path, backend)
 
     # auto: first ready backend in preferred order
     for candidate in AUTO_BACKEND_ORDER:
-        ok, _detail = _backend_ready_non_auto(package_path, candidate)
-        if ok:
+        readiness = _backend_ready_non_auto(package_path, candidate)
+        if readiness.ok:
             if candidate == "ptrace":
-                return True, "ptrace available"
-            return True, f"{candidate} ready"
+                return BackendReadiness(ok=True, detail="ptrace available")
+            return BackendReadiness(ok=True, detail=f"{candidate} ready")
 
-    return False, "no usable tracer found (eBPF/preload not ready, ptrace not found)"
+    return BackendReadiness(
+        ok=False,
+        detail="no usable tracer found (eBPF/preload not ready, ptrace not found)",
+    )
 
 
-def _backend_ready_non_auto(package_path: Path, backend: str) -> tuple[bool, str]:
+def backend_ready(package_path: Path, backend: str) -> tuple[bool, str]:
+    """Backward-compatible tuple wrapper for backend readiness."""
+    return backend_readiness(package_path, backend).as_tuple()
+
+
+def _backend_ready_non_auto(package_path: Path, backend: str) -> BackendReadiness:
     if backend == "ptrace":
         ptrace = find_ptrace_tracer(package_path)
-        return (True, ptrace) if ptrace else (False, "ptrace tracer not found")
+        return (
+            BackendReadiness(ok=True, detail=ptrace)
+            if ptrace
+            else BackendReadiness(ok=False, detail="ptrace tracer not found")
+        )
 
     if backend == "ebpf":
         ebpf = find_ebpf_tracer(package_path)
         if not ebpf:
-            return False, "eBPF tracer not found"
+            return BackendReadiness(ok=False, detail="eBPF tracer not found")
         ok, reason = ebpf_is_ready(ebpf)
-        return ok, reason or "ready"
+        return BackendReadiness(ok=ok, detail=reason or "ready")
 
     preload = find_preload_tracer(package_path)
     if not preload:
-        return False, "preload tracer not found"
+        return BackendReadiness(ok=False, detail="preload tracer not found")
     ok, reason = preload_is_ready(package_path, preload)
-    return ok, reason or "ready"
+    return BackendReadiness(ok=ok, detail=reason or "ready")
 
 
 def _find_binary(package_path: Path, binary_name: str) -> str | None:

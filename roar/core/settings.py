@@ -51,7 +51,8 @@ def _infer_search_stop(start: Path) -> Path:
         ).strip()
         if out:
             return Path(out).resolve()
-    except Exception:
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        # Outside a git repo or git unavailable: keep search local to current start.
         pass
     return start.resolve()
 

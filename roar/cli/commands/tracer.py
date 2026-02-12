@@ -78,19 +78,19 @@ def _set_tracer_default(mode: str) -> None:
 
 def _ebpf_readiness(path: str) -> tuple[bool, str]:
     """Check eBPF readiness and return (ok, reason)."""
-    ok, reason = tracer_backends.ebpf_is_ready(path)
-    return ok, reason or "ready"
+    readiness = tracer_backends.ebpf_readiness(path)
+    return readiness.ok, readiness.reason or "ready"
 
 
 def _preload_readiness(path: str) -> tuple[bool, str]:
     """Check preload readiness and return (ok, reason)."""
-    ok, reason = tracer_backends.preload_is_ready(_package_path(), path)
-    return ok, reason or "ready"
+    readiness = tracer_backends.preload_readiness(_package_path(), path)
+    return readiness.ok, readiness.reason or "ready"
 
 
 def _backend_ready(backend: str) -> tuple[bool, str]:
     """Check readiness for backend: auto|ptrace|ebpf|preload."""
-    return tracer_backends.backend_ready(_package_path(), backend)
+    return tracer_backends.backend_readiness(_package_path(), backend).as_tuple()
 
 
 def _print_status() -> None:

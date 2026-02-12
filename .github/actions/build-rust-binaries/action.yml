@@ -1,0 +1,34 @@
+name: Build Rust Binaries
+description: Build and stage roar Rust binaries into an output directory
+inputs:
+  manifest-path:
+    description: Path to rust workspace manifest
+    required: false
+    default: rust/Cargo.toml
+  output-dir:
+    description: Directory to place built binaries
+    required: false
+    default: rust-bin
+runs:
+  using: composite
+  steps:
+    - name: Build proxy
+      shell: bash
+      run: cargo build --release --manifest-path "${{ inputs.manifest-path }}" -p roar-proxy
+
+    - name: Build ptrace tracer
+      shell: bash
+      run: cargo build --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer
+
+    - name: Build eBPF tracer
+      shell: bash
+      run: cargo build --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer-ebpf
+
+    - name: Stage Rust binaries
+      shell: bash
+      run: |
+        mkdir -p "${{ inputs.output-dir }}"
+        cp rust/target/release/roar-tracer "${{ inputs.output-dir }}/"
+        cp rust/target/release/roar-proxy "${{ inputs.output-dir }}/"
+        cp rust/target/release/roar-tracer-ebpf "${{ inputs.output-dir }}/"
+        cp rust/target/release/roard "${{ inputs.output-dir }}/"

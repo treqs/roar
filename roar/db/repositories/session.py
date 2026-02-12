@@ -227,6 +227,21 @@ class SQLAlchemySessionRepository(SessionRepository):
         ).scalar_one_or_none()
         return self._session_to_dict(session) if session else None
 
+    def get_by_hash_prefix(self, hash_prefix: str) -> dict[str, Any] | None:
+        """
+        Get the first session whose hash starts with hash_prefix.
+
+        Args:
+            hash_prefix: Session hash prefix
+
+        Returns:
+            Session dict or None if not found.
+        """
+        session = self._session.execute(
+            select(Session).where(Session.hash.like(f"{hash_prefix}%")).limit(1)
+        ).scalar_one_or_none()
+        return self._session_to_dict(session) if session else None
+
     def get_steps(self, session_id: int) -> list[dict[str, Any]]:
         """
         Get all steps (jobs) in a session, ordered by step number.

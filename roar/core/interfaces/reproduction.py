@@ -4,6 +4,8 @@ Reproduction service interfaces.
 Defines protocols for artifact reproduction services.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -31,6 +33,15 @@ class PipelineInfo:
     build_steps: list[dict] = field(default_factory=list)
     run_steps: list[dict] = field(default_factory=list)
     total_steps: int = 0
+
+
+@dataclass
+class PipelineLookupResult:
+    """Typed result for pipeline lookup operations."""
+
+    pipeline: PipelineInfo | None = None
+    error: str | None = None
+    source: str = "none"  # local | remote | none
 
 
 @dataclass

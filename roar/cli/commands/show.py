@@ -13,12 +13,35 @@ from pathlib import Path
 import click
 
 from ...core.bootstrap import bootstrap
-from ...core.container import get_container
+from ...core.di import try_resolve
 from ...core.interfaces.logger import ILogger
 from ...db.context import create_database_context
 from ...presenters.formatting import format_duration, format_size, format_timestamp
 from ..context import RoarContext
 from ..decorators import require_init
+
+
+def _logger() -> ILogger | None:
+    """Resolve logger from DI container when available."""
+    return try_resolve(ILogger)  # type: ignore[type-abstract]
+
+
+def _safe_json_loads(raw: str, context: str) -> dict | None:
+    """Parse JSON with debug logging instead of silent failure."""
+    logger = _logger()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        if logger:
+            logger.debug("show: failed to decode %s JSON: %s", context, e)
+        return None
+    if not isinstance(parsed, dict):
+        if logger:
+            logger.debug(
+                "show: expected object for %s JSON, got %s", context, type(parsed).__name__
+            )
+        return None
+    return parsed
 
 
 def _classify_ref(ref: str, cwd: Path) -> str:
@@ -39,7 +62,7 @@ def _classify_ref(ref: str, cwd: Path) -> str:
     Returns:
         One of: "job_step", "file_path", "job_uid", "artifact_hash", "unknown"
     """
-    logger = get_container().try_resolve(ILogger)  # type: ignore[type-abstract]
+    logger = _logger()
     if logger:
         logger.debug("_classify_ref: ref=%r, cwd=%s", ref, cwd)
 
@@ -82,7 +105,7 @@ def _resolve_job_ref(db_ctx, session_id: int, job_ref: str) -> dict | None:
     - @N or @BN notation (step number)
     - job_uid (full or prefix)
     """
-    logger = get_container().try_resolve(ILogger)  # type: ignore[type-abstract]
+    logger = _logger()
     if logger:
         logger.debug("_resolve_job_ref: job_ref=%r, session_id=%d", job_ref, session_id)
 
@@ -199,92 +222,86 @@ def _show_job(db_ctx, job: dict) -> None:
 
     # Metadata (what gets registered with GLaaS)
     if job.get("metadata"):
-        try:
-            meta = json.loads(job["metadata"])
-            if meta:
-                click.echo("\nMetadata:")
+        meta = _safe_json_loads(job["metadata"], "metadata")
+        if meta:
+            click.echo("\nMetadata:")
 
-                # Working directory
-                if meta.get("cwd"):
-                    click.echo(f"  Working dir: {meta['cwd']}")
+            # Working directory
+            if meta.get("cwd"):
+                click.echo(f"  Working dir: {meta['cwd']}")
 
-                # Runtime info
-                runtime = meta.get("runtime", {})
-                if runtime.get("hostname"):
-                    click.echo(f"  Hostname: {runtime['hostname']}")
-                if runtime.get("os"):
-                    os_info = runtime["os"]
-                    click.echo(f"  OS: {os_info.get('system', '')} {os_info.get('release', '')}")
-                if runtime.get("python"):
-                    click.echo(f"  Python: {runtime['python'].get('version', '')}")
+            # Runtime info
+            runtime = meta.get("runtime", {})
+            if runtime.get("hostname"):
+                click.echo(f"  Hostname: {runtime['hostname']}")
+            if runtime.get("os"):
+                os_info = runtime["os"]
+                click.echo(f"  OS: {os_info.get('system', '')} {os_info.get('release', '')}")
+            if runtime.get("python"):
+                click.echo(f"  Python: {runtime['python'].get('version', '')}")
 
-                # Hardware
-                if runtime.get("gpu"):
-                    gpus = runtime["gpu"]
-                    for i, gpu in enumerate(gpus):
-                        gpu_str = f"  GPU {i}: {gpu.get('name', 'unknown')} ({gpu.get('memory_mb', '?')} MB)"
-                        if gpu.get("compute_cap"):
-                            gpu_str += f", compute cap {gpu['compute_cap']}"
-                        click.echo(gpu_str)
-                if runtime.get("cuda"):
-                    cuda = runtime["cuda"]
-                    cuda_parts = []
-                    if cuda.get("cuda_version"):
-                        cuda_parts.append(f"CUDA {cuda['cuda_version']}")
-                    if cuda.get("driver_version"):
-                        cuda_parts.append(f"driver {cuda['driver_version']}")
-                    if cuda.get("cudnn_version"):
-                        cuda_parts.append(f"cuDNN {cuda['cudnn_version']}")
-                    if cuda_parts:
-                        click.echo(f"  CUDA: {', '.join(cuda_parts)}")
-                if runtime.get("cpu"):
-                    cpu = runtime["cpu"]
-                    click.echo(
-                        f"  CPU: {cpu.get('model', 'unknown')} ({cpu.get('count', '?')} cores)"
+            # Hardware
+            if runtime.get("gpu"):
+                gpus = runtime["gpu"]
+                for i, gpu in enumerate(gpus):
+                    gpu_str = (
+                        f"  GPU {i}: {gpu.get('name', 'unknown')} ({gpu.get('memory_mb', '?')} MB)"
                     )
-                if runtime.get("memory"):
-                    mem = runtime["memory"]
-                    click.echo(f"  Memory: {mem.get('total_mb', '?')} MB")
+                    if gpu.get("compute_cap"):
+                        gpu_str += f", compute cap {gpu['compute_cap']}"
+                    click.echo(gpu_str)
+            if runtime.get("cuda"):
+                cuda = runtime["cuda"]
+                cuda_parts = []
+                if cuda.get("cuda_version"):
+                    cuda_parts.append(f"CUDA {cuda['cuda_version']}")
+                if cuda.get("driver_version"):
+                    cuda_parts.append(f"driver {cuda['driver_version']}")
+                if cuda.get("cudnn_version"):
+                    cuda_parts.append(f"cuDNN {cuda['cudnn_version']}")
+                if cuda_parts:
+                    click.echo(f"  CUDA: {', '.join(cuda_parts)}")
+            if runtime.get("cpu"):
+                cpu = runtime["cpu"]
+                click.echo(f"  CPU: {cpu.get('model', 'unknown')} ({cpu.get('count', '?')} cores)")
+            if runtime.get("memory"):
+                mem = runtime["memory"]
+                click.echo(f"  Memory: {mem.get('total_mb', '?')} MB")
 
-                # Environment variables
-                env_vars = runtime.get("env_vars", {})
-                if env_vars:
-                    click.echo(f"\n  Environment Variables ({len(env_vars)}):")
-                    for name, value in sorted(env_vars.items()):
-                        # Truncate long values
-                        display_val = value if len(value) <= 60 else value[:57] + "..."
-                        click.echo(f"    {name}={display_val}")
+            # Environment variables
+            env_vars = runtime.get("env_vars", {})
+            if env_vars:
+                click.echo(f"\n  Environment Variables ({len(env_vars)}):")
+                for name, value in sorted(env_vars.items()):
+                    # Truncate long values
+                    display_val = value if len(value) <= 60 else value[:57] + "..."
+                    click.echo(f"    {name}={display_val}")
 
-                # Packages
-                packages = meta.get("packages", {})
-                if packages and isinstance(packages, dict):
-                    for manager, pkgs in packages.items():
-                        if pkgs and isinstance(pkgs, dict):
-                            click.echo(f"\n  Packages ({manager}, {len(pkgs)}):")
-                            for name, version in sorted(pkgs.items())[:15]:
-                                if version:
-                                    click.echo(f"    {name}=={version}")
-                                else:
-                                    click.echo(f"    {name}")
-                            if len(pkgs) > 15:
-                                click.echo(f"    ... and {len(pkgs) - 15} more")
-        except json.JSONDecodeError:
-            pass
+            # Packages
+            packages = meta.get("packages", {})
+            if packages and isinstance(packages, dict):
+                for manager, pkgs in packages.items():
+                    if pkgs and isinstance(pkgs, dict):
+                        click.echo(f"\n  Packages ({manager}, {len(pkgs)}):")
+                        for name, version in sorted(pkgs.items())[:15]:
+                            if version:
+                                click.echo(f"    {name}=={version}")
+                            else:
+                                click.echo(f"    {name}")
+                        if len(pkgs) > 15:
+                            click.echo(f"    ... and {len(pkgs) - 15} more")
 
     # Telemetry (external service links)
     if job.get("telemetry"):
-        try:
-            telem = json.loads(job["telemetry"])
-            if telem:
-                click.echo("\nTelemetry:")
-                for name, url in telem.items():
-                    if isinstance(url, list):
-                        for u in url:
-                            click.echo(f"  {name}: {u}")
-                    else:
-                        click.echo(f"  {name}: {url}")
-        except json.JSONDecodeError:
-            pass
+        telem = _safe_json_loads(job["telemetry"], "telemetry")
+        if telem:
+            click.echo("\nTelemetry:")
+            for name, url in telem.items():
+                if isinstance(url, list):
+                    for u in url:
+                        click.echo(f"  {name}: {u}")
+                else:
+                    click.echo(f"  {name}: {url}")
 
     # Inputs
     inputs = db_ctx.jobs.get_inputs(job["id"])
@@ -376,7 +393,7 @@ def show(ctx: RoarContext, ref: str | None) -> None:
         roar show ./output/model.pkl       # Show artifact by path
     """
     bootstrap(ctx.roar_dir)
-    logger = get_container().try_resolve(ILogger)  # type: ignore[type-abstract]
+    logger = _logger()
     if logger:
         logger.debug("show: entry with ref=%r", ref)
 

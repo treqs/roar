@@ -197,10 +197,11 @@ class GetService:
                 final_path.unlink()
             tmp_path.rename(final_path)
 
-        except Exception:
+        except Exception as e:
             # Clean up tmp file on error
             if tmp_path.exists():
                 tmp_path.unlink()
+            self._logger.debug("Single-file get failed for %s: %s", remote_key, e)
             raise
 
         file_info = {
@@ -312,12 +313,13 @@ class GetService:
                         "relative_key": relative,
                     }
                 )
-        except Exception:
+        except Exception as e:
             # Clean up any pending temp files on failure.
             for entry in pending_downloads:
                 tmp_path = entry["tmp_path"]
                 if tmp_path.exists():
                     tmp_path.unlink()
+            self._logger.debug("Prefix get failed for %s: %s", prefix, e)
             raise
 
         duration = time.time() - start_time

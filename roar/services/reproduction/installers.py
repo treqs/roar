@@ -203,6 +203,15 @@ class PythonPackageInstaller:
         self._presenter = presenter
         self._print = print_fn or print
 
+    @property
+    def use_uv(self) -> bool:
+        """Whether uv should be used instead of pip."""
+        return self._use_uv
+
+    @use_uv.setter
+    def use_uv(self, enabled: bool) -> None:
+        self._use_uv = enabled
+
     def install_build_tools(
         self,
         venv_dir: Path,

@@ -9,7 +9,7 @@ import os
 import secrets
 from typing import Any
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from ...core.interfaces.logger import ILogger
@@ -356,6 +356,34 @@ class SQLAlchemyJobRepository(JobRepository):
                 .where(Job.session_id == session_id)
                 .order_by(Job.timestamp.desc())
                 .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+        return [self._job_to_dict(j) for j in jobs]
+
+    def get_latest_build_jobs(self, session_id: int) -> list[dict[str, Any]]:
+        """
+        Get latest build jobs by step number for a session.
+
+        Args:
+            session_id: Session database ID
+
+        Returns:
+            List of latest build job dicts ordered by step number.
+        """
+        latest_build_ids = (
+            select(Job.step_number, func.max(Job.id).label("max_id"))
+            .where(Job.session_id == session_id, Job.job_type == "build")
+            .group_by(Job.step_number)
+            .subquery()
+        )
+
+        jobs = (
+            self._session.execute(
+                select(Job)
+                .join(latest_build_ids, Job.id == latest_build_ids.c.max_id)
+                .order_by(Job.step_number.asc())
             )
             .scalars()
             .all()

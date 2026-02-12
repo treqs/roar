@@ -7,5 +7,6 @@ following the Strategy pattern.
 
 from .console import ConsolePresenter
 from .dag_renderer import DagRenderer
+from .null import NullPresenter
 
-__all__ = ["ConsolePresenter", "DagRenderer"]
+__all__ = ["ConsolePresenter", "DagRenderer", "NullPresenter"]

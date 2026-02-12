@@ -28,7 +28,7 @@ class GitAccessService:
         service = GitAccessService()
         result = service.check_push_access(git_url, repo_root)
         if not result.has_access:
-            print(f"No access: {result.error}")
+            _ = result.error
     """
 
     def check_push_access(

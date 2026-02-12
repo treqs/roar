@@ -6,7 +6,7 @@ Provides Pydantic models for content-addressed artifacts and their hashes.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Protocol, cast
 
 from pydantic import Field, computed_field, field_validator
 
@@ -15,6 +15,20 @@ from .base import ImmutableModel, RoarBaseModel
 # Type aliases for validation
 HashAlgorithm = Literal["blake3", "sha256", "sha512", "md5"]
 HexDigest = Annotated[str, Field(min_length=8, max_length=128, pattern=r"^[a-f0-9]+$")]
+
+
+class SupportsArtifactRow(Protocol):
+    """Structural type for ORM-like artifact rows."""
+
+    id: str
+    size: int
+    first_seen_at: float
+    first_seen_path: str | None
+    source_type: str | None
+    source_url: str | None
+    uploaded_to: str | None
+    synced_at: float | None
+    metadata_: str | None
 
 
 class ArtifactHash(ImmutableModel):
@@ -62,7 +76,7 @@ class Artifact(RoarBaseModel):
     @classmethod
     def from_orm(
         cls,
-        orm_artifact: object,
+        orm_artifact: SupportsArtifactRow,
         hashes: list[dict[str, str]] | None = None,
     ) -> Artifact:
         """Create Artifact from ORM model.
@@ -77,19 +91,18 @@ class Artifact(RoarBaseModel):
         hash_models = []
         if hashes:
             for h in hashes:
-                hash_models.append(
-                    ArtifactHash(algorithm=h["algorithm"], digest=h["digest"])  # type: ignore[arg-type]
-                )
+                algorithm = cast(HashAlgorithm, h["algorithm"])
+                hash_models.append(ArtifactHash(algorithm=algorithm, digest=h["digest"]))
 
         return cls(
-            id=orm_artifact.id,  # type: ignore[attr-defined]
-            size=orm_artifact.size,  # type: ignore[attr-defined]
-            first_seen_at=orm_artifact.first_seen_at,  # type: ignore[attr-defined]
-            first_seen_path=orm_artifact.first_seen_path,  # type: ignore[attr-defined]
-            source_type=orm_artifact.source_type,  # type: ignore[attr-defined]
-            source_url=orm_artifact.source_url,  # type: ignore[attr-defined]
-            uploaded_to=orm_artifact.uploaded_to,  # type: ignore[attr-defined]
-            synced_at=orm_artifact.synced_at,  # type: ignore[attr-defined]
+            id=orm_artifact.id,
+            size=orm_artifact.size,
+            first_seen_at=orm_artifact.first_seen_at,
+            first_seen_path=orm_artifact.first_seen_path,
+            source_type=orm_artifact.source_type,
+            source_url=orm_artifact.source_url,
+            uploaded_to=orm_artifact.uploaded_to,
+            synced_at=orm_artifact.synced_at,
             metadata=getattr(orm_artifact, "metadata_", None),
             hashes=hash_models,
         )

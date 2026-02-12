@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ...presenters import NullPresenter
 from ...utils.git_url import is_ssh_url, ssh_to_https
 from .installers import AptInstaller, PythonPackageInstaller
 from .pipeline_metadata import PipelineMetadataParser, RequirementSummary
@@ -51,15 +52,15 @@ class EnvironmentSetupService:
             presenter: Presenter for user feedback
             roar_executable: Path to roar executable for initialization
         """
-        self._presenter = presenter
+        self._presenter = presenter or NullPresenter()
         self._use_uv = self._check_uv_available()
         self._roar_executable = roar_executable or self._detect_roar_executable()
         self._logger: ILogger | None = None
         self._metadata_parser = PipelineMetadataParser()
-        self._apt_installer = AptInstaller(presenter=presenter, print_fn=self._print)
+        self._apt_installer = AptInstaller(presenter=self._presenter, print_fn=self._print)
         self._python_installer = PythonPackageInstaller(
             use_uv=self._use_uv,
-            presenter=presenter,
+            presenter=self._presenter,
             print_fn=self._print,
         )
 
@@ -238,6 +239,7 @@ class EnvironmentSetupService:
         pip_any_version: bool = False,
     ) -> None:
         """Install pip-installed build tools into the venv before regular packages."""
+        self._python_installer.use_uv = self._use_uv
         self._python_installer.install_build_tools(
             venv_dir=venv_dir,
             packages=packages,
@@ -520,6 +522,7 @@ class EnvironmentSetupService:
         auto_confirm: bool = False,
         pip_any_version: bool = False,
     ) -> tuple[bool, list[str]]:
+        self._python_installer.use_uv = self._use_uv
         return self._python_installer.install_packages(
             venv_dir=venv_dir,
             packages=packages,
@@ -573,8 +576,5 @@ class EnvironmentSetupService:
         return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
     def _print(self, message: str) -> None:
-        """Print message via presenter or fallback to print."""
-        if self._presenter:
-            self._presenter.print(message)
-        else:
-            print(message)
+        """Print message through the configured presenter."""
+        self._presenter.print(message)

@@ -100,11 +100,11 @@ class TracerService:
         Returns:
             (is_ready, reason_if_not_ready)
         """
-        return tracer_backends.ebpf_is_ready(path)
+        return tracer_backends.ebpf_readiness(path).as_tuple()
 
     def _preload_is_ready(self, launcher_path: str) -> tuple[bool, str | None]:
         """Check whether preload launcher and library are available."""
-        return tracer_backends.preload_is_ready(self._package_path, launcher_path)
+        return tracer_backends.preload_readiness(self._package_path, launcher_path).as_tuple()
 
     def _get_tracer_candidates(
         self,

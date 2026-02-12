@@ -27,22 +27,11 @@ jobs:
       - name: Install bpf-linker
         run: cargo install bpf-linker
 
-      - name: Build proxy
-        run: cargo build --release --manifest-path rust/Cargo.toml -p roar-proxy
-
-      - name: Build ptrace tracer
-        run: cargo build --release --manifest-path rust/Cargo.toml -p roar-tracer
-
-      - name: Build eBPF tracer
-        run: cargo build --release --manifest-path rust/Cargo.toml -p roar-tracer-ebpf
-
-      - name: Stage Rust binaries
-        run: |
-          mkdir -p rust-bin
-          cp rust/target/release/roar-tracer rust-bin/
-          cp rust/target/release/roar-proxy rust-bin/
-          cp rust/target/release/roar-tracer-ebpf rust-bin/
-          cp rust/target/release/roard rust-bin/
+      - name: Build and stage Rust binaries
+        uses: ./.github/actions/build-rust-binaries
+        with:
+          manifest-path: rust/Cargo.toml
+          output-dir: rust-bin
 
       - name: Upload Rust binaries artifact
         uses: actions/upload-artifact@v4
@@ -89,51 +78,16 @@ jobs:
           path: rust-bin/
 
       - name: Copy binaries to roar/bin
-        run: |
-          mkdir -p roar/bin
-          cp rust-bin/roar-tracer roar/bin/
-          cp rust-bin/roar-proxy roar/bin/
-          cp rust-bin/roar-tracer-ebpf roar/bin/
-          cp rust-bin/roard roar/bin/
-          chmod +x roar/bin/roar-tracer roar/bin/roar-proxy roar/bin/roar-tracer-ebpf roar/bin/roard
+        uses: ./.github/actions/copy-rust-binaries
+        with:
+          source-dir: rust-bin
+          destination-dir: roar/bin
 
       - name: Build wheel via maturin
         run: maturin build --release --manifest-path rust/crates/artifact-hash-py/Cargo.toml --interpreter python --out dist
 
       - name: Verify wheel contains native extension and binaries
-        run: |
-          python - <<'PY'
-          import glob
-          import zipfile
-
-          wheels = sorted(glob.glob("dist/*.whl"))
-          if len(wheels) != 1:
-              raise SystemExit(f"Expected exactly one wheel, found: {wheels}")
-
-          wheel = wheels[0]
-          with zipfile.ZipFile(wheel) as zf:
-              names = set(zf.namelist())
-
-          required_bins = {
-              "roar/bin/roar-tracer",
-              "roar/bin/roar-proxy",
-              "roar/bin/roar-tracer-ebpf",
-              "roar/bin/roard",
-          }
-          missing_bins = sorted(path for path in required_bins if path not in names)
-          if missing_bins:
-              raise SystemExit(f"Missing binaries in wheel: {missing_bins}")
-
-          has_native = any(
-              name.startswith("roar/_hash_native")
-              and (name.endswith(".so") or name.endswith(".pyd") or name.endswith(".dylib"))
-              for name in names
-          )
-          if not has_native:
-              raise SystemExit("Missing native hash extension in wheel (roar/_hash_native*)")
-
-          print(f"Verified wheel contents: {wheel}")
-          PY
+        run: python scripts/ci/verify_wheel_contents.py
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
@@ -168,12 +122,10 @@ jobs:
           path: rust-bin/
 
       - name: Copy binaries to roar/bin
-        run: |
-          mkdir -p roar/bin
-          cp rust-bin/roar-tracer roar/bin/
-          cp rust-bin/roar-proxy roar/bin/
-          cp rust-bin/roar-tracer-ebpf roar/bin/
-          cp rust-bin/roard roar/bin/
+        uses: ./.github/actions/copy-rust-binaries
+        with:
+          source-dir: rust-bin
+          destination-dir: roar/bin
 
       - name: Build sdist via maturin
         run: maturin sdist --manifest-path rust/crates/artifact-hash-py/Cargo.toml --out dist

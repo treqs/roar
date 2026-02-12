@@ -10,7 +10,13 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ...core.interfaces.reproduction import EnvironmentInfo, PipelineInfo, ReproductionResult
+from ...core.interfaces.reproduction import (
+    EnvironmentInfo,
+    PipelineInfo,
+    PipelineLookupResult,
+    ReproductionResult,
+)
+from ...presenters import NullPresenter
 from ...utils.git_url import urls_match
 from .environment_setup import EnvironmentSetupService
 from .pipeline_executor import PipelineExecutor
@@ -55,11 +61,11 @@ class ReproductionService:
             presenter: Presenter for user feedback
         """
         self._glaas = glaas_client
-        self._presenter = presenter
+        self._presenter = presenter or NullPresenter()
         # Detect the roar executable once and pass to both services
         roar_exe = self._get_roar_executable()
-        self._env_setup = EnvironmentSetupService(presenter, roar_executable=roar_exe)
-        self._executor = PipelineExecutor(presenter, roar_executable=roar_exe)
+        self._env_setup = EnvironmentSetupService(self._presenter, roar_executable=roar_exe)
+        self._executor = PipelineExecutor(self._presenter, roar_executable=roar_exe)
 
     def reproduce(
         self,
@@ -91,10 +97,11 @@ class ReproductionService:
         warnings: list[str] = []
 
         # Look up artifact and get pipeline
-        pipeline, error = self._lookup_pipeline(hash_prefix, server_url, roar_dir)
-        if error:
-            return ReproductionResult(success=False, error=error)
+        lookup = self.lookup_pipeline_result(hash_prefix, server_url, roar_dir)
+        if lookup.error:
+            return ReproductionResult(success=False, error=lookup.error)
 
+        pipeline = lookup.pipeline
         if not pipeline:
             return ReproductionResult(
                 success=False,
@@ -135,20 +142,13 @@ class ReproductionService:
                     self._print(f"  - {pkg}")
 
         # Confirm reproduction
-        if not auto_confirm:
-            if self._presenter:
-                if not self._presenter.confirm("Proceed with reproduction?", default=True):
-                    return ReproductionResult(
-                        success=False,
-                        error="Reproduction cancelled by user",
-                    )
-            else:
-                response = input("Proceed with reproduction? [Y/n] ")
-                if response.lower() == "n":
-                    return ReproductionResult(
-                        success=False,
-                        error="Reproduction cancelled by user",
-                    )
+        if not auto_confirm and not self._presenter.confirm(
+            "Proceed with reproduction?", default=True
+        ):
+            return ReproductionResult(
+                success=False,
+                error="Reproduction cancelled by user",
+            )
 
         # Check if current repo matches the artifact remote
         environment = self._try_reuse_current_repo(cwd, pipeline)
@@ -182,26 +182,14 @@ class ReproductionService:
         if run_pipeline:
             self._executor.preview_steps(pipeline)
 
-            if not auto_confirm:
-                if self._presenter:
-                    if not self._presenter.confirm("Run the pipeline?", default=True):
-                        return ReproductionResult(
-                            success=True,
-                            repo_dir=environment.repo_dir,
-                            steps_run=0,
-                            steps_total=steps_total,
-                            warnings=["Pipeline not executed (user chose to skip)"],
-                        )
-                else:
-                    response = input("Run the pipeline? [Y/n] ")
-                    if response.lower() == "n":
-                        return ReproductionResult(
-                            success=True,
-                            repo_dir=environment.repo_dir,
-                            steps_run=0,
-                            steps_total=steps_total,
-                            warnings=["Pipeline not executed (user chose to skip)"],
-                        )
+            if not auto_confirm and not self._presenter.confirm("Run the pipeline?", default=True):
+                return ReproductionResult(
+                    success=True,
+                    repo_dir=environment.repo_dir,
+                    steps_run=0,
+                    steps_total=steps_total,
+                    warnings=["Pipeline not executed (user chose to skip)"],
+                )
 
             steps_run, steps_total = self._executor.execute(
                 pipeline,
@@ -290,30 +278,44 @@ class ReproductionService:
         server_url: str | None,
         roar_dir: Path,
     ) -> tuple[PipelineInfo | None, str | None]:
+        """Backward-compatible tuple wrapper around lookup_pipeline_result()."""
+        result = self.lookup_pipeline_result(hash_prefix, server_url, roar_dir)
+        return result.pipeline, result.error
+
+    def lookup_pipeline_result(
+        self,
+        hash_prefix: str,
+        server_url: str | None,
+        roar_dir: Path,
+    ) -> PipelineLookupResult:
         """
         Look up artifact and retrieve pipeline info.
 
         First tries local database, then GLaaS if configured.
 
         Returns:
-            Tuple of (PipelineInfo, None) or (None, error_message)
+            Structured lookup result with pipeline + error + source.
         """
         # Try local lookup first
         pipeline = self._lookup_local(hash_prefix, roar_dir)
         if pipeline:
-            return pipeline, None
+            return PipelineLookupResult(pipeline=pipeline, error=None, source="local")
 
         # Try GLaaS
         if self._glaas or server_url:
             pipeline, error = self._lookup_remote(hash_prefix, server_url)
             if error:
-                return None, error
+                return PipelineLookupResult(pipeline=None, error=error, source="remote")
             if pipeline:
-                return pipeline, None
+                return PipelineLookupResult(pipeline=pipeline, error=None, source="remote")
 
-        return None, (
-            f"Artifact not found: {hash_prefix}\n"
-            "If this artifact is on a remote server, check your authentication with 'roar auth test'."
+        return PipelineLookupResult(
+            pipeline=None,
+            error=(
+                f"Artifact not found: {hash_prefix}\n"
+                "If this artifact is on a remote server, check your authentication with 'roar auth test'."
+            ),
+            source="none",
         )
 
     def _lookup_local(
@@ -402,8 +404,12 @@ class ReproductionService:
 
         # Get artifact info
         try:
+            from ...core.exceptions import GlaasApiError
+
             artifact = client.get_artifact(hash_prefix)
-        except Exception as e:
+        except GlaasApiError as e:
+            return None, str(e)
+        except (ValueError, RuntimeError) as e:
             return None, str(e)  # Propagate the actual error
         if not artifact:
             return None, None  # Not found, not an error
@@ -434,11 +440,8 @@ class ReproductionService:
         ), None
 
     def _print(self, message: str) -> None:
-        """Print message via presenter or fallback to print."""
-        if self._presenter:
-            self._presenter.print(message)
-        else:
-            print(message)
+        """Print message through the configured presenter."""
+        self._presenter.print(message)
 
     def _get_roar_executable(self) -> str:
         """Get path to the currently running roar executable.

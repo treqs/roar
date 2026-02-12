@@ -1,3 +1,5 @@
+mod seccomp;
+
 use nix::sys::ptrace;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{fork, ForkResult, Pid};
@@ -38,6 +40,29 @@ const SYS_PREADV2: u64 = 327; // preadv with flags
 const SYS_PWRITEV2: u64 = 328; // pwritev with flags
 
 const AUDIT_ARCH_X86_64: u32 = 0xC000_003E;
+const TRACKED_SYSCALLS: &[u64] = &[
+    SYS_READ,
+    SYS_WRITE,
+    SYS_OPEN,
+    SYS_CLOSE,
+    SYS_MMAP,
+    SYS_PREAD64,
+    SYS_PWRITE64,
+    SYS_READV,
+    SYS_WRITEV,
+    SYS_SENDFILE,
+    SYS_CHDIR,
+    SYS_FCHDIR,
+    SYS_RENAME,
+    SYS_OPENAT,
+    SYS_RENAMEAT,
+    SYS_PREADV,
+    SYS_PWRITEV,
+    SYS_RENAMEAT2,
+    SYS_COPY_FILE_RANGE,
+    SYS_PREADV2,
+    SYS_PWRITEV2,
+];
 
 #[derive(Debug)]
 struct TracerState {
@@ -100,165 +125,6 @@ fn read_string_from_tracee(pid: Pid, addr: u64) -> Option<String> {
             }
         }
         current += 8;
-    }
-}
-
-// =============================================================================
-// Seccomp-BPF filter
-// =============================================================================
-
-#[repr(C)]
-struct sock_filter {
-    code: u16,
-    jt: u8,
-    jf: u8,
-    k: u32,
-}
-
-#[repr(C)]
-struct sock_fprog {
-    len: u16,
-    filter: *const sock_filter,
-}
-
-fn build_seccomp_filter() -> Vec<sock_filter> {
-    // BPF instruction constants
-    const BPF_LD: u16 = 0x00;
-    const BPF_W: u16 = 0x00;
-    const BPF_ABS: u16 = 0x20;
-    const BPF_JMP: u16 = 0x05;
-    const BPF_JEQ: u16 = 0x10;
-    const BPF_RET: u16 = 0x06;
-    const BPF_K: u16 = 0x00;
-
-    const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
-    const SECCOMP_RET_TRACE: u32 = 0x7ff0_0000;
-
-    // seccomp_data offsets
-    const OFFSET_NR: u32 = 0; // offsetof(seccomp_data, nr)
-    const OFFSET_ARCH: u32 = 4; // offsetof(seccomp_data, arch)
-
-    // All syscalls we want to trace
-    let tracked_syscalls: &[u64] = &[
-        SYS_READ,
-        SYS_WRITE,
-        SYS_OPEN,
-        SYS_CLOSE,
-        SYS_MMAP,
-        SYS_PREAD64,
-        SYS_PWRITE64,
-        SYS_READV,
-        SYS_WRITEV,
-        SYS_SENDFILE,
-        SYS_CHDIR,
-        SYS_FCHDIR,
-        SYS_RENAME,
-        SYS_OPENAT,
-        SYS_RENAMEAT,
-        SYS_PREADV,
-        SYS_PWRITEV,
-        SYS_RENAMEAT2,
-        SYS_COPY_FILE_RANGE,
-        SYS_PREADV2,
-        SYS_PWRITEV2,
-    ];
-
-    let num_syscalls = tracked_syscalls.len();
-    let mut filter = Vec::new();
-
-    // Load arch: BPF_LD | BPF_W | BPF_ABS, offset=arch
-    filter.push(sock_filter {
-        code: BPF_LD | BPF_W | BPF_ABS,
-        jt: 0,
-        jf: 0,
-        k: OFFSET_ARCH,
-    });
-
-    // Check arch == AUDIT_ARCH_X86_64, if not → ALLOW
-    // Jump over 1 instruction (to the load nr) if equal, else jump to the ALLOW at the end
-    // We'll fix the jf offset after we know the total filter length
-    let arch_check_idx = filter.len();
-    filter.push(sock_filter {
-        code: BPF_JMP | BPF_JEQ | BPF_K,
-        jt: 0, // next instruction
-        jf: 0, // placeholder - will be patched
-        k: AUDIT_ARCH_X86_64,
-    });
-
-    // Load syscall number: BPF_LD | BPF_W | BPF_ABS, offset=nr
-    filter.push(sock_filter {
-        code: BPF_LD | BPF_W | BPF_ABS,
-        jt: 0,
-        jf: 0,
-        k: OFFSET_NR,
-    });
-
-    // Chain of JEQ checks for each tracked syscall
-    // Each check: if nr == syscall → jump to TRACE, else fall through
-    for (i, &syscall) in tracked_syscalls.iter().enumerate() {
-        let remaining = num_syscalls - i - 1;
-        // If match, jump over remaining checks + ALLOW to reach TRACE
-        // If no match, fall through to next check (jf=0)
-        filter.push(sock_filter {
-            code: BPF_JMP | BPF_JEQ | BPF_K,
-            jt: (remaining + 1) as u8, // jump over remaining JEQs + 1 ALLOW → land on TRACE
-            jf: 0,                     // fall through to next JEQ
-            k: syscall as u32,
-        });
-    }
-
-    // Default: ALLOW (for untracked syscalls)
-    filter.push(sock_filter {
-        code: BPF_RET | BPF_K,
-        jt: 0,
-        jf: 0,
-        k: SECCOMP_RET_ALLOW,
-    });
-
-    // TRACE (for tracked syscalls)
-    filter.push(sock_filter {
-        code: BPF_RET | BPF_K,
-        jt: 0,
-        jf: 0,
-        k: SECCOMP_RET_TRACE,
-    });
-
-    // Patch arch check jf: if arch doesn't match, jump to ALLOW
-    // From arch_check_idx+1, we need to skip: load_nr(1) + num_syscalls JEQs + reach ALLOW
-    // Total instructions after arch check = 1 (load nr) + num_syscalls (JEQs) + 1 (ALLOW) + 1 (TRACE)
-    // jf should jump to ALLOW, which is at index (arch_check_idx + 1 + 1 + num_syscalls)
-    // Relative from next instruction: 1 (load_nr) + num_syscalls (JEQs) = num_syscalls + 1
-    filter[arch_check_idx].jf = (num_syscalls + 1) as u8;
-
-    filter
-}
-
-fn install_seccomp_filter() {
-    let filter = build_seccomp_filter();
-    let prog = sock_fprog {
-        len: filter.len() as u16,
-        filter: filter.as_ptr(),
-    };
-
-    // PR_SET_NO_NEW_PRIVS is required for unprivileged seccomp
-    let ret = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
-    if ret != 0 {
-        eprintln!("Warning: prctl(PR_SET_NO_NEW_PRIVS) failed");
-        return;
-    }
-
-    // Install the BPF filter
-    let ret = unsafe {
-        libc::prctl(
-            libc::PR_SET_SECCOMP,
-            libc::SECCOMP_MODE_FILTER,
-            &prog as *const sock_fprog as libc::c_ulong,
-            0,
-            0,
-        )
-    };
-    if ret != 0 {
-        eprintln!("Warning: prctl(PR_SET_SECCOMP) failed");
     }
 }
 
@@ -572,7 +438,7 @@ fn run_tracer(command: Vec<String>, output_file: &str) -> i32 {
 
             // Install seccomp-BPF filter before exec
             // The filter survives exec and is inherited by fork/clone children
-            install_seccomp_filter();
+            seccomp::install_seccomp_filter(TRACKED_SYSCALLS, AUDIT_ARCH_X86_64);
 
             let mut cmd = Command::new(&command[0]);
             if command.len() > 1 {

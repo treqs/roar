@@ -6,7 +6,7 @@ Provides Pydantic models for job executions and their inputs/outputs.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Protocol
 
 from pydantic import Field, computed_field, field_validator
 
@@ -15,6 +15,30 @@ from .base import ImmutableModel, RoarBaseModel
 # Type aliases
 JobType = Literal["run", "build"]
 JobStatus = Literal["pending", "running", "completed", "failed"]
+
+
+class SupportsJobRow(Protocol):
+    """Structural type for ORM-like job rows."""
+
+    id: int
+    job_uid: str
+    timestamp: float
+    command: str
+    script: str | None
+    step_identity: str | None
+    session_id: int | None
+    step_number: int | None
+    step_name: str | None
+    git_repo: str | None
+    git_commit: str | None
+    git_branch: str | None
+    duration_seconds: float | None
+    exit_code: int | None
+    synced_at: float | None
+    status: JobStatus | None
+    job_type: JobType | None
+    metadata_: str | None
+    telemetry: str | None
 
 
 class JobInput(ImmutableModel):
@@ -89,7 +113,7 @@ class Job(RoarBaseModel):
     @classmethod
     def from_orm(
         cls,
-        orm_job: object,
+        orm_job: SupportsJobRow,
         inputs: list[dict] | None = None,
         outputs: list[dict] | None = None,
     ) -> Job:
@@ -130,25 +154,25 @@ class Job(RoarBaseModel):
                 )
 
         return cls(
-            id=orm_job.id,  # type: ignore[attr-defined]
-            job_uid=orm_job.job_uid,  # type: ignore[attr-defined]
-            timestamp=orm_job.timestamp,  # type: ignore[attr-defined]
-            command=orm_job.command,  # type: ignore[attr-defined]
-            script=orm_job.script,  # type: ignore[attr-defined]
-            step_identity=orm_job.step_identity,  # type: ignore[attr-defined]
-            session_id=orm_job.session_id,  # type: ignore[attr-defined]
-            step_number=orm_job.step_number,  # type: ignore[attr-defined]
-            step_name=orm_job.step_name,  # type: ignore[attr-defined]
-            git_repo=orm_job.git_repo,  # type: ignore[attr-defined]
-            git_commit=orm_job.git_commit,  # type: ignore[attr-defined]
-            git_branch=orm_job.git_branch,  # type: ignore[attr-defined]
-            duration_seconds=orm_job.duration_seconds,  # type: ignore[attr-defined]
-            exit_code=orm_job.exit_code,  # type: ignore[attr-defined]
-            synced_at=orm_job.synced_at,  # type: ignore[attr-defined]
-            status=orm_job.status,  # type: ignore[attr-defined]
-            job_type=orm_job.job_type,  # type: ignore[attr-defined]
+            id=orm_job.id,
+            job_uid=orm_job.job_uid,
+            timestamp=orm_job.timestamp,
+            command=orm_job.command,
+            script=orm_job.script,
+            step_identity=orm_job.step_identity,
+            session_id=orm_job.session_id,
+            step_number=orm_job.step_number,
+            step_name=orm_job.step_name,
+            git_repo=orm_job.git_repo,
+            git_commit=orm_job.git_commit,
+            git_branch=orm_job.git_branch,
+            duration_seconds=orm_job.duration_seconds,
+            exit_code=orm_job.exit_code,
+            synced_at=orm_job.synced_at,
+            status=orm_job.status,
+            job_type=orm_job.job_type,
             metadata=getattr(orm_job, "metadata_", None),
-            telemetry=orm_job.telemetry,  # type: ignore[attr-defined]
+            telemetry=orm_job.telemetry,
             inputs=input_models,
             outputs=output_models,
         )

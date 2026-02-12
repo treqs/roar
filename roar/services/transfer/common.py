@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ...core.interfaces.registration import GitContext
+from ...core.logging import get_logger
 from ...db.hashing.backend import compute_hashes_batch
 from ...plugins.vcs.git import GitVCSProvider
 
@@ -52,7 +53,8 @@ def resolve_git_context(repo_root: Path, git_commit: str | None = None) -> GitCo
             commit=git_commit or vcs.get_commit_hash(root),
             branch=vcs.get_branch(root),
         )
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as e:
+        get_logger().debug("Failed to resolve git context at %s: %s", repo_root, e)
         return GitContext(repo=None, commit=git_commit, branch=None)
 
 
