@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field, computed_field, field_validator, model_validator
 
+from ..tracer_modes import TracerMode
 from .base import ImmutableModel, RoarBaseModel
 
 # Type aliases
@@ -77,8 +78,11 @@ class RunContext(RoarBaseModel):
     repo_root: Annotated[str, Field(min_length=1)]
     command: Annotated[list[str], Field(min_length=1)]
     job_type: JobType | None = None
+    step_name: str | None = None
     quiet: bool = False
     hash_algorithms: list[HashAlgorithm] = Field(default_factory=lambda: ["blake3"])  # type: ignore[arg-type]
+    tracer_mode: TracerMode | None = None
+    tracer_fallback: bool | None = None
     git_commit: str | None = None
     git_branch: str | None = None
     git_repo: str | None = None

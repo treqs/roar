@@ -7,6 +7,7 @@ Provides settings loading from TOML files, environment variables, and defaults.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from .models.config import (
     HashConfig,
     LoggingConfig,
     OutputConfig,
+    ProxyConfig,
     RegisterConfig,
     ReversibleConfig,
     TracerConfig,
@@ -38,14 +40,36 @@ def _get_logger():
     return get_logger()
 
 
-def find_config_file(start_dir: str | None = None) -> Path | None:
+def _infer_search_stop(start: Path) -> Path:
+    """Infer a safe upward-search boundary for config/.roar discovery."""
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL,
+            cwd=start,
+            text=True,
+        ).strip()
+        if out:
+            return Path(out).resolve()
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        # Outside a git repo or git unavailable: keep search local to current start.
+        pass
+    return start.resolve()
+
+
+def find_config_file(start_dir: str | None = None, stop_dir: str | None = None) -> Path | None:
     """
     Find .roar/config.toml by walking up from start_dir (or cwd).
+
+    Args:
+        start_dir: Directory to start searching from.
+        stop_dir: Optional boundary directory to stop searching at (inclusive).
 
     Returns:
         Path to config file, or None if not found.
     """
     start = Path(start_dir) if start_dir else Path.cwd()
+    stop_path = Path(stop_dir).resolve() if stop_dir else _infer_search_stop(start)
 
     for parent in [start, *list(start.parents)]:
         # Check for .roar/config.toml
@@ -65,6 +89,33 @@ def find_config_file(start_dir: str | None = None) -> Path | None:
                 _get_logger().debug("Failed to parse pyproject.toml at %s: %s", pyproject, e)
             except OSError as e:
                 _get_logger().debug("Failed to read pyproject.toml at %s: %s", pyproject, e)
+        if parent.resolve() == stop_path:
+            break
+
+    return None
+
+
+def find_roar_dir(start_dir: str | None = None, stop_dir: str | None = None) -> Path | None:
+    """
+    Find an existing .roar directory by walking up from start_dir (or cwd).
+
+    Args:
+        start_dir: Directory to start searching from.
+        stop_dir: Optional boundary directory to stop searching at (inclusive).
+
+    Returns:
+        Path to the nearest .roar directory within the search scope, or None if not found.
+    """
+    start = Path(start_dir) if start_dir else Path.cwd()
+
+    stop_path = Path(stop_dir).resolve() if stop_dir else _infer_search_stop(start)
+
+    for parent in [start, *list(start.parents)]:
+        roar_dir = parent / ".roar"
+        if roar_dir.is_dir():
+            return roar_dir
+        if parent.resolve() == stop_path:
+            break
 
     return None
 
@@ -153,6 +204,7 @@ class RoarSettings(BaseSettings):
     glaas: GlaasConfig = GlaasConfig()
     registration: RegisterConfig = RegisterConfig()
     hash: HashConfig = HashConfig()
+    proxy: ProxyConfig = ProxyConfig()
     tracer: TracerConfig = TracerConfig()
     reversible: ReversibleConfig = ReversibleConfig()
     logging: LoggingConfig = LoggingConfig()
@@ -243,6 +295,7 @@ class RoarSettings(BaseSettings):
             "glaas": self.glaas.model_dump(),
             "registration": self.registration.model_dump(),
             "hash": self.hash.model_dump(),
+            "proxy": self.proxy.model_dump(),
             "tracer": self.tracer.model_dump(),
             "reversible": self.reversible.model_dump(),
             "logging": self.logging.model_dump(),

@@ -38,6 +38,7 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "lineage": ("roar.cli.commands.lineage", "lineage", "Show lineage for an artifact"),
     "log": ("roar.cli.commands.log", "log", "Show execution log"),
     "pop": ("roar.cli.commands.pop", "pop", "Pop the last step from the session"),
+    "proxy": ("roar.cli.commands.proxy", "proxy", "Manage S3 proxy for lineage tracking"),
     "put": ("roar.cli.commands.put", "put", "Publish artifacts to cloud storage"),
     "register": ("roar.cli.commands.register", "register", "Register artifacts or jobs"),
     "reproduce": ("roar.cli.commands.reproduce", "reproduce", "Reproduce an artifact"),
@@ -45,6 +46,7 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "run": ("roar.cli.commands.run", "run", "Run a command with provenance tracking"),
     "show": ("roar.cli.commands.show", "show", "Show details of a job or artifact"),
     "status": ("roar.cli.commands.status", "status", "Show current session status"),
+    "tracer": ("roar.cli.commands.tracer", "tracer", "Manage tracer backend defaults"),
 }
 
 

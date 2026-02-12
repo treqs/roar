@@ -1,0 +1,28 @@
+[package]
+name = "roar-tracer-preload"
+version = "0.1.0"
+edition = "2021"
+description = "LD_PRELOAD-based tracer for roar provenance tracking"
+
+[[bin]]
+name = "roar-tracer-preload"
+path = "src/main.rs"
+
+[lib]
+name = "roar_tracer_preload"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+rmp-serde = "1"
+serde = { version = "1", features = ["derive"] }
+tracer-fd = { path = "../../crates/tracer-fd" }
+tracer-runtime = { path = "../../crates/tracer-runtime" }
+tracer-schema = { path = "../../crates/tracer-schema" }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "allow"

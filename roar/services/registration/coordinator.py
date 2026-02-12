@@ -9,6 +9,7 @@ Orchestrates the 4-phase registration pattern:
 """
 
 from functools import cached_property
+from typing import Any
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
@@ -236,7 +237,11 @@ class RegistrationCoordinator(IRegistrationCoordinator):
                 h = item.get("hash")
                 p = item.get("path")
                 if h and p:
-                    result.append({"hash": h, "path": p})
+                    item_dict: dict[str, Any] = {"hash": h, "path": p}
+                    br = item.get("byte_ranges")
+                    if br is not None:
+                        item_dict["byte_ranges"] = br
+                    result.append(item_dict)
                 elif h:
                     self._logger.warning("Dropping I/O item %s: missing path", h[:12])
             return result

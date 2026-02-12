@@ -115,6 +115,10 @@ class JobRepository(Protocol):
         """Search jobs by command/script."""
         ...
 
+    def get_latest_build_jobs(self, session_id: int) -> list[dict[str, Any]]:
+        """Get latest build jobs by step number for a session."""
+        ...
+
 
 @runtime_checkable
 class SessionRepository(Protocol):
@@ -132,6 +136,10 @@ class SessionRepository(Protocol):
 
     def get(self, session_id: int) -> dict[str, Any] | None:
         """Get session by ID."""
+        ...
+
+    def get_by_hash_prefix(self, hash_prefix: str) -> dict[str, Any] | None:
+        """Get first session matching a hash prefix."""
         ...
 
     def get_active(self) -> dict[str, Any] | None:

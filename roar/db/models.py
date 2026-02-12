@@ -156,6 +156,9 @@ class JobInput(Base):
     )
     artifact_id: Mapped[str] = mapped_column(String, ForeignKey("artifacts.id"), nullable=False)
     path: Mapped[str] = mapped_column(Text, nullable=False)
+    byte_ranges: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # JSON: [[start, end], ...]
 
     # Relationships
     job: Mapped["Job"] = relationship(back_populates="inputs")
@@ -178,6 +181,9 @@ class JobOutput(Base):
     )
     artifact_id: Mapped[str] = mapped_column(String, ForeignKey("artifacts.id"), nullable=False)
     path: Mapped[str] = mapped_column(Text, nullable=False)
+    byte_ranges: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # JSON: [[start, end], ...]
 
     # Relationships
     job: Mapped["Job"] = relationship(back_populates="outputs")

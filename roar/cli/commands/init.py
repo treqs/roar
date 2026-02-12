@@ -104,6 +104,12 @@ put = []
 # Additional algorithms for roar run
 run = []
 
+[tracer]
+# Default tracer backend policy (auto, ebpf, preload, ptrace)
+default = "auto"
+# Allow runtime fallback to another tracer backend
+fallback_enabled = true
+
 [reversible]
 # Enable file preservation before overwrites during roar run
 enabled = false

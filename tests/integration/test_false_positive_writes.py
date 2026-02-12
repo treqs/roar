@@ -204,7 +204,7 @@ def test_read_only_repo_file_not_recorded_as_output(temp_git_repo, roar_cli, git
     (test_repo_file_read_then_pipe_write_not_attributed) for a deterministic
     reproducer.
 
-    Bug mechanism (tracer/src/main.rs line 349):
+    Bug mechanism (rust/tracers/ptrace/src/main.rs):
     1. Script opens repo file for reading -> tracer records fd N -> path
     2. Script closes the file -> tracer does NOT remove fd N from fd_table
     3. os.pipe() creates new fds, one of which may reuse fd N

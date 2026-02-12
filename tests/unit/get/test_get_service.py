@@ -6,7 +6,7 @@ Tests the end-to-end get workflow: download → hash → register → create job
 
 import json
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -456,6 +456,43 @@ class TestGetServicePrefix:
 
         assert result.success is False
         assert "No files found" in result.error
+
+    def test_prefix_hashes_in_single_batch_call(self, tmp_path: Path):
+        """Prefix download computes hashes for all files in one batch call."""
+        import blake3
+
+        backend = NoOpDownloadBackend(bucket="my-bucket")
+        backend.seed("checkpoints/epoch_1.pt", b"epoch 1")
+        backend.seed("checkpoints/epoch_2.pt", b"epoch 2")
+
+        mock_db = _make_mock_db()
+        artifact_ids = iter([("art-1", True), ("art-2", True)])
+        mock_db.artifacts.register.side_effect = lambda **kwargs: next(artifact_ids)
+
+        source = Source(
+            scheme="s3",
+            bucket="my-bucket",
+            key="checkpoints",
+            original_url="s3://my-bucket/checkpoints/",
+        )
+        service = GetService(
+            db_context=mock_db,
+            backend=backend,
+            source=source,
+            repo_root=tmp_path,
+        )
+
+        calls = {"count": 0}
+
+        def fake_hashes(paths):
+            calls["count"] += 1
+            return {str(path): blake3.blake3(Path(path).read_bytes()).hexdigest() for path in paths}
+
+        with patch("roar.services.get.service.hash_files_blake3", side_effect=fake_hashes):
+            result = service.get(destination=tmp_path / "out", is_prefix=True)
+
+        assert result.success is True
+        assert calls["count"] == 1
 
     def test_prefix_dry_run(self, tmp_path: Path):
         """Prefix dry run lists all files that would be downloaded."""

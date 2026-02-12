@@ -11,6 +11,8 @@ import subprocess
 import sys
 from typing import TYPE_CHECKING
 
+from ...presenters import NullPresenter
+
 if TYPE_CHECKING:
     from ...core.interfaces.presenter import IPresenter
     from ...core.interfaces.reproduction import EnvironmentInfo, PipelineInfo
@@ -43,7 +45,7 @@ class PipelineExecutor:
             presenter: Presenter for user feedback
             roar_executable: Path to roar executable (auto-detected if not provided)
         """
-        self._presenter = presenter
+        self._presenter = presenter or NullPresenter()
         self._roar_initialized = False
         self._roar_executable = roar_executable or self._detect_roar_executable()
 
@@ -90,15 +92,9 @@ class PipelineExecutor:
                 # Ask for confirmation if not auto
                 if not auto_confirm:
                     command = step.get("command", "")
-                    if self._presenter:
-                        if not self._presenter.confirm(f"Run: {command}?", default=True):
-                            self._print("Step skipped.")
-                            continue
-                    else:
-                        response = input(f"Run: {command}? [Y/n] ")
-                        if response.lower() == "n":
-                            self._print("Step skipped.")
-                            continue
+                    if not self._presenter.confirm(f"Run: {command}?", default=True):
+                        self._print("Step skipped.")
+                        continue
 
                 success = self._run_step(step, environment, is_build=False)
                 if success:
@@ -106,11 +102,7 @@ class PipelineExecutor:
                 else:
                     self._print(f"Step {i} failed.")
                     if not auto_confirm:
-                        if self._presenter:
-                            cont = self._presenter.confirm("Continue with next step?", default=True)
-                        else:
-                            response = input("Continue with next step? [Y/n] ")
-                            cont = response.lower() != "n"
+                        cont = self._presenter.confirm("Continue with next step?", default=True)
                         if not cont:
                             break
 
@@ -268,8 +260,5 @@ class PipelineExecutor:
         self._print("")
 
     def _print(self, message: str) -> None:
-        """Print message via presenter or fallback to print."""
-        if self._presenter:
-            self._presenter.print(message)
-        else:
-            print(message)
+        """Print message through the configured presenter."""
+        self._presenter.print(message)

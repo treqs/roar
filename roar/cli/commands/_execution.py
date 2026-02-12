@@ -99,10 +99,13 @@ def execute_and_report(
     ctx: "RoarContext",
     command: list[str],
     job_type: str | None,
+    step_name: str | None,
     quiet: bool,
     hash_algorithms: list[str],
     git_info: dict,
     repo_root: str,
+    tracer_mode: str | None = None,
+    tracer_fallback: bool | None = None,
 ) -> int:
     """
     Execute command via coordinator and show report.
@@ -118,6 +121,7 @@ def execute_and_report(
         ctx: RoarContext with roar_dir and other context
         command: Command to execute as list of strings
         job_type: Job type - None for run, "build" for build
+        step_name: Optional user-defined step label
         quiet: Whether to suppress output
         hash_algorithms: List of hash algorithms to use
         git_info: Git info dict with commit, branch, remote_url
@@ -128,9 +132,24 @@ def execute_and_report(
     """
     from typing import Literal, cast
 
+    from ...config import config_get
     from ...core.interfaces.run import RunContext
     from ...presenters.run_report import RunReportPresenter
     from ...services.execution import RunCoordinator
+    from ...services.execution.proxy import ProxyService
+
+    # Check if S3 proxy is enabled
+    proxy_service = None
+    if config_get("proxy.enabled"):
+        proxy_service = ProxyService()
+        if not proxy_service.find_proxy():
+            click.echo(
+                "Error: S3 proxy is enabled but roar-proxy binary not found.\n"
+                "Build it with: cargo build --release --manifest-path rust/Cargo.toml -p roar-proxy\n"
+                "Or disable: roar proxy disable",
+                err=True,
+            )
+            return 1
 
     # Create run context
     hash_algos = cast(list[Literal["blake3", "sha256", "sha512", "md5"]], hash_algorithms)
@@ -140,15 +159,18 @@ def execute_and_report(
         repo_root=repo_root,
         command=command,
         job_type=job_type_literal,
+        step_name=step_name,
         quiet=quiet,
         hash_algorithms=hash_algos,
+        tracer_mode=tracer_mode,  # type: ignore[arg-type]
+        tracer_fallback=tracer_fallback,
         git_commit=git_info.get("commit"),
         git_branch=git_info.get("branch"),
         git_repo=git_info.get("remote_url"),
     )
 
     # Execute via coordinator
-    coordinator = RunCoordinator()
+    coordinator = RunCoordinator(proxy_service=proxy_service)
     result = coordinator.execute(run_ctx)
 
     # Present report

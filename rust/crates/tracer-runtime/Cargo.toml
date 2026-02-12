@@ -1,0 +1,8 @@
+[package]
+name = "tracer-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Shared runtime helpers for tracer backends"
+
+[dependencies]
+tracer-schema = { path = "../tracer-schema" }

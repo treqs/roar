@@ -48,14 +48,113 @@ class DataLoaderService:
             data = msgpack.unpack(f, raw=False)
 
         self.logger.debug("Tracer data parsed successfully: %d keys", len(data))
+        files = self._normalize_files(data)
+        opened_files, read_files, written_files = self._derive_file_lists(data, files)
+
         return TracerData(
-            opened_files=data.get("opened_files", []),
-            read_files=data.get("read_files", []),
-            written_files=data.get("written_files", []),
+            opened_files=opened_files,
+            read_files=read_files,
+            written_files=written_files,
+            files=files,
             processes=data.get("processes", []),
-            start_time=data.get("start_time", 0),
-            end_time=data.get("end_time", 0),
+            start_time=float(data.get("start_time", 0)),
+            end_time=float(data.get("end_time", 0)),
+            version=int(data.get("version", 1) or 1),
+            tracer_mode=str(data.get("tracer_mode", "ptrace") or "ptrace"),
+            events_dropped=int(data.get("events_dropped", 0) or 0),
         )
+
+    def _normalize_files(self, data: dict) -> list[dict]:
+        """Normalize tracer file records to a common shape."""
+        normalized: list[dict] = []
+
+        raw_files = data.get("files", [])
+        if isinstance(raw_files, list) and raw_files:
+            for record in raw_files:
+                if not isinstance(record, dict):
+                    continue
+                path = record.get("path")
+                if not isinstance(path, str) or not path:
+                    continue
+
+                item = {
+                    "path": path,
+                    "read": bool(record.get("read", False)),
+                    "written": bool(record.get("written", False)),
+                }
+                if "chunks_read" in record:
+                    item["chunks_read"] = record.get("chunks_read")
+                if "chunks_written" in record:
+                    item["chunks_written"] = record.get("chunks_written")
+                normalized.append(item)
+            return normalized
+
+        # Legacy ptrace reports don't have "files"; synthesize from aggregate lists.
+        opened = data.get("opened_files", [])
+        read = set(data.get("read_files", []))
+        written = set(data.get("written_files", []))
+        paths = []
+        if isinstance(opened, list):
+            paths.extend(opened)
+        paths.extend([p for p in read if p not in paths])
+        paths.extend([p for p in written if p not in paths])
+
+        for path in paths:
+            if not isinstance(path, str) or not path:
+                continue
+            normalized.append(
+                {
+                    "path": path,
+                    "read": path in read,
+                    "written": path in written,
+                }
+            )
+
+        return normalized
+
+    def _derive_file_lists(
+        self,
+        data: dict,
+        files: list[dict],
+    ) -> tuple[list[str], list[str], list[str]]:
+        """
+        Derive opened/read/written lists from whichever tracer format was provided.
+
+        Preference order:
+        1. Explicit legacy arrays when present
+        2. Derived values from normalized file records
+        """
+
+        def _explicit_list(key: str) -> list[str] | None:
+            value = data.get(key)
+            if not isinstance(value, list):
+                return None
+            return [item for item in value if isinstance(item, str)]
+
+        explicit_opened = _explicit_list("opened_files")
+        explicit_read = _explicit_list("read_files")
+        explicit_written = _explicit_list("written_files")
+
+        if (
+            explicit_opened is not None
+            and explicit_read is not None
+            and explicit_written is not None
+        ):
+            return explicit_opened, explicit_read, explicit_written
+
+        opened_files: list[str] = []
+        read_files: list[str] = []
+        written_files: list[str] = []
+        for record in files:
+            path = record.get("path")
+            if not isinstance(path, str):
+                continue
+            opened_files.append(path)
+            if record.get("read"):
+                read_files.append(path)
+            if record.get("written"):
+                written_files.append(path)
+        return opened_files, read_files, written_files
 
     def load_python_data(self, path: str | None) -> PythonInjectData:
         """

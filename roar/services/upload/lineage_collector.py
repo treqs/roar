@@ -8,8 +8,6 @@ for registering artifacts with GLaaS.
 
 from pathlib import Path
 
-from sqlalchemy import text
-
 from ...core.interfaces.upload import LineageData
 from ...db.context import create_database_context
 
@@ -58,7 +56,7 @@ class LineageCollector:
     Usage:
         collector = LineageCollector()
         lineage = collector.collect(["hash1", "hash2"], roar_dir)
-        print(f"Jobs: {len(lineage.jobs)}, Artifacts: {len(lineage.artifacts)}")
+        # lineage.jobs and lineage.artifacts now hold the full registration payload
     """
 
     def collect(
@@ -117,41 +115,37 @@ class LineageCollector:
         lineage_artifact_hashes: set[str],
     ) -> list[dict]:
         """Add build jobs from the active pipeline that are connected to the lineage."""
-        build_jobs = ctx_db.conn.execute(
-            text("""
-                SELECT j.* FROM jobs j
-                INNER JOIN (
-                    SELECT step_number, MAX(id) as max_id
-                    FROM jobs
-                    WHERE session_id = :session_id AND job_type = 'build'
-                    GROUP BY step_number
-                ) latest ON j.id = latest.max_id
-                ORDER BY j.step_number
-            """),
-            {"session_id": pipeline["id"]},
-        ).fetchall()
+        build_jobs = ctx_db.jobs.get_latest_build_jobs(pipeline["id"])
 
         # Include ALL build jobs from the session - they set up the environment
         build_job_ids = set()
         build_job_list = []
 
         for bj in build_jobs:
-            job_dict = dict(bj._mapping) if hasattr(bj, "_mapping") else dict(bj)
-            job_id = bj.id if hasattr(bj, "id") else bj["id"]
+            job_dict = dict(bj)
+            job_id = bj["id"]
             inputs = ctx_db.jobs.get_inputs(job_id)
             outputs = ctx_db.jobs.get_outputs(job_id)
 
             job_dict["_input_hashes"] = [h for h in (_get_blake3(inp) for inp in inputs) if h]
             job_dict["_output_hashes"] = [h for h in (_get_blake3(out) for out in outputs) if h]
 
-            # Structured inputs/outputs with hash and path
+            # Structured inputs/outputs with hash, path, and byte_ranges
             job_dict["_inputs"] = [
-                {"hash": h, "path": inp.get("path") or inp.get("first_seen_path", "")}
+                {
+                    "hash": h,
+                    "path": inp.get("path") or inp.get("first_seen_path", ""),
+                    "byte_ranges": inp.get("byte_ranges"),
+                }
                 for inp in inputs
                 if (h := _get_blake3(inp))
             ]
             job_dict["_outputs"] = [
-                {"hash": h, "path": out.get("path") or out.get("first_seen_path", "")}
+                {
+                    "hash": h,
+                    "path": out.get("path") or out.get("first_seen_path", ""),
+                    "byte_ranges": out.get("byte_ranges"),
+                }
                 for out in outputs
                 if (h := _get_blake3(out))
             ]

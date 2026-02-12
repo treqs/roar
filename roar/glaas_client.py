@@ -1,15 +1,12 @@
 """GLaaS client for communicating with the Graph Lineage-as-a-Service server."""
 
-import base64
 import contextlib
-import hashlib
-import json
-import os
-import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import Any
+
+from .glaas import auth as _auth
+from .glaas.transport import parse_json_response, request_json
 
 
 def _get_logger():
@@ -20,131 +17,22 @@ def _get_logger():
 
 def get_glaas_url() -> str | None:
     """Get GLaaS server URL from config or environment."""
-    from .config import config_get
-
-    url = config_get("glaas.url")
-    if not url:
-        url = os.environ.get("GLAAS_URL")
-    return url
+    return _auth.get_glaas_url()
 
 
-def _detect_key_type(key_path: Path) -> str:
-    """Detect SSH key type from filename or content."""
-    name = key_path.name
-    if "ed25519" in name:
-        return "ed25519"
-    elif "ecdsa" in name:
-        return "ecdsa"
-    elif "rsa" in name:
-        return "rsa"
-    # Fallback: check content
-    content = key_path.read_text()
-    if "ed25519" in content.lower():
-        return "ed25519"
-    elif "ecdsa" in content.lower():
-        return "ecdsa"
-    return "rsa"  # default
+def find_ssh_private_key():
+    """Compatibility wrapper for auth key discovery."""
+    return _auth.find_ssh_private_key()
 
 
-def find_ssh_private_key() -> tuple[str, Path] | None:
-    """Find SSH private key for signing. Returns (key_type, path) or None.
-
-    Priority: ROAR_SSH_KEY env > glaas.key config > ~/.ssh/ default
-    """
-    from .config import config_get
-
-    # 1. Environment variable
-    env_key = os.environ.get("ROAR_SSH_KEY")
-    if env_key:
-        path = Path(env_key)
-        if path.exists():
-            key_type = _detect_key_type(path)
-            return (key_type, path)
-
-    # 2. Config file
-    config_key = config_get("glaas.key")
-    if config_key:
-        path = Path(config_key)
-        if path.exists():
-            key_type = _detect_key_type(path)
-            return (key_type, path)
-
-    # 3. Default ~/.ssh/ search
-    ssh_dir = Path.home() / ".ssh"
-    if not ssh_dir.exists():
-        return None
-
-    # Prefer Ed25519, then RSA
-    key_prefs = [
-        ("ed25519", "id_ed25519"),
-        ("rsa", "id_rsa"),
-        ("ecdsa", "id_ecdsa"),
-    ]
-
-    for key_type, key_name in key_prefs:
-        key_path = ssh_dir / key_name
-        if key_path.exists():
-            return (key_type, key_path)
-
-    return None
-
-
-def find_ssh_pubkey() -> tuple[str, str, Path] | None:
-    """Find SSH public key. Returns (key_type, content, path) or None.
-
-    Priority: ROAR_SSH_KEY env > glaas.key config > ~/.ssh/ default
-    Derives pubkey path from private key path by adding .pub extension.
-    """
-    from .config import config_get
-
-    # 1. Environment variable - derive pubkey from private key path
-    env_key = os.environ.get("ROAR_SSH_KEY")
-    if env_key:
-        pubkey_path = Path(env_key + ".pub")
-        if pubkey_path.exists():
-            content = pubkey_path.read_text().strip()
-            parts = content.split()
-            if len(parts) >= 2:
-                return (parts[0], content, pubkey_path)
-
-    # 2. Config file - derive pubkey from private key path
-    config_key = config_get("glaas.key")
-    if config_key:
-        pubkey_path = Path(config_key + ".pub")
-        if pubkey_path.exists():
-            content = pubkey_path.read_text().strip()
-            parts = content.split()
-            if len(parts) >= 2:
-                return (parts[0], content, pubkey_path)
-
-    # 3. Default ~/.ssh/ search
-    ssh_dir = Path.home() / ".ssh"
-    if not ssh_dir.exists():
-        return None
-
-    key_prefs = ["id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"]
-
-    for key_name in key_prefs:
-        key_path = ssh_dir / key_name
-        if key_path.exists():
-            content = key_path.read_text().strip()
-            parts = content.split()
-            if len(parts) >= 2:
-                return (parts[0], content, key_path)
-
-    return None
+def find_ssh_pubkey():
+    """Compatibility wrapper for auth key discovery."""
+    return _auth.find_ssh_pubkey()
 
 
 def compute_pubkey_fingerprint(pubkey: str) -> str:
-    """Compute SHA256 fingerprint of an SSH public key."""
-    parts = pubkey.strip().split()
-    if len(parts) < 2:
-        raise ValueError("Invalid public key format")
-
-    key_data = base64.b64decode(parts[1])
-    digest = hashlib.sha256(key_data).digest()
-    fingerprint = base64.b64encode(digest).decode().rstrip("=")
-    return f"SHA256:{fingerprint}"
+    """Compatibility wrapper for SSH key fingerprinting."""
+    return _auth.compute_pubkey_fingerprint(pubkey)
 
 
 def create_signature_payload(
@@ -153,89 +41,13 @@ def create_signature_payload(
     timestamp: int,
     body_hash: str | None = None,
 ) -> bytes:
-    """Create the payload that gets signed."""
-    payload = f"{timestamp}\n{method}\n{path}"
-    if body_hash:
-        payload += f"\n{body_hash}"
-    return payload.encode()
+    """Compatibility wrapper for signature payload generation."""
+    return _auth.create_signature_payload(method, path, timestamp, body_hash)
 
 
-def sign_payload(payload: bytes, key_path: Path, key_type: str) -> bytes | None:
-    """
-    Sign payload with SSH private key.
-
-    Uses ssh-keygen for signing (available on most systems).
-    Returns base64-encoded signature or None on failure.
-    """
-    import subprocess
-    import tempfile
-
-    # Write payload to temp file
-    with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".data") as f:
-        f.write(payload)
-        payload_path = f.name
-
-    sig_path = payload_path + ".sig"
-
-    try:
-        # Use ssh-keygen to sign
-        # -Y sign: create signature
-        # -f: identity file
-        # -n: namespace (we use "glaas")
-        result = subprocess.run(
-            [
-                "ssh-keygen",
-                "-Y",
-                "sign",
-                "-f",
-                str(key_path),
-                "-n",
-                "glaas",
-                payload_path,
-            ],
-            capture_output=True,
-            text=True,
-        )
-
-        if result.returncode != 0:
-            return None
-
-        # Read signature file
-        if not Path(sig_path).exists():
-            return None
-
-        sig_content = Path(sig_path).read_text()
-
-        # Parse SSH signature format
-        # Format: -----BEGIN SSH SIGNATURE-----\n<base64>\n-----END SSH SIGNATURE-----
-        lines = sig_content.strip().split("\n")
-        sig_lines = []
-        in_sig = False
-        for line in lines:
-            if line.startswith("-----BEGIN"):
-                in_sig = True
-                continue
-            if line.startswith("-----END"):
-                break
-            if in_sig:
-                sig_lines.append(line)
-
-        if not sig_lines:
-            return None
-
-        # Return the base64 signature data
-        sig_b64 = "".join(sig_lines)
-        return base64.b64decode(sig_b64)
-
-    except Exception as e:
-        _get_logger().debug("Failed to sign payload: %s", e)
-        return None
-    finally:
-        # Cleanup temp files
-        with contextlib.suppress(Exception):
-            Path(payload_path).unlink()
-        with contextlib.suppress(Exception):
-            Path(sig_path).unlink()
+def sign_payload(payload: bytes, key_path, key_type: str) -> bytes | None:
+    """Compatibility wrapper for payload signing."""
+    return _auth.sign_payload(payload, key_path, key_type)
 
 
 def make_auth_header(
@@ -243,42 +55,8 @@ def make_auth_header(
     path: str,
     body: bytes | None = None,
 ) -> str | None:
-    """Create Authorization header with SSH signature."""
-    # Find keys
-    pubkey_info = find_ssh_pubkey()
-    privkey_info = find_ssh_private_key()
-
-    if not pubkey_info or not privkey_info:
-        return None
-
-    _, pubkey_content, _ = pubkey_info
-    key_type, privkey_path = privkey_info
-
-    # Compute fingerprint
-    fingerprint = compute_pubkey_fingerprint(pubkey_content)
-
-    # Create timestamp
-    timestamp = int(time.time())
-
-    # Compute body hash if body present
-    body_hash = None
-    if body:
-        body_hash = hashlib.sha256(body).hexdigest()
-
-    # Create payload
-    payload = create_signature_payload(method, path, timestamp, body_hash)
-
-    # Sign
-    signature = sign_payload(payload, privkey_path, key_type)
-    if not signature:
-        return None
-
-    # Encode signature
-    sig_b64 = base64.b64encode(signature).decode()
-
-    # Build header
-    header = f'Signature keyid="{fingerprint}" ts="{timestamp}" sig="{sig_b64}"'
-    return header
+    """Compatibility wrapper for auth header generation."""
+    return _auth.make_auth_header(method, path, body)
 
 
 class GlaasClient:
@@ -296,32 +74,8 @@ class GlaasClient:
     def _parse_json_response(
         self, response_body: str, http_status: int
     ) -> tuple[dict | None, str | None]:
-        """Parse JSON response with descriptive error messages.
-
-        Returns (parsed_dict, error_message).
-        """
-        # Handle empty responses
-        if not response_body:
-            return None, f"Server returned empty response (HTTP {http_status})"
-
-        # Handle whitespace-only responses
-        if not response_body.strip():
-            return None, f"Server returned whitespace-only response (HTTP {http_status})"
-
-        # Detect HTML responses (common from misconfigured proxies)
-        stripped = response_body.strip()
-        if stripped.startswith("<!") or stripped.lower().startswith("<html"):
-            preview = response_body[:100].replace("\n", " ")
-            return None, f"Server returned HTML instead of JSON: '{preview}...'"
-
-        # Attempt JSON parsing
-        try:
-            return json.loads(response_body), None
-        except json.JSONDecodeError as e:
-            preview = response_body[:100].replace("\n", " ")
-            return None, (
-                f"Invalid JSON in response (HTTP {http_status}) at position {e.pos}: '{preview}...'"
-            )
+        """Parse JSON response with descriptive error messages."""
+        return parse_json_response(response_body, http_status)
 
     def health_check(self) -> bool:
         """
@@ -367,99 +121,13 @@ class GlaasClient:
         """Make authenticated request. Returns (response_dict, error_message)."""
         if not self.base_url:
             return None, "GLaaS URL not configured"
-
-        url = f"{self.base_url}{path}"
-        body_bytes = json.dumps(body).encode() if body else None
-
-        _get_logger().debug(
-            "API request: %s %s (body: %d bytes)",
-            method,
-            url,
-            len(body_bytes) if body_bytes else 0,
-        )
-
-        # Create auth header (None if no SSH keys available)
-        auth_header = make_auth_header(method, path, body_bytes)
-
-        # Build request
-        req = urllib.request.Request(
-            url,
-            data=body_bytes,
+        return request_json(
+            base_url=self.base_url,
             method=method,
+            path=path,
+            body=body,
+            auth_header_factory=make_auth_header,
         )
-        if auth_header:
-            req.add_header("Authorization", auth_header)
-        if body_bytes:
-            req.add_header("Content-Type", "application/json")
-
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                http_status = resp.status
-                response_body = resp.read().decode()
-
-                _get_logger().debug(
-                    "API response: %s %s -> HTTP %d (%d bytes)",
-                    method,
-                    path,
-                    http_status,
-                    len(response_body),
-                )
-
-                # Handle empty/whitespace responses (return {} for backward compatibility)
-                if not response_body or not response_body.strip():
-                    return {}, None
-
-                # Parse JSON with descriptive errors
-                result, error = self._parse_json_response(response_body, http_status)
-                if error:
-                    return None, error
-
-                # Unwrap ApiResponse format: {"success": true, "data": {...}}
-                if isinstance(result, dict) and result.get("success") and "data" in result:
-                    return result["data"], None
-                return result, None
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode() if e.fp else ""
-            # Try to parse error body as JSON
-            error_data, _ = self._parse_json_response(error_body, e.code)
-            if error_data and isinstance(error_data, dict):
-                # Check for both "detail" (FastAPI) and "message" (Flask) keys
-                detail = error_data.get("detail") or error_data.get("message") or str(e)
-            elif error_body:
-                # Detect proxy/firewall 403 (HTML response)
-                stripped = error_body.strip()
-                if e.code == 403 and (
-                    stripped.startswith("<!") or stripped.lower().startswith("<html")
-                ):
-                    detail = (
-                        "Access denied by proxy or firewall (received HTML 403). "
-                        "Check network configuration."
-                    )
-                else:
-                    # Include truncated preview of non-JSON error body
-                    preview = error_body[:100].replace("\n", " ")
-                    detail = (
-                        f"Non-JSON response: '{preview}...'"
-                        if len(error_body) > 100
-                        else error_body
-                    )
-            else:
-                detail = str(e)
-            _get_logger().debug(
-                "API error: %s %s -> HTTP %d: %s", method, path, e.code, detail[:200]
-            )
-            return None, f"HTTP {e.code}: {detail}"
-        except urllib.error.URLError as e:
-            _get_logger().debug("GLaaS connection error to %s: %s", url, e)
-            return None, f"Connection error: {e}"
-        except json.JSONDecodeError as e:
-            _get_logger().debug(
-                "GLaaS invalid JSON response from %s at position %d: %s", url, e.pos, e.msg
-            )
-            return None, f"Invalid JSON response at position {e.pos}: {e.msg}"
-        except Exception as e:
-            _get_logger().debug("GLaaS request to %s failed: %s", url, e)
-            return None, str(e)
 
     def register_artifact(
         self,

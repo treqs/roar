@@ -219,5 +219,5 @@ CLAUDE.md
 .claude/
 
 # roar
-roar/bin/roar-tracer
+roar/bin/*
 .roar/

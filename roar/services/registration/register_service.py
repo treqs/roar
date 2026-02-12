@@ -23,6 +23,7 @@ from ...core.interfaces.registration import BatchRegistrationResult, GitContext
 from ...core.interfaces.upload import LineageData
 from ...core.logging import get_logger
 from ...db.context import create_database_context
+from ...db.hashing.backend import compute_hashes_batch
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
 from ...plugins.vcs.git import GitVCSProvider
@@ -341,23 +342,9 @@ class RegisterService:
     def _compute_hash(self, path: str) -> str | None:
         """Compute BLAKE3 hash of file."""
         try:
-            import blake3
-
-            b3_hasher = blake3.blake3()
-            with open(path, "rb") as f:
-                for chunk in iter(lambda: f.read(8192 * 1024), b""):
-                    b3_hasher.update(chunk)
-            return b3_hasher.hexdigest()
-        except ImportError:
-            # Fallback to hashlib if blake3 not available
-            import hashlib
-
-            sha_hasher = hashlib.sha256()
-            with open(path, "rb") as f:
-                for chunk in iter(lambda: f.read(8192 * 1024), b""):
-                    sha_hasher.update(chunk)
-            return sha_hasher.hexdigest()
-        except OSError as e:
+            hashes_by_path = compute_hashes_batch([path], ["blake3"])
+            return hashes_by_path.get(path, {}).get("blake3")
+        except (OSError, ValueError) as e:
             self._logger.error("Failed to hash file %s: %s", path, e)
             return None
 

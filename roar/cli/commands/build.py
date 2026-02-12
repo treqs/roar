@@ -6,6 +6,7 @@ Usage: roar build [options] <command>
 
 import click
 
+from ...core.tracer_modes import TRACER_MODE_VALUES
 from ..context import RoarContext
 from ..decorators import require_init
 from ._execution import (
@@ -27,6 +28,19 @@ from ._execution import (
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
 @click.option("-q", "--quiet", is_flag=True, default=None, help="Suppress output summary")
 @click.option("-n", "--name", "step_name", help="Name for this step")
+@click.option(
+    "--tracer",
+    "tracer_mode",
+    type=click.Choice(list(TRACER_MODE_VALUES)),
+    default=None,
+    help="Tracer backend policy for this build",
+)
+@click.option(
+    "--tracer-fallback/--no-tracer-fallback",
+    "tracer_fallback",
+    default=None,
+    help="Allow runtime fallback to another tracer backend",
+)
 @click.option("--hash", "hash_algorithms", multiple=True, help="Add hash algorithm")
 @click.pass_obj
 @require_init
@@ -35,6 +49,8 @@ def build(
     args: tuple[str, ...],
     quiet: bool | None,
     step_name: str | None,
+    tracer_mode: str | None,
+    tracer_fallback: bool | None,
     hash_algorithms: tuple[str, ...],
 ) -> None:
     """Run a build step with provenance tracking.
@@ -69,10 +85,13 @@ def build(
         ctx=ctx,
         command=args_list,
         job_type="build",
+        step_name=step_name,
         quiet=quiet_setting,
         hash_algorithms=algorithms,
         git_info=git_info,
         repo_root=repo_root,
+        tracer_mode=tracer_mode,
+        tracer_fallback=tracer_fallback,
     )
 
     if exit_code != 0:
@@ -93,6 +112,9 @@ Use for:
 
 Options:
   --quiet, -q    Suppress output summary
+  --tracer       Tracer policy: auto, ebpf, preload, ptrace
+  --tracer-fallback / --no-tracer-fallback
+                 Enable/disable runtime tracer fallback
   --hash <algo>  Add hash algorithm (can be repeated)
   -n, --name     Name for this step
 

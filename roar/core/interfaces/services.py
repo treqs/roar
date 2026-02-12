@@ -26,6 +26,14 @@ class HashingService(Protocol):
         """Compute multiple hashes in single pass."""
         ...
 
+    def compute_hashes_batch(
+        self,
+        paths: list[str],
+        algorithms: list[str] | None = None,
+    ) -> dict[str, dict[str, str]]:
+        """Compute hashes for multiple files in batch."""
+        ...
+
 
 @runtime_checkable
 class JobRecordingService(Protocol):

@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 
 from ..core.exceptions import DatabaseConnectionError
 from .engine import create_roar_engine, create_session_factory, init_database
-from .hashing import HashAlgorithmRegistry
 from .repositories import (
     SQLAlchemyArtifactRepository,
     SQLAlchemyCollectionRepository,
@@ -52,7 +51,6 @@ class DatabaseContext:
         self.db_path = db_path
         self._engine: Engine | None = None
         self._session: Session | None = None
-        self._hash_registry = HashAlgorithmRegistry()
 
         # Repositories (initialized on connect)
         self._hash_cache_repo: SQLAlchemyHashCacheRepository | None = None
@@ -82,7 +80,7 @@ class DatabaseContext:
         self._collection_repo = SQLAlchemyCollectionRepository(self._session)
 
         # Initialize services
-        self._hashing_service = DefaultHashingService(self._hash_cache_repo, self._hash_registry)
+        self._hashing_service = DefaultHashingService(self._hash_cache_repo)
         self._session_service = DefaultSessionService(
             self._session_repo, self._job_repo, self._artifact_repo
         )
@@ -233,11 +231,6 @@ class DatabaseContext:
                 db_path=str(self.db_path),
             )
         return self._lineage_service
-
-    @property
-    def hash_registry(self) -> HashAlgorithmRegistry:
-        """Hash algorithm registry for creating hashers."""
-        return self._hash_registry
 
     @property
     def job_recording(self) -> JobRecordingService:

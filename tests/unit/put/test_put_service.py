@@ -111,6 +111,42 @@ class TestPutServiceBasic:
             # Verify artifact was linked as input
             mock_db.jobs.add_input.assert_called_once()
 
+    def test_put_returns_registered_session_info(self, tmp_path: Path):
+        """Put returns the exact session hash/url registered with GLaaS."""
+        model_file = tmp_path / "model.pt"
+        model_file.write_bytes(b"model data")
+
+        backend = MemoryBackend(bucket="test-bucket", prefix="models")
+
+        mock_db = Mock()
+        mock_db.artifacts = Mock()
+        mock_db.artifacts.register.return_value = ("artifact-uuid-1", True)
+        mock_db.jobs = Mock()
+        mock_db.jobs.create.return_value = (42, "job-uid-1")
+        mock_db.sessions = Mock()
+        mock_db.sessions.get_active.return_value = {"id": 1, "current_step": 2}
+        mock_db.sessions.get_next_step_number.return_value = 3
+
+        glaas_deps = create_mock_glaas_deps()
+
+        with patch("roar.services.put.service.get_glaas_url", return_value="http://glaas.test"):
+            service = PutService(
+                db_context=mock_db,
+                backend=backend,
+                destination="memory://test-bucket/models",
+                repo_root=tmp_path,
+                **glaas_deps,
+            )
+
+            result = service.put(
+                sources=[str(model_file)],
+                message="publish model",
+            )
+
+        assert result.success is True
+        assert result.session_hash == "session_hash_abc123"
+        assert result.session_url == "https://glaas.ai/dag/session_hash_abc123"
+
     def test_put_stores_urls_in_job_metadata(self, tmp_path: Path):
         """Put stores cloud URLs in job metadata."""
         # Arrange
@@ -189,6 +225,50 @@ class TestPutServiceBasic:
             assert result.success is True
             assert len(result.uploaded_files) == 2
             assert mock_db.jobs.add_input.call_count == 2
+
+    def test_put_hashes_multiple_files_in_single_batch_call(self, tmp_path: Path):
+        """Put computes all source hashes in one batch backend call."""
+        import blake3
+
+        file1 = tmp_path / "model.pt"
+        file2 = tmp_path / "config.yaml"
+        file1.write_bytes(b"model")
+        file2.write_bytes(b"config")
+
+        backend = MemoryBackend(bucket="bucket", prefix="")
+
+        mock_db = Mock()
+        mock_db.artifacts = Mock()
+        artifact_ids = iter([("art-1", True), ("art-2", True)])
+        mock_db.artifacts.register.side_effect = lambda **kwargs: next(artifact_ids)
+        mock_db.jobs = Mock()
+        mock_db.jobs.create.return_value = (42, "job-uid")
+        mock_db.sessions = Mock()
+        mock_db.sessions.get_active.return_value = {"id": 1}
+        mock_db.sessions.get_next_step_number.return_value = 1
+
+        glaas_deps = create_mock_glaas_deps()
+        calls = {"count": 0}
+
+        def fake_hashes(paths):
+            calls["count"] += 1
+            return {str(path): blake3.blake3(Path(path).read_bytes()).hexdigest() for path in paths}
+
+        with (
+            patch("roar.services.put.service.get_glaas_url", return_value="http://glaas.test"),
+            patch("roar.services.put.service.hash_files_blake3", side_effect=fake_hashes),
+        ):
+            service = PutService(
+                db_context=mock_db,
+                backend=backend,
+                destination="memory://test-bucket/models",
+                repo_root=tmp_path,
+                **glaas_deps,
+            )
+            result = service.put(sources=[str(file1), str(file2)], message="test")
+
+        assert result.success is True
+        assert calls["count"] == 1
 
 
 class TestPutServiceDryRun:

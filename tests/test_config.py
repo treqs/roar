@@ -12,12 +12,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from roar.cli.commands.init import DEFAULT_CONFIG_TEMPLATE
 from roar.config import (
     CONFIGURABLE_KEYS,
     VALID_HASH_ALGORITHMS,
     _get_default_config,
     config_get,
+    config_set,
+    get_roar_dir,
     load_config,
     save_config,
 )
@@ -84,6 +88,17 @@ class TestRoarInit:
         assert found is not None, "find_config_file should find the config"
         assert found.name == "config.toml"
         assert found.parent.name == ".roar"
+
+    def test_get_roar_dir_reuses_parent_roar_directory(self, tmp_path: Path) -> None:
+        root = tmp_path / "repo"
+        nested = root / "nested" / "deep"
+        roar_dir = root / ".roar"
+        roar_dir.mkdir(parents=True)
+        nested.mkdir(parents=True)
+        subprocess.run(["git", "init", str(root)], check=True, capture_output=True)
+
+        resolved = get_roar_dir(str(nested))
+        assert resolved == roar_dir
 
 
 class TestDefaultConfigTemplate:
@@ -360,3 +375,39 @@ class TestConfigurableKeys:
         assert defaults["hash"]["primary"] in VALID_HASH_ALGORITHMS
         for algo in defaults["hash"]["get"]:
             assert algo in VALID_HASH_ALGORITHMS
+
+
+class TestTracerConfig:
+    def test_legacy_tracer_mode_is_ignored(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".roar" / "config.toml"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text("""
+[tracer]
+mode = "ptrace"
+""")
+
+        config = load_config(start_dir=str(tmp_path))
+        assert config["tracer"]["default"] == "auto"
+
+    def test_config_get_legacy_mode_returns_not_set(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".roar" / "config.toml"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text("""
+[tracer]
+default = "ebpf"
+""")
+
+        assert config_get("tracer.mode", start_dir=str(tmp_path)) is None
+        assert config_get("tracer.default", start_dir=str(tmp_path)) == "ebpf"
+
+    def test_config_set_legacy_mode_is_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match=r"Unknown config key: tracer\.mode"):
+            config_set("tracer.mode", "ptrace", start_dir=str(tmp_path))
+
+    def test_fallback_enabled_default_is_true(self, tmp_path: Path) -> None:
+        config = load_config(start_dir=str(tmp_path))
+        assert config["tracer"]["fallback_enabled"] is True
+
+    def test_config_set_preload_mode(self, tmp_path: Path) -> None:
+        config_set("tracer.default", "preload", start_dir=str(tmp_path))
+        assert config_get("tracer.default", start_dir=str(tmp_path)) == "preload"

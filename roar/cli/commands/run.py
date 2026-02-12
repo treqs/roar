@@ -9,6 +9,7 @@ import shlex
 
 import click
 
+from ...core.tracer_modes import TRACER_MODE_VALUES
 from ...db.context import create_database_context
 from ...presenters.console import ConsolePresenter
 from ...presenters.run_report import RunReportPresenter
@@ -34,6 +35,19 @@ from ._execution import (
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
 @click.option("-q", "--quiet", is_flag=True, default=None, help="Suppress output summary")
 @click.option("-n", "--name", "step_name", help="Name for this step")
+@click.option(
+    "--tracer",
+    "tracer_mode",
+    type=click.Choice(list(TRACER_MODE_VALUES)),
+    default=None,
+    help="Tracer backend policy for this run",
+)
+@click.option(
+    "--tracer-fallback/--no-tracer-fallback",
+    "tracer_fallback",
+    default=None,
+    help="Allow runtime fallback to another tracer backend",
+)
 @click.option("--hash", "hash_algorithms", multiple=True, help="Add hash algorithm")
 @click.pass_obj
 @require_init
@@ -42,6 +56,8 @@ def run(
     args: tuple[str, ...],
     quiet: bool | None,
     step_name: str | None,
+    tracer_mode: str | None,
+    tracer_fallback: bool | None,
     hash_algorithms: tuple[str, ...],
 ) -> None:
     """Run a command with provenance tracking.
@@ -119,10 +135,13 @@ def run(
         ctx=ctx,
         command=command,
         job_type=job_type,
+        step_name=step_name,
         quiet=quiet_setting,
         hash_algorithms=algorithms,
         git_info=git_info,
         repo_root=repo_root,
+        tracer_mode=tracer_mode,
+        tracer_fallback=tracer_fallback,
     )
 
     if exit_code != 0:
@@ -184,6 +203,9 @@ Run a command with provenance tracking.
 
 Options:
   --quiet, -q             Suppress output summary
+  --tracer <mode>         Tracer policy: auto, ebpf, preload, ptrace
+  --tracer-fallback       Enable runtime tracer fallback
+  --no-tracer-fallback    Disable runtime tracer fallback
   --hash <algo>           Add hash algorithm (can be repeated)
   -n, --name <name>       Name for this step
 

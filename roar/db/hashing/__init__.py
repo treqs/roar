@@ -1,25 +1,17 @@
-"""
-Hash algorithm strategies and registry.
+"""Artifact hashing backend API."""
 
-This module implements the Strategy pattern for hash algorithms,
-enabling new algorithms to be added without modifying existing code
-(Open/Closed Principle).
-"""
-
-from .registry import HashAlgorithmRegistry
-from .strategies import (
-    Blake3Strategy,
-    HashStrategy,
-    MD5Strategy,
-    SHA256Strategy,
-    SHA512Strategy,
+from .backend import (
+    VALID_ALGORITHMS,
+    compute_hash,
+    compute_hashes,
+    compute_hashes_batch,
+    normalize_algorithms,
 )
 
 __all__ = [
-    "Blake3Strategy",
-    "HashAlgorithmRegistry",
-    "HashStrategy",
-    "MD5Strategy",
-    "SHA256Strategy",
-    "SHA512Strategy",
+    "VALID_ALGORITHMS",
+    "compute_hash",
+    "compute_hashes",
+    "compute_hashes_batch",
+    "normalize_algorithms",
 ]

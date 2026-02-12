@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.11.5,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "roar-cli"
-version = "0.2.4"
+version = "0.2.5"
 description = "Reproducibility and provenance tracker for ML training pipelines"
 authors = [
     { name="TReqs Team", email="info@treqs.ai" }
@@ -70,27 +70,31 @@ dev = [
 # This registers `roar` on PATH after pip install
 roar = "roar.__main__:main"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["roar", "roar.*"]
-
-[tool.setuptools.package-data]
-roar = ["bin/*"]
+[tool.maturin]
+manifest-path = "rust/crates/artifact-hash-py/Cargo.toml"
+python-source = "."
+module-name = "roar._hash_native"
+bindings = "pyo3"
+include = [
+    { path = "roar/bin/*", format = "sdist" },
+    { path = "roar/bin/*", format = "wheel" },
+]
 
 [tool.pytest.ini_options]
 # Parallel execution enabled by default with pytest-xdist
 # - Uses --dist loadfile to keep same-file tests in same worker (avoids cwd race conditions)
-# - live_glaas tests must be run separately with --dist no (sequential)
+# - Default profile excludes tests requiring root/eBPF and live GLaaS dependencies
 testpaths = ["tests"]
 markers = [
     "integration: Integration tests (uses fixtures)",
     "e2e: End-to-end tests (full workflows)",
     "glaas: Tests requiring GLaaS server",
     "live_glaas: Tests requiring live GLaaS API running locally",
+    "ebpf: Tests requiring eBPF daemon/root privileges",
     "cloud: Tests for cloud storage operations",
     "happy_path: Happy path tests for core functionality",
 ]
-addopts = "-v --strict-markers -n auto --dist loadfile"
+addopts = "-v --strict-markers -n auto --dist loadfile --ignore=tests/ebpf --ignore=tests/live_glaas"
 timeout = 60
 filterwarnings = [
     "ignore::DeprecationWarning",

@@ -6,7 +6,7 @@ Measures:
   1. Fixed startup/teardown cost (trace /bin/true)
   2. Marginal per-syscall cost (trace open/read/write/close at increasing scales)
 
-Reports absolute milliseconds for each component per tracer (ptrace vs eBPF).
+Reports absolute milliseconds for each component per tracer (ptrace, preload, eBPF).
 """
 
 import os
@@ -20,13 +20,17 @@ from pathlib import Path
 # Configuration
 PYTHON_BIN = ".venv/bin/python"
 TRACER_BIN = "roar/bin/roar-tracer"
+PRELOAD_TRACER_BIN = os.environ.get(
+    "PRELOAD_TRACER_BIN",
+    os.path.join(os.path.dirname(__file__), "../../rust/target/release/roar-tracer-preload"),
+)
 EBPF_TRACER_BIN = os.environ.get(
     "EBPF_TRACER_BIN",
-    os.path.join(os.path.dirname(__file__), "../../tracer-ebpf/target/release/roar-tracer-ebpf"),
+    os.path.join(os.path.dirname(__file__), "../../rust/target/release/roar-tracer-ebpf"),
 )
 ROARD_BIN = os.environ.get(
     "ROARD_BIN",
-    os.path.join(os.path.dirname(__file__), "../../tracer-ebpf/target/release/roard"),
+    os.path.join(os.path.dirname(__file__), "../../rust/target/release/roard"),
 )
 NUM_ITERATIONS = 10
 NUM_WARMUP = 2
@@ -107,6 +111,45 @@ def _ebpf_works_sudo(binary_path):
         return False
 
 
+def _find_preload_library(binary_path):
+    """Find a preload shared library next to the launcher."""
+    binary_dir = Path(binary_path).parent
+    direct_candidates = (
+        binary_dir / "libroar_tracer_preload.so",
+        binary_dir / "libroar-tracer-preload.so",
+    )
+    for candidate in direct_candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    wildcard_candidates = []
+    wildcard_candidates.extend(sorted(binary_dir.glob("libroar_tracer_preload*.so")))
+    wildcard_candidates.extend(sorted(binary_dir.glob("libroar-tracer-preload*.so")))
+    for candidate in wildcard_candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _preload_works(binary_path, preload_lib=None):
+    """Quick test: can the preload binary run directly."""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".msgpack", delete=True) as f:
+            env = os.environ.copy()
+            if preload_lib:
+                env["ROAR_PRELOAD_LIB"] = preload_lib
+            r = subprocess.run(
+                [binary_path, f.name, "/bin/true"],
+                capture_output=True,
+                timeout=10,
+                text=True,
+                env=env,
+            )
+            return r.returncode == 0
+    except Exception:
+        return False
+
+
 def start_roard(sudo_prefix):
     """Start roard daemon and wait for it to be ready. Returns the process."""
     if not os.path.exists(ROARD_BIN):
@@ -178,11 +221,12 @@ def make_scaling_script(n):
     )
 
 
-def run_timed(cmd, timeout=120):
+def run_timed(cmd, timeout=120, env=None):
     """Run command, return (elapsed_seconds, success, stderr)."""
     start = time.perf_counter()
+    merged_env = None if env is None else {**os.environ, **env}
     try:
-        r = subprocess.run(cmd, capture_output=True, timeout=timeout, text=True)
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout, text=True, env=merged_env)
         return time.perf_counter() - start, r.returncode == 0, r.stderr
     except subprocess.TimeoutExpired:
         return time.perf_counter() - start, False, "timed out"
@@ -190,16 +234,16 @@ def run_timed(cmd, timeout=120):
         return 0.0, False, str(e)
 
 
-def measure(label, cmd, n_iter, n_warmup, sleep_between=0.0):
+def measure(label, cmd, n_iter, n_warmup, sleep_between=0.0, env=None):
     """Warmup then measure n_iter runs. Returns list of elapsed times (s)."""
     for _ in range(n_warmup):
-        run_timed(cmd)
+        run_timed(cmd, env=env)
         if sleep_between:
             time.sleep(sleep_between)
     times = []
     fail_msg_shown = False
     for _i in range(n_iter):
-        t, ok, stderr = run_timed(cmd)
+        t, ok, stderr = run_timed(cmd, env=env)
         if ok:
             times.append(t)
         else:
@@ -247,12 +291,14 @@ def main():
     print("=" * 72)
     print(f"  Iterations: {NUM_ITERATIONS}  Warmup: {NUM_WARMUP}")
     print(f"  ptrace: {TRACER_BIN}")
+    print(f"  preload:{PRELOAD_TRACER_BIN}")
     print(f"  ebpf:   {EBPF_TRACER_BIN}")
     print(f"  roard:  {ROARD_BIN}")
     print(f"  python: {PYTHON_BIN}")
 
     for path, label in [
         (TRACER_BIN, "ptrace"),
+        (PRELOAD_TRACER_BIN, "preload"),
         (EBPF_TRACER_BIN, "eBPF"),
         (PYTHON_BIN, "python"),
     ]:
@@ -286,6 +332,19 @@ def main():
     # ── Build tracer configs ─────────────────────────────────────────────
     active_tracers = {}
     active_tracers["ptrace"] = {"bin": TRACER_BIN, "sleep": 0.0, "sudo": []}
+    preload_lib = _find_preload_library(PRELOAD_TRACER_BIN)
+    preload_env = {"ROAR_PRELOAD_LIB": preload_lib} if preload_lib else None
+    if _preload_works(PRELOAD_TRACER_BIN, preload_lib):
+        preload_note = f" (lib={preload_lib})" if preload_lib else ""
+        print(f"  preload: enabled{preload_note}", flush=True)
+        active_tracers["preload"] = {
+            "bin": PRELOAD_TRACER_BIN,
+            "sleep": 0.0,
+            "sudo": [],
+            "env": preload_env,
+        }
+    else:
+        print("  preload: UNAVAILABLE (launcher/library not runnable)", flush=True)
 
     if ebpf_available:
         active_tracers["ebpf"] = {
@@ -339,7 +398,12 @@ def _run_benchmarks(active_tracers):
         with tempfile.NamedTemporaryFile(suffix=".msgpack", delete=True) as f:
             cmd = [*cfg["sudo"], cfg["bin"], f.name, "/bin/true"]
             times = measure(
-                f"{name} /bin/true", cmd, NUM_ITERATIONS, NUM_WARMUP, sleep_between=cfg["sleep"]
+                f"{name} /bin/true",
+                cmd,
+                NUM_ITERATIONS,
+                NUM_WARMUP,
+                sleep_between=cfg["sleep"],
+                env=cfg.get("env"),
             )
         tm, ts = mean_std(times)
         overhead = tm - bl_mean
@@ -374,7 +438,12 @@ def _run_benchmarks(active_tracers):
                 with tempfile.NamedTemporaryFile(suffix=".msgpack", delete=True) as f:
                     cmd = [*cfg["sudo"], cfg["bin"], f.name, PYTHON_BIN, str(script)]
                     times = measure(
-                        f"{name} N={n}", cmd, NUM_ITERATIONS, NUM_WARMUP, sleep_between=cfg["sleep"]
+                        f"{name} N={n}",
+                        cmd,
+                        NUM_ITERATIONS,
+                        NUM_WARMUP,
+                        sleep_between=cfg["sleep"],
+                        env=cfg.get("env"),
                     )
                 tm, ts = mean_std(times)
                 overhead = ms(tm - bl_mean)

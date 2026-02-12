@@ -9,38 +9,24 @@ roar put ALWAYS registers lineage with GLaaS. This is not optional.
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
-
-import blake3
+from typing import Any
 
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...glaas_client import GlaasClient, get_glaas_url
-from ...plugins.vcs.git import GitVCSProvider
 from ...services.registration import RegistrationCoordinator, SessionRegistrationService
+from ...services.transfer import (
+    DatabaseContext,
+    build_operation_metadata_json,
+    hash_files_blake3,
+    resolve_git_context,
+)
 from ...services.upload.lineage_collector import LineageCollector
 from .backends.base import StorageBackend
 from .resolver import SourceResolver
-
-if TYPE_CHECKING:
-    pass
-
-
-class DatabaseContext(Protocol):
-    """Protocol for database context dependency."""
-
-    @property
-    def artifacts(self) -> Any: ...
-
-    @property
-    def jobs(self) -> Any: ...
-
-    @property
-    def sessions(self) -> Any: ...
 
 
 @dataclass
@@ -50,6 +36,8 @@ class PutResult:
     success: bool
     job_id: int | None = None
     job_uid: str | None = None
+    session_hash: str | None = None
+    session_url: str | None = None
     uploaded_files: list[dict[str, Any]] = field(default_factory=list)
     dry_run: bool = False
     would_upload: list[dict[str, Any]] = field(default_factory=list)
@@ -219,6 +207,8 @@ class PutService:
             self._logger.debug("Dry run mode — skipping upload and registration")
             return PutResult(
                 success=True,
+                session_hash=session_hash,
+                session_url=session_result.session_url,
                 dry_run=True,
                 would_upload=[{"path": str(r.path), "exists": r.exists} for r in resolved],
             )
@@ -228,12 +218,15 @@ class PutService:
         artifact_urls: dict[str, str] = {}  # artifact_id -> remote_url
         artifact_hashes: list[str] = []  # For lineage collection
         artifacts_info: list[tuple[str, str]] = []  # (artifact_id, path)
+        hashes_by_path = self._hash_files_batch([source.path for source in resolved])
 
         for i, source in enumerate(resolved):
             file_path = source.path
 
-            # Hash the file
-            file_hash = self._hash_file(file_path)
+            # Hashes are computed in one batch call up front.
+            file_hash = hashes_by_path.get(str(file_path))
+            if not file_hash:
+                raise OSError(f"Failed to hash file: {file_path}")
             self._logger.debug(
                 "File %d/%d: %s, blake3=%s",
                 i + 1,
@@ -329,8 +322,9 @@ class PutService:
         destination_type = parsed.scheme.lower()
 
         # Build metadata
-        metadata = {
-            "put": {
+        metadata_json = build_operation_metadata_json(
+            "put",
+            {
                 "message": message,
                 "destination": self._destination,
                 "destination_type": destination_type,
@@ -338,8 +332,8 @@ class PutService:
                 "git_commit": git_commit,
                 "git_tag": git_tag,
                 "timestamp": time.time(),
-            }
-        }
+            },
+        )
         self._logger.debug(
             "Job metadata: destination_type=%s, artifacts=%d", destination_type, len(artifact_urls)
         )
@@ -351,7 +345,7 @@ class PutService:
             timestamp=time.time(),
             session_id=session_id,
             step_number=step_number,
-            metadata=json.dumps(metadata),
+            metadata=metadata_json,
             job_type="put",
             exit_code=0,
         )
@@ -380,7 +374,7 @@ class PutService:
             exit_code=0,
             job_type="put",
             step_number=step_number,
-            metadata=json.dumps(metadata),
+            metadata=metadata_json,
         )
         if not put_job_result.success:
             self._logger.debug("Put job GLaaS registration failed: %s", put_job_result.error)
@@ -412,6 +406,8 @@ class PutService:
                 success=False,
                 job_id=job_id,
                 job_uid=job_uid,
+                session_hash=session_hash,
+                session_url=session_result.session_url,
                 uploaded_files=uploaded_files,
                 error=registration_error,
             )
@@ -425,6 +421,8 @@ class PutService:
             success=True,
             job_id=job_id,
             job_uid=job_uid,
+            session_hash=session_hash,
+            session_url=session_result.session_url,
             uploaded_files=uploaded_files,
         )
 
@@ -455,17 +453,15 @@ class PutService:
             )
         return prepared
 
-    def _hash_file(self, path: Path) -> str:
-        """Compute BLAKE3 hash of a file (matches tracer algorithm)."""
-        size = path.stat().st_size
-        self._logger.debug("Hashing file: %s (%d bytes)", path.name, size)
-        hasher = blake3.blake3()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                hasher.update(chunk)
-        digest = hasher.hexdigest()
-        self._logger.debug("Hash result: %s -> blake3:%s", path.name, digest[:12])
-        return digest
+    def _hash_files_batch(self, paths: list[Path]) -> dict[str, str]:
+        """Compute BLAKE3 hashes for paths in one backend batch call."""
+        if not paths:
+            return {}
+
+        self._logger.debug("Hashing %d file(s) in batch", len(paths))
+        result = hash_files_blake3(paths)
+        self._logger.debug("Batch hash completed: %d/%d file(s)", len(result), len(paths))
+        return result
 
     def _find_or_create_artifact(self, path: Path, file_hash: str) -> str:
         """Find existing artifact by hash or create new one."""
@@ -487,25 +483,11 @@ class PutService:
     def _get_git_context(self, git_commit: str | None = None) -> GitContext:
         """Get git context from repository."""
         self._logger.debug("Resolving git context from %s", self._repo_root)
-        try:
-            vcs = GitVCSProvider()
-            repo_root = vcs.get_repo_root(str(self._repo_root))
-            if not repo_root:
-                self._logger.debug("Not a git repository: %s", self._repo_root)
-                return GitContext(repo=None, commit=git_commit, branch=None)
-
-            ctx = GitContext(
-                repo=vcs.get_remote_url(repo_root),
-                commit=git_commit or vcs.get_commit_hash(repo_root),
-                branch=vcs.get_branch(repo_root),
-            )
-            self._logger.debug(
-                "Git context resolved: repo=%s, commit=%s, branch=%s",
-                ctx.repo,
-                ctx.commit[:12] if ctx.commit else None,
-                ctx.branch,
-            )
-            return ctx
-        except Exception as e:
-            self._logger.debug("Failed to resolve git context: %s", e)
-            return GitContext(repo=None, commit=git_commit, branch=None)
+        ctx = resolve_git_context(self._repo_root, git_commit)
+        self._logger.debug(
+            "Git context resolved: repo=%s, commit=%s, branch=%s",
+            ctx.repo,
+            ctx.commit[:12] if ctx.commit else None,
+            ctx.branch,
+        )
+        return ctx

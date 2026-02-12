@@ -38,34 +38,49 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install maturin
           pip install -e .[dev]
 
       - name: Run mypy
         run: mypy roar
 
-  build-tracer:
+  build-rust-binaries:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Rust
+      - name: Set up Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build tracer
-        run: cargo build --release --manifest-path tracer/Cargo.toml
+      - name: Set up Rust (nightly with rust-src)
+        run: |
+          rustup install nightly
+          rustup component add rust-src --toolchain nightly
 
-      - name: Upload tracer artifact
+      - name: Install bpf-linker
+        run: cargo install bpf-linker
+
+      - name: Build and stage Rust binaries
+        uses: ./.github/actions/build-rust-binaries
+        with:
+          manifest-path: rust/Cargo.toml
+          output-dir: rust-bin
+
+      - name: Upload Rust binaries artifact
         uses: actions/upload-artifact@v4
         with:
-          name: roar-tracer
-          path: tracer/target/release/roar-tracer
+          name: roar-rust-binaries
+          path: rust-bin/*
 
   test:
     runs-on: ubuntu-latest
-    needs: build-tracer
+    needs: [build-rust-binaries]
     strategy:
       fail-fast: false
       matrix:
@@ -79,35 +94,92 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Download tracer
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download Rust binaries
         uses: actions/download-artifact@v4
         with:
-          name: roar-tracer
-          path: tracer/target/release/
+          name: roar-rust-binaries
+          path: rust/target/release/
 
-      - name: Make tracer executable
-        run: chmod +x tracer/target/release/roar-tracer
+      - name: Make tracer and proxy executables runnable
+        run: |
+          chmod +x \
+            rust/target/release/roar-tracer \
+            rust/target/release/roar-proxy \
+            rust/target/release/roar-tracer-ebpf \
+            rust/target/release/roard
 
       - name: Check ptrace availability
         run: |
           echo "Testing if ptrace is available on this runner..."
-          TRACER=tracer/target/release/roar-tracer
+          TRACER=rust/target/release/roar-tracer
           TEST_LOG=/tmp/ptrace_test.json
           if $TRACER $TEST_LOG echo "ptrace test" 2>&1; then
             if [ -f "$TEST_LOG" ] && [ -s "$TEST_LOG" ]; then
-              echo "✓ ptrace is available - tracer can capture syscalls"
+              echo "ptrace is available."
               cat $TEST_LOG
             else
-              echo "⚠ ptrace may be restricted - tracer ran but produced no output"
+              echo "ptrace may be restricted; tracer produced no output."
             fi
           else
-            echo "⚠ ptrace appears to be disabled - tracer failed to run"
+            echo "ptrace appears to be disabled on this runner."
           fi
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install maturin
           pip install -e .[dev]
 
+      - name: Build native hash extension
+        run: ./scripts/build_hash_native.sh
+
+      - name: Verify native hash extension import
+        run: python -c "import roar._hash_native as m; print(m.__name__)"
+
       - name: Run tests (parallel)
-        run: pytest tests/ -v --tb=short -x -n auto --dist loadfile -m "not glaas and not live_glaas"
+        run: pytest --tb=short -x -m "not glaas and not live_glaas"
+
+  test-tracer-privileged:
+    runs-on: ubuntu-latest
+    needs: [build-rust-binaries]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download Rust binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: roar-rust-binaries
+          path: rust/target/release/
+
+      - id: preflight
+        name: Preflight privileged tracer requirements
+        run: |
+          if [ "$(id -u)" -eq 0 ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install maturin
+          pip install -e .[dev]
+
+      - name: Run eBPF test lane
+        if: steps.preflight.outputs.ready == 'true'
+        run: pytest -m ebpf --tb=short
+
+      - name: Skip privileged lane
+        if: steps.preflight.outputs.ready != 'true'
+        run: |
+          echo "Skipping privileged tracer tests: root privileges are required."

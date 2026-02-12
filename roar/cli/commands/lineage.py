@@ -11,6 +11,7 @@ from pathlib import Path
 import click
 
 from ...db.context import create_database_context
+from ...db.hashing.backend import compute_hashes_batch
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -33,26 +34,7 @@ def _resolve_artifact_path(path: str, cwd: Path) -> str | None:
     if not os.path.exists(path):
         return None
 
-    # Compute hash using blake3
-    try:
-        import blake3
-
-        b3_hasher = blake3.blake3()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192 * 1024), b""):
-                b3_hasher.update(chunk)
-        return b3_hasher.hexdigest()
-    except ImportError:
-        # Fallback to hashlib if blake3 not available
-        import hashlib
-
-        sha_hasher = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192 * 1024), b""):
-                sha_hasher.update(chunk)
-        return sha_hasher.hexdigest()
-    except OSError:
-        return None
+    return compute_hashes_batch([path], ["blake3"]).get(path, {}).get("blake3")
 
 
 @click.command("lineage", hidden=True)

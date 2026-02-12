@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/artifact-hash-core",
+    "crates/artifact-hash-py",
+    "crates/tracer-schema",
+    "crates/tracer-runtime",
+    "crates/tracer-fd",
+    "tracers/ptrace",
+    "tracers/preload",
+    "tracers/ebpf/common",
+    "tracers/ebpf/probe",
+    "tracers/ebpf/userspace",
+    "services/proxy",
+]
+default-members = [
+    "tracers/ptrace",
+    "tracers/preload",
+    "tracers/ebpf/userspace",
+]
+
+# BPF programs need specific profile settings to avoid verifier issues.
+# aya-build compiles the probe crate with --release, so these profiles apply there too.
+[profile.dev.package.roar-tracer-ebpf-ebpf]
+opt-level = 2
+overflow-checks = false
+debug = 2
+debug-assertions = false
+codegen-units = 1
+
+[profile.release.package.roar-tracer-ebpf-ebpf]
+opt-level = 2
+codegen-units = 1
+debug = 2
+overflow-checks = false
+debug-assertions = false

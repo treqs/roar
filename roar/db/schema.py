@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS job_inputs (
     job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
     artifact_id TEXT NOT NULL REFERENCES artifacts(id),
     path TEXT NOT NULL,                 -- Path at time of read
+    byte_ranges TEXT,                   -- JSON: [[start, end], ...] for ranged S3 GETs
     PRIMARY KEY (job_id, artifact_id, path)
 );
 
@@ -119,6 +120,7 @@ CREATE TABLE IF NOT EXISTS job_outputs (
     job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
     artifact_id TEXT NOT NULL REFERENCES artifacts(id),
     path TEXT NOT NULL,                 -- Path at time of write
+    byte_ranges TEXT,                   -- JSON: [[start, end], ...] for ranged S3 writes
     PRIMARY KEY (job_id, artifact_id, path)
 );
 
@@ -217,3 +219,14 @@ def run_migrations(conn) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN status TEXT")
     if "job_type" not in columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN job_type TEXT")
+
+    # Add byte_ranges to job_inputs and job_outputs
+    cursor = conn.execute("PRAGMA table_info(job_inputs)")
+    input_columns = {row["name"] for row in cursor.fetchall()}
+    if "byte_ranges" not in input_columns:
+        conn.execute("ALTER TABLE job_inputs ADD COLUMN byte_ranges TEXT")
+
+    cursor = conn.execute("PRAGMA table_info(job_outputs)")
+    output_columns = {row["name"] for row in cursor.fetchall()}
+    if "byte_ranges" not in output_columns:
+        conn.execute("ALTER TABLE job_outputs ADD COLUMN byte_ranges TEXT")

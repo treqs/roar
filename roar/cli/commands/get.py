@@ -16,6 +16,7 @@ import click
 from ...core.bootstrap import bootstrap
 from ...db.context import create_database_context
 from ...services.get.backends import NoOpDownloadBackend, parse_source, should_skip_download
+from ...services.transfer import load_backend_class, resolve_backend_for_scheme
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -35,29 +36,33 @@ def _get_backend(source_url: str):
             scheme=parsed.scheme,
         )
 
-    if parsed.scheme in ("http", "https"):
-        from ...services.get.backends.http import HTTPBackend
+    from ...services.get.backends.http import HTTPBackend
 
-        return HTTPBackend(url=source_url)
-    elif parsed.scheme == "s3":
-        try:
-            from ...services.get.backends.s3 import S3DownloadBackend
-        except ImportError as e:
-            raise click.ClickException(
-                "S3 backend requires boto3. Install with: pip install boto3"
-            ) from e
-        return S3DownloadBackend(bucket=parsed.bucket)
-    elif parsed.scheme == "gs":
-        try:
-            from ...services.get.backends.gcs import GCSDownloadBackend
-        except ImportError as e:
-            raise click.ClickException(
-                "GCS backend requires google-cloud-storage. "
-                "Install with: pip install google-cloud-storage"
-            ) from e
-        return GCSDownloadBackend(bucket=parsed.bucket)
-    else:
-        raise click.ClickException(f"Unsupported source scheme: {parsed.scheme}")
+    builders = {
+        "http": lambda: HTTPBackend(url=source_url),
+        "https": lambda: HTTPBackend(url=source_url),
+        "s3": lambda: load_backend_class(
+            "roar.services.get.backends.s3",
+            "S3DownloadBackend",
+            "S3 backend requires boto3. Install with: pip install boto3",
+        )(bucket=parsed.bucket),
+        "gs": lambda: load_backend_class(
+            "roar.services.get.backends.gcs",
+            "GCSDownloadBackend",
+            "GCS backend requires google-cloud-storage. Install with: pip install google-cloud-storage",
+        )(bucket=parsed.bucket),
+    }
+
+    try:
+        return resolve_backend_for_scheme(
+            parsed.scheme,
+            builders,
+            f"Unsupported source scheme: {parsed.scheme}",
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    except ImportError as e:
+        raise click.ClickException(str(e)) from e
 
 
 @click.command("get")

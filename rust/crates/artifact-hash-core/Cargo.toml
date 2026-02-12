@@ -1,0 +1,20 @@
+[package]
+name = "artifact-hash-core"
+version = "0.1.0"
+edition = "2021"
+description = "Shared artifact hashing engine for roar"
+
+[dependencies]
+blake3 = "1"
+md-5 = "0.10"
+rayon = "1.10"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "allow"
+too_many_arguments = "allow"

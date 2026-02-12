@@ -18,6 +18,12 @@ if TYPE_CHECKING:
     from ...db.context import DatabaseContext
 
 
+def _get_logger():
+    from ...core.logging import get_logger
+
+    return get_logger()
+
+
 class EntityType(Enum):
     """Type of resolved entity."""
 
@@ -50,7 +56,7 @@ class EntityLookupService:
         service = EntityLookupService(db_context)
         result = service.lookup("abc123de")
         if result:
-            print(f"Found {result.entity_type}: {result.entity}")
+            _ = result.entity_type, result.entity
     """
 
     def __init__(self, db_context: "DatabaseContext") -> None:
@@ -167,20 +173,12 @@ class EntityLookupService:
         Returns:
             LookupResult if found, None otherwise
         """
-        from sqlalchemy import text
-
         # Try exact match first
         pipeline = self._db.sessions.get_by_hash(hash_prefix)
 
         # Try prefix match if no exact match
         if not pipeline:
-            cursor = self._db.conn.execute(
-                text("SELECT * FROM sessions WHERE hash LIKE :hash_prefix LIMIT 1"),
-                {"hash_prefix": f"{hash_prefix}%"},
-            )
-            row = cursor.fetchone()
-            if row:
-                pipeline = dict(row)
+            pipeline = self._db.sessions.get_by_hash_prefix(hash_prefix)
 
         if pipeline:
             return LookupResult(
@@ -231,6 +229,7 @@ class EntityLookupService:
     def _lookup_artifact_glaas(self, hash_prefix: str) -> dict | None:
         """Look up artifact on GLaaS."""
         try:
+            from ...core.exceptions import GlaasApiError
             from ...glaas_client import GlaasClient
 
             glaas = GlaasClient()
@@ -238,7 +237,14 @@ class EntityLookupService:
                 return None
 
             return glaas.get_artifact(hash_prefix)
-        except Exception:
+        except GlaasApiError as e:
+            _get_logger().debug("GLaaS artifact lookup failed for %s: %s", hash_prefix, e)
+            return None
+        except (ValueError, RuntimeError, OSError) as e:
+            _get_logger().debug("GLaaS artifact lookup failed for %s: %s", hash_prefix, e)
+            return None
+        except ImportError as e:
+            _get_logger().debug("GLaaS client import failed: %s", e)
             return None
 
 

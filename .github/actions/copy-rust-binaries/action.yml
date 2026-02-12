@@ -1,0 +1,31 @@
+name: Copy Rust Binaries
+description: Copy staged Rust binaries into roar/bin and mark executable
+inputs:
+  source-dir:
+    description: Directory containing staged binaries
+    required: false
+    default: rust-bin
+  destination-dir:
+    description: Destination directory for package binaries
+    required: false
+    default: roar/bin
+runs:
+  using: composite
+  steps:
+    - name: Copy binaries
+      shell: bash
+      run: |
+        mkdir -p "${{ inputs.destination-dir }}"
+        cp "${{ inputs.source-dir }}/roar-tracer" "${{ inputs.destination-dir }}/"
+        cp "${{ inputs.source-dir }}/roar-proxy" "${{ inputs.destination-dir }}/"
+        cp "${{ inputs.source-dir }}/roar-tracer-ebpf" "${{ inputs.destination-dir }}/"
+        cp "${{ inputs.source-dir }}/roard" "${{ inputs.destination-dir }}/"
+
+    - name: Make binaries executable
+      shell: bash
+      run: |
+        chmod +x \
+          "${{ inputs.destination-dir }}/roar-tracer" \
+          "${{ inputs.destination-dir }}/roar-proxy" \
+          "${{ inputs.destination-dir }}/roar-tracer-ebpf" \
+          "${{ inputs.destination-dir }}/roard"
