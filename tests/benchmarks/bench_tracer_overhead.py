@@ -4,7 +4,8 @@ Benchmark: decompose tracer overhead into startup vs. marginal cost.
 
 Measures:
   1. Fixed startup/teardown cost (trace /bin/true)
-  2. Marginal per-syscall cost (trace open/read/write/close at increasing scales)
+  2. Marginal per-file cost (1 write + 1 read per file at increasing file counts)
+  3. Marginal per-read/write cost (fixed files, increasing read/write repetitions)
 
 Reports absolute milliseconds for each component per tracer (ptrace, preload, eBPF).
 """
@@ -36,8 +37,11 @@ NUM_ITERATIONS = 10
 NUM_WARMUP = 2
 EBPF_SLEEP = 1.5  # seconds between eBPF runs for BPF cleanup
 
-# Scale points: number of files to open/write + open/read per iteration
+# Scale points for per-file series: number of files to open/write + open/read.
 SYSCALL_SCALES = [0, 200, 500, 1000, 2000, 5000]
+# Scale points for per-read/write series: repeated writes+reads per file.
+RW_PER_FILE_SCALES = [1, 2, 4, 8, 16, 32, 64]
+RW_SERIES_FILE_COUNT = 200
 
 EXPECTED_CAP_NAMES = {
     "cap_bpf",
@@ -221,6 +225,32 @@ def make_scaling_script(n):
     )
 
 
+def make_rw_scaling_script(n_files, rw_per_file):
+    """Workload: fixed files, repeated writes then reads per file."""
+    if n_files == 0 or rw_per_file == 0:
+        return "pass\n"
+    return (
+        "import os, tempfile, shutil\n"
+        "workdir = tempfile.mkdtemp(prefix='bench_rw_scale_')\n"
+        "payload = b'x' * 256\n"
+        f"paths = [os.path.join(workdir, 'f_' + str(i)) for i in range({n_files})]\n"
+        "try:\n"
+        "    for path in paths:\n"
+        "        with open(path, 'wb') as f:\n"
+        "            f.write(payload)\n"
+        f"    for _ in range({rw_per_file}):\n"
+        "        for path in paths:\n"
+        "            with open(path, 'r+b') as f:\n"
+        "                f.seek(0)\n"
+        "                f.write(payload)\n"
+        "        for path in paths:\n"
+        "            with open(path, 'rb') as f:\n"
+        "                f.read(len(payload))\n"
+        "finally:\n"
+        "    shutil.rmtree(workdir)\n"
+    )
+
+
 def run_timed(cmd, timeout=120, env=None):
     """Run command, return (elapsed_seconds, success, stderr)."""
     start = time.perf_counter()
@@ -295,6 +325,8 @@ def main():
     print(f"  ebpf:   {EBPF_TRACER_BIN}")
     print(f"  roard:  {ROARD_BIN}")
     print(f"  python: {PYTHON_BIN}")
+    print(f"  per-file scales: {SYSCALL_SCALES}")
+    print(f"  per-rw scales:   {RW_PER_FILE_SCALES}  (fixed files={RW_SERIES_FILE_COUNT})")
 
     for path, label in [
         (TRACER_BIN, "ptrace"),
@@ -411,15 +443,15 @@ def _run_benchmarks(active_tracers):
         print(fmt_row(name, f"{ms(tm):.1f}", f"{ms(overhead):+.1f}", f"{ms(ts):.1f}"))
 
     # ==================================================================
-    # Part 2: Marginal cost — scaling workload (python, N files)
+    # Part 2: Marginal per-file cost — scaling workload by file count
     # ==================================================================
-    print("\n--- Part 2: Marginal cost (N = files written + read) ---\n")
+    print("\n--- Part 2: Marginal per-file cost (N = files written + read once) ---\n")
 
     with tempfile.TemporaryDirectory(prefix="bench_scale_") as tmpdir:
         workdir = Path(tmpdir)
 
-        # Store (N, overhead_ms) per tracer
-        scale_points = {name: [] for name in active_tracers}
+        # Store (N_files, overhead_ms) per tracer
+        per_file_points = {name: [] for name in active_tracers}
         table_rows = []
 
         for n in SYSCALL_SCALES:
@@ -447,7 +479,7 @@ def _run_benchmarks(active_tracers):
                     )
                 tm, ts = mean_std(times)
                 overhead = ms(tm - bl_mean)
-                scale_points[name].append((n, overhead))
+                per_file_points[name].append((n, overhead))
                 row[f"{name}_overhead"] = overhead
                 row[f"{name}_std"] = ms(ts)
 
@@ -460,19 +492,89 @@ def _run_benchmarks(active_tracers):
             print("  ".join(parts) + "  (ms)", flush=True)
 
     # ==================================================================
-    # Regression
+    # Regression A: per-file series
     # ==================================================================
-    print("\n--- Regression: overhead(N) = startup_ms + per_file_ms * N ---\n")
+    print("\n--- Regression A: overhead(N_files) = startup_ms + per_file_ms * N_files ---\n")
 
-    regressions = {}
+    per_file_regressions = {}
     print(f"  {'Tracer':>14}  {'Startup (ms)':>13}  {'Per-file (ms)':>14}  {'Per-file (us)':>14}")
     print(f"  {'------':>14}  {'------------':>13}  {'-------------':>14}  {'-------------':>14}")
-    for name, points in scale_points.items():
+    for name, points in per_file_points.items():
         xs = [p[0] for p in points]
         ys = [p[1] for p in points]
         intercept, slope = linear_regression(xs, ys)
-        regressions[name] = (intercept, slope)
+        per_file_regressions[name] = (intercept, slope)
         print(f"  {name:>14}  {intercept:>13.1f}  {slope:>14.4f}  {slope * 1000:>14.1f}")
+
+    # ==================================================================
+    # Part 3: Marginal per-read/write cost — fixed files, varying repeats
+    # ==================================================================
+    print(
+        f"\n--- Part 3: Marginal per-read/write cost "
+        f"(fixed files={RW_SERIES_FILE_COUNT}, varying reads+writes per file) ---\n"
+    )
+
+    with tempfile.TemporaryDirectory(prefix="bench_rw_scale_") as tmpdir:
+        workdir = Path(tmpdir)
+
+        # Store (total_rw_ops, overhead_ms) per tracer
+        per_rw_points = {name: [] for name in active_tracers}
+
+        for rw_per_file in RW_PER_FILE_SCALES:
+            script = workdir / f"rw_scale_{RW_SERIES_FILE_COUNT}_{rw_per_file}.py"
+            script.write_text(make_rw_scaling_script(RW_SERIES_FILE_COUNT, rw_per_file))
+            total_rw_ops = 2 * RW_SERIES_FILE_COUNT * rw_per_file
+
+            # Baseline
+            bl = measure(
+                f"baseline rw/file={rw_per_file}",
+                [PYTHON_BIN, str(script)],
+                NUM_ITERATIONS,
+                NUM_WARMUP,
+            )
+            bl_mean, bl_std = mean_std(bl)
+
+            parts = [
+                f"  rw/file={rw_per_file:>3}",
+                f"ops={total_rw_ops:>6}",
+                f"base={ms(bl_mean):>7.1f}",
+            ]
+
+            for name, cfg in active_tracers.items():
+                with tempfile.NamedTemporaryFile(suffix=".msgpack", delete=True) as f:
+                    cmd = [*cfg["sudo"], cfg["bin"], f.name, PYTHON_BIN, str(script)]
+                    times = measure(
+                        f"{name} rw/file={rw_per_file}",
+                        cmd,
+                        NUM_ITERATIONS,
+                        NUM_WARMUP,
+                        sleep_between=cfg["sleep"],
+                        env=cfg.get("env"),
+                    )
+                tm, ts = mean_std(times)
+                overhead = ms(tm - bl_mean)
+                per_rw_points[name].append((total_rw_ops, overhead))
+                overhead_us_per_op = (overhead * 1000 / total_rw_ops) if total_rw_ops else 0.0
+                parts.append(
+                    f"{name}=+{overhead:>6.1f}±{ms(ts):.1f} ({overhead_us_per_op:.2f} us/op)"
+                )
+
+            print("  ".join(parts) + "  (ms)", flush=True)
+
+    # ==================================================================
+    # Regression B: per-read/write series
+    # ==================================================================
+    print("\n--- Regression B: overhead(ops) = intercept_ms + per_rw_ms * total_rw_ops ---\n")
+
+    per_rw_regressions = {}
+    print(f"  {'Tracer':>14}  {'Intercept (ms)':>14}  {'Per-rw (ms)':>12}  {'Per-rw (us)':>12}")
+    print(f"  {'------':>14}  {'--------------':>14}  {'-----------':>12}  {'-----------':>12}")
+    for name, points in per_rw_points.items():
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        intercept, slope = linear_regression(xs, ys)
+        per_rw_regressions[name] = (intercept, slope)
+        print(f"  {name:>14}  {intercept:>14.1f}  {slope:>12.6f}  {slope * 1000:>12.3f}")
 
     # ==================================================================
     # Summary
@@ -482,16 +584,23 @@ def _run_benchmarks(active_tracers):
     print(f"{'=' * 72}\n")
 
     for name in active_tracers:
-        intercept, slope = regressions[name]
+        intercept, slope = per_file_regressions[name]
+        rw_intercept, rw_slope = per_rw_regressions[name]
         true_startup = startup[name]
         print(f"  {name}:")
         print(f"    Startup (/bin/true):          {true_startup:>8.1f} ms")
-        print(f"    Startup (regression):         {intercept:>8.1f} ms")
+        print(f"    Startup (file regression):    {intercept:>8.1f} ms")
         print(f"    Marginal cost per file:       {slope:>8.4f} ms  ({slope * 1000:.1f} us)")
-        print("    Projected overhead:")
+        print(f"    Per-rw intercept:             {rw_intercept:>8.1f} ms")
+        print(f"    Marginal cost per read/write: {rw_slope:>8.6f} ms  ({rw_slope * 1000:.3f} us)")
+        print("    Projected overhead by files:")
         for nf in [100, 1000, 10000, 100000]:
             total = intercept + slope * nf
             print(f"      N={nf:>6} files:            {total:>8.1f} ms")
+        print("    Projected overhead by read/write ops:")
+        for nops in [1000, 10000, 100000, 1000000]:
+            total = rw_intercept + rw_slope * nops
+            print(f"      ops={nops:>7}:              {total:>8.1f} ms")
         print()
 
 
