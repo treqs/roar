@@ -8,6 +8,7 @@ by analyzing the process tree captured by the tracer.
 import os
 import shutil
 import subprocess
+import sys
 from typing import Any
 
 from ....core.interfaces.logger import ILogger
@@ -107,6 +108,10 @@ class BuildToolCollectorService:
         if not paths_to_resolve:
             self.logger.debug("No system build tool paths to resolve")
             return {}
+
+        # On non-Linux, skip dpkg resolution — return tool basenames with empty versions
+        if sys.platform != "linux":
+            return {os.path.basename(p): "" for p in paths_to_resolve}
 
         # Batch dpkg -S to map paths to packages
         pkg_names = self._resolve_dpkg_packages(paths_to_resolve)

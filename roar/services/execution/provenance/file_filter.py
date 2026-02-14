@@ -26,6 +26,11 @@ class FileFilterService:
         "/opt/",
         "/lib/",
         "/lib64/",
+        # macOS system paths
+        "/System/",
+        "/Library/",
+        "/Applications/",
+        "/private/var/",
     )
 
     # Torch/triton cache patterns
@@ -45,6 +50,10 @@ class FileFilterService:
         "/usr/lib/",
         "/usr/share/",
         "/opt/",
+        # macOS system paths
+        "/System/",
+        "/Library/Caches/",
+        "/private/var/",
     )
 
     def __init__(self, logger: ILogger | None = None) -> None:

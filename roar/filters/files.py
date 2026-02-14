@@ -160,13 +160,21 @@ class FileClassifier:
         return False
 
     def _is_system_shared_lib(self, path_str: str) -> bool:
-        """Check if a file is a system shared library (.so file in system paths).
+        """Check if a file is a system shared library (.so/.dylib file in system paths).
 
         This is checked early to prevent misclassification when sys.prefix = /usr.
         """
-        # Check for .so files in known system library directories
-        system_lib_dirs = ["/usr/lib", "/lib", "/usr/lib64", "/lib64", "/usr/local/lib"]
-        if ".so" in path_str:
+        # Check for .so/.dylib files in known system library directories
+        system_lib_dirs = [
+            "/usr/lib",
+            "/lib",
+            "/usr/lib64",
+            "/lib64",
+            "/usr/local/lib",
+            # macOS
+            "/System/Library/Frameworks",
+        ]
+        if ".so" in path_str or path_str.endswith(".dylib"):
             for lib_dir in system_lib_dirs:
                 if path_str.startswith(lib_dir):
                     return True
@@ -183,14 +191,19 @@ class FileClassifier:
             "/etc",
             "/usr/local/lib",
             "/opt",
+            # macOS
+            "/System/Library",
+            "/Library/Frameworks",
         ]
 
         for prefix in system_prefixes:
             if path_str.startswith(prefix):
                 return True
 
-        # Also check for .so files anywhere (shared libraries)
-        return bool(".so" in path_str and ("/lib" in path_str or "/usr" in path_str))
+        # Also check for .so/.dylib files anywhere (shared libraries)
+        if ".so" in path_str and ("/lib" in path_str or "/usr" in path_str):
+            return True
+        return bool(path_str.endswith(".dylib") and ("/lib" in path_str or "/Library" in path_str))
 
     def classify_all(self, paths: list[str]) -> dict:
         """
