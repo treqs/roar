@@ -17,12 +17,10 @@ from .job_recording import ExecutionJobRecorder
 from .tracer import TracerService
 
 if TYPE_CHECKING:
-    from ...core.exceptions import TracerNotFoundError
     from ...core.interfaces.logger import ILogger
     from ...core.interfaces.presenter import IPresenter
     from ...core.interfaces.run import RunContext, RunResult
     from .proxy import ProxyService
-    from .signal_handler import ProcessSignalHandler
 
 
 class RunCoordinator:

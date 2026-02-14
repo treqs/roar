@@ -50,7 +50,7 @@ def get_migrated_commands() -> list[click.Command]:
     return commands
 
 
-def __getattr__(name: str):  # noqa: N807
+def __getattr__(name: str):
     if name == "MIGRATED_COMMANDS":
         return get_migrated_commands()
     if name in _COMMAND_MODULES:

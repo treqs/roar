@@ -43,14 +43,12 @@ class RuntimeCollectorService:
         parts: list[str] = []
 
         # Machine identity
-        with contextlib.suppress(OSError):
-            with open("/etc/machine-id") as f:
-                parts.append(f.read().strip())
+        with contextlib.suppress(OSError), open("/etc/machine-id") as f:
+            parts.append(f.read().strip())
 
         # NVIDIA driver version — changes on driver update
-        with contextlib.suppress(OSError):
-            with open("/proc/driver/nvidia/version") as f:
-                parts.append(f.read().strip())
+        with contextlib.suppress(OSError), open("/proc/driver/nvidia/version") as f:
+            parts.append(f.read().strip())
 
         # CUDA toolkit — mtime changes on install/update
         for p in ("/usr/local/cuda/version.json", "/usr/local/cuda/version.txt"):
@@ -143,12 +141,15 @@ class RuntimeCollectorService:
             self.logger.debug("Collecting CPU info")
             cpu_info = self._get_cpu_info()
 
-            self._save_cache(fingerprint, {
-                "cuda": cuda_info,
-                "gpu": gpu_info,
-                "cpu": cpu_info,
-                "vm": vm_info,
-            })
+            self._save_cache(
+                fingerprint,
+                {
+                    "cuda": cuda_info,
+                    "gpu": gpu_info,
+                    "cpu": cpu_info,
+                    "vm": vm_info,
+                },
+            )
 
         # Always collect fresh — cheap file reads only
         self.logger.debug("Collecting container info")

@@ -11,7 +11,7 @@ Lightweight DI with support for:
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     from .interfaces.cloud import ICloudStorageProvider
@@ -25,6 +25,7 @@ T = TypeVar("T")
 # ---------------------------------------------------------------------------
 # Minimal provider implementations (replaces dependency_injector)
 # ---------------------------------------------------------------------------
+
 
 class _Provider:
     """Base provider protocol."""
@@ -83,7 +84,7 @@ class ServiceContainer:
     for extensible components like cloud providers and analyzers.
     """
 
-    _instance: Optional["ServiceContainer"] = None
+    _instance: ServiceContainer | None = None
 
     def __init__(self) -> None:
         """Initialize the container with empty registries."""
@@ -98,7 +99,7 @@ class ServiceContainer:
         self._command_aliases: dict[str, str] = {}
 
     @classmethod
-    def get_instance(cls) -> "ServiceContainer":
+    def get_instance(cls) -> ServiceContainer:
         """Get the global container instance (singleton)."""
         if cls._instance is None:
             cls._instance = cls()

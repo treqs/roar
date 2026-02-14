@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import sys
 import threading
-import time
-
 
 _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _INTERVAL = 0.08

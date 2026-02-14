@@ -73,7 +73,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str):  # noqa: N807 — PEP 562 module __getattr__
+def __getattr__(name: str):
     if name in _LAZY_IMPORTS:
         module_path, attr = _LAZY_IMPORTS[name]
         import importlib

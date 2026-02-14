@@ -10,10 +10,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from ..core.interfaces.vcs import IVCSProvider
+from typing import Any
 
 _SENTINEL: dict[str, Any] = {}
 
