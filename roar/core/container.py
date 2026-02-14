@@ -80,8 +80,8 @@ class ServiceContainer:
     """
     Dependency injection container for roar.
 
-    Combines dependency-injector's DI capabilities with plugin registries
-    for extensible components like cloud providers and analyzers.
+    Combines DI capabilities with plugin registries for extensible
+    components like cloud providers and analyzers.
     """
 
     _instance: ServiceContainer | None = None
@@ -111,7 +111,7 @@ class ServiceContainer:
         cls._instance = None
 
     # -------------------------------------------------------------------------
-    # Core service registration (uses dependency-injector providers)
+    # Core service registration
     # -------------------------------------------------------------------------
 
     def register_singleton(

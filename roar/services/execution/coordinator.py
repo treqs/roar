@@ -181,7 +181,7 @@ class RunCoordinator:
             self._cleanup_logs(tracer_result.tracer_log_path, tracer_result.inject_log_path)
             sys.exit(130)
 
-        # --- Post-fork: heavy imports deferred to here ---
+        # Heavy imports deferred to after tracer fork
         from ...config import load_config
         from ...core.interfaces.run import RunResult
         from .provenance import ProvenanceService

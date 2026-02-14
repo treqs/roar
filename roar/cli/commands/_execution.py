@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from ..context import RoarContext
 
 
-def validate_git_clean() -> tuple[str, dict]:
+def validate_git_clean() -> str:
     """
     Validate git repository is clean and return repo root.
 
@@ -28,7 +28,7 @@ def validate_git_clean() -> tuple[str, dict]:
     is collected by the ProvenanceService after the fork.
 
     Returns:
-        Tuple of (repo_root, empty_git_info_dict)
+        Repository root path
 
     Raises:
         click.ClickException: If not in a git repo or has uncommitted changes
@@ -69,7 +69,7 @@ def validate_git_clean() -> tuple[str, dict]:
         lines.append("Commit your changes before running this command.")
         raise click.ClickException("\n".join(lines))
 
-    return repo_root, {}
+    return repo_root
 
 
 def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
@@ -102,7 +102,6 @@ def execute_and_report(
     step_name: str | None,
     quiet: bool,
     hash_algorithms: list[str],
-    git_info: dict,
     repo_root: str,
     tracer_mode: str | None = None,
     tracer_fallback: bool | None = None,
@@ -124,7 +123,6 @@ def execute_and_report(
         step_name: Optional user-defined step label
         quiet: Whether to suppress output
         hash_algorithms: List of hash algorithms to use
-        git_info: Git info dict with commit, branch, remote_url
         repo_root: Git repository root path
 
     Returns:
@@ -164,9 +162,6 @@ def execute_and_report(
         hash_algorithms=hash_algos,
         tracer_mode=tracer_mode,  # type: ignore[arg-type]
         tracer_fallback=tracer_fallback,
-        git_commit=git_info.get("commit"),
-        git_branch=git_info.get("branch"),
-        git_repo=git_info.get("remote_url"),
     )
 
     # Execute via coordinator

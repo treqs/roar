@@ -25,7 +25,7 @@ class TestRunTracerFlags:
         runner = CliRunner()
 
         with (
-            patch.object(run_module, "validate_git_clean", return_value=("/tmp/repo", {})),
+            patch.object(run_module, "validate_git_clean", return_value="/tmp/repo"),
             patch.object(run_module, "get_quiet_setting", return_value=False),
             patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
             patch.object(run_module, "execute_and_report", return_value=0) as mock_exec,
@@ -56,7 +56,7 @@ class TestBuildTracerFlags:
         runner = CliRunner()
 
         with (
-            patch.object(build_module, "validate_git_clean", return_value=("/tmp/repo", {})),
+            patch.object(build_module, "validate_git_clean", return_value="/tmp/repo"),
             patch.object(build_module, "get_quiet_setting", return_value=False),
             patch.object(build_module, "get_hash_algorithms", return_value=["blake3"]),
             patch.object(build_module, "execute_and_report", return_value=0) as mock_exec,
@@ -77,7 +77,7 @@ class TestBuildTracerFlags:
         runner = CliRunner()
 
         with (
-            patch.object(build_module, "validate_git_clean", return_value=("/tmp/repo", {})),
+            patch.object(build_module, "validate_git_clean", return_value="/tmp/repo"),
             patch.object(build_module, "get_quiet_setting", return_value=False),
             patch.object(build_module, "get_hash_algorithms", return_value=["blake3"]),
             patch.object(build_module, "execute_and_report", return_value=0) as mock_exec,
