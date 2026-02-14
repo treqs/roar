@@ -159,7 +159,7 @@ def _resolve_dag_reference(
     from ...db.context import create_database_context
     from ...presenters.console import ConsolePresenter
     from ...presenters.run_report import RunReportPresenter
-    from ...services.execution import DAGReferenceResolver
+    from ...services.execution.dag_resolver import DAGReferenceResolver
 
     with create_database_context(ctx.roar_dir) as db_ctx:
         resolver = DAGReferenceResolver(

@@ -156,7 +156,7 @@ def execute_and_report(
 
     from ...config import config_get
     from ...core.interfaces.run import RunContext
-    from ...services.execution import RunCoordinator
+    from ...services.execution.coordinator import RunCoordinator
 
     # Check if S3 proxy is enabled
     proxy_service = None
