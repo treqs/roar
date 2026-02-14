@@ -207,44 +207,54 @@ class RunCoordinator:
                 is_build=is_build,
             )
 
-        # Collect provenance
-        self.logger.debug("Collecting provenance data")
-        inject_log = (
-            tracer_result.inject_log_path if os.path.exists(tracer_result.inject_log_path) else None
-        )
-        roar_dir = os.path.join(ctx.repo_root, ".roar")
-        provenance_service = ProvenanceService(cache_dir=roar_dir)
-        prov = provenance_service.collect(
-            ctx.repo_root,
-            tracer_result.tracer_log_path,
-            inject_log,
-            config,
-        )
-        self.logger.debug(
-            "Provenance collected: read_files=%d, written_files=%d",
-            len(prov.get("data", {}).get("read_files", [])),
-            len(prov.get("data", {}).get("written_files", [])),
-        )
+        # Post-processing with progress spinner
+        from ...presenters.spinner import Spinner
 
-        # Stop proxy and collect S3 entries before DB recording.
-        s3_entries = stop_proxy_if_running()
+        with Spinner("Sniffing out provenance...", quiet=ctx.quiet) as spin:
+            # Collect provenance
+            self.logger.debug("Collecting provenance data")
+            inject_log = (
+                tracer_result.inject_log_path
+                if os.path.exists(tracer_result.inject_log_path)
+                else None
+            )
+            roar_dir = os.path.join(ctx.repo_root, ".roar")
+            provenance_service = ProvenanceService(cache_dir=roar_dir)
+            prov = provenance_service.collect(
+                ctx.repo_root,
+                tracer_result.tracer_log_path,
+                inject_log,
+                config,
+            )
+            self.logger.debug(
+                "Provenance collected: read_files=%d, written_files=%d",
+                len(prov.get("data", {}).get("read_files", [])),
+                len(prov.get("data", {}).get("written_files", [])),
+            )
 
-        # Record in database
-        self.logger.debug("Recording job in database")
-        job_id, job_uid, read_file_info, written_file_info, stale_upstream, stale_downstream = (
-            self._record_job(ctx, prov, tracer_result, start_time, is_build, s3_entries)
-        )
-        self.logger.debug(
-            "Job recorded: id=%d, uid=%s, inputs=%d, outputs=%d",
-            job_id,
-            job_uid[:12] if job_uid else None,
-            len(read_file_info),
-            len(written_file_info),
-        )
+            # Stop proxy and collect S3 entries before DB recording.
+            s3_entries = stop_proxy_if_running()
 
-        # Cleanup temp files
-        self.logger.debug("Cleaning up temporary log files")
-        self._cleanup_logs(tracer_result.tracer_log_path, tracer_result.inject_log_path)
+            spin.update("Hashing files and TReqing outputs...")
+
+            # Record in database
+            self.logger.debug("Recording job in database")
+            job_id, job_uid, read_file_info, written_file_info, stale_upstream, stale_downstream = (
+                self._record_job(ctx, prov, tracer_result, start_time, is_build, s3_entries)
+            )
+            self.logger.debug(
+                "Job recorded: id=%d, uid=%s, inputs=%d, outputs=%d",
+                job_id,
+                job_uid[:12] if job_uid else None,
+                len(read_file_info),
+                len(written_file_info),
+            )
+
+            spin.update("Auto-lineaging done, tidying up...")
+
+            # Cleanup temp files
+            self.logger.debug("Cleaning up temporary log files")
+            self._cleanup_logs(tracer_result.tracer_log_path, tracer_result.inject_log_path)
 
         self.logger.debug(
             "RunCoordinator.execute completed: exit_code=%d, duration=%.2fs",
