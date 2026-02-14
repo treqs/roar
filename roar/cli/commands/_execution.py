@@ -21,37 +21,45 @@ if TYPE_CHECKING:
 
 def validate_git_clean() -> tuple[str, dict]:
     """
-    Validate git repository is clean and return git info.
+    Validate git repository is clean and return repo root.
 
-    This function checks:
-    1. We're inside a git repository
-    2. The working tree has no uncommitted changes
+    Lightweight pre-fork check using git subprocesses directly, avoiding
+    the heavy bootstrap/import cascade. Git info (commit, branch, etc.)
+    is collected separately after the fork via :func:`collect_git_info`.
 
     Returns:
-        Tuple of (repo_root, git_info) where git_info contains:
-        - commit: Current commit hash
-        - branch: Current branch name
-        - remote_url: Remote origin URL
+        Tuple of (repo_root, git_info_placeholder)
 
     Raises:
         click.ClickException: If not in a git repo or has uncommitted changes
     """
-    from ...core.bootstrap import bootstrap
-    from ...core.container import get_container
+    import subprocess
 
-    # Bootstrap container to ensure VCS provider is registered
-    bootstrap()
-
-    vcs = get_container().get_vcs_provider("git")
-    repo_root = vcs.get_repo_root()
-
-    if not repo_root:
+    # Find repo root (no bootstrap needed)
+    try:
+        repo_root = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
         raise click.ClickException(
             "roar requires the working directory to be inside a git repository."
         )
 
-    clean, changes = vcs.get_status(repo_root)
-    if not clean:
+    # Check dirty status
+    try:
+        status_output = subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            cwd=repo_root,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        status_output = ""
+
+    if status_output:
+        changes = status_output.split("\n")
         lines = ["Git repo has uncommitted changes:"]
         for change in changes[:5]:
             lines.append(f"  {change}")
@@ -61,15 +69,29 @@ def validate_git_clean() -> tuple[str, dict]:
         lines.append("Commit your changes before running this command.")
         raise click.ClickException("\n".join(lines))
 
-    # Get git info
+    # Return empty git_info — collected later via collect_git_info()
+    return repo_root, {}
+
+
+def collect_git_info(repo_root: str) -> dict:
+    """
+    Collect git metadata (commit, branch, remote) for provenance.
+
+    This is separated from validate_git_clean() so the expensive
+    bootstrap + VCS provider import can be deferred until after the
+    child process has been forked.
+    """
+    from ...core.bootstrap import bootstrap
+    from ...core.container import get_container
+
+    bootstrap()
+    vcs = get_container().get_vcs_provider("git")
     vcs_info = vcs.get_info(repo_root)
-    git_info = {
+    return {
         "commit": vcs_info.commit if vcs_info else None,
         "branch": vcs_info.branch if vcs_info else None,
         "remote_url": vcs_info.remote_url if vcs_info else None,
     }
-
-    return repo_root, git_info
 
 
 def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
