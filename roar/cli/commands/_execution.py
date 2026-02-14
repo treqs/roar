@@ -156,13 +156,13 @@ def execute_and_report(
 
     from ...config import config_get
     from ...core.interfaces.run import RunContext
-    from ...presenters.run_report import RunReportPresenter
     from ...services.execution import RunCoordinator
-    from ...services.execution.proxy import ProxyService
 
     # Check if S3 proxy is enabled
     proxy_service = None
     if config_get("proxy.enabled"):
+        from ...services.execution.proxy import ProxyService
+
         proxy_service = ProxyService()
         if not proxy_service.find_proxy():
             click.echo(
@@ -197,6 +197,7 @@ def execute_and_report(
 
     # Present report
     from ...presenters.console import ConsolePresenter
+    from ...presenters.run_report import RunReportPresenter
 
     presenter = ConsolePresenter()
     report = RunReportPresenter(presenter)
