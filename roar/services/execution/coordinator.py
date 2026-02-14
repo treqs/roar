@@ -183,9 +183,11 @@ class RunCoordinator:
 
         # Heavy imports deferred to after tracer fork
         from ...config import load_config
+        from ...core.bootstrap import bootstrap
         from ...core.interfaces.run import RunResult
         from .provenance import ProvenanceService
 
+        bootstrap(ctx.roar_dir)
         config = load_config(start_dir=ctx.repo_root)
 
         # Check if tracer log exists
