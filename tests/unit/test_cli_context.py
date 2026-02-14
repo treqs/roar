@@ -16,10 +16,12 @@ def test_create_resolves_parent_roar_dir(tmp_path: Path) -> None:
         patch.object(RoarContext, "_load_config", return_value={"output": {"quiet": True}}),
     ):
         ctx = RoarContext.create(cwd=nested)
+        # Access config inside mock scope (lazy-loaded on first access)
+        config = ctx.config
 
     assert ctx.roar_dir == roar_dir
     assert ctx.is_initialized is True
-    assert ctx.config.get("output", {}).get("quiet") is True
+    assert config.get("output", {}).get("quiet") is True
 
 
 def test_create_falls_back_to_cwd_roar_dir_when_uninitialized(tmp_path: Path) -> None:

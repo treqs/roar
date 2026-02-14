@@ -205,7 +205,8 @@ class RunCoordinator:
         inject_log = (
             tracer_result.inject_log_path if os.path.exists(tracer_result.inject_log_path) else None
         )
-        provenance_service = ProvenanceService()
+        roar_dir = os.path.join(ctx.repo_root, ".roar")
+        provenance_service = ProvenanceService(cache_dir=roar_dir)
         prov = provenance_service.collect(
             ctx.repo_root,
             tracer_result.tracer_log_path,

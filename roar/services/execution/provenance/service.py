@@ -50,6 +50,7 @@ class ProvenanceService:
         package_collector: IPackageCollector | None = None,
         assembler: IProvenanceAssembler | None = None,
         logger: ILogger | None = None,
+        cache_dir: str | None = None,
     ):
         """
         Initialize the provenance service with optional dependencies.
@@ -62,12 +63,13 @@ class ProvenanceService:
             package_collector: Service for packages (default: PackageCollectorService)
             assembler: Service for output assembly (default: ProvenanceAssemblerService)
             logger: Logger for internal diagnostics
+            cache_dir: Optional directory for caching runtime hardware info
         """
         self._data_loader = data_loader or DataLoaderService()
         self._file_filter = file_filter or FileFilterService()
-        self._runtime_collector = runtime_collector or RuntimeCollectorService()
+        self._runtime_collector = runtime_collector or RuntimeCollectorService(cache_dir=cache_dir)
         self._process_summarizer = process_summarizer or ProcessSummarizerService()
-        self._package_collector = package_collector or PackageCollectorService()
+        self._package_collector = package_collector or PackageCollectorService(cache_dir=cache_dir)
         self._assembler = assembler or ProvenanceAssemblerService()
         self._logger = logger
 

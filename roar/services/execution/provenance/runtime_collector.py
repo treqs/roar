@@ -5,6 +5,9 @@ Collects runtime environment information including OS, hardware, CUDA, etc.
 """
 
 import contextlib
+import glob
+import hashlib
+import json
 import os
 import platform
 import socket
@@ -14,13 +17,16 @@ from typing import Any
 from ....core.interfaces.logger import ILogger
 from ....core.interfaces.provenance import PythonInjectData, RuntimeInfo, TracerData
 
+_CACHE_FILENAME = "runtime_cache.json"
+
 
 class RuntimeCollectorService:
     """Collects runtime environment information."""
 
-    def __init__(self, logger: ILogger | None = None) -> None:
-        """Initialize runtime collector with optional logger."""
+    def __init__(self, logger: ILogger | None = None, cache_dir: str | None = None) -> None:
+        """Initialize runtime collector with optional logger and cache directory."""
         self._logger = logger
+        self._cache_dir = cache_dir
 
     @property
     def logger(self) -> ILogger:
@@ -30,6 +36,64 @@ class RuntimeCollectorService:
 
             self._logger = get_logger()
         return self._logger
+
+    @staticmethod
+    def _hardware_fingerprint() -> str:
+        """Build a cheap fingerprint from procfs/sysfs to detect hardware changes."""
+        parts: list[str] = []
+
+        # Machine identity
+        with contextlib.suppress(OSError):
+            with open("/etc/machine-id") as f:
+                parts.append(f.read().strip())
+
+        # NVIDIA driver version — changes on driver update
+        with contextlib.suppress(OSError):
+            with open("/proc/driver/nvidia/version") as f:
+                parts.append(f.read().strip())
+
+        # CUDA toolkit — mtime changes on install/update
+        for p in ("/usr/local/cuda/version.json", "/usr/local/cuda/version.txt"):
+            try:
+                parts.append(f"{p}:{os.stat(p).st_mtime}")
+                break
+            except OSError:
+                pass
+
+        # GPU PCI device IDs — catches physical GPU swaps
+        with contextlib.suppress(OSError):
+            for cls_path in sorted(glob.glob("/sys/bus/pci/devices/*/class")):
+                try:
+                    with open(cls_path) as f:
+                        if f.read().strip().startswith("0x0300"):  # VGA controller
+                            dev_dir = os.path.dirname(cls_path)
+                            with open(f"{dev_dir}/vendor") as vf:
+                                vendor = vf.read().strip()
+                            with open(f"{dev_dir}/device") as df:
+                                device = df.read().strip()
+                            parts.append(f"gpu:{vendor}:{device}")
+                except OSError:
+                    pass
+
+        return hashlib.md5("|".join(parts).encode()).hexdigest()
+
+    def _load_cache(self) -> dict[str, Any] | None:
+        if not self._cache_dir:
+            return None
+        try:
+            with open(os.path.join(self._cache_dir, _CACHE_FILENAME)) as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError, ValueError):
+            return None
+
+    def _save_cache(self, fingerprint: str, data: dict[str, Any]) -> None:
+        if not self._cache_dir:
+            return
+        try:
+            with open(os.path.join(self._cache_dir, _CACHE_FILENAME), "w") as f:
+                json.dump({"fingerprint": fingerprint, "data": data}, f)
+        except OSError:
+            pass
 
     def collect(
         self,
@@ -57,16 +121,38 @@ class RuntimeCollectorService:
             source = root if root is not None else tracer_data.processes[0]
             command = source.get("command", [])
 
+        # Try hardware cache for expensive subprocess-based collectors
+        fingerprint = self._hardware_fingerprint()
+        cache = self._load_cache()
+
+        if cache and cache.get("fingerprint") == fingerprint:
+            self.logger.debug("Runtime cache hit (fingerprint=%s)", fingerprint[:8])
+            cached = cache["data"]
+            cuda_info = cached.get("cuda")
+            gpu_info = cached.get("gpu")
+            cpu_info = cached.get("cpu")
+            vm_info = cached.get("vm")
+        else:
+            self.logger.debug("Runtime cache miss, collecting hardware info")
+            self.logger.debug("Collecting VM info")
+            vm_info = self._get_vm_info()
+            self.logger.debug("Collecting CUDA info")
+            cuda_info = self._get_cuda_info()
+            self.logger.debug("Collecting GPU info")
+            gpu_info = self._get_gpu_info()
+            self.logger.debug("Collecting CPU info")
+            cpu_info = self._get_cpu_info()
+
+            self._save_cache(fingerprint, {
+                "cuda": cuda_info,
+                "gpu": gpu_info,
+                "cpu": cpu_info,
+                "vm": vm_info,
+            })
+
+        # Always collect fresh — cheap file reads only
         self.logger.debug("Collecting container info")
         container_info = self._get_container_info()
-        self.logger.debug("Collecting VM info")
-        vm_info = self._get_vm_info()
-        self.logger.debug("Collecting CUDA info")
-        cuda_info = self._get_cuda_info()
-        self.logger.debug("Collecting GPU info")
-        gpu_info = self._get_gpu_info()
-        self.logger.debug("Collecting CPU info")
-        cpu_info = self._get_cpu_info()
         self.logger.debug("Collecting memory info")
         memory_info = self._get_memory_info()
 
