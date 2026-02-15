@@ -20,6 +20,18 @@ runs:
         cp "${{ inputs.source-dir }}/roar-proxy" "${{ inputs.destination-dir }}/"
         cp "${{ inputs.source-dir }}/roar-tracer-ebpf" "${{ inputs.destination-dir }}/"
         cp "${{ inputs.source-dir }}/roard" "${{ inputs.destination-dir }}/"
+        cp "${{ inputs.source-dir }}/roar-tracer-preload" "${{ inputs.destination-dir }}/"
+
+        shopt -s nullglob
+        preload_libs=(
+          "${{ inputs.source-dir }}"/libroar_tracer_preload*.so
+          "${{ inputs.source-dir }}"/libroar-tracer-preload*.so
+          "${{ inputs.source-dir }}"/libroar_tracer_preload*.dylib
+          "${{ inputs.source-dir }}"/libroar-tracer-preload*.dylib
+        )
+        if [ "${#preload_libs[@]}" -gt 0 ]; then
+          cp "${preload_libs[@]}" "${{ inputs.destination-dir }}/"
+        fi
 
     - name: Make binaries executable
       shell: bash
@@ -28,4 +40,5 @@ runs:
           "${{ inputs.destination-dir }}/roar-tracer" \
           "${{ inputs.destination-dir }}/roar-proxy" \
           "${{ inputs.destination-dir }}/roar-tracer-ebpf" \
-          "${{ inputs.destination-dir }}/roard"
+          "${{ inputs.destination-dir }}/roard" \
+          "${{ inputs.destination-dir }}/roar-tracer-preload"

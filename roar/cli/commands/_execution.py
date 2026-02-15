@@ -131,8 +131,12 @@ def execute_and_report(
     from typing import Literal, cast
 
     from ...config import config_get
+    from ...core.bootstrap import bootstrap
     from ...core.interfaces.run import RunContext
     from ...services.execution.coordinator import RunCoordinator
+
+    # Ensure plugin/provider registries (including VCS=git) are populated.
+    bootstrap(ctx.roar_dir)
 
     # Check if S3 proxy is enabled
     proxy_service = None

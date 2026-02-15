@@ -2189,6 +2189,7 @@ name = "roar-tracer-preload"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cc",
  "libc",
  "rmp-serde",
  "serde",

@@ -24,6 +24,10 @@ runs:
       shell: bash
       run: cargo build --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer-ebpf
 
+    - name: Build preload tracer
+      shell: bash
+      run: cargo build --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer-preload
+
     - name: Stage Rust binaries
       shell: bash
       run: |
@@ -32,3 +36,19 @@ runs:
         cp rust/target/release/roar-proxy "${{ inputs.output-dir }}/"
         cp rust/target/release/roar-tracer-ebpf "${{ inputs.output-dir }}/"
         cp rust/target/release/roard "${{ inputs.output-dir }}/"
+        cp rust/target/release/roar-tracer-preload "${{ inputs.output-dir }}/"
+
+        shopt -s nullglob
+        preload_libs=(
+          rust/target/release/libroar_tracer_preload*.so
+          rust/target/release/libroar-tracer-preload*.so
+          rust/target/release/deps/libroar_tracer_preload*.so
+          rust/target/release/deps/libroar-tracer-preload*.so
+          rust/target/release/libroar_tracer_preload*.dylib
+          rust/target/release/libroar-tracer-preload*.dylib
+          rust/target/release/deps/libroar_tracer_preload*.dylib
+          rust/target/release/deps/libroar-tracer-preload*.dylib
+        )
+        if [ "${#preload_libs[@]}" -gt 0 ]; then
+          cp "${preload_libs[@]}" "${{ inputs.output-dir }}/"
+        fi

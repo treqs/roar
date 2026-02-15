@@ -20,6 +20,7 @@ def main() -> None:
         "roar/bin/roar-proxy",
         "roar/bin/roar-tracer-ebpf",
         "roar/bin/roard",
+        "roar/bin/roar-tracer-preload",
     }
     missing_bins = sorted(path for path in required_bins if path not in names)
     if missing_bins:
@@ -32,6 +33,14 @@ def main() -> None:
     )
     if not has_native:
         raise SystemExit("Missing native hash extension in wheel (roar/_hash_native*)")
+
+    has_preload_lib = any(
+        name.startswith("roar/bin/libroar_tracer_preload")
+        or name.startswith("roar/bin/libroar-tracer-preload")
+        for name in names
+    )
+    if not has_preload_lib:
+        raise SystemExit("Missing preload interposer library in wheel (roar/bin/libroar*_preload*)")
 
     print(f"Verified wheel contents: {wheel}")
 

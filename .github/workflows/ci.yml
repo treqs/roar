@@ -109,7 +109,8 @@ jobs:
             rust/target/release/roar-tracer \
             rust/target/release/roar-proxy \
             rust/target/release/roar-tracer-ebpf \
-            rust/target/release/roard
+            rust/target/release/roard \
+            rust/target/release/roar-tracer-preload
 
       - name: Check ptrace availability
         run: |

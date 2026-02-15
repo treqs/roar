@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::os::unix::process::ExitStatusExt;
-use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,6 +16,11 @@ use roar_tracer_preload::TraceEvent;
 
 const TRACE_FD_ENV: &str = "ROAR_PRELOAD_TRACE_FD";
 const PRELOAD_LIB_ENV: &str = "ROAR_PRELOAD_LIB";
+
+#[cfg(target_os = "macos")]
+const PROCESS_PRELOAD_ENV: &str = "DYLD_INSERT_LIBRARIES";
+#[cfg(not(target_os = "macos"))]
+const PROCESS_PRELOAD_ENV: &str = "LD_PRELOAD";
 
 struct CollectorState {
     fd: FdTracker,
@@ -141,6 +146,8 @@ fn resolve_preload_library() -> Option<PathBuf> {
     let direct_candidates = [
         exe_dir.join("libroar_tracer_preload.so"),
         exe_dir.join("libroar-tracer-preload.so"),
+        exe_dir.join("libroar_tracer_preload.dylib"),
+        exe_dir.join("libroar-tracer-preload.dylib"),
     ];
     for candidate in direct_candidates {
         if candidate.exists() {
@@ -156,7 +163,7 @@ fn resolve_preload_library() -> Option<PathBuf> {
             };
             let is_match = (name.starts_with("libroar_tracer_preload")
                 || name.starts_with("libroar-tracer-preload"))
-                && name.ends_with(".so");
+                && (name.ends_with(".so") || name.ends_with(".dylib"));
             if is_match && path.exists() {
                 return Some(path);
             }
@@ -171,9 +178,7 @@ fn drain_events(read_fd: i32, state: &mut CollectorState, buf: &mut Vec<u8>) -> 
     let mut tmp = [0u8; 64 * 1024];
 
     loop {
-        let n = unsafe {
-            libc::read(read_fd, tmp.as_mut_ptr() as *mut libc::c_void, tmp.len())
-        };
+        let n = unsafe { libc::read(read_fd, tmp.as_mut_ptr() as *mut libc::c_void, tmp.len()) };
         if n > 0 {
             buf.extend_from_slice(&tmp[..n as usize]);
         } else {
@@ -182,8 +187,7 @@ fn drain_events(read_fd: i32, state: &mut CollectorState, buf: &mut Vec<u8>) -> 
     }
 
     while buf.len() >= 4 {
-        let len =
-            u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+        let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
         if buf.len() < 4 + len {
             break;
         }
@@ -204,6 +208,39 @@ fn status_to_exit_code(status: std::process::ExitStatus) -> i32 {
     }
     let signal = status.signal().unwrap_or(1);
     128 + signal
+}
+
+fn resolve_command_path(command: &str) -> Option<PathBuf> {
+    let command_path = PathBuf::from(command);
+    if command_path.is_absolute() || command.contains('/') {
+        if command_path.exists() {
+            return Some(command_path);
+        }
+        return None;
+    }
+
+    let path_var = env::var_os("PATH")?;
+    for segment in env::split_paths(&path_var) {
+        let candidate = segment.join(command);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn is_macos_protected_binary(path: &Path) -> bool {
+    path.starts_with("/System/")
+        || path.starts_with("/usr/bin/")
+        || path.starts_with("/bin/")
+        || path.starts_with("/sbin/")
+        || path.starts_with("/usr/sbin/")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_macos_protected_binary(_path: &Path) -> bool {
+    false
 }
 
 fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
@@ -231,21 +268,25 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
     }
 
     let preload_library_str = preload_library.to_string_lossy().to_string();
-    let existing_preload = env::var("LD_PRELOAD").unwrap_or_default();
+    let existing_preload = env::var(PROCESS_PRELOAD_ENV).unwrap_or_default();
     let combined_preload = if existing_preload.is_empty() {
         preload_library_str.clone()
     } else {
         format!("{preload_library_str}:{existing_preload}")
     };
 
-    cmd.env("LD_PRELOAD", combined_preload);
+    cmd.env(PROCESS_PRELOAD_ENV, combined_preload);
+    #[cfg(target_os = "macos")]
+    cmd.env("DYLD_FORCE_FLAT_NAMESPACE", "1");
     cmd.env(PRELOAD_LIB_ENV, preload_library_str);
     cmd.env(TRACE_FD_ENV, write_fd.to_string());
 
     let mut child = cmd.spawn().context("failed to spawn traced command")?;
 
     // Close write end in parent so read_fd gets EOF when child exits
-    unsafe { libc::close(write_fd); }
+    unsafe {
+        libc::close(write_fd);
+    }
 
     let root_pid = child.id();
     let mut state = CollectorState::new(root_pid, command.to_vec());
@@ -271,10 +312,24 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
         }
     }
 
-    unsafe { libc::close(read_fd); }
+    unsafe {
+        libc::close(read_fd);
+    }
 
     let end_time = timestamp_now();
     let report = state.build_report(start_time, end_time);
+    if cfg!(target_os = "macos") && report.files.is_empty() {
+        let target_path = resolve_command_path(&command[0]);
+        if let Some(path) = target_path.as_deref() {
+            if is_macos_protected_binary(path) {
+                eprintln!(
+                    "roar-tracer-preload warning: no file I/O events captured. \
+macOS may ignore DYLD_INSERT_LIBRARIES for Apple platform binaries: {}",
+                    path.display()
+                );
+            }
+        }
+    }
     let msgpack = rmp_serde::to_vec_named(&report).context("failed to serialize report")?;
     fs::write(output_file, &msgpack)
         .with_context(|| format!("failed to write report to {output_file}"))?;

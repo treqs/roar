@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,7 +66,7 @@ def find_ebpf_tracer(package_path: Path) -> str | None:
 
 
 def find_preload_tracer(package_path: Path) -> str | None:
-    """Find the LD_PRELOAD tracer launcher binary."""
+    """Find the preload tracer launcher binary."""
     return _find_binary(
         package_path=package_path,
         binary_name="roar-tracer-preload",
@@ -87,6 +88,8 @@ def find_preload_library(package_path: Path) -> str | None:
     Preferred names:
     - libroar_tracer_preload.so
     - libroar-tracer-preload.so
+    - libroar_tracer_preload.dylib
+    - libroar-tracer-preload.dylib
     """
     release_dir = package_path.parent / "rust" / "target" / "release"
     deps_dir = release_dir / "deps"
@@ -95,8 +98,12 @@ def find_preload_library(package_path: Path) -> str | None:
     direct_candidates = [
         release_dir / "libroar_tracer_preload.so",
         release_dir / "libroar-tracer-preload.so",
+        release_dir / "libroar_tracer_preload.dylib",
+        release_dir / "libroar-tracer-preload.dylib",
         package_bin_dir / "libroar_tracer_preload.so",
         package_bin_dir / "libroar-tracer-preload.so",
+        package_bin_dir / "libroar_tracer_preload.dylib",
+        package_bin_dir / "libroar-tracer-preload.dylib",
     ]
     for candidate in direct_candidates:
         if candidate.exists():
@@ -105,10 +112,16 @@ def find_preload_library(package_path: Path) -> str | None:
     wildcard_candidates: list[Path] = []
     wildcard_candidates.extend(sorted(release_dir.glob("libroar_tracer_preload*.so")))
     wildcard_candidates.extend(sorted(release_dir.glob("libroar-tracer-preload*.so")))
+    wildcard_candidates.extend(sorted(release_dir.glob("libroar_tracer_preload*.dylib")))
+    wildcard_candidates.extend(sorted(release_dir.glob("libroar-tracer-preload*.dylib")))
     wildcard_candidates.extend(sorted(deps_dir.glob("libroar_tracer_preload*.so")))
     wildcard_candidates.extend(sorted(deps_dir.glob("libroar-tracer-preload*.so")))
+    wildcard_candidates.extend(sorted(deps_dir.glob("libroar_tracer_preload*.dylib")))
+    wildcard_candidates.extend(sorted(deps_dir.glob("libroar-tracer-preload*.dylib")))
     wildcard_candidates.extend(sorted(package_bin_dir.glob("libroar_tracer_preload*.so")))
     wildcard_candidates.extend(sorted(package_bin_dir.glob("libroar-tracer-preload*.so")))
+    wildcard_candidates.extend(sorted(package_bin_dir.glob("libroar_tracer_preload*.dylib")))
+    wildcard_candidates.extend(sorted(package_bin_dir.glob("libroar-tracer-preload*.dylib")))
 
     for candidate in wildcard_candidates:
         if candidate.exists():
@@ -259,3 +272,43 @@ def _find_binary(package_path: Path, binary_name: str) -> str | None:
 
     resolved = shutil.which(binary_name)
     return resolved if resolved else None
+
+
+def build_preload_tracer(package_path: Path) -> bool:
+    """
+    Best-effort local build of preload tracer artifacts.
+
+    Intended for source checkouts on macOS where users install roar in editable mode.
+    Returns True when the build command succeeded.
+    """
+    if sys.platform != "darwin":
+        return False
+
+    cargo = shutil.which("cargo")
+    if not cargo:
+        return False
+
+    repo_root = package_path.parent
+    manifest = repo_root / "rust" / "Cargo.toml"
+    if not manifest.exists():
+        return False
+
+    try:
+        result = subprocess.run(
+            [
+                cargo,
+                "build",
+                "--release",
+                "--manifest-path",
+                str(manifest),
+                "-p",
+                "roar-tracer-preload",
+            ],
+            cwd=str(repo_root),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False

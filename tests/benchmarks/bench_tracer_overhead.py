@@ -121,6 +121,8 @@ def _find_preload_library(binary_path):
     direct_candidates = (
         binary_dir / "libroar_tracer_preload.so",
         binary_dir / "libroar-tracer-preload.so",
+        binary_dir / "libroar_tracer_preload.dylib",
+        binary_dir / "libroar-tracer-preload.dylib",
     )
     for candidate in direct_candidates:
         if candidate.exists():
@@ -129,6 +131,8 @@ def _find_preload_library(binary_path):
     wildcard_candidates = []
     wildcard_candidates.extend(sorted(binary_dir.glob("libroar_tracer_preload*.so")))
     wildcard_candidates.extend(sorted(binary_dir.glob("libroar-tracer-preload*.so")))
+    wildcard_candidates.extend(sorted(binary_dir.glob("libroar_tracer_preload*.dylib")))
+    wildcard_candidates.extend(sorted(binary_dir.glob("libroar-tracer-preload*.dylib")))
     for candidate in wildcard_candidates:
         if candidate.exists():
             return str(candidate)

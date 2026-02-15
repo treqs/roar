@@ -39,3 +39,16 @@ def test_backend_ready_auto_prefers_preload_when_ebpf_not_ready(tmp_path: Path) 
 
     assert ok
     assert detail == "preload ready"
+
+
+def test_find_preload_library_supports_dylib(tmp_path: Path) -> None:
+    package_path = tmp_path / "roar"
+    package_path.mkdir()
+    release_dir = tmp_path / "rust" / "target" / "release"
+    release_dir.mkdir(parents=True)
+
+    dylib = release_dir / "libroar_tracer_preload.dylib"
+    dylib.write_text("")
+
+    resolved = tracer_backends.find_preload_library(package_path)
+    assert resolved == str(dylib.resolve())

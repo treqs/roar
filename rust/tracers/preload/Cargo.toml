@@ -22,6 +22,9 @@ tracer-fd = { path = "../../crates/tracer-fd" }
 tracer-runtime = { path = "../../crates/tracer-runtime" }
 tracer-schema = { path = "../../crates/tracer-schema" }
 
+[build-dependencies]
+cc = "1"
+
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 unwrap_used = "warn"
