@@ -314,13 +314,20 @@ class TestFiltersNoisePrefixes:
         assert is_noise_read("/Library/Developer/CommandLineTools/usr/lib/libclang.dylib")
         assert is_noise_read("/Applications/Xcode.app/Contents/MacOS/Xcode")
         assert is_noise_read("/private/var/db/dyld/dyld_shared_cache_arm64e")
+        assert is_noise_read("/private/var/run/something")
+        assert is_noise_read("/private/var/log/system.log")
 
     def test_macos_write_noise(self):
         from roar.filters import is_noise_write
 
         assert is_noise_write("/System/Library/something")
         assert is_noise_write("/Library/Caches/com.apple.ld/cache.json")
-        assert is_noise_write("/private/var/folders/xx/tmp123")
+        # /private/var/folders/ is temp space, not unconditional noise
+        assert not is_noise_write("/private/var/folders/xx/tmp123")
+        # But specific system sub-paths are still noise
+        assert is_noise_write("/private/var/db/something")
+        assert is_noise_write("/private/var/run/something")
+        assert is_noise_write("/private/var/log/something")
 
     def test_linux_paths_still_work(self):
         from roar.filters import is_noise_read, is_noise_write
@@ -378,7 +385,9 @@ class TestFileFilterServiceMacOS:
         assert "/System/" in prefixes
         assert "/Library/" in prefixes
         assert "/Applications/" in prefixes
-        assert "/private/var/" in prefixes
+        assert "/private/var/db/" in prefixes
+        assert "/private/var/run/" in prefixes
+        assert "/private/var/log/" in prefixes
 
     def test_write_noise_prefixes_include_macos(self):
         from roar.services.execution.provenance.file_filter import FileFilterService
@@ -386,7 +395,9 @@ class TestFileFilterServiceMacOS:
         prefixes = FileFilterService.WRITE_NOISE_PREFIXES
         assert "/System/" in prefixes
         assert "/Library/Caches/" in prefixes
-        assert "/private/var/" in prefixes
+        assert "/private/var/db/" in prefixes
+        assert "/private/var/run/" in prefixes
+        assert "/private/var/log/" in prefixes
 
     def test_is_system_read_macos_path(self):
         from roar.services.execution.provenance.file_filter import FileFilterService
@@ -403,7 +414,27 @@ class TestFileFilterServiceMacOS:
         svc._logger = MagicMock()
         assert svc._is_write_noise("/System/Library/foo")
         assert svc._is_write_noise("/Library/Caches/com.apple.dt.Xcode/foo")
-        assert svc._is_write_noise("/private/var/folders/xx/tmp")
+        # /private/var/folders/ is temp space, not unconditional noise
+        assert not svc._is_write_noise("/private/var/folders/xx/tmp")
+        # But specific system sub-paths are still noise
+        assert svc._is_write_noise("/private/var/db/something")
+        assert svc._is_write_noise("/private/var/run/something")
+        assert svc._is_write_noise("/private/var/log/something")
+
+    def test_is_tmp_path_linux(self):
+        from roar.services.execution.provenance.file_filter import FileFilterService
+
+        assert FileFilterService._is_tmp_path("/tmp/foo.txt")
+        assert FileFilterService._is_tmp_path("/tmp/subdir/bar")
+        assert not FileFilterService._is_tmp_path("/home/user/tmp/foo")
+
+    def test_is_tmp_path_macos(self):
+        from roar.services.execution.provenance.file_filter import FileFilterService
+
+        assert FileFilterService._is_tmp_path("/private/var/folders/xx/T/tmp123")
+        assert FileFilterService._is_tmp_path("/private/var/folders/ab/cdef/T/foo")
+        assert not FileFilterService._is_tmp_path("/private/var/db/dyld/cache")
+        assert not FileFilterService._is_tmp_path("/private/var/log/system.log")
 
 
 # ---------------------------------------------------------------------------

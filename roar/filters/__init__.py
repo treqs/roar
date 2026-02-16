@@ -31,7 +31,9 @@ _READ_NOISE_PREFIXES = (
     "/System/",
     "/Library/",
     "/Applications/",
-    "/private/var/",
+    "/private/var/db/",
+    "/private/var/run/",
+    "/private/var/log/",
 )
 
 # Torch/triton cache patterns
@@ -58,7 +60,9 @@ _WRITE_NOISE_PREFIXES = (
     # macOS system paths
     "/System/",
     "/Library/Caches/",
-    "/private/var/",
+    "/private/var/db/",
+    "/private/var/run/",
+    "/private/var/log/",
 )
 
 

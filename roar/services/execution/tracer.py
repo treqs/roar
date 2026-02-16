@@ -231,29 +231,23 @@ class TracerService:
                 hint = (
                     "roar-tracer-ebpf binary not found. Build it with:\n"
                     "  cd rust && cargo build --release -p roar-tracer-ebpf"
-                    "  (eBPF; Linux; fastest but requires perms)"
                 )
             elif mode == "preload":
                 hint = (
                     "roar-tracer-preload or preload library not found. Build it with:\n"
                     "  cd rust && cargo build --release -p roar-tracer-preload"
-                    "  (preload; macOS & Linux; no-go for statically linked libc binaries)"
                 )
             elif mode == "ptrace":
                 hint = (
                     "roar-tracer binary not found. Build it with:\n"
                     "  cd rust && cargo build --release -p roar-tracer"
-                    "  (ptrace; Linux; slowest but broadest compatibility)"
                 )
             else:
                 hint = (
                     "No tracer binary found. Build one with:\n"
-                    "  cd rust && cargo build --release -p roar-tracer-ebpf"
-                    "  (eBPF; Linux; fastest but requires perms)\n"
-                    "  cd rust && cargo build --release -p roar-tracer-preload"
-                    " (preload; macOS & Linux; no-go for statically linked libc binaries)\n"
+                    "  cd rust && cargo build --release -p roar-tracer-ebpf\n"
+                    "  cd rust && cargo build --release -p roar-tracer-preload\n"
                     "  cd rust && cargo build --release -p roar-tracer"
-                    "       (ptrace; Linux; slowest but broadest compatibility)"
                 )
             raise TracerNotFoundError(hint)
 

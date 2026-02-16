@@ -32,9 +32,11 @@ class TestBuildToolCollector:
         result = service.collect(processes, sys_prefix="/some/venv")
         assert result == {}
 
+    @patch("roar.services.execution.provenance.build_tool_collector.sys")
     @patch("roar.services.execution.provenance.build_tool_collector.subprocess.run")
     @patch("roar.services.execution.provenance.build_tool_collector.shutil.which")
-    def test_cmake_gcc_detected(self, mock_which, mock_run, service):
+    def test_cmake_gcc_detected(self, mock_which, mock_run, mock_sys, service):
+        mock_sys.platform = "linux"
         processes = [
             {"command": ["/usr/bin/cmake", "..", "-DCMAKE_BUILD_TYPE=Release"]},
             {"command": ["/usr/bin/gcc", "-o", "foo.o", "-c", "foo.c"]},
