@@ -17,16 +17,22 @@ import pytest
 
 def _run_roar_cmd(*args: str, cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
     """Run a roar command using the current Python interpreter."""
+    command = [sys.executable, "-m", "roar", *args]
     result = subprocess.run(
-        [sys.executable, "-m", "roar", *args],
+        command,
         cwd=cwd,
         capture_output=True,
         text=True,
     )
     if check and result.returncode != 0:
+        stdout = result.stdout or "<empty>"
+        stderr = result.stderr or "<empty>"
+        command_with_output = (
+            f"{' '.join(command)}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+        )
         raise subprocess.CalledProcessError(
             result.returncode,
-            [sys.executable, "-m", "roar", *args],
+            command_with_output,
             result.stdout,
             result.stderr,
         )

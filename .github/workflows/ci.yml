@@ -218,6 +218,31 @@ jobs:
       - name: Verify native hash extension import
         run: python -c "import roar._hash_native as m; print(m.__name__)"
 
+      - name: Smoke test preload tracer with Python file I/O
+        run: |
+          tmp_dir="$(mktemp -d)"
+          cd "$tmp_dir"
+
+          git init
+          git config user.email "ci@example.com"
+          git config user.name "CI"
+          printf ".roar/\n" > .gitignore
+          git add .gitignore
+          git commit -m "init"
+
+          python -m roar init -y
+          cat > smoke.py <<'PY'
+          from pathlib import Path
+
+          Path("smoke.txt").write_text("ok")
+          _ = Path("smoke.txt").read_text()
+          PY
+
+          git add smoke.py
+          git commit -m "add smoke script"
+
+          python -m roar run "$(python -c 'import sys; print(sys.executable)')" smoke.py
+
       - name: Run tests (parallel)
         run: pytest --tb=short -x -m "not glaas and not live_glaas and not ebpf"
 

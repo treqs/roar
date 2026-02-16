@@ -279,8 +279,6 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
     };
 
     cmd.env(PROCESS_PRELOAD_ENV, combined_preload);
-    #[cfg(target_os = "macos")]
-    cmd.env("DYLD_FORCE_FLAT_NAMESPACE", "1");
     cmd.env(PRELOAD_LIB_ENV, preload_library_str);
     cmd.env(TRACE_FD_ENV, write_fd.to_string());
 

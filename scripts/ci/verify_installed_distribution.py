@@ -63,7 +63,8 @@ def main() -> None:
         for p in bin_dir.iterdir()
         if p.is_file()
         and (
-            p.name.startswith("libroar_tracer_preload") or p.name.startswith("libroar-tracer-preload")
+            p.name.startswith("libroar_tracer_preload")
+            or p.name.startswith("libroar-tracer-preload")
         )
         and p.name.endswith(expected_lib_ext)
     ]

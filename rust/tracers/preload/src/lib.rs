@@ -55,13 +55,21 @@ unsafe fn sys_write(fd: c_int, buf: *const c_void, count: size_t) -> ssize_t {
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
-pub unsafe extern "C" fn roar_interpose_read(fd: c_int, buf: *mut c_void, count: size_t) -> ssize_t {
+pub unsafe extern "C" fn roar_interpose_read(
+    fd: c_int,
+    buf: *mut c_void,
+    count: size_t,
+) -> ssize_t {
     read(fd, buf, count)
 }
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
-pub unsafe extern "C" fn roar_interpose_write(fd: c_int, buf: *const c_void, count: size_t) -> ssize_t {
+pub unsafe extern "C" fn roar_interpose_write(
+    fd: c_int,
+    buf: *const c_void,
+    count: size_t,
+) -> ssize_t {
     write(fd, buf, count)
 }
 
@@ -173,7 +181,11 @@ pub unsafe extern "C" fn roar_interpose_unlink(path: *const c_char) -> c_int {
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
-pub unsafe extern "C" fn roar_interpose_unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
+pub unsafe extern "C" fn roar_interpose_unlinkat(
+    dirfd: c_int,
+    path: *const c_char,
+    flags: c_int,
+) -> c_int {
     unlinkat(dirfd, path, flags)
 }
 

@@ -23,9 +23,6 @@ extern int roar_interpose_unlinkat(int dirfd, const char *path, int flags);
 extern int roar_interpose_truncate(const char *path, off_t length);
 extern int roar_interpose_ftruncate(int fd, off_t length);
 
-extern ssize_t __read_nocancel(int fd, void *buf, size_t count);
-extern ssize_t __write_nocancel(int fd, const void *buf, size_t count);
-
 #define DYLD_INTERPOSE(_replacement, _replacee)                                       \
   __attribute__((used)) static struct {                                               \
     const void *replacement;                                                          \
@@ -37,8 +34,6 @@ extern ssize_t __write_nocancel(int fd, const void *buf, size_t count);
 
 DYLD_INTERPOSE(roar_interpose_read, read);
 DYLD_INTERPOSE(roar_interpose_write, write);
-DYLD_INTERPOSE(roar_interpose_read, __read_nocancel);
-DYLD_INTERPOSE(roar_interpose_write, __write_nocancel);
 DYLD_INTERPOSE(roar_interpose_pread, pread);
 DYLD_INTERPOSE(roar_interpose_pwrite, pwrite);
 DYLD_INTERPOSE(roar_interpose_readv, readv);
