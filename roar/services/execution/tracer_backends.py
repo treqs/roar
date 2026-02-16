@@ -271,4 +271,3 @@ def _find_binary(package_path: Path, binary_name: str) -> str | None:
 
     resolved = shutil.which(binary_name)
     return resolved if resolved else None
-

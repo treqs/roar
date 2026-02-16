@@ -186,6 +186,13 @@ class ProvenanceAssemblerService:
         # System libraries (covered by dpkg/system packages)
         return bool(
             path.startswith(
-                ("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/", "/System/Library/", "/Library/Frameworks/")
+                (
+                    "/lib/",
+                    "/lib64/",
+                    "/usr/lib/",
+                    "/usr/lib64/",
+                    "/System/Library/",
+                    "/Library/Frameworks/",
+                )
             )
         )

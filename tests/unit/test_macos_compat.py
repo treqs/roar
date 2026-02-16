@@ -33,11 +33,7 @@ class TestRuntimeCollectorMacOS:
         from roar.services.execution.provenance.runtime_collector import RuntimeCollectorService
 
         mock_sys.platform = "darwin"
-        ioreg_output = (
-            '  | {\n'
-            '  |   "IOPlatformUUID" = "ABCD-1234-EFGH-5678"\n'
-            '  | }\n'
-        )
+        ioreg_output = '  | {\n  |   "IOPlatformUUID" = "ABCD-1234-EFGH-5678"\n  | }\n'
         result_obj = MagicMock()
         result_obj.returncode = 0
         result_obj.stdout = ioreg_output
@@ -55,13 +51,17 @@ class TestRuntimeCollectorMacOS:
         from roar.services.execution.provenance.runtime_collector import RuntimeCollectorService
 
         mock_sys.platform = "darwin"
-        with patch("roar.services.execution.provenance.runtime_collector.subprocess.run") as mock_run:
+        with patch(
+            "roar.services.execution.provenance.runtime_collector.subprocess.run"
+        ) as mock_run:
             result_obj = MagicMock()
             result_obj.returncode = 1
             result_obj.stdout = ""
             mock_run.return_value = result_obj
 
-            with patch("builtins.open", side_effect=AssertionError("should not open files on darwin")):
+            with patch(
+                "builtins.open", side_effect=AssertionError("should not open files on darwin")
+            ):
                 fp = RuntimeCollectorService._hardware_fingerprint()
             assert fp  # still produces a fingerprint (from empty parts)
 
@@ -127,6 +127,7 @@ class TestRuntimeCollectorMacOS:
         )
 
         with patch.object(service, "_run_command") as mock_cmd:
+
             def side_effect(args, **kw):
                 if args[0] == "nvidia-smi":
                     return None
@@ -293,7 +294,9 @@ class TestBuildToolCollectorMacOS:
         processes = [{"command": ["/usr/bin/cmake", ".."]}]
         mock_which.return_value = "/usr/bin/cmake"
 
-        with patch("roar.services.execution.provenance.build_tool_collector.subprocess.run") as mock_run:
+        with patch(
+            "roar.services.execution.provenance.build_tool_collector.subprocess.run"
+        ) as mock_run:
             service.collect(processes, sys_prefix="/some/venv")
             mock_run.assert_not_called()
 
@@ -307,7 +310,9 @@ class TestFiltersNoisePrefixes:
     def test_macos_system_path_is_noise_read(self):
         from roar.filters import is_noise_read
 
-        assert is_noise_read("/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation")
+        assert is_noise_read(
+            "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation"
+        )
         assert is_noise_read("/Library/Developer/CommandLineTools/usr/lib/libclang.dylib")
         assert is_noise_read("/Applications/Xcode.app/Contents/MacOS/Xcode")
         assert is_noise_read("/private/var/db/dyld/dyld_shared_cache_arm64e")
@@ -352,14 +357,20 @@ class TestFileClassifierMacOS:
 
         fc = FileClassifier.__new__(FileClassifier)
         assert fc._is_system_shared_lib("/usr/lib/libSystem.B.dylib")
-        assert fc._is_system_shared_lib("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.dylib")
+        assert fc._is_system_shared_lib(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.dylib"
+        )
 
     def test_dylib_is_system_file(self):
         from roar.filters.files import FileClassifier
 
         fc = FileClassifier.__new__(FileClassifier)
-        assert fc._is_system_file("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
-        assert fc._is_system_file("/Library/Frameworks/Python.framework/Versions/3.12/lib/libpython3.12.dylib")
+        assert fc._is_system_file(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        )
+        assert fc._is_system_file(
+            "/Library/Frameworks/Python.framework/Versions/3.12/lib/libpython3.12.dylib"
+        )
 
     def test_so_still_detected(self):
         from roar.filters.files import FileClassifier
@@ -450,7 +461,9 @@ class TestAssemblerMacOS:
 
     def test_dylib_is_code_file(self, service):
         assert service._is_code_file("/usr/lib/libfoo.dylib")
-        assert service._is_code_file("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.dylib")
+        assert service._is_code_file(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.dylib"
+        )
 
     def test_dylib_in_code_extensions(self):
         from roar.services.execution.provenance.assembler import ProvenanceAssemblerService
@@ -462,7 +475,9 @@ class TestAssemblerMacOS:
         assert service._is_code_file("/usr/lib/libm.so")
 
     def test_macos_system_lib_is_read_noise(self, service):
-        assert service._is_read_noise("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        assert service._is_read_noise(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        )
         assert service._is_read_noise("/Library/Frameworks/Python.framework/lib/libpython3.dylib")
 
     def test_linux_system_lib_still_read_noise(self, service):
