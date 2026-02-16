@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -273,42 +272,3 @@ def _find_binary(package_path: Path, binary_name: str) -> str | None:
     resolved = shutil.which(binary_name)
     return resolved if resolved else None
 
-
-def build_preload_tracer(package_path: Path) -> bool:
-    """
-    Best-effort local build of preload tracer artifacts.
-
-    Intended for source checkouts on macOS where users install roar in editable mode.
-    Returns True when the build command succeeded.
-    """
-    if sys.platform != "darwin":
-        return False
-
-    cargo = shutil.which("cargo")
-    if not cargo:
-        return False
-
-    repo_root = package_path.parent
-    manifest = repo_root / "rust" / "Cargo.toml"
-    if not manifest.exists():
-        return False
-
-    try:
-        result = subprocess.run(
-            [
-                cargo,
-                "build",
-                "--release",
-                "--manifest-path",
-                str(manifest),
-                "-p",
-                "roar-tracer-preload",
-            ],
-            cwd=str(repo_root),
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False

@@ -6,7 +6,6 @@ Handles tracer binary discovery and process execution via the tracer.
 
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -36,7 +35,6 @@ class TracerService:
         # Go up 3 levels: execution -> services -> roar
         self._package_path = package_path or Path(__file__).parent.parent.parent
         self._logger = logger
-        self._preload_bootstrap_attempted = False
 
     @property
     def logger(self) -> ILogger:
@@ -157,19 +155,12 @@ class TracerService:
         if backend == "preload":
             preload = self._find_preload_tracer()
             if not preload:
-                self._attempt_preload_bootstrap()
-                preload = self._find_preload_tracer()
-            if not preload:
                 return None
             if require_ready:
                 ready, reason = self._preload_is_ready(preload)
                 if not ready:
-                    if reason == "preload library not found":
-                        self._attempt_preload_bootstrap()
-                        ready, reason = self._preload_is_ready(preload)
-                    if not ready:
-                        self.logger.debug("Skipping preload tracer in auto mode: %s", reason)
-                        return None
+                    self.logger.debug("Skipping preload tracer in auto mode: %s", reason)
+                    return None
             return "preload", preload
 
         if backend == "ptrace":
@@ -177,25 +168,6 @@ class TracerService:
             if ptrace:
                 return "ptrace", ptrace
         return None
-
-    def _attempt_preload_bootstrap(self) -> None:
-        """
-        Build preload tracer artifacts once per process on macOS source checkouts.
-        """
-        if self._preload_bootstrap_attempted:
-            return
-        self._preload_bootstrap_attempted = True
-
-        if sys.platform != "darwin":
-            return
-
-        print("🪚 building tracer", flush=True)
-        self.logger.info("Preload tracer not found; attempting local build via cargo")
-        ok = tracer_backends.build_preload_tracer(self._package_path)
-        if ok:
-            self.logger.info("Built roar-tracer-preload successfully")
-        else:
-            self.logger.debug("Automatic preload tracer build did not succeed")
 
     def find_tracer(self) -> str | None:
         """

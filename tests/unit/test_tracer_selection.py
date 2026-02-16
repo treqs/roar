@@ -12,19 +12,7 @@ def _make_signal_handler():
 
 
 class TestTracerSelection:
-    def test_forced_preload_bootstraps_on_darwin_when_missing(self, tmp_path):
-        svc = TracerService(package_path=tmp_path / "roar")
-        with (
-            patch.object(svc, "_get_tracer_mode", return_value="preload"),
-            patch.object(svc, "_get_fallback_enabled", return_value=True),
-            patch("roar.services.execution.tracer.sys.platform", "darwin"),
-            patch.object(
-                svc, "_find_preload_tracer", side_effect=[None, "/bin/roar-tracer-preload"]
-            ),
-            patch("roar.services.execution.tracer.tracer_backends.build_preload_tracer", return_value=True) as mock_build,
-        ):
-            assert svc.find_tracer() == "/bin/roar-tracer-preload"
-        mock_build.assert_called_once_with(tmp_path / "roar")
+    # Note: we intentionally do not auto-build tracer binaries during pip/CLI execution.
 
     def test_auto_prefers_preload_when_ebpf_unready(self, tmp_path):
         svc = TracerService(package_path=tmp_path / "roar")
