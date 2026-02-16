@@ -9,6 +9,10 @@ inputs:
     description: Destination directory for package binaries
     required: false
     default: roar/bin
+  platform:
+    description: Target platform (linux or macos)
+    required: false
+    default: linux
 runs:
   using: composite
   steps:
@@ -16,11 +20,14 @@ runs:
       shell: bash
       run: |
         mkdir -p "${{ inputs.destination-dir }}"
-        cp "${{ inputs.source-dir }}/roar-tracer" "${{ inputs.destination-dir }}/"
         cp "${{ inputs.source-dir }}/roar-proxy" "${{ inputs.destination-dir }}/"
-        cp "${{ inputs.source-dir }}/roar-tracer-ebpf" "${{ inputs.destination-dir }}/"
-        cp "${{ inputs.source-dir }}/roard" "${{ inputs.destination-dir }}/"
         cp "${{ inputs.source-dir }}/roar-tracer-preload" "${{ inputs.destination-dir }}/"
+
+        if [ "${{ inputs.platform }}" = "linux" ]; then
+          cp "${{ inputs.source-dir }}/roar-tracer" "${{ inputs.destination-dir }}/"
+          cp "${{ inputs.source-dir }}/roar-tracer-ebpf" "${{ inputs.destination-dir }}/"
+          cp "${{ inputs.source-dir }}/roard" "${{ inputs.destination-dir }}/"
+        fi
 
         shopt -s nullglob
         preload_libs=(
@@ -37,8 +44,12 @@ runs:
       shell: bash
       run: |
         chmod +x \
-          "${{ inputs.destination-dir }}/roar-tracer" \
           "${{ inputs.destination-dir }}/roar-proxy" \
-          "${{ inputs.destination-dir }}/roar-tracer-ebpf" \
-          "${{ inputs.destination-dir }}/roard" \
           "${{ inputs.destination-dir }}/roar-tracer-preload"
+
+        if [ "${{ inputs.platform }}" = "linux" ]; then
+          chmod +x \
+            "${{ inputs.destination-dir }}/roar-tracer" \
+            "${{ inputs.destination-dir }}/roar-tracer-ebpf" \
+            "${{ inputs.destination-dir }}/roard"
+        fi
