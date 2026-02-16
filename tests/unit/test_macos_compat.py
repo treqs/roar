@@ -61,12 +61,9 @@ class TestRuntimeCollectorMacOS:
             result_obj.stdout = ""
             mock_run.return_value = result_obj
 
-            fp = RuntimeCollectorService._hardware_fingerprint()
-            assert fp  # still produces a fingerprint (from empty parts)
-            # Should NOT have opened /etc/machine-id
             with patch("builtins.open", side_effect=AssertionError("should not open files on darwin")):
-                # If open were called for Linux paths, it would raise
-                pass
+                fp = RuntimeCollectorService._hardware_fingerprint()
+            assert fp  # still produces a fingerprint (from empty parts)
 
     @patch("roar.services.execution.provenance.runtime_collector.sys")
     def test_get_cpu_info_darwin(self, mock_sys, service):

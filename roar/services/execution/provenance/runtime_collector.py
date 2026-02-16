@@ -41,7 +41,7 @@ class RuntimeCollectorService:
 
     @staticmethod
     def _hardware_fingerprint() -> str:
-        """Build a cheap fingerprint from procfs/sysfs to detect hardware changes."""
+        """Build a cheap fingerprint to detect hardware changes."""
         parts: list[str] = []
 
         if sys.platform == "darwin":
