@@ -159,25 +159,25 @@ jobs:
           # macOS x86_64
           - python-version: "3.10"
             py-tag: "cp310"
-            runner: macos-13
+            runner: macos-15-intel
             artifact-name: roar-rust-binaries-macos-x86_64
             platform: macos
             platform-tag: macos-x86_64
           - python-version: "3.11"
             py-tag: "cp311"
-            runner: macos-13
+            runner: macos-15-intel
             artifact-name: roar-rust-binaries-macos-x86_64
             platform: macos
             platform-tag: macos-x86_64
           - python-version: "3.12"
             py-tag: "cp312"
-            runner: macos-13
+            runner: macos-15-intel
             artifact-name: roar-rust-binaries-macos-x86_64
             platform: macos
             platform-tag: macos-x86_64
           - python-version: "3.13"
             py-tag: "cp313"
-            runner: macos-13
+            runner: macos-15-intel
             artifact-name: roar-rust-binaries-macos-x86_64
             platform: macos
             platform-tag: macos-x86_64
@@ -221,6 +221,18 @@ jobs:
         env:
           ROAR_WHEEL_PLATFORM: ${{ matrix.platform }}
         run: python scripts/ci/verify_wheel_contents.py
+
+      - name: Install and smoke test wheel
+        env:
+          ROAR_WHEEL_PLATFORM: ${{ matrix.platform }}
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          tmp_dir="$(mktemp -d)"
+          cp scripts/ci/verify_installed_distribution.py "${tmp_dir}/"
+          (
+            cd "${tmp_dir}"
+            python verify_installed_distribution.py
+          )
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4

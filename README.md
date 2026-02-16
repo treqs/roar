@@ -27,7 +27,7 @@ Requires Python 3.10+.
 | macOS         | 🚧 Experimental |
 | Windows       | Coming soon    |
 
-PyPI wheels are currently published for Linux. For macOS, install from source and build the preload tracer (see "Tracer Backends").
+PyPI wheels are published for Linux and macOS (`x86_64` and `arm64`).
 
 ### Development Installation
 

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::os::unix::process::ExitStatusExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -21,6 +21,11 @@ const PRELOAD_LIB_ENV: &str = "ROAR_PRELOAD_LIB";
 const PROCESS_PRELOAD_ENV: &str = "DYLD_INSERT_LIBRARIES";
 #[cfg(not(target_os = "macos"))]
 const PROCESS_PRELOAD_ENV: &str = "LD_PRELOAD";
+
+#[cfg(target_os = "macos")]
+const PRELOAD_LIBRARY_EXT: &str = ".dylib";
+#[cfg(not(target_os = "macos"))]
+const PRELOAD_LIBRARY_EXT: &str = ".so";
 
 struct CollectorState {
     fd: FdTracker,
@@ -144,10 +149,8 @@ fn resolve_preload_library() -> Option<PathBuf> {
     let exe_dir = exe.parent()?;
 
     let direct_candidates = [
-        exe_dir.join("libroar_tracer_preload.so"),
-        exe_dir.join("libroar-tracer-preload.so"),
-        exe_dir.join("libroar_tracer_preload.dylib"),
-        exe_dir.join("libroar-tracer-preload.dylib"),
+        exe_dir.join(format!("libroar_tracer_preload{PRELOAD_LIBRARY_EXT}")),
+        exe_dir.join(format!("libroar-tracer-preload{PRELOAD_LIBRARY_EXT}")),
     ];
     for candidate in direct_candidates {
         if candidate.exists() {
@@ -163,7 +166,7 @@ fn resolve_preload_library() -> Option<PathBuf> {
             };
             let is_match = (name.starts_with("libroar_tracer_preload")
                 || name.starts_with("libroar-tracer-preload"))
-                && (name.ends_with(".so") || name.ends_with(".dylib"));
+                && name.ends_with(PRELOAD_LIBRARY_EXT);
             if is_match && path.exists() {
                 return Some(path);
             }
