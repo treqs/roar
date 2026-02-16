@@ -285,8 +285,14 @@ class ProvenanceService:
 
     def _get_git_info(self, repo_root: str) -> dict[str, Any]:
         """Get git info via VCS provider."""
-        vcs = get_container().get_vcs_provider("git")
-        vcs_info = vcs.get_info(repo_root)
+        try:
+            vcs = get_container().get_vcs_provider("git")
+            vcs_info = vcs.get_info(repo_root)
+        except KeyError:
+            # Defensive fallback if plugin bootstrap/registration was skipped.
+            from ....plugins.vcs.git import GitVCSProvider
+
+            vcs_info = GitVCSProvider().get_info(repo_root)
 
         return {
             "commit": vcs_info.commit,

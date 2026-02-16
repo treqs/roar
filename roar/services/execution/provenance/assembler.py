@@ -14,7 +14,19 @@ class ProvenanceAssemblerService:
     """Assembles final provenance output from context."""
 
     # Code file extensions (for unmanaged_code filtering)
-    CODE_EXTENSIONS = (".py", ".so", ".pyx", ".pxd", ".c", ".cpp", ".h", ".hpp", ".rs", ".go")
+    CODE_EXTENSIONS = (
+        ".py",
+        ".so",
+        ".dylib",
+        ".pyx",
+        ".pxd",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".rs",
+        ".go",
+    )
 
     def __init__(self, logger: ILogger | None = None) -> None:
         """Initialize assembler with optional logger."""
@@ -141,11 +153,11 @@ class ProvenanceAssemblerService:
 
     def _is_code_file(self, path: str) -> bool:
         """Check if path is a code file (not data)."""
-        # Check extension
+        # Check extension (includes .dylib via CODE_EXTENSIONS)
         for ext in self.CODE_EXTENSIONS:
             if path.endswith(ext):
                 return True
-        # .so files with version suffixes
+        # .so files with version suffixes (e.g. libfoo.so.6)
         return bool(".so." in path or path.endswith(".so"))
 
     def _is_unmanaged_noise(self, path: str) -> bool:
@@ -171,5 +183,16 @@ class ProvenanceAssemblerService:
         # roar's inject directory (sitecustomize.py)
         if "/roar/services/execution/inject" in path or "sitecustomize.py" in path:
             return True
-        # System libraries (covered by dpkg packages)
-        return bool(path.startswith(("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/")))
+        # System libraries (covered by dpkg/system packages)
+        return bool(
+            path.startswith(
+                (
+                    "/lib/",
+                    "/lib64/",
+                    "/usr/lib/",
+                    "/usr/lib64/",
+                    "/System/Library/",
+                    "/Library/Frameworks/",
+                )
+            )
+        )

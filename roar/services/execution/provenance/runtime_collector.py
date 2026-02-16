@@ -10,8 +10,10 @@ import hashlib
 import json
 import os
 import platform
+import re
 import socket
 import subprocess
+import sys
 from typing import Any
 
 from ....core.interfaces.logger import ILogger
@@ -39,39 +41,56 @@ class RuntimeCollectorService:
 
     @staticmethod
     def _hardware_fingerprint() -> str:
-        """Build a cheap fingerprint from procfs/sysfs to detect hardware changes."""
+        """Build a cheap fingerprint to detect hardware changes."""
         parts: list[str] = []
 
-        # Machine identity
-        with contextlib.suppress(OSError), open("/etc/machine-id") as f:
-            parts.append(f.read().strip())
+        if sys.platform == "darwin":
+            # macOS: use IOPlatformExpertDevice for platform UUID
+            try:
+                result = subprocess.run(
+                    ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.split("\n"):
+                        if "IOPlatformUUID" in line:
+                            parts.append(line.split('"')[-2])
+                            break
+            except Exception:
+                pass
+        else:
+            # Linux: machine-id + PCI devices
+            with contextlib.suppress(OSError), open("/etc/machine-id") as f:
+                parts.append(f.read().strip())
 
-        # NVIDIA driver version — changes on driver update
-        with contextlib.suppress(OSError), open("/proc/driver/nvidia/version") as f:
-            parts.append(f.read().strip())
+            # NVIDIA driver version — changes on driver update
+            with contextlib.suppress(OSError), open("/proc/driver/nvidia/version") as f:
+                parts.append(f.read().strip())
 
-        # CUDA toolkit — mtime changes on install/update
+            # GPU PCI device IDs — catches physical GPU swaps
+            with contextlib.suppress(OSError):
+                for cls_path in sorted(glob.glob("/sys/bus/pci/devices/*/class")):
+                    try:
+                        with open(cls_path) as f:
+                            if f.read().strip().startswith("0x0300"):  # VGA controller
+                                dev_dir = os.path.dirname(cls_path)
+                                with open(f"{dev_dir}/vendor") as vf:
+                                    vendor = vf.read().strip()
+                                with open(f"{dev_dir}/device") as df:
+                                    device = df.read().strip()
+                                parts.append(f"gpu:{vendor}:{device}")
+                    except OSError:
+                        pass
+
+        # CUDA toolkit — mtime changes on install/update (works on both platforms)
         for p in ("/usr/local/cuda/version.json", "/usr/local/cuda/version.txt"):
             try:
                 parts.append(f"{p}:{os.stat(p).st_mtime}")
                 break
             except OSError:
                 pass
-
-        # GPU PCI device IDs — catches physical GPU swaps
-        with contextlib.suppress(OSError):
-            for cls_path in sorted(glob.glob("/sys/bus/pci/devices/*/class")):
-                try:
-                    with open(cls_path) as f:
-                        if f.read().strip().startswith("0x0300"):  # VGA controller
-                            dev_dir = os.path.dirname(cls_path)
-                            with open(f"{dev_dir}/vendor") as vf:
-                                vendor = vf.read().strip()
-                            with open(f"{dev_dir}/device") as df:
-                                device = df.read().strip()
-                            parts.append(f"gpu:{vendor}:{device}")
-                except OSError:
-                    pass
 
         return hashlib.md5("|".join(parts).encode()).hexdigest()
 
@@ -265,24 +284,27 @@ class RuntimeCollectorService:
         """Detect if running in a container and get container info."""
         container_info = {}
 
-        try:
-            if os.path.exists("/.dockerenv"):
-                container_info["type"] = "docker"
+        if sys.platform != "darwin":
+            # Linux-specific: check /.dockerenv and /proc/self/cgroup
+            try:
+                if os.path.exists("/.dockerenv"):
+                    container_info["type"] = "docker"
 
-            with open("/proc/self/cgroup") as f:
-                for line in f:
-                    if "docker" in line or "containerd" in line:
-                        container_info["type"] = "docker"
-                        parts = line.strip().split("/")
-                        if len(parts) > 1 and len(parts[-1]) >= 12:
-                            container_info["container_id"] = parts[-1][:12]
-                        break
-                    elif "kubepods" in line:
-                        container_info["type"] = "kubernetes"
-                        break
-        except Exception as e:
-            self.logger.debug("Failed to detect container info: %s", e)
+                with open("/proc/self/cgroup") as f:
+                    for line in f:
+                        if "docker" in line or "containerd" in line:
+                            container_info["type"] = "docker"
+                            parts = line.strip().split("/")
+                            if len(parts) > 1 and len(parts[-1]) >= 12:
+                                container_info["container_id"] = parts[-1][:12]
+                            break
+                        elif "kubepods" in line:
+                            container_info["type"] = "kubernetes"
+                            break
+            except Exception as e:
+                self.logger.debug("Failed to detect container info: %s", e)
 
+        # Environment variable checks work on any platform
         if os.environ.get("KUBERNETES_SERVICE_HOST"):
             container_info["type"] = "kubernetes"
         elif os.environ.get("container") == "podman":  # noqa: SIM112
@@ -294,31 +316,38 @@ class RuntimeCollectorService:
         """Detect if running in a VM and identify the hypervisor."""
         vm_info = {}
 
-        stdout = self._run_command(["systemd-detect-virt"])
-        if stdout:
-            virt = stdout.strip()
-            if virt and virt != "none":
-                vm_info["hypervisor"] = virt
+        if sys.platform == "darwin":
+            # macOS: sysctl kern.hv_vmm_present returns 1 inside a VM
+            stdout = self._run_command(["sysctl", "-n", "kern.hv_vmm_present"])
+            if stdout and stdout.strip() == "1":
+                vm_info["hypervisor"] = "unknown"
+        else:
+            # Linux
+            stdout = self._run_command(["systemd-detect-virt"])
+            if stdout:
+                virt = stdout.strip()
+                if virt and virt != "none":
+                    vm_info["hypervisor"] = virt
 
-        try:
-            if os.path.exists("/sys/hypervisor/type"):
-                with open("/sys/hypervisor/type") as f:
-                    vm_info["hypervisor"] = f.read().strip()
-        except Exception as e:
-            self.logger.debug("Failed to read hypervisor type: %s", e)
+            try:
+                if os.path.exists("/sys/hypervisor/type"):
+                    with open("/sys/hypervisor/type") as f:
+                        vm_info["hypervisor"] = f.read().strip()
+            except Exception as e:
+                self.logger.debug("Failed to read hypervisor type: %s", e)
 
-        try:
-            if os.path.exists("/sys/class/dmi/id/sys_vendor"):
-                with open("/sys/class/dmi/id/sys_vendor") as f:
-                    vendor = f.read().strip()
-                    if "Amazon" in vendor:
-                        vm_info["cloud"] = "aws"
-                    elif "Google" in vendor:
-                        vm_info["cloud"] = "gcp"
-                    elif "Microsoft" in vendor:
-                        vm_info["cloud"] = "azure"
-        except Exception as e:
-            self.logger.debug("Failed to read sys_vendor for cloud detection: %s", e)
+            try:
+                if os.path.exists("/sys/class/dmi/id/sys_vendor"):
+                    with open("/sys/class/dmi/id/sys_vendor") as f:
+                        vendor = f.read().strip()
+                        if "Amazon" in vendor:
+                            vm_info["cloud"] = "aws"
+                        elif "Google" in vendor:
+                            vm_info["cloud"] = "gcp"
+                        elif "Microsoft" in vendor:
+                            vm_info["cloud"] = "azure"
+            except Exception as e:
+                self.logger.debug("Failed to read sys_vendor for cloud detection: %s", e)
 
         return vm_info if vm_info else None
 
@@ -326,6 +355,7 @@ class RuntimeCollectorService:
         """Get GPU information."""
         gpu_info = []
 
+        # Try nvidia-smi first (works on both Linux and macOS if NVIDIA GPU present)
         stdout = self._run_command(
             [
                 "nvidia-smi",
@@ -346,6 +376,29 @@ class RuntimeCollectorService:
                             gpu["compute_cap"] = parts[2]
                         gpu_info.append(gpu)
 
+        # macOS: fall back to system_profiler for Apple/integrated GPUs
+        if not gpu_info and sys.platform == "darwin":
+            stdout = self._run_command(["system_profiler", "SPDisplaysDataType"])
+            if stdout:
+                current_gpu: dict[str, Any] = {}
+                for line in stdout.split("\n"):
+                    stripped = line.strip()
+                    if stripped.startswith("Chipset Model:"):
+                        if current_gpu:
+                            gpu_info.append(current_gpu)
+                        current_gpu = {"name": stripped.split(":", 1)[1].strip()}
+                    elif stripped.startswith("VRAM") and current_gpu:
+                        # e.g. "VRAM (Total):  16 GB" or "VRAM (Dynamic, Max): 48 GB"
+                        vram_str = stripped.split(":", 1)[1].strip()
+                        match = re.match(r"(\d+)\s*(MB|GB)", vram_str)
+                        if match:
+                            val = int(match.group(1))
+                            if match.group(2) == "GB":
+                                val *= 1024
+                            current_gpu["memory_mb"] = val
+                if current_gpu:
+                    gpu_info.append(current_gpu)
+
         return gpu_info if gpu_info else None
 
     def _get_cpu_info(self) -> dict[str, Any] | None:
@@ -355,46 +408,91 @@ class RuntimeCollectorService:
         with contextlib.suppress(Exception):
             cpu_info["count"] = os.cpu_count()
 
-        try:
-            with open("/proc/cpuinfo") as f:
-                cpuinfo = f.read()
-            for line in cpuinfo.split("\n"):
-                if line.startswith("model name"):
-                    cpu_info["model"] = line.split(":")[1].strip()
-                    break
-        except Exception as e:
-            self.logger.debug("Failed to read /proc/cpuinfo: %s", e)
+        if sys.platform == "darwin":
+            # macOS: use sysctl for CPU info
+            stdout = self._run_command(["sysctl", "-n", "machdep.cpu.brand_string"])
+            if stdout:
+                cpu_info["model"] = stdout.strip()
 
-        stdout = self._run_command(["lscpu"])
-        if stdout:
-            for line in stdout.split("\n"):
-                if line.startswith("Architecture:"):
-                    cpu_info["architecture"] = line.split(":")[1].strip()
-                elif line.startswith("CPU(s):"):
-                    cpu_info["count"] = int(line.split(":")[1].strip())
-                elif line.startswith("Thread(s) per core:"):
-                    cpu_info["threads_per_core"] = int(line.split(":")[1].strip())
-                elif line.startswith("Core(s) per socket:"):
-                    cpu_info["cores_per_socket"] = int(line.split(":")[1].strip())
-                elif line.startswith("Socket(s):"):
-                    cpu_info["sockets"] = int(line.split(":")[1].strip())
+            cpu_info["architecture"] = platform.machine()
+
+            stdout = self._run_command(["sysctl", "-n", "hw.physicalcpu"])
+            if stdout:
+                with contextlib.suppress(ValueError):
+                    cpu_info["cores_per_socket"] = int(stdout.strip())
+
+            stdout = self._run_command(["sysctl", "-n", "hw.logicalcpu"])
+            if stdout:
+                with contextlib.suppress(ValueError):
+                    cpu_info["count"] = int(stdout.strip())
+        else:
+            # Linux
+            try:
+                with open("/proc/cpuinfo") as f:
+                    cpuinfo = f.read()
+                for line in cpuinfo.split("\n"):
+                    if line.startswith("model name"):
+                        cpu_info["model"] = line.split(":")[1].strip()
+                        break
+            except Exception as e:
+                self.logger.debug("Failed to read /proc/cpuinfo: %s", e)
+
+            stdout = self._run_command(["lscpu"])
+            if stdout:
+                for line in stdout.split("\n"):
+                    if line.startswith("Architecture:"):
+                        cpu_info["architecture"] = line.split(":")[1].strip()
+                    elif line.startswith("CPU(s):"):
+                        cpu_info["count"] = int(line.split(":")[1].strip())
+                    elif line.startswith("Thread(s) per core:"):
+                        cpu_info["threads_per_core"] = int(line.split(":")[1].strip())
+                    elif line.startswith("Core(s) per socket:"):
+                        cpu_info["cores_per_socket"] = int(line.split(":")[1].strip())
+                    elif line.startswith("Socket(s):"):
+                        cpu_info["sockets"] = int(line.split(":")[1].strip())
 
         return cpu_info if cpu_info else None
 
     def _get_memory_info(self) -> dict[str, int] | None:
         """Get system memory information."""
-        memory_info = {}
+        memory_info: dict[str, int] = {}
 
-        try:
-            with open("/proc/meminfo") as f:
-                for line in f:
-                    if line.startswith("MemTotal:"):
-                        kb = int(line.split()[1])
-                        memory_info["total_mb"] = kb // 1024
-                    elif line.startswith("MemAvailable:"):
-                        kb = int(line.split()[1])
-                        memory_info["available_mb"] = kb // 1024
-        except Exception as e:
-            self.logger.debug("Failed to read /proc/meminfo: %s", e)
+        if sys.platform == "darwin":
+            # macOS: total memory via sysctl
+            stdout = self._run_command(["sysctl", "-n", "hw.memsize"])
+            if stdout:
+                with contextlib.suppress(ValueError):
+                    memory_info["total_mb"] = int(stdout.strip()) // (1024 * 1024)
+
+            # macOS: available memory via vm_stat (page size * free+inactive pages)
+            stdout = self._run_command(["vm_stat"])
+            if stdout:
+                page_size = 16384  # default on Apple Silicon
+                free_pages = 0
+                # Parse page size from header: "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
+                for line in stdout.split("\n"):
+                    if "page size of" in line:
+                        match = re.search(r"page size of (\d+)", line)
+                        if match:
+                            page_size = int(match.group(1))
+                    elif line.startswith(("Pages free:", "Pages inactive:")):
+                        match = re.search(r"(\d+)", line.split(":")[1])
+                        if match:
+                            free_pages += int(match.group(1))
+                if free_pages:
+                    memory_info["available_mb"] = (free_pages * page_size) // (1024 * 1024)
+        else:
+            # Linux
+            try:
+                with open("/proc/meminfo") as f:
+                    for line in f:
+                        if line.startswith("MemTotal:"):
+                            kb = int(line.split()[1])
+                            memory_info["total_mb"] = kb // 1024
+                        elif line.startswith("MemAvailable:"):
+                            kb = int(line.split()[1])
+                            memory_info["available_mb"] = kb // 1024
+            except Exception as e:
+                self.logger.debug("Failed to read /proc/meminfo: %s", e)
 
         return memory_info if memory_info else None

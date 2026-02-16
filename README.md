@@ -16,7 +16,7 @@ pip install roar-cli
 uv pip install roar-cli
 ```
 
-Requires Python 3.10+ and Linux (x86_64 or aarch64).
+Requires Python 3.10+.
 
 ### Platform Support
 
@@ -24,10 +24,10 @@ Requires Python 3.10+ and Linux (x86_64 or aarch64).
 | ------------- | -------------- |
 | Linux x86_64  | ✅ Full support |
 | Linux aarch64 | ✅ Full support |
-| macOS         | Coming soon    |
+| macOS         | 🚧 Experimental |
 | Windows       | Coming soon    |
 
-macOS and Windows support are planned for future releases.
+PyPI wheels are published for Linux and macOS (`x86_64` and `arm64`).
 
 ### Development Installation
 
@@ -36,7 +36,7 @@ macOS and Windows support are planned for future releases.
 git clone https://github.com/treqs/roar.git
 cd roar
 
-# Install in development mode (automatically builds tracer if Rust is installed)
+# Install in development mode
 uv pip install -e ".[dev]"
 # or without uv
 pip install -e ".[dev]"
@@ -53,6 +53,45 @@ roar init
 roar run python preprocess.py --input data.csv --output features.parquet
 roar run python train.py --data features.parquet --output model.pt
 roar run python evaluate.py --model model.pt --output metrics.json
+```
+
+## Tracer Backends
+
+`roar run` relies on a Rust "tracer" binary to observe file I/O. If you see an error like "No tracer binary found", build one of the backends below.
+
+### Backends
+
+| Backend | Binary | Platforms | Notes |
+| --- | --- | --- | --- |
+| eBPF | `roar-tracer-ebpf` | Linux | Fastest, but requires permissions and kernel support. |
+| preload | `roar-tracer-preload` + `libroar_tracer_preload` | macOS, Linux | Uses `DYLD_INSERT_LIBRARIES` (macOS) or `LD_PRELOAD` (Linux). Not compatible with processes that ignore preload env vars (e.g., SIP/hardened runtime on macOS), or fully-static binaries (common with Go). |
+| ptrace | `roar-tracer` | Linux | Slowest, broadest compatibility on Linux. |
+
+### Building
+
+```bash
+cd rust
+
+# eBPF (Linux)
+cargo build --release -p roar-tracer-ebpf
+
+# preload (macOS & Linux)
+cargo build --release -p roar-tracer-preload
+
+# ptrace (Linux)
+cargo build --release -p roar-tracer
+```
+
+### Selecting A Backend
+
+By default, `roar` uses `auto` mode: prefer eBPF, then preload, then ptrace.
+
+```bash
+# Show what roar can currently find and whether it looks usable
+roar tracer status
+
+# Set a default backend (auto|ebpf|preload|ptrace)
+roar tracer set-default preload
 ```
 
 ## Commands
@@ -382,7 +421,7 @@ roar auth test
 ### Setup
 
 ```bash
-# Install dev dependencies (automatically builds tracer if Rust is installed)
+# Install dev dependencies
 uv pip install -e ".[dev]"
 ```
 

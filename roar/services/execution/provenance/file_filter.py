@@ -26,6 +26,13 @@ class FileFilterService:
         "/opt/",
         "/lib/",
         "/lib64/",
+        # macOS system paths
+        "/System/",
+        "/Library/",
+        "/Applications/",
+        "/private/var/db/",
+        "/private/var/run/",
+        "/private/var/log/",
     )
 
     # Torch/triton cache patterns
@@ -45,6 +52,12 @@ class FileFilterService:
         "/usr/lib/",
         "/usr/share/",
         "/opt/",
+        # macOS system paths
+        "/System/",
+        "/Library/Caches/",
+        "/private/var/db/",
+        "/private/var/run/",
+        "/private/var/log/",
     )
 
     def __init__(self, logger: ILogger | None = None) -> None:
@@ -126,7 +139,7 @@ class FileFilterService:
                 return False
             if ignore_package_reads and self._is_package_file(path, sys_prefix, sys_base_prefix):
                 return False
-            return not (ignore_tmp_files and path.startswith("/tmp/"))
+            return not (ignore_tmp_files and self._is_tmp_path(path))
 
         # Apply filters to reads
         opened_files = [f for f in tracer_data.opened_files if should_include_read(f)]
@@ -157,8 +170,8 @@ class FileFilterService:
             # Skip torch cache from output (but don't delete - it's a persistent cache)
             if ignore_torch_cache and self._is_torch_cache(f):
                 continue
-            # Handle /tmp files
-            if f.startswith("/tmp/"):
+            # Handle tmp files (Linux /tmp/ and macOS /private/var/folders/)
+            if self._is_tmp_path(f):
                 if ignore_tmp_files:
                     # Skip /tmp files entirely (unless strict mode)
                     continue
@@ -183,6 +196,11 @@ class FileFilterService:
             modules_files=modules_files,
             tmp_files_deleted=deleted_count,
         )
+
+    @staticmethod
+    def _is_tmp_path(path: str) -> bool:
+        """Check if path is a temporary file (Linux /tmp/ or macOS /private/var/folders/)."""
+        return path.startswith("/tmp/") or path.startswith("/private/var/folders/")
 
     def _is_system_read(self, path: str) -> bool:
         """Check if path is a system file read."""

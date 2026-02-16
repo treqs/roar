@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,7 +66,7 @@ def find_ebpf_tracer(package_path: Path) -> str | None:
 
 
 def find_preload_tracer(package_path: Path) -> str | None:
-    """Find the LD_PRELOAD tracer launcher binary."""
+    """Find the preload tracer launcher binary."""
     return _find_binary(
         package_path=package_path,
         binary_name="roar-tracer-preload",
@@ -84,36 +85,42 @@ def find_preload_library(package_path: Path) -> str | None:
     """
     Find the preload interposer shared library.
 
-    Preferred names:
-    - libroar_tracer_preload.so
-    - libroar-tracer-preload.so
+    Uses platform-specific extensions:
+    - Linux: .so
+    - macOS: .dylib
     """
     release_dir = package_path.parent / "rust" / "target" / "release"
     deps_dir = release_dir / "deps"
     package_bin_dir = package_path / "bin"
+    base_names = ("libroar_tracer_preload", "libroar-tracer-preload")
+    extensions = _preload_library_extensions()
 
-    direct_candidates = [
-        release_dir / "libroar_tracer_preload.so",
-        release_dir / "libroar-tracer-preload.so",
-        package_bin_dir / "libroar_tracer_preload.so",
-        package_bin_dir / "libroar-tracer-preload.so",
-    ]
+    direct_candidates: list[Path] = []
+    for directory in (release_dir, package_bin_dir):
+        for base_name in base_names:
+            for ext in extensions:
+                direct_candidates.append(directory / f"{base_name}{ext}")
     for candidate in direct_candidates:
         if candidate.exists():
             return str(candidate.resolve())
 
     wildcard_candidates: list[Path] = []
-    wildcard_candidates.extend(sorted(release_dir.glob("libroar_tracer_preload*.so")))
-    wildcard_candidates.extend(sorted(release_dir.glob("libroar-tracer-preload*.so")))
-    wildcard_candidates.extend(sorted(deps_dir.glob("libroar_tracer_preload*.so")))
-    wildcard_candidates.extend(sorted(deps_dir.glob("libroar-tracer-preload*.so")))
-    wildcard_candidates.extend(sorted(package_bin_dir.glob("libroar_tracer_preload*.so")))
-    wildcard_candidates.extend(sorted(package_bin_dir.glob("libroar-tracer-preload*.so")))
+    for directory in (release_dir, deps_dir, package_bin_dir):
+        for base_name in base_names:
+            for ext in extensions:
+                wildcard_candidates.extend(sorted(directory.glob(f"{base_name}*{ext}")))
 
     for candidate in wildcard_candidates:
         if candidate.exists():
             return str(candidate.resolve())
     return None
+
+
+def _preload_library_extensions() -> tuple[str, ...]:
+    """Return preload interposer extensions accepted on this platform."""
+    if sys.platform == "darwin":
+        return (".dylib",)
+    return (".so",)
 
 
 def get_perf_event_paranoid() -> int | None:

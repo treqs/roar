@@ -245,9 +245,9 @@ class TracerService:
             else:
                 hint = (
                     "No tracer binary found. Build one with:\n"
-                    "  cd rust && cargo build --release -p roar-tracer-ebpf  (eBPF, recommended)\n"
-                    "  cd rust && cargo build --release -p roar-tracer-preload (preload)\n"
-                    "  cd rust && cargo build --release -p roar-tracer       (ptrace, fallback)"
+                    "  cd rust && cargo build --release -p roar-tracer-ebpf\n"
+                    "  cd rust && cargo build --release -p roar-tracer-preload\n"
+                    "  cd rust && cargo build --release -p roar-tracer"
                 )
             raise TracerNotFoundError(hint)
 

@@ -12,6 +12,8 @@ def _make_signal_handler():
 
 
 class TestTracerSelection:
+    # Note: we intentionally do not auto-build tracer binaries during pip/CLI execution.
+
     def test_auto_prefers_preload_when_ebpf_unready(self, tmp_path):
         svc = TracerService(package_path=tmp_path / "roar")
         with (

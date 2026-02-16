@@ -12,7 +12,7 @@ on:
         type: boolean
 
 jobs:
-  build-rust-binaries:
+  build-rust-binaries-linux:
     runs-on: ubuntu-latest
 
     steps:
@@ -69,24 +69,121 @@ jobs:
       - name: Upload Rust binaries artifact
         uses: actions/upload-artifact@v4
         with:
-          name: roar-rust-binaries
+          name: roar-rust-binaries-linux-x86_64
           path: rust-bin/*
 
-  build-wheel:
-    runs-on: ubuntu-latest
-    needs: build-rust-binaries
+  build-rust-binaries-macos:
     strategy:
       fail-fast: false
       matrix:
         include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build and stage Rust binaries
+        uses: ./.github/actions/build-rust-binaries-macos
+        with:
+          manifest-path: rust/Cargo.toml
+          output-dir: rust-bin
+
+      - name: Upload Rust binaries artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: roar-rust-binaries-macos-${{ matrix.arch }}
+          path: rust-bin/*
+
+  build-wheel:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
           - python-version: "3.10"
             py-tag: "cp310"
+            runner: ubuntu-latest
+            artifact-name: roar-rust-binaries-linux-x86_64
+            platform: linux
+            platform-tag: linux-x86_64
           - python-version: "3.11"
             py-tag: "cp311"
+            runner: ubuntu-latest
+            artifact-name: roar-rust-binaries-linux-x86_64
+            platform: linux
+            platform-tag: linux-x86_64
           - python-version: "3.12"
             py-tag: "cp312"
+            runner: ubuntu-latest
+            artifact-name: roar-rust-binaries-linux-x86_64
+            platform: linux
+            platform-tag: linux-x86_64
           - python-version: "3.13"
             py-tag: "cp313"
+            runner: ubuntu-latest
+            artifact-name: roar-rust-binaries-linux-x86_64
+            platform: linux
+            platform-tag: linux-x86_64
+          # macOS ARM64
+          - python-version: "3.10"
+            py-tag: "cp310"
+            runner: macos-latest
+            artifact-name: roar-rust-binaries-macos-arm64
+            platform: macos
+            platform-tag: macos-arm64
+          - python-version: "3.11"
+            py-tag: "cp311"
+            runner: macos-latest
+            artifact-name: roar-rust-binaries-macos-arm64
+            platform: macos
+            platform-tag: macos-arm64
+          - python-version: "3.12"
+            py-tag: "cp312"
+            runner: macos-latest
+            artifact-name: roar-rust-binaries-macos-arm64
+            platform: macos
+            platform-tag: macos-arm64
+          - python-version: "3.13"
+            py-tag: "cp313"
+            runner: macos-latest
+            artifact-name: roar-rust-binaries-macos-arm64
+            platform: macos
+            platform-tag: macos-arm64
+          # macOS x86_64
+          - python-version: "3.10"
+            py-tag: "cp310"
+            runner: macos-15-intel
+            artifact-name: roar-rust-binaries-macos-x86_64
+            platform: macos
+            platform-tag: macos-x86_64
+          - python-version: "3.11"
+            py-tag: "cp311"
+            runner: macos-15-intel
+            artifact-name: roar-rust-binaries-macos-x86_64
+            platform: macos
+            platform-tag: macos-x86_64
+          - python-version: "3.12"
+            py-tag: "cp312"
+            runner: macos-15-intel
+            artifact-name: roar-rust-binaries-macos-x86_64
+            platform: macos
+            platform-tag: macos-x86_64
+          - python-version: "3.13"
+            py-tag: "cp313"
+            runner: macos-15-intel
+            artifact-name: roar-rust-binaries-macos-x86_64
+            platform: macos
+            platform-tag: macos-x86_64
+
+    runs-on: ${{ matrix.runner }}
+    needs: [build-rust-binaries-linux, build-rust-binaries-macos]
 
     steps:
       - uses: actions/checkout@v4
@@ -107,7 +204,7 @@ jobs:
       - name: Download Rust binaries artifact
         uses: actions/download-artifact@v4
         with:
-          name: roar-rust-binaries
+          name: ${{ matrix.artifact-name }}
           path: rust-bin/
 
       - name: Copy binaries to roar/bin
@@ -115,22 +212,37 @@ jobs:
         with:
           source-dir: rust-bin
           destination-dir: roar/bin
+          platform: ${{ matrix.platform }}
 
       - name: Build wheel via maturin
         run: maturin build --release --manifest-path rust/crates/artifact-hash-py/Cargo.toml --interpreter python --out dist
 
       - name: Verify wheel contains native extension and binaries
+        env:
+          ROAR_WHEEL_PLATFORM: ${{ matrix.platform }}
         run: python scripts/ci/verify_wheel_contents.py
+
+      - name: Install and smoke test wheel
+        env:
+          ROAR_WHEEL_PLATFORM: ${{ matrix.platform }}
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          tmp_dir="$(mktemp -d)"
+          cp scripts/ci/verify_installed_distribution.py "${tmp_dir}/"
+          (
+            cd "${tmp_dir}"
+            python verify_installed_distribution.py
+          )
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.py-tag }}
+          name: wheel-${{ matrix.py-tag }}-${{ matrix.platform-tag }}
           path: dist/*.whl
 
   build-sdist:
     runs-on: ubuntu-latest
-    needs: build-rust-binaries
+    needs: build-rust-binaries-linux
 
     steps:
       - uses: actions/checkout@v4
@@ -151,7 +263,7 @@ jobs:
       - name: Download Rust binaries artifact
         uses: actions/download-artifact@v4
         with:
-          name: roar-rust-binaries
+          name: roar-rust-binaries-linux-x86_64
           path: rust-bin/
 
       - name: Copy binaries to roar/bin
@@ -202,17 +314,40 @@ jobs:
         run: |
           python - <<'PY'
           import glob
+          import os
 
           wheels = sorted(glob.glob("dist/*.whl"))
-          expected = {"cp310", "cp311", "cp312", "cp313"}
-          found = {wheel.split("-")[2] for wheel in wheels}
+          expected_count = 12
+          expected_py_tags = {"cp310", "cp311", "cp312", "cp313"}
 
           print("Found wheels:")
           for wheel in wheels:
-              print(f"  - {wheel}")
+              print(f"  - {os.path.basename(wheel)}")
 
-          if found != expected:
-              raise SystemExit(f"Expected wheel tags {sorted(expected)}, found {sorted(found)}")
+          if len(wheels) != expected_count:
+              raise SystemExit(f"Expected {expected_count} wheels, found {len(wheels)}")
+
+          found_py_tags = {os.path.basename(w).split("-")[2] for w in wheels}
+          if found_py_tags != expected_py_tags:
+              raise SystemExit(
+                  f"Expected Python tags {sorted(expected_py_tags)}, "
+                  f"found {sorted(found_py_tags)}"
+              )
+
+          # Verify we have wheels for all 3 platform tags
+          wheel_basenames = [os.path.basename(w) for w in wheels]
+          has_linux = any("linux" in w for w in wheel_basenames)
+          has_macos_arm = any("macosx" in w and "arm64" in w for w in wheel_basenames)
+          has_macos_x86 = any("macosx" in w and "x86_64" in w for w in wheel_basenames)
+
+          if not has_linux:
+              raise SystemExit("Missing Linux wheels")
+          if not has_macos_arm:
+              raise SystemExit("Missing macOS ARM64 wheels")
+          if not has_macos_x86:
+              raise SystemExit("Missing macOS x86_64 wheels")
+
+          print(f"Verified {len(wheels)} wheels across all platforms")
           PY
 
       - name: Check distribution

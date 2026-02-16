@@ -7,6 +7,7 @@ Collects package information from pip, dpkg, and other package managers.
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -127,6 +128,9 @@ class PackageCollectorService:
         Returns:
             Dict of dpkg package names to versions
         """
+        if sys.platform != "linux":
+            return {}
+
         # Get shared lib info and find dpkg-managed ones
         dpkg_pkg_names: set[str] = set()
         libs_info = self._get_shared_libs_info(shared_libs, sys_prefix, installed_packages)

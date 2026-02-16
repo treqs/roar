@@ -51,7 +51,10 @@ def http_server():
     """Start a local HTTP server for testing."""
     # Reset responses
     MockHTTPHandler.responses = {}
-    server = HTTPServer(("127.0.0.1", 0), MockHTTPHandler)
+    try:
+        server = HTTPServer(("127.0.0.1", 0), MockHTTPHandler)
+    except OSError as exc:
+        pytest.skip(f"Cannot bind HTTP server: {exc}")
     port = server.server_address[1]
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()

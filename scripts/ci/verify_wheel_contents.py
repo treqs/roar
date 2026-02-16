@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+import os
 import zipfile
 
 
@@ -15,12 +16,30 @@ def main() -> None:
     with zipfile.ZipFile(wheel) as zf:
         names = set(zf.namelist())
 
-    required_bins = {
-        "roar/bin/roar-tracer",
-        "roar/bin/roar-proxy",
-        "roar/bin/roar-tracer-ebpf",
-        "roar/bin/roard",
-    }
+    platform = os.environ.get("ROAR_WHEEL_PLATFORM", "linux")
+
+    if platform == "macos":
+        required_bins = {
+            "roar/bin/roar-proxy",
+            "roar/bin/roar-tracer-preload",
+        }
+        linux_only_bins = {
+            "roar/bin/roar-tracer",
+            "roar/bin/roar-tracer-ebpf",
+            "roar/bin/roard",
+        }
+        unexpected = sorted(path for path in linux_only_bins if path in names)
+        if unexpected:
+            raise SystemExit(f"Linux-only binaries found in macOS wheel: {unexpected}")
+    else:
+        required_bins = {
+            "roar/bin/roar-tracer",
+            "roar/bin/roar-proxy",
+            "roar/bin/roar-tracer-ebpf",
+            "roar/bin/roard",
+            "roar/bin/roar-tracer-preload",
+        }
+
     missing_bins = sorted(path for path in required_bins if path not in names)
     if missing_bins:
         raise SystemExit(f"Missing binaries in wheel: {missing_bins}")
@@ -32,6 +51,14 @@ def main() -> None:
     )
     if not has_native:
         raise SystemExit("Missing native hash extension in wheel (roar/_hash_native*)")
+
+    has_preload_lib = any(
+        name.startswith("roar/bin/libroar_tracer_preload")
+        or name.startswith("roar/bin/libroar-tracer-preload")
+        for name in names
+    )
+    if not has_preload_lib:
+        raise SystemExit("Missing preload interposer library in wheel (roar/bin/libroar*_preload*)")
 
     print(f"Verified wheel contents: {wheel}")
 
