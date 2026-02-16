@@ -28,6 +28,7 @@ class RoarBaseModel(BaseModel):
         populate_by_name=True,
         use_enum_values=True,
         revalidate_instances="never",
+        defer_build=True,
     )
 
 
@@ -41,4 +42,5 @@ class ImmutableModel(RoarBaseModel):
         populate_by_name=True,
         use_enum_values=True,
         revalidate_instances="never",
+        defer_build=True,
     )

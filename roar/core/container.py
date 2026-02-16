@@ -1,40 +1,95 @@
 """
 Dependency injection container for roar.
 
-Uses dependency-injector for DI with support for:
+Lightweight DI with support for:
 - Singleton and transient lifetimes
 - Factory registration
 - Interface-based resolution
 - Plugin registries for extensible components
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
-from typing import Optional, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
-from dependency_injector import providers
-
-from .interfaces.cloud import ICloudStorageProvider
-from .interfaces.command import ICommand
-from .interfaces.telemetry import ITelemetryProvider
-from .interfaces.vcs import IVCSProvider
+if TYPE_CHECKING:
+    from .interfaces.cloud import ICloudStorageProvider
+    from .interfaces.command import ICommand
+    from .interfaces.telemetry import ITelemetryProvider
+    from .interfaces.vcs import IVCSProvider
 
 T = TypeVar("T")
+
+
+# ---------------------------------------------------------------------------
+# Minimal provider implementations (replaces dependency_injector)
+# ---------------------------------------------------------------------------
+
+
+class _Provider:
+    """Base provider protocol."""
+
+    def __call__(self) -> Any:
+        raise NotImplementedError
+
+
+class _ObjectProvider(_Provider):
+    """Returns the same pre-created instance every time."""
+
+    __slots__ = ("_obj",)
+
+    def __init__(self, obj: Any) -> None:
+        self._obj = obj
+
+    def __call__(self) -> Any:
+        return self._obj
+
+
+class _SingletonProvider(_Provider):
+    """Calls factory once, caches and returns the result thereafter."""
+
+    __slots__ = ("_factory", "_instance")
+
+    def __init__(self, factory: Callable[..., Any]) -> None:
+        self._factory = factory
+        self._instance: Any = _SENTINEL
+
+    def __call__(self) -> Any:
+        if self._instance is _SENTINEL:
+            self._instance = self._factory()
+        return self._instance
+
+
+class _FactoryProvider(_Provider):
+    """Calls factory on every resolution (transient)."""
+
+    __slots__ = ("_factory",)
+
+    def __init__(self, factory: Callable[..., Any]) -> None:
+        self._factory = factory
+
+    def __call__(self) -> Any:
+        return self._factory()
+
+
+_SENTINEL = object()
 
 
 class ServiceContainer:
     """
     Dependency injection container for roar.
 
-    Combines dependency-injector's DI capabilities with plugin registries
-    for extensible components like cloud providers and analyzers.
+    Combines DI capabilities with plugin registries for extensible
+    components like cloud providers and analyzers.
     """
 
-    _instance: Optional["ServiceContainer"] = None
+    _instance: ServiceContainer | None = None
 
     def __init__(self) -> None:
         """Initialize the container with empty registries."""
         # Dynamic provider storage (interface -> provider)
-        self._providers: dict[type, providers.Provider] = {}
+        self._providers: dict[type, _Provider] = {}
 
         # Plugin registries (multiple implementations per interface)
         self._cloud_providers: dict[str, type[ICloudStorageProvider]] = {}
@@ -44,7 +99,7 @@ class ServiceContainer:
         self._command_aliases: dict[str, str] = {}
 
     @classmethod
-    def get_instance(cls) -> "ServiceContainer":
+    def get_instance(cls) -> ServiceContainer:
         """Get the global container instance (singleton)."""
         if cls._instance is None:
             cls._instance = cls()
@@ -56,7 +111,7 @@ class ServiceContainer:
         cls._instance = None
 
     # -------------------------------------------------------------------------
-    # Core service registration (uses dependency-injector providers)
+    # Core service registration
     # -------------------------------------------------------------------------
 
     def register_singleton(
@@ -74,11 +129,9 @@ class ServiceContainer:
             factory: Optional factory function (for lazy init)
         """
         if implementation is not None:
-            # Use Object provider for pre-created instances
-            self._providers[interface] = providers.Object(implementation)
+            self._providers[interface] = _ObjectProvider(implementation)
         elif factory is not None:
-            # Use Singleton provider with factory for lazy initialization
-            self._providers[interface] = providers.Singleton(factory)
+            self._providers[interface] = _SingletonProvider(factory)
         else:
             raise ValueError("Must provide either implementation or factory")
 
@@ -94,7 +147,7 @@ class ServiceContainer:
             interface: The interface/protocol type
             factory: Factory function or class
         """
-        self._providers[interface] = providers.Factory(factory)
+        self._providers[interface] = _FactoryProvider(factory)
 
     def register_class(
         self,
@@ -111,9 +164,9 @@ class ServiceContainer:
             scope: 'singleton' or 'transient'
         """
         if scope == "singleton":
-            self._providers[interface] = providers.Singleton(implementation)
+            self._providers[interface] = _SingletonProvider(implementation)
         else:
-            self._providers[interface] = providers.Factory(implementation)
+            self._providers[interface] = _FactoryProvider(implementation)
 
     def resolve(self, interface: type[T]) -> T:
         """
@@ -146,7 +199,7 @@ class ServiceContainer:
             return None
         return self._providers[interface]()
 
-    def override(self, interface: type[T], provider: providers.Provider) -> None:
+    def override(self, interface: type[T], provider: _Provider) -> None:
         """
         Override a registered provider (useful for testing).
 

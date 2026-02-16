@@ -4,6 +4,8 @@ Package collector service for provenance collection.
 Collects package information from pip, dpkg, and other package managers.
 """
 
+import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -11,13 +13,17 @@ from typing import Any
 from ....core.interfaces.logger import ILogger
 from ....core.interfaces.provenance import PythonInjectData
 
+_DPKG_CACHE_FILENAME = "dpkg_lib_cache.json"
+_DPKG_STATUS_PATH = "/var/lib/dpkg/status"
+
 
 class PackageCollectorService:
     """Collects package information from various package managers."""
 
-    def __init__(self, logger: ILogger | None = None) -> None:
-        """Initialize package collector with optional logger."""
+    def __init__(self, logger: ILogger | None = None, cache_dir: str | None = None) -> None:
+        """Initialize package collector with optional logger and cache directory."""
         self._logger = logger
+        self._cache_dir = cache_dir
 
     @property
     def logger(self) -> ILogger:
@@ -167,6 +173,10 @@ class PackageCollectorService:
         """
         Get information about shared libraries including their source.
 
+        Classifies each library as pip-managed, venv-managed, or dpkg-managed.
+        The dpkg lookups use a persistent cache (keyed by dpkg database mtime)
+        and a single batched ``dpkg -S`` call for any cache misses.
+
         Args:
             shared_libs: List of shared library paths
             sys_prefix: Python sys.prefix path
@@ -175,81 +185,155 @@ class PackageCollectorService:
         Returns:
             List of dicts with path, managed, manager, package info
         """
-        libs_info = []
+        libs_info: list[dict[str, Any]] = []
+        needs_dpkg: list[int] = []  # indices into libs_info needing dpkg lookup
+        resolved_prefix = Path(sys_prefix).resolve() if sys_prefix else None
 
         for lib_path in shared_libs:
             if lib_path.startswith("/proc/") or lib_path.startswith("/dev/"):
                 continue
-            libs_info.append(self._classify_shared_lib(lib_path, sys_prefix, installed_packages))
+
+            info: dict[str, Any] = {"path": lib_path}
+
+            # Check if it's in site-packages (pip-managed)
+            if "site-packages" in lib_path:
+                info["managed"] = True
+                info["manager"] = "pip"
+                pkg_name = self._extract_package_from_site_packages(lib_path)
+                if pkg_name:
+                    pkg_name_normalized = pkg_name.lower().replace("-", "_")
+                    for installed_name in installed_packages:
+                        if installed_name.lower().replace("-", "_") == pkg_name_normalized:
+                            info["package"] = installed_name
+                            break
+                    else:
+                        info["package"] = pkg_name
+                libs_info.append(info)
+                continue
+
+            # Check if under sys_prefix (venv)
+            if resolved_prefix:
+                try:
+                    Path(lib_path).relative_to(resolved_prefix)
+                    info["managed"] = True
+                    info["manager"] = "pip"
+                    libs_info.append(info)
+                    continue
+                except ValueError:
+                    pass
+
+            # Needs dpkg lookup — collect for batch resolution
+            libs_info.append(info)
+            needs_dpkg.append(len(libs_info) - 1)
+
+        # Resolve dpkg ownership via cache + single batched subprocess
+        if needs_dpkg:
+            dpkg_paths = [libs_info[i]["path"] for i in needs_dpkg]
+            dpkg_results = self._resolve_dpkg_owners(dpkg_paths)
+            for idx in needs_dpkg:
+                lib_path = libs_info[idx]["path"]
+                pkg_name = dpkg_results.get(lib_path)
+                if pkg_name:
+                    libs_info[idx]["package"] = pkg_name
+                    libs_info[idx]["managed"] = True
+                    libs_info[idx]["manager"] = "dpkg"
+                else:
+                    libs_info[idx]["managed"] = False
 
         return libs_info
 
-    def _classify_shared_lib(
-        self,
-        lib_path: str,
-        sys_prefix: str,
-        installed_packages: dict[str, str],
-    ) -> dict[str, Any]:
+    # ------------------------------------------------------------------
+    # dpkg file→package cache (invalidated by dpkg database mtime)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _dpkg_db_mtime() -> float:
+        """Return mtime of the dpkg status database, or 0 if unavailable."""
+        try:
+            return os.stat(_DPKG_STATUS_PATH).st_mtime
+        except OSError:
+            return 0.0
+
+    def _load_dpkg_cache(self) -> tuple[float, dict[str, str]]:
+        """Load cached lib_path→package mappings. Returns (mtime, mapping)."""
+        if not self._cache_dir:
+            return 0.0, {}
+        try:
+            with open(os.path.join(self._cache_dir, _DPKG_CACHE_FILENAME)) as f:
+                data = json.load(f)
+            return float(data.get("dpkg_mtime", 0)), data.get("libs", {})
+        except (OSError, json.JSONDecodeError, ValueError):
+            return 0.0, {}
+
+    def _save_dpkg_cache(self, dpkg_mtime: float, libs: dict[str, str]) -> None:
+        """Persist lib_path→package mappings."""
+        if not self._cache_dir:
+            return
+        try:
+            with open(os.path.join(self._cache_dir, _DPKG_CACHE_FILENAME), "w") as f:
+                json.dump({"dpkg_mtime": dpkg_mtime, "libs": libs}, f)
+        except OSError:
+            pass
+
+    def _resolve_dpkg_owners(self, lib_paths: list[str]) -> dict[str, str]:
         """
-        Classify a shared library - is it from a deb package, pip/uv package, or unmanaged.
+        Map library paths to owning dpkg package names.
+
+        Uses a persistent cache keyed on ``/var/lib/dpkg/status`` mtime.
+        Only runs ``dpkg -S`` for paths not already in the cache.
 
         Args:
-            lib_path: Path to the shared library
-            sys_prefix: Python sys.prefix path
-            installed_packages: Dict of installed pip packages
+            lib_paths: Library file paths to look up
 
         Returns:
-            Dict with path, managed, manager, package info
+            Dict mapping path → package name for dpkg-owned paths
         """
-        info: dict[str, Any] = {"path": lib_path}
+        current_mtime = self._dpkg_db_mtime()
+        cached_mtime, cached_libs = self._load_dpkg_cache()
 
-        # Check if it's in site-packages (pip-managed)
-        if "site-packages" in lib_path:
-            info["managed"] = True
-            info["manager"] = "pip"
-            pkg_name = self._extract_package_from_site_packages(lib_path)
-            if pkg_name:
-                # Try to find matching installed package (case-insensitive, handle - vs _)
-                pkg_name_normalized = pkg_name.lower().replace("-", "_")
-                for installed_name in installed_packages:
-                    if installed_name.lower().replace("-", "_") == pkg_name_normalized:
-                        info["package"] = installed_name
-                        break
-                else:
-                    # If exact match not found, use the extracted name
-                    info["package"] = pkg_name
-            return info
+        # Invalidate cache if dpkg database changed
+        if cached_mtime != current_mtime:
+            self.logger.debug("dpkg cache miss (db mtime changed)")
+            cached_libs = {}
+        else:
+            self.logger.debug("dpkg cache valid, %d entries", len(cached_libs))
 
-        # Check if under sys_prefix (venv)
-        if sys_prefix:
-            try:
-                Path(lib_path).relative_to(Path(sys_prefix).resolve())
-                info["managed"] = True
-                info["manager"] = "pip"
-                return info
-            except ValueError:
-                pass
+        results: dict[str, str] = {}
+        uncached: list[str] = []
 
-        # Check if it's a system library (dpkg-managed)
-        try:
-            result = subprocess.run(
-                ["dpkg", "-S", lib_path],
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-            if result.returncode == 0:
-                pkg_name = result.stdout.split(":")[0].strip()
-                info["package"] = pkg_name
-                info["managed"] = True
-                info["manager"] = "dpkg"
+        for path in lib_paths:
+            if path in cached_libs:
+                results[path] = cached_libs[path]
             else:
-                info["managed"] = False
-        except Exception as e:
-            self.logger.debug("dpkg -S failed for %s: %s", lib_path, e)
-            info["managed"] = None
+                uncached.append(path)
 
-        return info
+        # Batch dpkg -S for all uncached paths in one subprocess call
+        if uncached:
+            self.logger.debug("Running dpkg -S for %d uncached libs", len(uncached))
+            try:
+                result = subprocess.run(
+                    ["dpkg", "-S", *uncached],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                # dpkg -S outputs "pkg:arch: /path" lines.
+                # Non-zero exit is expected when some paths aren't found,
+                # but matches still appear on stdout.
+                for line in result.stdout.strip().split("\n"):
+                    if ": " in line:
+                        pkg_part, path_part = line.split(": ", 1)
+                        pkg_name = pkg_part.split(":")[0].strip()
+                        path = path_part.strip()
+                        results[path] = pkg_name
+                        cached_libs[path] = pkg_name
+            except Exception as e:
+                self.logger.debug("Batch dpkg -S failed: %s", e)
+
+            # Persist updated cache
+            self._save_dpkg_cache(current_mtime, cached_libs)
+
+        return results
 
     def _extract_package_from_site_packages(self, lib_path: str) -> str | None:
         """

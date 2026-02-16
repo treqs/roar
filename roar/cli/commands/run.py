@@ -10,10 +10,6 @@ import shlex
 import click
 
 from ...core.tracer_modes import TRACER_MODE_VALUES
-from ...db.context import create_database_context
-from ...presenters.console import ConsolePresenter
-from ...presenters.run_report import RunReportPresenter
-from ...services.execution import DAGReferenceResolver
 from ..context import RoarContext
 from ..decorators import require_init
 from ._execution import (
@@ -106,7 +102,7 @@ def run(
         i += 1
 
     # Validate git is clean
-    repo_root, git_info = validate_git_clean()
+    repo_root = validate_git_clean()
 
     # Get quiet setting
     quiet_setting = get_quiet_setting(quiet, repo_root)
@@ -138,7 +134,6 @@ def run(
         step_name=step_name,
         quiet=quiet_setting,
         hash_algorithms=algorithms,
-        git_info=git_info,
         repo_root=repo_root,
         tracer_mode=tracer_mode,
         tracer_fallback=tracer_fallback,
@@ -160,6 +155,11 @@ def _resolve_dag_reference(
     Returns:
         Tuple of (command_string, is_build) or (None, False) on error
     """
+    from ...db.context import create_database_context
+    from ...presenters.console import ConsolePresenter
+    from ...presenters.run_report import RunReportPresenter
+    from ...services.execution.dag_resolver import DAGReferenceResolver
+
     with create_database_context(ctx.roar_dir) as db_ctx:
         resolver = DAGReferenceResolver(
             db_ctx.sessions,

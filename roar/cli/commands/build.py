@@ -72,7 +72,7 @@ def build(
         return
 
     # Validate git is clean
-    repo_root, git_info = validate_git_clean()
+    repo_root = validate_git_clean()
 
     # Get quiet setting
     quiet_setting = get_quiet_setting(quiet, repo_root)
@@ -88,7 +88,6 @@ def build(
         step_name=step_name,
         quiet=quiet_setting,
         hash_algorithms=algorithms,
-        git_info=git_info,
         repo_root=repo_root,
         tracer_mode=tracer_mode,
         tracer_fallback=tracer_fallback,

@@ -10,10 +10,9 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from ..core.interfaces.vcs import IVCSProvider
+_SENTINEL: dict[str, Any] = {}
 
 
 @dataclass
@@ -29,14 +28,28 @@ class RoarContext:
         repo_root: Path to git repository root (None if not in a repo)
         cwd: Current working directory
         is_interactive: Whether stdin is a TTY (for prompts)
-        config: Loaded configuration dictionary
+        config: Configuration dictionary (lazy-loaded on first access)
     """
 
     roar_dir: Path
     repo_root: Path | None
     cwd: Path
     is_interactive: bool
-    config: dict[str, Any] = field(default_factory=dict)
+    _config: dict[str, Any] = field(default_factory=lambda: _SENTINEL, repr=False)
+
+    @property
+    def config(self) -> dict[str, Any]:
+        """Lazy-loaded configuration. Only imports config machinery on first access."""
+        if self._config is _SENTINEL:
+            if self.roar_dir.exists():
+                self._config = self._load_config(self.roar_dir.parent)
+            else:
+                self._config = {}
+        return self._config
+
+    @config.setter
+    def config(self, value: dict[str, Any]) -> None:
+        self._config = value
 
     @classmethod
     def create(cls, cwd: Path | None = None) -> RoarContext:
@@ -45,7 +58,7 @@ class RoarContext:
         This factory method gathers all necessary context information:
         - Determines the .roar directory location
         - Finds the git repository root (if any)
-        - Loads configuration (if initialized)
+        - Configuration is lazy-loaded on first access to .config
 
         Args:
             cwd: Working directory override (defaults to Path.cwd())
@@ -59,52 +72,46 @@ class RoarContext:
         # Get VCS provider and find repo root.
         repo_root = cls._get_repo_root(cwd)
 
-        # Determine .roar directory by searching upward from cwd, bounded to workspace.
-        from ..core.settings import find_roar_dir
-
-        search_stop = str(repo_root) if repo_root is not None else str(cwd)
-        roar_dir = find_roar_dir(str(cwd), stop_dir=search_stop) or (cwd / ".roar")
-
-        # Load config if roar is initialized
-        config: dict[str, Any] = {}
-        if roar_dir.exists():
-            config = cls._load_config(roar_dir.parent)
+        # Walk upward looking for .roar directory, bounded to workspace.
+        # Inlined to avoid importing roar.core (heavy cascade) at CLI init.
+        stop = (repo_root or cwd).resolve()
+        roar_dir = cwd / ".roar"  # default fallback
+        for parent in [cwd, *list(cwd.parents)]:
+            candidate = parent / ".roar"
+            if candidate.is_dir():
+                roar_dir = candidate
+                break
+            if parent.resolve() == stop:
+                break
 
         return cls(
             roar_dir=roar_dir,
             repo_root=repo_root,
             cwd=cwd,
             is_interactive=sys.stdin.isatty(),
-            config=config,
         )
 
     @staticmethod
     def _get_repo_root(start_dir: Path | None = None) -> Path | None:
         """Get the git repository root, if in a git repo.
 
+        Uses git directly to avoid importing the container (and its heavy
+        dependency chain) before bootstrap.
+
         Returns:
             Path to repo root, or None if not in a git repository
         """
         try:
-            from ..core.container import get_container
+            import subprocess
 
-            container = get_container()
-            vcs: IVCSProvider = container.get_vcs_provider("git")
-            root = vcs.get_repo_root(str(start_dir) if start_dir else None)
-            return Path(root) if root else None
+            out = subprocess.check_output(
+                ["git", "rev-parse", "--show-toplevel"],
+                stderr=subprocess.DEVNULL,
+                cwd=start_dir,
+            )
+            return Path(out.decode().strip())
         except Exception:
-            # Container not bootstrapped yet — fall back to direct git call
-            try:
-                import subprocess
-
-                out = subprocess.check_output(
-                    ["git", "rev-parse", "--show-toplevel"],
-                    stderr=subprocess.DEVNULL,
-                    cwd=start_dir,
-                )
-                return Path(out.decode().strip())
-            except Exception:
-                return None
+            return None
 
     @staticmethod
     def _load_config(start_dir: Path) -> dict[str, Any]:

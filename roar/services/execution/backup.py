@@ -21,11 +21,12 @@ class PreviousOutputBackupService:
 
     def backup_previous_outputs(self, ctx: RunContext, logger: ILogger) -> None:
         from ...config import config_get
-        from ...db.context import create_database_context
-        from ...db.repositories.job import SQLAlchemyJobRepository
 
         if not config_get("reversible.enabled"):
             return
+
+        from ...db.context import create_database_context
+        from ...db.repositories.job import SQLAlchemyJobRepository
 
         try:
             with create_database_context(ctx.roar_dir) as db_ctx:
