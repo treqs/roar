@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::ErrorKind;
-use std::os::unix::net::UnixDatagram;
 use std::os::unix::process::ExitStatusExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tracer_fd::FdTracker;
@@ -16,7 +14,7 @@ use tracer_schema::{ProcessInfo, TracerReport};
 
 use roar_tracer_preload::TraceEvent;
 
-const TRACE_SOCKET_ENV: &str = "ROAR_PRELOAD_TRACE_SOCK";
+const TRACE_FD_ENV: &str = "ROAR_PRELOAD_TRACE_FD";
 const PRELOAD_LIB_ENV: &str = "ROAR_PRELOAD_LIB";
 
 struct CollectorState {
@@ -168,40 +166,33 @@ fn resolve_preload_library() -> Option<PathBuf> {
     None
 }
 
-fn make_socket_path(output_file: &str) -> PathBuf {
-    let pid = std::process::id();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let parent = Path::new(output_file)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    parent.join(format!(".roar-preload-{pid}-{nanos}.sock"))
-}
-
-fn drain_events(socket: &UnixDatagram, state: &mut CollectorState) -> usize {
+fn drain_events(read_fd: i32, state: &mut CollectorState, buf: &mut Vec<u8>) -> usize {
     let mut processed = 0usize;
-    let mut buf = [0u8; 16 * 1024];
+    let mut tmp = [0u8; 64 * 1024];
 
     loop {
-        match socket.recv(&mut buf) {
-            Ok(size) => {
-                processed += 1;
-                match rmp_serde::from_slice::<TraceEvent>(&buf[..size]) {
-                    Ok(event) => state.ingest(event),
-                    Err(_) => state.events_dropped += 1,
-                }
-            }
-            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
-                break;
-            }
-            Err(_) => {
-                state.events_dropped += 1;
-                break;
-            }
+        let n = unsafe {
+            libc::read(read_fd, tmp.as_mut_ptr() as *mut libc::c_void, tmp.len())
+        };
+        if n > 0 {
+            buf.extend_from_slice(&tmp[..n as usize]);
+        } else {
+            break;
         }
+    }
+
+    while buf.len() >= 4 {
+        let len =
+            u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+        if buf.len() < 4 + len {
+            break;
+        }
+        match rmp_serde::from_slice::<TraceEvent>(&buf[4..4 + len]) {
+            Ok(event) => state.ingest(event),
+            Err(_) => state.events_dropped += 1,
+        }
+        processed += 1;
+        buf.drain(..4 + len);
     }
 
     processed
@@ -219,10 +210,18 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
     let preload_library = resolve_preload_library()
         .context("preload library not found; set ROAR_PRELOAD_LIB or build roar-tracer-preload")?;
 
-    let socket_path = make_socket_path(output_file);
-    let socket = UnixDatagram::bind(&socket_path)
-        .with_context(|| format!("failed to bind socket {}", socket_path.display()))?;
-    socket.set_nonblocking(true)?;
+    let mut pipe_fds = [0i32; 2];
+    if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
+        anyhow::bail!("failed to create pipe");
+    }
+    let read_fd = pipe_fds[0];
+    let write_fd = pipe_fds[1];
+
+    // Read end: non-blocking (for polling) + close-on-exec (child doesn't need it)
+    unsafe {
+        libc::fcntl(read_fd, libc::F_SETFL, libc::O_NONBLOCK);
+        libc::fcntl(read_fd, libc::F_SETFD, libc::FD_CLOEXEC);
+    }
 
     let start_time = timestamp_now();
 
@@ -241,16 +240,21 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
 
     cmd.env("LD_PRELOAD", combined_preload);
     cmd.env(PRELOAD_LIB_ENV, preload_library_str);
-    cmd.env(TRACE_SOCKET_ENV, &socket_path);
+    cmd.env(TRACE_FD_ENV, write_fd.to_string());
 
     let mut child = cmd.spawn().context("failed to spawn traced command")?;
+
+    // Close write end in parent so read_fd gets EOF when child exits
+    unsafe { libc::close(write_fd); }
+
     let root_pid = child.id();
     let mut state = CollectorState::new(root_pid, command.to_vec());
     state.ensure_process(root_pid);
 
+    let mut read_buf = Vec::new();
     let exit_code;
     loop {
-        let _ = drain_events(&socket, &mut state);
+        let _ = drain_events(read_fd, &mut state, &mut read_buf);
 
         if let Some(status) = child.try_wait()? {
             exit_code = status_to_exit_code(status);
@@ -262,10 +266,12 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
 
     let drain_deadline = Instant::now() + Duration::from_millis(50);
     while Instant::now() < drain_deadline {
-        if drain_events(&socket, &mut state) == 0 {
+        if drain_events(read_fd, &mut state, &mut read_buf) == 0 {
             break;
         }
     }
+
+    unsafe { libc::close(read_fd); }
 
     let end_time = timestamp_now();
     let report = state.build_report(start_time, end_time);
@@ -273,7 +279,6 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
     fs::write(output_file, &msgpack)
         .with_context(|| format!("failed to write report to {output_file}"))?;
 
-    let _ = fs::remove_file(&socket_path);
     Ok(exit_code)
 }
 

@@ -1,7 +1,6 @@
 use std::cell::Cell;
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
 use std::fs;
-use std::os::unix::net::UnixDatagram;
 use std::sync::OnceLock;
 
 use libc::{off_t, size_t, ssize_t};
@@ -9,13 +8,14 @@ use libc::{off_t, size_t, ssize_t};
 pub mod ipc;
 pub use ipc::TraceEvent;
 
-const TRACE_SOCKET_ENV: &str = "ROAR_PRELOAD_TRACE_SOCK";
+const TRACE_FD_ENV: &str = "ROAR_PRELOAD_TRACE_FD";
 
 thread_local! {
     static IN_HOOK: Cell<bool> = const { Cell::new(false) };
 }
 
-static TRACE_SOCKET: OnceLock<Option<UnixDatagram>> = OnceLock::new();
+static TRACE_PIPE_FD: OnceLock<Option<c_int>> = OnceLock::new();
+static REAL_WRITE: OnceLock<Option<WriteFn>> = OnceLock::new();
 
 fn in_hook() -> bool {
     IN_HOOK.with(|flag| flag.get())
@@ -32,25 +32,40 @@ fn with_hook_guard<F: FnOnce()>(f: F) {
     });
 }
 
-fn trace_socket() -> Option<&'static UnixDatagram> {
-    TRACE_SOCKET
-        .get_or_init(|| {
-            let socket_path = std::env::var(TRACE_SOCKET_ENV).ok()?;
-            let sock = UnixDatagram::unbound().ok()?;
-            sock.connect(socket_path).ok()?;
-            Some(sock)
-        })
-        .as_ref()
+fn trace_pipe_fd() -> Option<c_int> {
+    *TRACE_PIPE_FD.get_or_init(|| {
+        let fd_str = std::env::var(TRACE_FD_ENV).ok()?;
+        let fd = fd_str.parse::<c_int>().ok()?;
+        if fd < 0 {
+            return None;
+        }
+        Some(fd)
+    })
+}
+
+fn get_real_write() -> Option<WriteFn> {
+    *REAL_WRITE.get_or_init(|| unsafe { resolve_symbol::<WriteFn>(b"write\0") })
 }
 
 fn send_event(event: &TraceEvent) {
-    let Some(sock) = trace_socket() else {
+    let Some(fd) = trace_pipe_fd() else {
+        return;
+    };
+    let Some(real_write) = get_real_write() else {
         return;
     };
     let Ok(payload) = rmp_serde::to_vec_named(event) else {
         return;
     };
-    let _ = sock.send(&payload);
+    let len = payload.len() as u32;
+    let mut frame = Vec::with_capacity(4 + payload.len());
+    frame.extend_from_slice(&len.to_le_bytes());
+    frame.extend_from_slice(&payload);
+    // Write via real libc write to bypass our hook.
+    // Pipe writes <= PIPE_BUF (4096) are atomic on Linux.
+    unsafe {
+        real_write(fd, frame.as_ptr() as *const c_void, frame.len());
+    }
 }
 
 fn current_pid() -> u32 {
