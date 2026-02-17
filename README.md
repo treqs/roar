@@ -24,7 +24,7 @@ Requires Python 3.10+.
 | ------------- | -------------- |
 | Linux x86_64  | ✅ Full support |
 | Linux aarch64 | ✅ Full support |
-| macOS         | 🚧 Experimental |
+| macOS         | 🚧 Experimental ([limitations](#macos-tracing-limitations)) |
 | Windows       | Coming soon    |
 
 PyPI wheels are published for Linux and macOS (`x86_64` and `arm64`).
@@ -93,6 +93,28 @@ roar tracer status
 # Set a default backend (auto|ebpf|preload|ptrace)
 roar tracer set-default preload
 ```
+
+### macOS Tracing Limitations
+
+On macOS, `roar` uses the `preload` backend (`DYLD_INSERT_LIBRARIES`). macOS System Integrity Protection (SIP) silently blocks library injection for Apple-signed platform binaries — anything under `/usr/bin/`, `/bin/`, `/sbin/`, or `/System/`. When this happens, `roar run` will complete successfully but capture no file I/O events.
+
+**Affected:** `/usr/bin/python3`, `/bin/sh`, `/usr/bin/ruby`, and all other Apple-shipped binaries.
+
+**Workaround:** Use non-Apple builds of your tools:
+
+```bash
+# Homebrew
+brew install python3
+roar run python3 train.py          # Uses /opt/homebrew/bin/python3 — works
+
+# conda / pyenv / nix also work
+roar run ~/.pyenv/shims/python train.py
+
+# This will NOT capture file events (SIP blocks it):
+roar run /usr/bin/python3 train.py
+```
+
+`roar` prints a warning when it detects no events were captured from a SIP-protected binary.
 
 ## Commands
 
