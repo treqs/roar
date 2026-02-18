@@ -158,6 +158,35 @@ fn standalone_preload_tracer_emits_msgpack_report() {
         "report should include at least one process"
     );
 
+    assert!(
+        !report.files.is_empty(),
+        "report should include file records"
+    );
+
+    // On macOS, F_GETPATH returns canonical paths (/private/var/...) while std::env::temp_dir()
+    // returns /var/... — check both the original and canonicalized path.
+    let target_canonical = fs::canonicalize(&target_path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| target_path_arg.clone());
+    let target_file = report
+        .files
+        .iter()
+        .find(|f| f.path == target_canonical || f.path == target_path_arg);
+    assert!(
+        target_file.is_some(),
+        "target file path should appear in file records; got: {:?}",
+        report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+    );
+    let target_file = target_file.unwrap();
+    assert!(
+        target_file.read,
+        "target file should be marked as read"
+    );
+    assert!(
+        target_file.written,
+        "target file should be marked as written"
+    );
+
     let _ = fs::remove_file(trace_path);
     let _ = fs::remove_file(target_path);
     let _ = fs::remove_dir(temp_dir);

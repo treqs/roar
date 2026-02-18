@@ -60,4 +60,74 @@ fn main() {
         eprintln!("unexpected payload: {}", String::from_utf8_lossy(got));
         std::process::exit(1);
     }
+
+    // --- mmap test: read the file via mmap ---
+    let mmap_fd = unsafe { libc::open(c_path.as_ptr(), libc::O_RDONLY) };
+    if mmap_fd < 0 {
+        eprintln!("failed to open file for mmap");
+        std::process::exit(1);
+    }
+    let mmap_ptr = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            payload.len(),
+            libc::PROT_READ,
+            libc::MAP_PRIVATE,
+            mmap_fd,
+            0,
+        )
+    };
+    if mmap_ptr == libc::MAP_FAILED {
+        eprintln!("mmap failed");
+        unsafe { libc::close(mmap_fd) };
+        std::process::exit(1);
+    }
+    let mmap_slice = unsafe { std::slice::from_raw_parts(mmap_ptr as *const u8, payload.len()) };
+    if mmap_slice != payload {
+        eprintln!(
+            "mmap payload mismatch: {}",
+            String::from_utf8_lossy(mmap_slice)
+        );
+        std::process::exit(1);
+    }
+    unsafe {
+        libc::munmap(mmap_ptr, payload.len());
+        libc::close(mmap_fd);
+    }
+
+    // --- rename test: rename to .renamed, then rename back ---
+    let renamed = format!("{}.renamed", c_path.to_str().unwrap());
+    let c_renamed = CString::new(renamed).expect("renamed path contains interior NUL");
+    if unsafe { libc::rename(c_path.as_ptr(), c_renamed.as_ptr()) } != 0 {
+        eprintln!("rename failed");
+        std::process::exit(1);
+    }
+    if unsafe { libc::rename(c_renamed.as_ptr(), c_path.as_ptr()) } != 0 {
+        eprintln!("rename back failed");
+        std::process::exit(1);
+    }
+
+    // --- truncate test: truncate the file to a smaller size ---
+    if unsafe { libc::truncate(c_path.as_ptr(), 5) } != 0 {
+        eprintln!("truncate failed");
+        std::process::exit(1);
+    }
+
+    // --- unlink test: create a temp file then unlink it ---
+    let unlink_path = format!("{}.unlink_test", c_path.to_str().unwrap());
+    let c_unlink = CString::new(unlink_path).expect("unlink path contains interior NUL");
+    let unlink_fd = unsafe {
+        libc::open(
+            c_unlink.as_ptr(),
+            libc::O_CREAT | libc::O_WRONLY,
+            0o644,
+        )
+    };
+    if unlink_fd >= 0 {
+        unsafe { libc::close(unlink_fd) };
+        if unsafe { libc::unlink(c_unlink.as_ptr()) } != 0 {
+            eprintln!("unlink failed");
+            std::process::exit(1);
+        }
+    }
 }

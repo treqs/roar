@@ -127,14 +127,52 @@ impl CollectorState {
 }
 
 fn parent_pid_from_proc(pid: u32) -> Option<u32> {
-    let status_path = format!("/proc/{pid}/status");
-    let status = fs::read_to_string(status_path).ok()?;
-    for line in status.lines() {
-        if let Some(value) = line.strip_prefix("PPid:") {
-            return value.trim().parse::<u32>().ok();
+    #[cfg(target_os = "macos")]
+    {
+        // Use proc_pidinfo(PROC_PIDTBSDINFO) to get the parent PID on macOS.
+        // struct proc_bsdinfo has pbi_ppid at offset 16 (after flags, status, xstatus, pid).
+        extern "C" {
+            fn proc_pidinfo(
+                pid: libc::c_int,
+                flavor: libc::c_int,
+                arg: u64,
+                buffer: *mut libc::c_void,
+                buffersize: libc::c_int,
+            ) -> libc::c_int;
         }
+        const PROC_PIDTBSDINFO: libc::c_int = 3;
+        let mut buf = [0u8; 256]; // struct proc_bsdinfo is ~136 bytes
+        let ret = unsafe {
+            proc_pidinfo(
+                pid as libc::c_int,
+                PROC_PIDTBSDINFO,
+                0,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len() as libc::c_int,
+            )
+        };
+        if ret <= 0 {
+            return None;
+        }
+        // pbi_ppid is at byte offset 16 (4th uint32 field).
+        let ppid = u32::from_ne_bytes([buf[16], buf[17], buf[18], buf[19]]);
+        if ppid == 0 {
+            return None;
+        }
+        return Some(ppid);
     }
-    None
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let status_path = format!("/proc/{pid}/status");
+        let status = fs::read_to_string(status_path).ok()?;
+        for line in status.lines() {
+            if let Some(value) = line.strip_prefix("PPid:") {
+                return value.trim().parse::<u32>().ok();
+            }
+        }
+        None
+    }
 }
 
 fn resolve_preload_library() -> Option<PathBuf> {

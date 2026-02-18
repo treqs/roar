@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
 #[cfg(not(target_os = "macos"))]
 use std::fs;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use libc::{off_t, size_t, ssize_t};
@@ -51,6 +52,144 @@ unsafe fn sys_write(fd: c_int, buf: *const c_void, count: size_t) -> ssize_t {
         buf as usize as libc::c_long,
         count as libc::c_long,
     ) as ssize_t
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+unsafe fn sys_mmap(
+    addr: *mut c_void,
+    length: size_t,
+    prot: c_int,
+    flags: c_int,
+    fd: c_int,
+    offset: off_t,
+) -> *mut c_void {
+    // Cannot use libc::syscall() for mmap because it returns `int` on macOS, truncating the
+    // 64-bit pointer. Use inline assembly to invoke the syscall directly.
+    // XNU arm64 ABI: x16 = syscall number, x0-x5 = args, svc #0x80; on error carry flag set
+    // and x0 = errno.
+    let ret: usize;
+    let err: usize;
+    core::arch::asm!(
+        "mov x16, #197",
+        "svc #0x80",
+        "cset {err}, cs",
+        inout("x0") addr as usize => ret,
+        in("x1") length,
+        in("x2") prot as usize,
+        in("x3") flags as usize,
+        in("x4") fd as usize,
+        in("x5") offset as usize,
+        err = out(reg) err,
+        out("x16") _,
+        options(nostack),
+    );
+    if err != 0 {
+        set_errno(ret as c_int);
+        return libc::MAP_FAILED;
+    }
+    ret as *mut c_void
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+unsafe fn sys_mmap(
+    addr: *mut c_void,
+    length: size_t,
+    prot: c_int,
+    flags: c_int,
+    fd: c_int,
+    offset: off_t,
+) -> *mut c_void {
+    // Cannot use libc::syscall() for mmap because it returns `int` on macOS, truncating the
+    // 64-bit pointer. Use inline assembly to invoke the syscall directly.
+    // XNU x86_64 ABI: rax = syscall number (BSD class 0x2000000 + 197), args in
+    // rdi/rsi/rdx/r10/r8/r9, syscall instruction; on error carry flag set and rax = errno.
+    let ret: usize;
+    let err: u8;
+    core::arch::asm!(
+        "mov rax, 0x20000C5",
+        "syscall",
+        "setc {err_byte}",
+        inout("rdi") addr as usize => _,
+        inout("rsi") length => _,
+        inout("rdx") prot as usize => _,
+        inout("r10") flags as usize => _,
+        inout("r8") fd as usize => _,
+        inout("r9") offset as usize => _,
+        inout("rax") 0usize => ret,
+        err_byte = out(reg_byte) err,
+        out("rcx") _,
+        out("r11") _,
+        options(nostack),
+    );
+    if err != 0 {
+        set_errno(ret as c_int);
+        return libc::MAP_FAILED;
+    }
+    ret as *mut c_void
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn sys_rename(old_path: *const c_char, new_path: *const c_char) -> c_int {
+    const SYS_RENAME: libc::c_int = 128;
+    libc::syscall(
+        SYS_RENAME,
+        old_path as usize as libc::c_long,
+        new_path as usize as libc::c_long,
+    ) as c_int
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn sys_renameat(
+    old_dirfd: c_int,
+    old_path: *const c_char,
+    new_dirfd: c_int,
+    new_path: *const c_char,
+) -> c_int {
+    const SYS_RENAMEAT: libc::c_int = 465;
+    libc::syscall(
+        SYS_RENAMEAT,
+        old_dirfd as libc::c_long,
+        old_path as usize as libc::c_long,
+        new_dirfd as libc::c_long,
+        new_path as usize as libc::c_long,
+    ) as c_int
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn sys_unlink(path: *const c_char) -> c_int {
+    const SYS_UNLINK: libc::c_int = 10;
+    libc::syscall(SYS_UNLINK, path as usize as libc::c_long) as c_int
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn sys_unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
+    const SYS_UNLINKAT: libc::c_int = 472;
+    libc::syscall(
+        SYS_UNLINKAT,
+        dirfd as libc::c_long,
+        path as usize as libc::c_long,
+        flags as libc::c_long,
+    ) as c_int
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn sys_truncate(path: *const c_char, length: off_t) -> c_int {
+    const SYS_TRUNCATE: libc::c_int = 200;
+    libc::syscall(
+        SYS_TRUNCATE,
+        path as usize as libc::c_long,
+        length as libc::c_long,
+    ) as c_int
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn sys_ftruncate(fd: c_int, length: off_t) -> c_int {
+    const SYS_FTRUNCATE: libc::c_int = 201;
+    libc::syscall(
+        SYS_FTRUNCATE,
+        fd as libc::c_long,
+        length as libc::c_long,
+    ) as c_int
 }
 
 #[cfg(target_os = "macos")]
@@ -421,16 +560,23 @@ type WritevFn = unsafe extern "C" fn(c_int, *const libc::iovec, c_int) -> ssize_
 type SendfileFn = unsafe extern "C" fn(c_int, c_int, *mut off_t, size_t) -> ssize_t;
 type CopyFileRangeFn =
     unsafe extern "C" fn(c_int, *mut off_t, c_int, *mut off_t, size_t, c_uint) -> ssize_t;
+#[cfg(not(target_os = "macos"))]
 type RenameFn = unsafe extern "C" fn(*const c_char, *const c_char) -> c_int;
+#[cfg(not(target_os = "macos"))]
 type RenameAtFn = unsafe extern "C" fn(c_int, *const c_char, c_int, *const c_char) -> c_int;
+#[cfg(not(target_os = "macos"))]
 type MmapFn = unsafe extern "C" fn(*mut c_void, size_t, c_int, c_int, c_int, off_t) -> *mut c_void;
 type FOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut libc::FILE;
 type FdOpenFn = unsafe extern "C" fn(c_int, *const c_char) -> *mut libc::FILE;
 type FreOpenFn =
     unsafe extern "C" fn(*const c_char, *const c_char, *mut libc::FILE) -> *mut libc::FILE;
+#[cfg(not(target_os = "macos"))]
 type UnlinkFn = unsafe extern "C" fn(*const c_char) -> c_int;
+#[cfg(not(target_os = "macos"))]
 type UnlinkAtFn = unsafe extern "C" fn(c_int, *const c_char, c_int) -> c_int;
+#[cfg(not(target_os = "macos"))]
 type TruncateFn = unsafe extern "C" fn(*const c_char, off_t) -> c_int;
+#[cfg(not(target_os = "macos"))]
 type FTruncateFn = unsafe extern "C" fn(c_int, off_t) -> c_int;
 
 #[cfg_attr(not(target_os = "macos"), no_mangle)]
@@ -471,11 +617,16 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: size_t) -> 
 
 #[cfg_attr(not(target_os = "macos"), no_mangle)]
 pub unsafe extern "C" fn unlink(path: *const c_char) -> c_int {
-    let Some(real) = resolve_symbol::<UnlinkFn>(b"unlink\0") else {
-        set_errno(libc::ENOSYS);
-        return -1;
+    #[cfg(target_os = "macos")]
+    let ret = sys_unlink(path);
+    #[cfg(not(target_os = "macos"))]
+    let ret = {
+        let Some(real) = resolve_symbol::<UnlinkFn>(b"unlink\0") else {
+            set_errno(libc::ENOSYS);
+            return -1;
+        };
+        real(path)
     };
-    let ret = real(path);
     if ret == 0 && !in_hook() {
         with_hook_guard(|| {
             if let Some(p) = c_str_to_owned(path) {
@@ -488,11 +639,16 @@ pub unsafe extern "C" fn unlink(path: *const c_char) -> c_int {
 
 #[cfg_attr(not(target_os = "macos"), no_mangle)]
 pub unsafe extern "C" fn unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
-    let Some(real) = resolve_symbol::<UnlinkAtFn>(b"unlinkat\0") else {
-        set_errno(libc::ENOSYS);
-        return -1;
+    #[cfg(target_os = "macos")]
+    let ret = sys_unlinkat(dirfd, path, flags);
+    #[cfg(not(target_os = "macos"))]
+    let ret = {
+        let Some(real) = resolve_symbol::<UnlinkAtFn>(b"unlinkat\0") else {
+            set_errno(libc::ENOSYS);
+            return -1;
+        };
+        real(dirfd, path, flags)
     };
-    let ret = real(dirfd, path, flags);
     if ret == 0 && !in_hook() {
         with_hook_guard(|| {
             if let Some(p) = resolve_at_path(dirfd, path) {
@@ -505,11 +661,16 @@ pub unsafe extern "C" fn unlinkat(dirfd: c_int, path: *const c_char, flags: c_in
 
 #[cfg_attr(not(target_os = "macos"), no_mangle)]
 pub unsafe extern "C" fn truncate(path: *const c_char, length: off_t) -> c_int {
-    let Some(real) = resolve_symbol::<TruncateFn>(b"truncate\0") else {
-        set_errno(libc::ENOSYS);
-        return -1;
+    #[cfg(target_os = "macos")]
+    let ret = sys_truncate(path, length);
+    #[cfg(not(target_os = "macos"))]
+    let ret = {
+        let Some(real) = resolve_symbol::<TruncateFn>(b"truncate\0") else {
+            set_errno(libc::ENOSYS);
+            return -1;
+        };
+        real(path, length)
     };
-    let ret = real(path, length);
     if ret == 0 && !in_hook() {
         with_hook_guard(|| {
             if let Some(p) = c_str_to_owned(path) {
@@ -522,11 +683,16 @@ pub unsafe extern "C" fn truncate(path: *const c_char, length: off_t) -> c_int {
 
 #[cfg_attr(not(target_os = "macos"), no_mangle)]
 pub unsafe extern "C" fn ftruncate(fd: c_int, length: off_t) -> c_int {
-    let Some(real) = resolve_symbol::<FTruncateFn>(b"ftruncate\0") else {
-        set_errno(libc::ENOSYS);
-        return -1;
+    #[cfg(target_os = "macos")]
+    let ret = sys_ftruncate(fd, length);
+    #[cfg(not(target_os = "macos"))]
+    let ret = {
+        let Some(real) = resolve_symbol::<FTruncateFn>(b"ftruncate\0") else {
+            set_errno(libc::ENOSYS);
+            return -1;
+        };
+        real(fd, length)
     };
-    let ret = real(fd, length);
     if ret == 0 && !in_hook() {
         with_hook_guard(|| emit_fd_write(fd));
     }
@@ -727,11 +893,16 @@ pub unsafe extern "C" fn copy_file_range(
 
 #[cfg_attr(not(target_os = "macos"), no_mangle)]
 pub unsafe extern "C" fn rename(old_path: *const c_char, new_path: *const c_char) -> c_int {
-    let Some(real) = resolve_symbol::<RenameFn>(b"rename\0") else {
-        set_errno(libc::ENOSYS);
-        return -1;
+    #[cfg(target_os = "macos")]
+    let ret = sys_rename(old_path, new_path);
+    #[cfg(not(target_os = "macos"))]
+    let ret = {
+        let Some(real) = resolve_symbol::<RenameFn>(b"rename\0") else {
+            set_errno(libc::ENOSYS);
+            return -1;
+        };
+        real(old_path, new_path)
     };
-    let ret = real(old_path, new_path);
     if ret == 0 && !in_hook() {
         with_hook_guard(|| {
             if let Some(path) = c_str_to_owned(new_path) {
@@ -749,11 +920,16 @@ pub unsafe extern "C" fn renameat(
     new_dir_fd: c_int,
     new_path: *const c_char,
 ) -> c_int {
-    let Some(real) = resolve_symbol::<RenameAtFn>(b"renameat\0") else {
-        set_errno(libc::ENOSYS);
-        return -1;
+    #[cfg(target_os = "macos")]
+    let ret = sys_renameat(old_dir_fd, old_path, new_dir_fd, new_path);
+    #[cfg(not(target_os = "macos"))]
+    let ret = {
+        let Some(real) = resolve_symbol::<RenameAtFn>(b"renameat\0") else {
+            set_errno(libc::ENOSYS);
+            return -1;
+        };
+        real(old_dir_fd, old_path, new_dir_fd, new_path)
     };
-    let ret = real(old_dir_fd, old_path, new_dir_fd, new_path);
     if ret == 0 && !in_hook() {
         with_hook_guard(|| {
             if let Some(path) = c_str_to_owned(new_path) {
@@ -773,20 +949,31 @@ pub unsafe extern "C" fn mmap(
     fd: c_int,
     offset: off_t,
 ) -> *mut c_void {
-    let Some(real) = resolve_symbol::<MmapFn>(b"mmap\0") else {
-        set_errno(libc::ENOSYS);
-        return libc::MAP_FAILED;
+    #[cfg(target_os = "macos")]
+    let ret = sys_mmap(addr, length, prot, flags, fd, offset);
+    #[cfg(not(target_os = "macos"))]
+    let ret = {
+        let Some(real) = resolve_symbol::<MmapFn>(b"mmap\0") else {
+            set_errno(libc::ENOSYS);
+            return libc::MAP_FAILED;
+        };
+        real(addr, length, prot, flags, fd, offset)
     };
-    let ret = real(addr, length, prot, flags, fd, offset);
-    if ret != libc::MAP_FAILED && fd >= 0 && !in_hook() {
-        with_hook_guard(|| {
-            if prot & libc::PROT_READ != 0 {
-                emit_fd_read(fd);
-            }
-            if (flags & libc::MAP_SHARED) != 0 && (prot & libc::PROT_WRITE) != 0 {
-                emit_fd_write(fd);
-            }
-        });
+    // Use a process-wide atomic guard instead of thread_local IN_HOOK for mmap. Thread-local
+    // storage is not available during early dyld init when mmap is called to map shared libraries.
+    // A static AtomicBool is safe because it lives in BSS (zero-initialized by the kernel).
+    static MMAP_IN_HOOK: AtomicBool = AtomicBool::new(false);
+    if ret != libc::MAP_FAILED
+        && fd >= 0
+        && !MMAP_IN_HOOK.swap(true, Ordering::Relaxed)
+    {
+        if prot & libc::PROT_READ != 0 {
+            emit_fd_read(fd);
+        }
+        if (flags & libc::MAP_SHARED) != 0 && (prot & libc::PROT_WRITE) != 0 {
+            emit_fd_write(fd);
+        }
+        MMAP_IN_HOOK.store(false, Ordering::Relaxed);
     }
     ret
 }
