@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::io::Read;
+use std::os::unix::net::UnixListener;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use tracer_fd::FdTracker;
@@ -14,7 +16,7 @@ use tracer_schema::{ProcessInfo, TracerReport};
 
 use roar_tracer_preload::TraceEvent;
 
-const TRACE_FD_ENV: &str = "ROAR_PRELOAD_TRACE_FD";
+const TRACE_SOCK_ENV: &str = "ROAR_PRELOAD_TRACE_SOCK";
 const PRELOAD_LIB_ENV: &str = "ROAR_PRELOAD_LIB";
 
 #[cfg(target_os = "macos")]
@@ -214,16 +216,34 @@ fn resolve_preload_library() -> Option<PathBuf> {
     None
 }
 
-fn drain_events(read_fd: i32, state: &mut CollectorState, buf: &mut Vec<u8>) -> usize {
-    let mut processed = 0usize;
-    let mut tmp = [0u8; 64 * 1024];
+fn make_socket_path(_output_file: &str) -> PathBuf {
+    let pid = std::process::id();
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    // Use /tmp to keep the path short — sun_path is only 104 bytes on macOS.
+    Path::new("/tmp").join(format!(".roar-{pid}-{nanos}.sock"))
+}
 
+#[derive(PartialEq)]
+enum DrainResult {
+    Ok,
+    Eof,
+}
+
+fn drain_stream(
+    stream: &mut std::os::unix::net::UnixStream,
+    buf: &mut Vec<u8>,
+    state: &mut CollectorState,
+) -> DrainResult {
+    let mut tmp = [0u8; 64 * 1024];
     loop {
-        let n = unsafe { libc::read(read_fd, tmp.as_mut_ptr() as *mut libc::c_void, tmp.len()) };
-        if n > 0 {
-            buf.extend_from_slice(&tmp[..n as usize]);
-        } else {
-            break;
+        match stream.read(&mut tmp) {
+            Ok(0) => return DrainResult::Eof,
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(_) => return DrainResult::Eof,
         }
     }
 
@@ -236,11 +256,10 @@ fn drain_events(read_fd: i32, state: &mut CollectorState, buf: &mut Vec<u8>) -> 
             Ok(event) => state.ingest(event),
             Err(_) => state.events_dropped += 1,
         }
-        processed += 1;
         buf.drain(..4 + len);
     }
 
-    processed
+    DrainResult::Ok
 }
 
 fn status_to_exit_code(status: std::process::ExitStatus) -> i32 {
@@ -288,18 +307,14 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
     let preload_library = resolve_preload_library()
         .context("preload library not found; set ROAR_PRELOAD_LIB or build roar-tracer-preload")?;
 
-    let mut pipe_fds = [0i32; 2];
-    if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
-        anyhow::bail!("failed to create pipe");
-    }
-    let read_fd = pipe_fds[0];
-    let write_fd = pipe_fds[1];
-
-    // Read end: non-blocking (for polling) + close-on-exec (child doesn't need it)
-    unsafe {
-        libc::fcntl(read_fd, libc::F_SETFL, libc::O_NONBLOCK);
-        libc::fcntl(read_fd, libc::F_SETFD, libc::FD_CLOEXEC);
-    }
+    let socket_path = make_socket_path(output_file);
+    // Remove any stale socket file before binding.
+    let _ = fs::remove_file(&socket_path);
+    let listener =
+        UnixListener::bind(&socket_path).context("failed to bind Unix domain socket")?;
+    listener
+        .set_nonblocking(true)
+        .context("failed to set listener non-blocking")?;
 
     let start_time = timestamp_now();
 
@@ -318,23 +333,27 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
 
     cmd.env(PROCESS_PRELOAD_ENV, combined_preload);
     cmd.env(PRELOAD_LIB_ENV, preload_library_str);
-    cmd.env(TRACE_FD_ENV, write_fd.to_string());
+    cmd.env(TRACE_SOCK_ENV, &socket_path);
 
     let mut child = cmd.spawn().context("failed to spawn traced command")?;
-
-    // Close write end in parent so read_fd gets EOF when child exits
-    unsafe {
-        libc::close(write_fd);
-    }
 
     let root_pid = child.id();
     let mut state = CollectorState::new(root_pid, command.to_vec());
     state.ensure_process(root_pid);
 
-    let mut read_buf = Vec::new();
+    let mut connections: Vec<(std::os::unix::net::UnixStream, Vec<u8>)> = Vec::new();
     let exit_code;
     loop {
-        let _ = drain_events(read_fd, &mut state, &mut read_buf);
+        // Accept new connections (non-blocking)
+        while let Ok((stream, _)) = listener.accept() {
+            let _ = stream.set_nonblocking(true);
+            connections.push((stream, Vec::new()));
+        }
+
+        // Drain each connection, removing those at EOF
+        connections.retain_mut(|(stream, buf)| {
+            drain_stream(stream, buf, &mut state) != DrainResult::Eof
+        });
 
         if let Some(status) = child.try_wait()? {
             exit_code = status_to_exit_code(status);
@@ -344,16 +363,33 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
         thread::sleep(Duration::from_millis(2));
     }
 
+    // Post-exit drain: keep accepting + draining for late-connecting grandchildren
     let drain_deadline = Instant::now() + Duration::from_millis(50);
     while Instant::now() < drain_deadline {
-        if drain_events(read_fd, &mut state, &mut read_buf) == 0 {
+        let mut activity = false;
+
+        while let Ok((stream, _)) = listener.accept() {
+            let _ = stream.set_nonblocking(true);
+            connections.push((stream, Vec::new()));
+            activity = true;
+        }
+
+        connections.retain_mut(|(stream, buf)| {
+            let result = drain_stream(stream, buf, &mut state);
+            if result != DrainResult::Eof {
+                activity = true;
+            }
+            result != DrainResult::Eof
+        });
+
+        if !activity && connections.is_empty() {
             break;
         }
+        thread::sleep(Duration::from_millis(1));
     }
 
-    unsafe {
-        libc::close(read_fd);
-    }
+    drop(listener);
+    let _ = fs::remove_file(&socket_path);
 
     let end_time = timestamp_now();
     let report = state.build_report(start_time, end_time);
