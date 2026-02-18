@@ -396,6 +396,19 @@ fn connect_unix_stream(path: &str) -> Option<c_int> {
             std::mem::size_of::<c_int>() as libc::socklen_t,
         );
 
+        // Prevent SIGPIPE when writing to a broken socket (fd closed by child process).
+        #[cfg(target_os = "macos")]
+        {
+            let one: c_int = 1;
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_NOSIGPIPE,
+                &one as *const _ as *const c_void,
+                std::mem::size_of::<c_int>() as libc::socklen_t,
+            );
+        }
+
         let mut addr: libc::sockaddr_un = std::mem::zeroed();
         addr.sun_family = libc::AF_UNIX as _;
         let path_bytes = path.as_bytes();
@@ -441,6 +454,13 @@ fn get_trace_fd() -> Option<c_int> {
     })
 }
 
+fn invalidate_trace_fd() {
+    TRACE_CONN.with(|cell| {
+        // Do NOT close — fd is already dead or reused by the app
+        cell.set((0, -1));
+    });
+}
+
 #[cfg(not(target_os = "macos"))]
 fn get_real_write() -> Option<WriteFn> {
     *REAL_WRITE.get_or_init(|| unsafe { resolve_symbol::<WriteFn>(b"write\0") })
@@ -457,18 +477,44 @@ fn send_event(event: &TraceEvent) {
     let mut frame = Vec::with_capacity(4 + payload.len());
     frame.extend_from_slice(&len.to_le_bytes());
     frame.extend_from_slice(&payload);
+
+    let rc: ssize_t;
     unsafe {
         #[cfg(target_os = "macos")]
         {
-            let _ = sys_write(fd, frame.as_ptr() as *const c_void, frame.len());
+            rc = sys_write(fd, frame.as_ptr() as *const c_void, frame.len());
         }
         #[cfg(not(target_os = "macos"))]
         {
-            // Write via real libc write to bypass our hook.
             let Some(real_write) = get_real_write() else {
                 return;
             };
-            real_write(fd, frame.as_ptr() as *const c_void, frame.len());
+            rc = real_write(fd, frame.as_ptr() as *const c_void, frame.len());
+        }
+    }
+
+    if rc < 0 {
+        let err = get_errno();
+        if err == libc::EBADF || err == libc::EPIPE || err == libc::ENOTCONN {
+            invalidate_trace_fd();
+            if let Some(new_fd) = get_trace_fd() {
+                unsafe {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = sys_write(new_fd, frame.as_ptr() as *const c_void, frame.len());
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        if let Some(real_write) = get_real_write() {
+                            let _ = real_write(
+                                new_fd,
+                                frame.as_ptr() as *const c_void,
+                                frame.len(),
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -531,6 +577,16 @@ fn set_errno(errno: c_int) {
     unsafe {
         *libc::__errno_location() = errno;
     }
+}
+
+#[cfg(target_os = "macos")]
+fn get_errno() -> c_int {
+    unsafe { *libc::__error() }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_errno() -> c_int {
+    unsafe { *libc::__errno_location() }
 }
 
 fn c_str_to_owned(path: *const c_char) -> Option<String> {

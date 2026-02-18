@@ -80,7 +80,9 @@ impl FdTracker {
     /// Handle a successful close.
     pub fn handle_close(&mut self, pid: u32, fd: i32) {
         self.fd_table.remove(&(pid, fd));
-        // Keep fd_state for report aggregation.
+        if let Some(old) = self.fd_state.remove(&(pid, fd)) {
+            self.closed_states.push(old);
+        }
     }
 
     /// Mark that the fd's path was read (without cursor/chunk accounting).
@@ -185,10 +187,18 @@ impl FdTracker {
 
     /// Handle dup.
     pub fn handle_dup(&mut self, pid: u32, old_fd: i32, new_fd: i32) {
+        // dup2/dup3 with identical fds is a no-op.
+        if old_fd == new_fd {
+            return;
+        }
+
+        // dup2/dup3 semantics: if new_fd is open, it is closed first.
+        self.fd_table.remove(&(pid, new_fd));
+        if let Some(old) = self.fd_state.remove(&(pid, new_fd)) {
+            self.closed_states.push(old);
+        }
+
         if let Some(path) = self.fd_table.get(&(pid, old_fd)).cloned() {
-            if let Some(old) = self.fd_state.remove(&(pid, new_fd)) {
-                self.closed_states.push(old);
-            }
             self.fd_table.insert((pid, new_fd), path.clone());
             self.fd_state.insert((pid, new_fd), FdState::new(path));
         }
@@ -333,6 +343,46 @@ mod tests {
         assert!(summary.files[0].read);
         assert!(!summary.files[0].written);
         assert_eq!(summary.opened_files, vec!["/tmp/test.txt".to_string()]);
+        assert!(!tracker.fd_state.contains_key(&(1, 3)));
+    }
+
+    #[test]
+    fn test_handle_dup_untracked_source_clears_target_fd() {
+        let mut tracker = FdTracker::new(None);
+        tracker.handle_open(1, 3, "/tmp/repo.txt".to_string(), 0);
+        tracker.handle_read(1, 3, 16);
+        tracker.handle_close(1, 3);
+
+        tracker.handle_open(1, 9, "/tmp/other.txt".to_string(), 0);
+        tracker.handle_write(1, 9, 8);
+
+        // old_fd is untracked; dup2/dup3 should still close new_fd.
+        tracker.handle_dup(1, 99, 9);
+
+        assert!(!tracker.fd_table.contains_key(&(1, 9)));
+        assert!(!tracker.fd_state.contains_key(&(1, 9)));
+
+        let summary = tracker.build_summary();
+        let written: Vec<_> = summary
+            .files
+            .iter()
+            .filter(|f| f.written)
+            .map(|f| f.path.as_str())
+            .collect();
+        assert!(written.contains(&"/tmp/other.txt"));
+        assert!(!written.contains(&"/tmp/repo.txt"));
+    }
+
+    #[test]
+    fn test_handle_dup_same_fd_is_noop() {
+        let mut tracker = FdTracker::new(None);
+        tracker.handle_open(1, 4, "/tmp/same.txt".to_string(), 0);
+        tracker.handle_dup(1, 4, 4);
+        assert_eq!(
+            tracker.fd_table.get(&(1, 4)),
+            Some(&"/tmp/same.txt".to_string())
+        );
+        assert!(tracker.fd_state.contains_key(&(1, 4)));
     }
 
     #[test]
