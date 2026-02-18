@@ -216,12 +216,19 @@ fn drain_stream(
     state: &mut CollectorState,
 ) -> DrainResult {
     let mut tmp = [0u8; 64 * 1024];
+    let mut hit_eof = false;
     loop {
         match stream.read(&mut tmp) {
-            Ok(0) => return DrainResult::Eof,
+            Ok(0) => {
+                hit_eof = true;
+                break;
+            }
             Ok(n) => buf.extend_from_slice(&tmp[..n]),
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-            Err(_) => return DrainResult::Eof,
+            Err(_) => {
+                hit_eof = true;
+                break;
+            }
         }
     }
 
@@ -237,7 +244,11 @@ fn drain_stream(
         buf.drain(..4 + len);
     }
 
-    DrainResult::Ok
+    if hit_eof {
+        DrainResult::Eof
+    } else {
+        DrainResult::Ok
+    }
 }
 
 fn status_to_exit_code(status: std::process::ExitStatus) -> i32 {
