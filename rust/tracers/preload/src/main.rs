@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::env;
+use std::ffi::c_void;
 use std::fs;
 use std::io::Read;
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixListener;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -188,6 +190,20 @@ fn make_socket_path(_output_file: &str) -> PathBuf {
     Path::new("/tmp").join(format!(".roar-{pid}-{nanos}.sock"))
 }
 
+const SOCK_BUF_SIZE: libc::c_int = 65536;
+
+fn set_rcvbuf(stream: &std::os::unix::net::UnixStream) {
+    unsafe {
+        libc::setsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_RCVBUF,
+            &SOCK_BUF_SIZE as *const _ as *const c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+    }
+}
+
 #[derive(PartialEq)]
 enum DrainResult {
     Ok,
@@ -309,6 +325,7 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
         // Accept new connections (non-blocking)
         while let Ok((stream, _)) = listener.accept() {
             let _ = stream.set_nonblocking(true);
+            set_rcvbuf(&stream);
             connections.push((stream, Vec::new()));
         }
 
@@ -332,6 +349,7 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
 
         while let Ok((stream, _)) = listener.accept() {
             let _ = stream.set_nonblocking(true);
+            set_rcvbuf(&stream);
             connections.push((stream, Vec::new()));
             activity = true;
         }

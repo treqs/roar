@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
 #[cfg(not(target_os = "macos"))]
 use std::fs;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
 
 use libc::{off_t, size_t, ssize_t};
@@ -10,9 +11,14 @@ pub mod ipc;
 pub use ipc::TraceEvent;
 
 const TRACE_SOCK_ENV: &str = "ROAR_PRELOAD_TRACE_SOCK";
+const SOCK_BUF_SIZE: c_int = 65536;
+
+/// Incremented in the child after fork() via pthread_atfork handler.
+static FORK_GEN: AtomicU32 = AtomicU32::new(1);
 
 thread_local! {
     static IN_HOOK: Cell<bool> = const { Cell::new(false) };
+    /// (fork_generation, fd) — fd is reused while generation matches.
     static TRACE_CONN: Cell<(u32, c_int)> = const { Cell::new((0, -1)) };
 }
 
@@ -217,9 +223,19 @@ fn with_hook_guard<F: FnOnce()>(f: F) {
     });
 }
 
+unsafe extern "C" fn on_fork_child() {
+    FORK_GEN.fetch_add(1, Ordering::Relaxed);
+}
+
 fn trace_sock_path() -> Option<&'static str> {
     TRACE_SOCK_PATH
-        .get_or_init(|| std::env::var(TRACE_SOCK_ENV).ok())
+        .get_or_init(|| {
+            // Register the fork handler once, alongside the first env-var read.
+            unsafe {
+                libc::pthread_atfork(None, None, Some(on_fork_child));
+            }
+            std::env::var(TRACE_SOCK_ENV).ok()
+        })
         .as_deref()
 }
 
@@ -232,6 +248,15 @@ fn connect_unix_stream(path: &str) -> Option<c_int> {
 
         // Set close-on-exec so exec'd processes create their own connections
         libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+
+        // Enlarge send buffer to reduce writer-side blocking on the 2ms poll interval.
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            &SOCK_BUF_SIZE as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as libc::socklen_t,
+        );
 
         let mut addr: libc::sockaddr_un = std::mem::zeroed();
         addr.sun_family = libc::AF_UNIX as _;
@@ -262,18 +287,18 @@ fn connect_unix_stream(path: &str) -> Option<c_int> {
 
 fn get_trace_fd() -> Option<c_int> {
     let path = trace_sock_path()?;
-    let cur_pid = current_pid();
+    let gen = FORK_GEN.load(Ordering::Relaxed);
     TRACE_CONN.with(|cell| {
-        let (cached_pid, cached_fd) = cell.get();
-        if cached_pid == cur_pid && cached_fd >= 0 {
-            return Some(cached_fd); // fast path
+        let (cached_gen, cached_fd) = cell.get();
+        if cached_gen == gen && cached_fd >= 0 {
+            return Some(cached_fd); // fast path: atomic load + thread-local, no syscall
         }
         // Close stale fd from before fork (if any)
         if cached_fd >= 0 {
             unsafe { libc::close(cached_fd) };
         }
         let fd = connect_unix_stream(path)?;
-        cell.set((cur_pid, fd));
+        cell.set((gen, fd));
         Some(fd)
     })
 }
