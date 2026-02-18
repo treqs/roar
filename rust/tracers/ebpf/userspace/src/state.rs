@@ -195,6 +195,7 @@ mod tests {
     fn test_handle_open_close() {
         let mut state = TracerState::new(None);
         state.handle_open(1, 3, "/tmp/test.txt".to_string(), 0);
+        state.handle_read(1, 3, 10);
 
         assert_eq!(
             state.fd.fd_table.get(&(1, 3)),
@@ -204,8 +205,13 @@ mod tests {
 
         state.handle_close(1, 3);
         assert!(!state.fd.fd_table.contains_key(&(1, 3)));
-        // fd_state preserved for report
-        assert!(state.fd.fd_state.contains_key(&(1, 3)));
+        assert!(!state.fd.fd_state.contains_key(&(1, 3)));
+
+        // Closed state is still included in report aggregation.
+        let report = state.build_report();
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].path, "/tmp/test.txt");
+        assert!(report.files[0].read);
     }
 
     #[test]
@@ -280,6 +286,33 @@ mod tests {
         );
         // New fd gets independent cursor starting at 0
         assert_eq!(state.fd.fd_state.get(&(1, 7)).unwrap().cursor, 0);
+    }
+
+    #[test]
+    fn test_handle_dup_untracked_source_closes_target_fd() {
+        let mut state = TracerState::new(None);
+        state.handle_open(1, 3, "/tmp/repo.txt".to_string(), 0);
+        state.handle_read(1, 3, 10);
+        state.handle_close(1, 3);
+
+        state.handle_open(1, 9, "/tmp/other.txt".to_string(), 0);
+        state.handle_write(1, 9, 20);
+
+        // old_fd is untracked; dup2/dup3 still closes new_fd.
+        state.handle_dup(1, 99, 9);
+
+        assert!(!state.fd.fd_table.contains_key(&(1, 9)));
+        assert!(!state.fd.fd_state.contains_key(&(1, 9)));
+
+        let report = state.build_report();
+        let written_paths: Vec<&str> = report
+            .files
+            .iter()
+            .filter(|f| f.written)
+            .map(|f| f.path.as_str())
+            .collect();
+        assert!(written_paths.contains(&"/tmp/other.txt"));
+        assert!(!written_paths.contains(&"/tmp/repo.txt"));
     }
 
     #[test]
