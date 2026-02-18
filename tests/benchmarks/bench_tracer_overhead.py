@@ -157,7 +157,11 @@ def _preload_works(binary_path, preload_lib=None):
             )
             if r.returncode == 0:
                 return True, ""
-            msg = r.stderr.strip().split("\n")[0][:200] if r.stderr.strip() else f"exit code {r.returncode}"
+            msg = (
+                r.stderr.strip().split("\n")[0][:200]
+                if r.stderr.strip()
+                else f"exit code {r.returncode}"
+            )
             return False, msg
     except Exception as e:
         return False, str(e)
@@ -374,7 +378,9 @@ def main():
     else:
         print("  ptrace: NOT BUILT (binary not found)", flush=True)
 
-    preload_lib = _find_preload_library(PRELOAD_TRACER_BIN) if os.path.exists(PRELOAD_TRACER_BIN) else None
+    preload_lib = (
+        _find_preload_library(PRELOAD_TRACER_BIN) if os.path.exists(PRELOAD_TRACER_BIN) else None
+    )
     preload_env = {"ROAR_PRELOAD_LIB": preload_lib} if preload_lib else None
     if not os.path.exists(PRELOAD_TRACER_BIN):
         print("  preload: NOT BUILT (binary not found)", flush=True)
