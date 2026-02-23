@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
 #[cfg(not(target_os = "macos"))]
 use std::fs;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::OnceLock;
 
 use libc::{off_t, size_t, ssize_t};
@@ -10,13 +10,19 @@ use libc::{off_t, size_t, ssize_t};
 pub mod ipc;
 pub use ipc::TraceEvent;
 
-const TRACE_FD_ENV: &str = "ROAR_PRELOAD_TRACE_FD";
+const TRACE_SOCK_ENV: &str = "ROAR_PRELOAD_TRACE_SOCK";
+const SOCK_BUF_SIZE: c_int = 65536;
+
+/// Incremented in the child after fork() via pthread_atfork handler.
+static FORK_GEN: AtomicU32 = AtomicU32::new(1);
 
 thread_local! {
     static IN_HOOK: Cell<bool> = const { Cell::new(false) };
+    /// (fork_generation, fd) — fd is reused while generation matches.
+    static TRACE_CONN: Cell<(u32, c_int)> = const { Cell::new((0, -1)) };
 }
 
-static TRACE_PIPE_FD: OnceLock<Option<c_int>> = OnceLock::new();
+static TRACE_SOCK_PATH: OnceLock<Option<String>> = OnceLock::new();
 #[cfg(not(target_os = "macos"))]
 static REAL_WRITE: OnceLock<Option<WriteFn>> = OnceLock::new();
 
@@ -355,15 +361,104 @@ fn with_hook_guard<F: FnOnce()>(f: F) {
     });
 }
 
-fn trace_pipe_fd() -> Option<c_int> {
-    *TRACE_PIPE_FD.get_or_init(|| {
-        let fd_str = std::env::var(TRACE_FD_ENV).ok()?;
-        let fd = fd_str.parse::<c_int>().ok()?;
+unsafe extern "C" fn on_fork_child() {
+    FORK_GEN.fetch_add(1, Ordering::Relaxed);
+}
+
+fn trace_sock_path() -> Option<&'static str> {
+    TRACE_SOCK_PATH
+        .get_or_init(|| {
+            // Register the fork handler once, alongside the first env-var read.
+            unsafe {
+                libc::pthread_atfork(None, None, Some(on_fork_child));
+            }
+            std::env::var(TRACE_SOCK_ENV).ok()
+        })
+        .as_deref()
+}
+
+fn connect_unix_stream(path: &str) -> Option<c_int> {
+    unsafe {
+        let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
         if fd < 0 {
             return None;
         }
+
+        // Set close-on-exec so exec'd processes create their own connections
+        libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+
+        // Enlarge send buffer to reduce writer-side blocking on the 2ms poll interval.
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            &SOCK_BUF_SIZE as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as libc::socklen_t,
+        );
+
+        // Prevent SIGPIPE when writing to a broken socket (fd closed by child process).
+        #[cfg(target_os = "macos")]
+        {
+            let one: c_int = 1;
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_NOSIGPIPE,
+                &one as *const _ as *const c_void,
+                std::mem::size_of::<c_int>() as libc::socklen_t,
+            );
+        }
+
+        let mut addr: libc::sockaddr_un = std::mem::zeroed();
+        addr.sun_family = libc::AF_UNIX as _;
+        let path_bytes = path.as_bytes();
+        if path_bytes.len() >= addr.sun_path.len() {
+            libc::close(fd);
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(
+            path_bytes.as_ptr(),
+            addr.sun_path.as_mut_ptr() as *mut u8,
+            path_bytes.len(),
+        );
+
+        let len = std::mem::size_of::<libc::sa_family_t>() + path_bytes.len() + 1;
+        if libc::connect(
+            fd,
+            &addr as *const _ as *const libc::sockaddr,
+            len as libc::socklen_t,
+        ) != 0
+        {
+            libc::close(fd);
+            return None;
+        }
+        Some(fd)
+    }
+}
+
+fn get_trace_fd() -> Option<c_int> {
+    let path = trace_sock_path()?;
+    let gen = FORK_GEN.load(Ordering::Relaxed);
+    TRACE_CONN.with(|cell| {
+        let (cached_gen, cached_fd) = cell.get();
+        if cached_gen == gen && cached_fd >= 0 {
+            return Some(cached_fd); // fast path: atomic load + thread-local, no syscall
+        }
+        // Close stale fd from before fork (if any)
+        if cached_fd >= 0 {
+            unsafe { libc::close(cached_fd) };
+        }
+        let fd = connect_unix_stream(path)?;
+        cell.set((gen, fd));
         Some(fd)
     })
+}
+
+fn invalidate_trace_fd() {
+    TRACE_CONN.with(|cell| {
+        // Do NOT close — fd is already dead or reused by the app
+        cell.set((0, -1));
+    });
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -372,7 +467,7 @@ fn get_real_write() -> Option<WriteFn> {
 }
 
 fn send_event(event: &TraceEvent) {
-    let Some(fd) = trace_pipe_fd() else {
+    let Some(fd) = get_trace_fd() else {
         return;
     };
     let Ok(payload) = rmp_serde::to_vec_named(event) else {
@@ -382,19 +477,44 @@ fn send_event(event: &TraceEvent) {
     let mut frame = Vec::with_capacity(4 + payload.len());
     frame.extend_from_slice(&len.to_le_bytes());
     frame.extend_from_slice(&payload);
+
+    let rc: ssize_t;
     unsafe {
         #[cfg(target_os = "macos")]
         {
-            let _ = sys_write(fd, frame.as_ptr() as *const c_void, frame.len());
+            rc = sys_write(fd, frame.as_ptr() as *const c_void, frame.len());
         }
         #[cfg(not(target_os = "macos"))]
         {
-            // Write via real libc write to bypass our hook.
-            // Pipe writes <= PIPE_BUF (4096) are atomic on Linux.
             let Some(real_write) = get_real_write() else {
                 return;
             };
-            real_write(fd, frame.as_ptr() as *const c_void, frame.len());
+            rc = real_write(fd, frame.as_ptr() as *const c_void, frame.len());
+        }
+    }
+
+    if rc < 0 {
+        let err = get_errno();
+        if err == libc::EBADF || err == libc::EPIPE || err == libc::ENOTCONN {
+            invalidate_trace_fd();
+            if let Some(new_fd) = get_trace_fd() {
+                unsafe {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = sys_write(new_fd, frame.as_ptr() as *const c_void, frame.len());
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        if let Some(real_write) = get_real_write() {
+                            let _ = real_write(
+                                new_fd,
+                                frame.as_ptr() as *const c_void,
+                                frame.len(),
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -457,6 +577,16 @@ fn set_errno(errno: c_int) {
     unsafe {
         *libc::__errno_location() = errno;
     }
+}
+
+#[cfg(target_os = "macos")]
+fn get_errno() -> c_int {
+    unsafe { *libc::__error() }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_errno() -> c_int {
+    unsafe { *libc::__errno_location() }
 }
 
 fn c_str_to_owned(path: *const c_char) -> Option<String> {

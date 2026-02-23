@@ -3,7 +3,7 @@
 Benchmark: decompose tracer overhead into startup vs. marginal cost.
 
 Measures:
-  1. Fixed startup/teardown cost (trace /bin/true)
+  1. Fixed startup/teardown cost (trace true)
   2. Marginal per-file cost (1 write + 1 read per file at increasing file counts)
   3. Marginal per-read/write cost (fixed files, increasing read/write repetitions)
 
@@ -11,6 +11,7 @@ Reports absolute milliseconds for each component per tracer (ptrace, preload, eB
 """
 
 import os
+import shutil
 import statistics
 import subprocess
 import sys
@@ -19,6 +20,7 @@ import time
 from pathlib import Path
 
 # Configuration
+TRUE_BIN = shutil.which("true") or "/usr/bin/true"
 PYTHON_BIN = ".venv/bin/python"
 TRACER_BIN = "roar/bin/roar-tracer"
 PRELOAD_TRACER_BIN = os.environ.get(
@@ -90,7 +92,7 @@ def _ebpf_works_direct(binary_path):
     try:
         with tempfile.NamedTemporaryFile(suffix=".msgpack", delete=True) as f:
             r = subprocess.run(
-                [binary_path, f.name, "/bin/true"],
+                [binary_path, f.name, TRUE_BIN],
                 capture_output=True,
                 timeout=10,
                 text=True,
@@ -105,7 +107,7 @@ def _ebpf_works_sudo(binary_path):
     try:
         with tempfile.NamedTemporaryFile(suffix=".msgpack", delete=True) as f:
             r = subprocess.run(
-                ["sudo", "-n", binary_path, f.name, "/bin/true"],
+                ["sudo", "-n", binary_path, f.name, TRUE_BIN],
                 capture_output=True,
                 timeout=10,
                 text=True,
@@ -140,22 +142,29 @@ def _find_preload_library(binary_path):
 
 
 def _preload_works(binary_path, preload_lib=None):
-    """Quick test: can the preload binary run directly."""
+    """Quick test: can the preload binary run directly. Returns (ok, error_msg)."""
     try:
         with tempfile.NamedTemporaryFile(suffix=".msgpack", delete=True) as f:
             env = os.environ.copy()
             if preload_lib:
                 env["ROAR_PRELOAD_LIB"] = preload_lib
             r = subprocess.run(
-                [binary_path, f.name, "/bin/true"],
+                [binary_path, f.name, TRUE_BIN],
                 capture_output=True,
                 timeout=10,
                 text=True,
                 env=env,
             )
-            return r.returncode == 0
-    except Exception:
-        return False
+            if r.returncode == 0:
+                return True, ""
+            msg = (
+                r.stderr.strip().split("\n")[0][:200]
+                if r.stderr.strip()
+                else f"exit code {r.returncode}"
+            )
+            return False, msg
+    except Exception as e:
+        return False, str(e)
 
 
 def start_roard(sudo_prefix):
@@ -332,21 +341,17 @@ def main():
     print(f"  per-file scales: {SYSCALL_SCALES}")
     print(f"  per-rw scales:   {RW_PER_FILE_SCALES}  (fixed files={RW_SERIES_FILE_COUNT})")
 
-    for path, label in [
-        (TRACER_BIN, "ptrace"),
-        (PRELOAD_TRACER_BIN, "preload"),
-        (EBPF_TRACER_BIN, "eBPF"),
-        (PYTHON_BIN, "python"),
-    ]:
-        if not os.path.exists(path):
-            print(f"ERROR: {label} not found: {path}", file=sys.stderr)
-            sys.exit(1)
+    if not os.path.exists(PYTHON_BIN):
+        print(f"ERROR: python not found: {PYTHON_BIN}", file=sys.stderr)
+        sys.exit(1)
 
     # ── Determine how to run the eBPF binary ─────────────────────────────
     ebpf_sudo = []
     ebpf_available = False
 
-    if _has_caps(EBPF_TRACER_BIN):
+    if not os.path.exists(EBPF_TRACER_BIN):
+        print("  ebpf:   NOT BUILT (binary not found)")
+    elif _has_caps(EBPF_TRACER_BIN):
         print("  ebpf:   capabilities set")
         ebpf_available = True
     elif os.getuid() == 0:
@@ -367,20 +372,28 @@ def main():
 
     # ── Build tracer configs ─────────────────────────────────────────────
     active_tracers = {}
-    active_tracers["ptrace"] = {"bin": TRACER_BIN, "sleep": 0.0, "sudo": []}
-    preload_lib = _find_preload_library(PRELOAD_TRACER_BIN)
+
+    if os.path.exists(TRACER_BIN):
+        active_tracers["ptrace"] = {"bin": TRACER_BIN, "sleep": 0.0, "sudo": []}
+    else:
+        print("  ptrace: NOT BUILT (binary not found)", flush=True)
+
+    preload_lib = (
+        _find_preload_library(PRELOAD_TRACER_BIN) if os.path.exists(PRELOAD_TRACER_BIN) else None
+    )
     preload_env = {"ROAR_PRELOAD_LIB": preload_lib} if preload_lib else None
-    if _preload_works(PRELOAD_TRACER_BIN, preload_lib):
-        preload_note = f" (lib={preload_lib})" if preload_lib else ""
-        print(f"  preload: enabled{preload_note}", flush=True)
+    if not os.path.exists(PRELOAD_TRACER_BIN):
+        print("  preload: NOT BUILT (binary not found)", flush=True)
+    elif preload_lib is None:
+        print("  preload: NOT BUILT (shared library not found)", flush=True)
+    else:
+        print(f"  preload: enabled (lib={preload_lib})", flush=True)
         active_tracers["preload"] = {
             "bin": PRELOAD_TRACER_BIN,
             "sleep": 0.0,
             "sudo": [],
             "env": preload_env,
         }
-    else:
-        print("  preload: UNAVAILABLE (launcher/library not runnable)", flush=True)
 
     if ebpf_available:
         active_tracers["ebpf"] = {
@@ -417,12 +430,16 @@ def main():
 
 
 def _run_benchmarks(active_tracers):
-    # ==================================================================
-    # Part 1: Fixed startup/teardown cost  (trace /bin/true)
-    # ==================================================================
-    print("\n--- Part 1: Startup / teardown (tracing /bin/true) ---\n")
+    if not active_tracers:
+        print("\nNo tracers available to benchmark.", file=sys.stderr)
+        sys.exit(1)
 
-    bl = measure("baseline /bin/true", ["/bin/true"], NUM_ITERATIONS, NUM_WARMUP)
+    # ==================================================================
+    # Part 1: Fixed startup/teardown cost  (trace true)
+    # ==================================================================
+    print("\n--- Part 1: Startup / teardown (tracing true) ---\n")
+
+    bl = measure("baseline true", [TRUE_BIN], NUM_ITERATIONS, NUM_WARMUP)
     bl_mean, bl_std = mean_std(bl)
 
     startup = {}  # name -> overhead_ms
@@ -432,9 +449,9 @@ def _run_benchmarks(active_tracers):
 
     for name, cfg in active_tracers.items():
         with tempfile.NamedTemporaryFile(suffix=".msgpack", delete=True) as f:
-            cmd = [*cfg["sudo"], cfg["bin"], f.name, "/bin/true"]
+            cmd = [*cfg["sudo"], cfg["bin"], f.name, TRUE_BIN]
             times = measure(
-                f"{name} /bin/true",
+                f"{name} true",
                 cmd,
                 NUM_ITERATIONS,
                 NUM_WARMUP,
@@ -592,7 +609,7 @@ def _run_benchmarks(active_tracers):
         rw_intercept, rw_slope = per_rw_regressions[name]
         true_startup = startup[name]
         print(f"  {name}:")
-        print(f"    Startup (/bin/true):          {true_startup:>8.1f} ms")
+        print(f"    Startup (true):          {true_startup:>8.1f} ms")
         print(f"    Startup (file regression):    {intercept:>8.1f} ms")
         print(f"    Marginal cost per file:       {slope:>8.4f} ms  ({slope * 1000:.1f} us)")
         print(f"    Per-rw intercept:             {rw_intercept:>8.1f} ms")
