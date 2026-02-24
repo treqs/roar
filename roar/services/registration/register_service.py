@@ -27,6 +27,7 @@ from ...db.hashing.backend import compute_hashes_batch
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
 from ...plugins.vcs.git import GitVCSProvider
+from ..transfer.common import resolve_repo_url_or_local_uri
 from ..upload.lineage_collector import LineageCollector
 from .coordinator import RegistrationCoordinator
 from .session import SessionRegistrationService
@@ -357,7 +358,7 @@ class RegisterService:
                 return GitContext(repo=None, commit=None, branch=None)
 
             return GitContext(
-                repo=vcs.get_remote_url(repo_root),
+                repo=resolve_repo_url_or_local_uri(vcs, repo_root, logger=self._logger),
                 commit=vcs.get_commit_hash(repo_root),
                 branch=vcs.get_branch(repo_root),
             )

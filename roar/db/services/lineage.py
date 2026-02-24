@@ -6,6 +6,7 @@ Provides lineage tracing and DAG reconstruction operations.
 
 from typing import Any
 
+from ...core.digests import extract_primary_digest
 from ...core.interfaces.repositories import ArtifactRepository, JobRepository
 from ...core.interfaces.services import LineageService
 
@@ -115,7 +116,7 @@ class DefaultLineageService(LineageService):
             if artifact:
                 resolved_ids.append(aid)
             else:
-                artifact = self._artifact_repo.get_by_hash(aid, algorithm="blake3")
+                artifact = self._resolve_artifact_by_hash(aid)
                 if artifact:
                     resolved_ids.append(artifact["id"])
 
@@ -141,7 +142,7 @@ class DefaultLineageService(LineageService):
                 inputs = self._job_repo.get_inputs(producer["id"])
                 job_dict["_input_artifact_ids"] = [inp["artifact_id"] for inp in inputs]
                 job_dict["_input_hashes"] = [
-                    h for h in (self._get_blake3(inp) for inp in inputs) if h
+                    h for h in (self._get_primary_digest(inp) for inp in inputs) if h
                 ]
                 # Structured inputs with hash, path, and byte_ranges
                 job_dict["_inputs"] = [
@@ -151,7 +152,7 @@ class DefaultLineageService(LineageService):
                         "byte_ranges": inp.get("byte_ranges"),
                     }
                     for inp in inputs
-                    if (h := self._get_blake3(inp))
+                    if (h := self._get_primary_digest(inp))
                 ]
 
                 for inp in inputs:
@@ -161,7 +162,7 @@ class DefaultLineageService(LineageService):
                 outputs = self._job_repo.get_outputs(producer["id"])
                 job_dict["_output_artifact_ids"] = [out["artifact_id"] for out in outputs]
                 job_dict["_output_hashes"] = [
-                    h for h in (self._get_blake3(out) for out in outputs) if h
+                    h for h in (self._get_primary_digest(out) for out in outputs) if h
                 ]
                 # Structured outputs with hash, path, and byte_ranges
                 job_dict["_outputs"] = [
@@ -171,7 +172,7 @@ class DefaultLineageService(LineageService):
                         "byte_ranges": out.get("byte_ranges"),
                     }
                     for out in outputs
-                    if (h := self._get_blake3(out))
+                    if (h := self._get_primary_digest(out))
                 ]
 
                 jobs.append(job_dict)
@@ -205,13 +206,13 @@ class DefaultLineageService(LineageService):
         # Resolve artifact by ID or hash
         artifact = self._artifact_repo.get(artifact_id)
         if not artifact:
-            artifact = self._artifact_repo.get_by_hash(artifact_id, algorithm="blake3")
+            artifact = self._resolve_artifact_by_hash(artifact_id)
             if artifact:
                 artifact_id = artifact["id"]
             else:
                 return None, [], set()
 
-        target_hash = self._get_blake3(artifact)
+        target_hash = self._get_primary_digest(artifact)
         if not target_hash:
             return None, [], set()
 
@@ -239,7 +240,7 @@ class DefaultLineageService(LineageService):
                 job_dict["_all_inputs"] = inputs
 
                 for inp in inputs:
-                    inp_hash = self._get_blake3(inp)
+                    inp_hash = self._get_primary_digest(inp)
                     if inp_hash:
                         on_path_hashes.add(inp_hash)
                     # Recursively trace upstream
@@ -257,7 +258,7 @@ class DefaultLineageService(LineageService):
         for job in jobs:
             job["_inputs"] = []
             for inp in job.get("_all_inputs", []):
-                inp_hash = self._get_blake3(inp)
+                inp_hash = self._get_primary_digest(inp)
                 if inp_hash and inp_hash in on_path_hashes:
                     job["_inputs"].append(
                         {
@@ -270,7 +271,7 @@ class DefaultLineageService(LineageService):
 
             job["_outputs"] = []
             for out in job.get("_all_outputs", []):
-                out_hash = self._get_blake3(out)
+                out_hash = self._get_primary_digest(out)
                 if out_hash and out_hash in on_path_hashes:
                     job["_outputs"].append(
                         {
@@ -291,17 +292,18 @@ class DefaultLineageService(LineageService):
         return artifact, jobs, on_path_hashes
 
     @staticmethod
-    def _get_blake3(item: dict[str, Any]) -> str | None:
-        """
-        Extract BLAKE3 hash from an artifact item.
+    def _get_primary_digest(item: dict[str, Any]) -> str | None:
+        """Compat wrapper around shared digest extraction."""
+        return extract_primary_digest(item)
 
-        Args:
-            item: Dict with 'hashes' list
+    def _resolve_artifact_by_hash(self, digest: str) -> dict[str, Any] | None:
+        """Resolve an artifact by digest across supported algorithms."""
+        artifact = self._artifact_repo.get_by_hash(digest, algorithm="blake3")
+        if artifact:
+            return artifact
 
-        Returns:
-            BLAKE3 digest or None.
-        """
-        for h in item.get("hashes", []):
-            if h.get("algorithm") == "blake3":
-                return h.get("digest")
-        return None
+        artifact = self._artifact_repo.get_by_hash(digest, algorithm="composite-blake3")
+        if artifact:
+            return artifact
+
+        return self._artifact_repo.get_by_hash(digest)

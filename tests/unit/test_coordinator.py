@@ -27,7 +27,12 @@ class TestRegisterLineage:
 
     @pytest.fixture
     def mock_artifact_service(self):
-        return MagicMock()
+        service = MagicMock()
+        service.resolve_artifact_hash.side_effect = lambda ref: (
+            f"id-{ref.get('hash', 'unknown')}",
+            None,
+        )
+        return service
 
     @pytest.fixture
     def mock_job_service(self):
@@ -151,6 +156,8 @@ class TestRegisterLineage:
         mock_job_service.link_job_artifacts.assert_called_once()
         call_kwargs = mock_job_service.link_job_artifacts.call_args[1]
         assert call_kwargs["job_uid"] == "job-001"
+        assert call_kwargs["inputs"][0]["artifact_hash"] == "id-in1"
+        assert call_kwargs["outputs"][0]["artifact_hash"] == "id-out1"
         assert result.links_created == 2  # 1 input + 1 output
 
     def test_full_4_phase_flow(self, coordinator, mock_job_service, mock_artifact_service):

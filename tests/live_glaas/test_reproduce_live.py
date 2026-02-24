@@ -140,7 +140,9 @@ def sample_input_data(temp_git_repo: Path, git_commit: Callable) -> dict[str, Pa
     data_files = {}
 
     input_csv = temp_git_repo / "input.csv"
-    input_csv.write_text("id,value\n1,foo\n2,bar\n3,baz\n")
+    # Include a per-repo token so artifact hashes stay unique across parallel live runs.
+    token = temp_git_repo.name
+    input_csv.write_text(f"id,value\n1,foo\n2,bar\n3,baz\n4,{token}\n")
     data_files["input"] = input_csv
 
     git_commit("Add input data")
@@ -175,6 +177,7 @@ def compute_file_hash():
 class TestReproduceLiveGlaas:
     """Live integration tests for roar reproduce command."""
 
+    @pytest.mark.timeout(120)
     def test_reproduce_full_pipeline(
         self,
         glaas_configured_with_local_remote,

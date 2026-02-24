@@ -99,6 +99,10 @@ class JobRepository(Protocol):
         """Get job output artifacts."""
         ...
 
+    def update_metadata(self, job_id: int, metadata: str | None) -> None:
+        """Update job metadata payload."""
+        ...
+
     def add_input(self, job_id: int, artifact_id: str, path: str) -> None:
         """Add input artifact to job."""
         ...

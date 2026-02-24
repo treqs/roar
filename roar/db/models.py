@@ -15,6 +15,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -38,6 +39,13 @@ class Artifact(Base):
     source_url: Mapped[str | None] = mapped_column(Text)
     uploaded_to: Mapped[str | None] = mapped_column(Text)  # JSON list
     synced_at: Mapped[float | None] = mapped_column(Float)
+    kind: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="primitive",
+        server_default=text("'primitive'"),
+    )
+    component_count: Mapped[int | None] = mapped_column(Integer)
     metadata_: Mapped[str | None] = mapped_column("metadata", Text)  # JSON
 
     # Relationships
@@ -47,6 +55,20 @@ class Artifact(Base):
     job_inputs: Mapped[list["JobInput"]] = relationship(back_populates="artifact")
     job_outputs: Mapped[list["JobOutput"]] = relationship(back_populates="artifact")
     collection_members: Mapped[list["CollectionMember"]] = relationship(back_populates="artifact")
+    composite_components: Mapped[list["CompositeArtifactComponent"]] = relationship(
+        back_populates="composite_artifact",
+        foreign_keys="CompositeArtifactComponent.composite_artifact_id",
+        cascade="all, delete-orphan",
+    )
+    component_of: Mapped[list["CompositeArtifactComponent"]] = relationship(
+        back_populates="component_artifact",
+        foreign_keys="CompositeArtifactComponent.artifact_id",
+    )
+    membership_index: Mapped[Optional["CompositeMembershipIndex"]] = relationship(
+        back_populates="composite_artifact",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("idx_artifacts_first_seen", "first_seen_at"),
@@ -277,6 +299,60 @@ class HashCache(Base):
         Index("idx_hash_cache_path", "path"),
         Index("idx_hash_cache_updated", "cached_at"),
     )
+
+
+class CompositeArtifactComponent(Base):
+    """Stored component entry for a composite artifact."""
+
+    __tablename__ = "composite_artifact_components"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    composite_artifact_id: Mapped[str] = mapped_column(
+        String, ForeignKey("artifacts.id", ondelete="CASCADE"), nullable=False
+    )
+    ordinal: Mapped[int | None] = mapped_column(Integer)
+    relative_path: Mapped[str] = mapped_column(Text, nullable=False)
+    leaf_kind: Mapped[str] = mapped_column(String, nullable=False, default="file")
+    component_algorithm: Mapped[str] = mapped_column(String, nullable=False)
+    component_digest: Mapped[str] = mapped_column(String, nullable=False)
+    component_size: Mapped[int | None] = mapped_column(Integer)
+    component_type: Mapped[str | None] = mapped_column(String)
+    artifact_id: Mapped[str | None] = mapped_column(String, ForeignKey("artifacts.id"))
+
+    composite_artifact: Mapped["Artifact"] = relationship(
+        back_populates="composite_components",
+        foreign_keys=[composite_artifact_id],
+    )
+    component_artifact: Mapped[Optional["Artifact"]] = relationship(
+        back_populates="component_of",
+        foreign_keys=[artifact_id],
+    )
+
+    __table_args__ = (
+        Index("idx_composite_components_parent", "composite_artifact_id"),
+        Index("idx_composite_components_digest", "component_algorithm", "component_digest"),
+        Index("idx_composite_components_artifact", "artifact_id"),
+    )
+
+
+class CompositeMembershipIndex(Base):
+    """Membership index metadata for large composites."""
+
+    __tablename__ = "composite_membership_indexes"
+
+    composite_artifact_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("artifacts.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    total_components: Mapped[int] = mapped_column(Integer, nullable=False)
+    stored_components: Mapped[int] = mapped_column(Integer, nullable=False)
+    bloom_filter_base64: Mapped[str | None] = mapped_column(Text)
+    bloom_bits: Mapped[int | None] = mapped_column(Integer)
+    bloom_hashes: Mapped[int | None] = mapped_column(Integer)
+    bloom_version: Mapped[int | None] = mapped_column(Integer)
+
+    composite_artifact: Mapped["Artifact"] = relationship(back_populates="membership_index")
 
 
 class SchemaVersion(Base):

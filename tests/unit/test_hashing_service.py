@@ -108,3 +108,28 @@ def test_compute_hash_reads_from_cache_when_available(tmp_path: Path, monkeypatc
 def test_compute_hash_missing_file_returns_none(tmp_path: Path) -> None:
     service = DefaultHashingService(FakeHashCache())
     assert service.compute_hash(str(tmp_path / "missing.bin"), "blake3") is None
+
+
+def test_compute_hashes_batch_skips_directories(tmp_path: Path, monkeypatch) -> None:
+    file_path = tmp_path / "artifact.bin"
+    file_path.write_bytes(b"artifact")
+    dir_path = tmp_path / "dataset"
+    dir_path.mkdir()
+
+    calls: dict[str, list[str]] = {}
+
+    def fake_backend(paths: list[str], algorithms: list[str]) -> dict[str, dict[str, str]]:
+        calls["paths"] = paths
+        return {
+            path_value: {algorithm: f"{algorithm}-digest" for algorithm in algorithms}
+            for path_value in paths
+        }
+
+    monkeypatch.setattr("roar.db.services.hashing.compute_hashes_batch_backend", fake_backend)
+    service = DefaultHashingService(FakeHashCache())
+
+    result = service.compute_hashes_batch([str(dir_path), str(file_path)], ["blake3"])
+
+    assert calls["paths"] == [str(file_path)]
+    assert str(file_path) in result
+    assert str(dir_path) not in result

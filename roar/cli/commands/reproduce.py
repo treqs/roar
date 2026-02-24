@@ -171,6 +171,7 @@ def _show_preview(
     list_requirements: bool = False,
 ) -> None:
     """Show pipeline preview without running."""
+    from ...presenters.console import ConsolePresenter
     from ...services.reproduction import PipelineExecutor
 
     # Look up pipeline
@@ -189,7 +190,7 @@ def _show_preview(
     click.echo("")
 
     # Show steps
-    executor = PipelineExecutor()
+    executor = PipelineExecutor(presenter=ConsolePresenter())
     executor.preview_steps(pipeline)
 
     # Show package info

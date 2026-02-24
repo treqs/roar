@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
     source_url TEXT,                    -- Original download URL
     uploaded_to TEXT,                   -- Where artifact was uploaded (JSON list)
     synced_at REAL,                     -- When synced to GLaaS (NULL = local only)
+    kind TEXT NOT NULL DEFAULT 'primitive', -- 'primitive' | 'composite'
+    component_count INTEGER,            -- Stored/declared component count for composite artifacts
     metadata TEXT                       -- JSON: mime type, description, etc.
 );
 
@@ -44,6 +46,40 @@ CREATE TABLE IF NOT EXISTS artifact_hashes (
 
 CREATE INDEX IF NOT EXISTS idx_artifact_hashes_artifact ON artifact_hashes(artifact_id);
 CREATE INDEX IF NOT EXISTS idx_artifact_hashes_digest ON artifact_hashes(digest);
+
+-- =============================================================================
+-- COMPOSITE ARTIFACT DETAIL TABLES
+-- Stored component rows and optional membership index metadata.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS composite_artifact_components (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    composite_artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+    ordinal INTEGER,
+    relative_path TEXT NOT NULL,
+    leaf_kind TEXT NOT NULL DEFAULT 'file', -- 'file' | 'symlink'
+    component_algorithm TEXT NOT NULL,
+    component_digest TEXT NOT NULL,
+    component_size INTEGER,
+    component_type TEXT,
+    artifact_id TEXT REFERENCES artifacts(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_composite_components_parent
+    ON composite_artifact_components(composite_artifact_id);
+CREATE INDEX IF NOT EXISTS idx_composite_components_digest
+    ON composite_artifact_components(component_algorithm, component_digest);
+CREATE INDEX IF NOT EXISTS idx_composite_components_artifact
+    ON composite_artifact_components(artifact_id);
+
+CREATE TABLE IF NOT EXISTS composite_membership_indexes (
+    composite_artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+    total_components INTEGER NOT NULL,
+    stored_components INTEGER NOT NULL,
+    bloom_filter_base64 TEXT,
+    bloom_bits INTEGER,
+    bloom_hashes INTEGER,
+    bloom_version INTEGER
+);
 
 -- =============================================================================
 -- JOBS
@@ -230,3 +266,49 @@ def run_migrations(conn) -> None:
     output_columns = {row["name"] for row in cursor.fetchall()}
     if "byte_ranges" not in output_columns:
         conn.execute("ALTER TABLE job_outputs ADD COLUMN byte_ranges TEXT")
+
+    artifact_table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='artifacts'"
+    ).fetchone()
+    if artifact_table_exists:
+        # Add composite-aware columns to artifacts table.
+        cursor = conn.execute("PRAGMA table_info(artifacts)")
+        artifact_columns = {row["name"] for row in cursor.fetchall()}
+        if "kind" not in artifact_columns:
+            conn.execute("ALTER TABLE artifacts ADD COLUMN kind TEXT NOT NULL DEFAULT 'primitive'")
+        if "component_count" not in artifact_columns:
+            conn.execute("ALTER TABLE artifacts ADD COLUMN component_count INTEGER")
+
+        # Create additive composite tables for local offline workflows.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS composite_artifact_components (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                composite_artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+                ordinal INTEGER,
+                relative_path TEXT NOT NULL,
+                leaf_kind TEXT NOT NULL DEFAULT 'file',
+                component_algorithm TEXT NOT NULL,
+                component_digest TEXT NOT NULL,
+                component_size INTEGER,
+                component_type TEXT,
+                artifact_id TEXT REFERENCES artifacts(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_composite_components_parent
+                ON composite_artifact_components(composite_artifact_id);
+            CREATE INDEX IF NOT EXISTS idx_composite_components_digest
+                ON composite_artifact_components(component_algorithm, component_digest);
+            CREATE INDEX IF NOT EXISTS idx_composite_components_artifact
+                ON composite_artifact_components(artifact_id);
+
+            CREATE TABLE IF NOT EXISTS composite_membership_indexes (
+                composite_artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+                total_components INTEGER NOT NULL,
+                stored_components INTEGER NOT NULL,
+                bloom_filter_base64 TEXT,
+                bloom_bits INTEGER,
+                bloom_hashes INTEGER,
+                bloom_version INTEGER
+            );
+            """
+        )

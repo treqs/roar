@@ -105,3 +105,31 @@ class TestExtractIoListPreservesByteRanges:
         assert len(result) == 1
         assert result[0] == {"hash": "h1", "path": "/input.csv"}
         assert "byte_ranges" not in result[0]
+
+    def test_extract_io_list_accepts_hashes_only_structured_items(self):
+        coordinator = RegistrationCoordinator(logger=MagicMock())
+
+        job = {
+            "_inputs": [
+                {
+                    "hashes": [
+                        {"algorithm": "sha256", "digest": "a" * 64},
+                        {"algorithm": "blake3", "digest": "b" * 64},
+                    ],
+                    "path": "/input.csv",
+                    "byte_ranges": [[0, 999]],
+                },
+            ],
+            "_input_hashes": [],
+        }
+
+        result = coordinator._extract_io_list(job, "_inputs", "_input_hashes")
+        assert len(result) == 1
+        assert result[0] == {
+            "hashes": [
+                {"algorithm": "sha256", "digest": "a" * 64},
+                {"algorithm": "blake3", "digest": "b" * 64},
+            ],
+            "path": "/input.csv",
+            "byte_ranges": [[0, 999]],
+        }

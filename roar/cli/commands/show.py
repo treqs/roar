@@ -9,14 +9,15 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any, cast
 
 import click
 
 from ...core.bootstrap import bootstrap
 from ...core.di import try_resolve
 from ...core.interfaces.logger import ILogger
-from ...db.context import create_database_context
-from ...presenters.formatting import format_duration, format_size, format_timestamp
+from ...db.context import create_database_context, optional_repo
+from ...presenters.show_renderer import ShowRenderer
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -142,228 +143,53 @@ def _resolve_job_ref(db_ctx, session_id: int, job_ref: str) -> dict | None:
     return job
 
 
+def _prepare_job_for_render(job: dict) -> dict:
+    """Parse raw JSON fields on a job dict into Python objects for the renderer.
+
+    The renderer expects 'metadata' and 'telemetry' as parsed dicts (or None),
+    not raw JSON strings.  This function returns a shallow copy of *job* with
+    those two keys replaced by their parsed equivalents.
+    """
+    job = dict(job)  # shallow copy so we don't mutate the original
+    if job.get("metadata") and isinstance(job["metadata"], str):
+        job["metadata"] = _safe_json_loads(job["metadata"], "metadata")
+    if job.get("telemetry") and isinstance(job["telemetry"], str):
+        job["telemetry"] = _safe_json_loads(job["telemetry"], "telemetry")
+    return job
+
+
 def _show_session(db_ctx, session: dict) -> None:
-    """Display session-level view with all jobs."""
-    click.echo(f"\nSession: {session['hash']}")
-    click.echo(f"Created: {format_timestamp(session['created_at'])}")
-    if session.get("git_repo"):
-        click.echo(f"Git: {session['git_repo']}")
-    if session.get("git_commit_start"):
-        click.echo(f"Commit: {session['git_commit_start']}")
-
+    """Fetch data and display session-level view with all jobs."""
     jobs = db_ctx.jobs.get_by_session(session["id"], limit=100)
-
-    if not jobs:
-        click.echo("\nNo jobs in this session.")
-        return
-
-    click.echo(f"\nJobs ({len(jobs)}):\n")
-
-    # Header
-    click.echo(f"{'STEP':<6}  {'JOB UID':<8}  {'STATUS':<6}  {'COMMAND'}")
-    click.echo("-" * 60)
-
-    # Jobs ordered by step number (oldest first)
-    for job in reversed(jobs):
-        step = f"@{job['step_number']}" if job["step_number"] else "-"
-        if job.get("job_type") == "build":
-            step = f"@B{job['step_number']}" if job["step_number"] else "-"
-
-        uid = job["job_uid"] or "?"
-
-        if job["exit_code"] is None:
-            status = "?"
-        elif job["exit_code"] == 0:
-            status = "OK"
-        else:
-            status = "FAIL"
-
-        command = job["command"] or ""
-        # Truncate long commands for table display
-        if len(command) > 50:
-            command = command[:47] + "..."
-
-        click.echo(f"{step:<6}  {uid:<8}  {status:<6}  {command}")
+    renderer = ShowRenderer()
+    click.echo(renderer.render_session(session, jobs))
 
 
 def _show_job(db_ctx, job: dict) -> None:
-    """Display detailed job view with artifacts."""
-    click.echo(f"\nJob: {job['job_uid']}")
-
-    step_ref = ""
-    if job["step_number"]:
-        prefix = "@B" if job.get("job_type") == "build" else "@"
-        step_ref = f" ({prefix}{job['step_number']})"
-    click.echo(f"Step: {job['step_number'] or '-'}{step_ref}")
-
-    if job.get("step_name"):
-        click.echo(f"Name: {job['step_name']}")
-    if job.get("step_identity"):
-        click.echo(f"Identity: {job['step_identity']}")
-
-    click.echo(f"Timestamp: {format_timestamp(job['timestamp'])}")
-    click.echo(f"Duration: {format_duration(job['duration_seconds'])}")
-
-    if job["exit_code"] is None:
-        status = "Unknown"
-    elif job["exit_code"] == 0:
-        status = "Success"
-    else:
-        status = f"Failed (exit {job['exit_code']})"
-    click.echo(f"Status: {status}")
-
-    click.echo(f"\nCommand: {job['command']}")
-
-    # Git info
-    if job.get("git_commit"):
-        click.echo(f"\nGit commit: {job['git_commit']}")
-    if job.get("git_branch"):
-        click.echo(f"Git branch: {job['git_branch']}")
-
-    # Metadata (what gets registered with GLaaS)
-    if job.get("metadata"):
-        meta = _safe_json_loads(job["metadata"], "metadata")
-        if meta:
-            click.echo("\nMetadata:")
-
-            # Working directory
-            if meta.get("cwd"):
-                click.echo(f"  Working dir: {meta['cwd']}")
-
-            # Runtime info
-            runtime = meta.get("runtime", {})
-            if runtime.get("hostname"):
-                click.echo(f"  Hostname: {runtime['hostname']}")
-            if runtime.get("os"):
-                os_info = runtime["os"]
-                click.echo(f"  OS: {os_info.get('system', '')} {os_info.get('release', '')}")
-            if runtime.get("python"):
-                click.echo(f"  Python: {runtime['python'].get('version', '')}")
-
-            # Hardware
-            if runtime.get("gpu"):
-                gpus = runtime["gpu"]
-                for i, gpu in enumerate(gpus):
-                    gpu_str = (
-                        f"  GPU {i}: {gpu.get('name', 'unknown')} ({gpu.get('memory_mb', '?')} MB)"
-                    )
-                    if gpu.get("compute_cap"):
-                        gpu_str += f", compute cap {gpu['compute_cap']}"
-                    click.echo(gpu_str)
-            if runtime.get("cuda"):
-                cuda = runtime["cuda"]
-                cuda_parts = []
-                if cuda.get("cuda_version"):
-                    cuda_parts.append(f"CUDA {cuda['cuda_version']}")
-                if cuda.get("driver_version"):
-                    cuda_parts.append(f"driver {cuda['driver_version']}")
-                if cuda.get("cudnn_version"):
-                    cuda_parts.append(f"cuDNN {cuda['cudnn_version']}")
-                if cuda_parts:
-                    click.echo(f"  CUDA: {', '.join(cuda_parts)}")
-            if runtime.get("cpu"):
-                cpu = runtime["cpu"]
-                click.echo(f"  CPU: {cpu.get('model', 'unknown')} ({cpu.get('count', '?')} cores)")
-            if runtime.get("memory"):
-                mem = runtime["memory"]
-                click.echo(f"  Memory: {mem.get('total_mb', '?')} MB")
-
-            # Environment variables
-            env_vars = runtime.get("env_vars", {})
-            if env_vars:
-                click.echo(f"\n  Environment Variables ({len(env_vars)}):")
-                for name, value in sorted(env_vars.items()):
-                    # Truncate long values
-                    display_val = value if len(value) <= 60 else value[:57] + "..."
-                    click.echo(f"    {name}={display_val}")
-
-            # Packages
-            packages = meta.get("packages", {})
-            if packages and isinstance(packages, dict):
-                for manager, pkgs in packages.items():
-                    if pkgs and isinstance(pkgs, dict):
-                        click.echo(f"\n  Packages ({manager}, {len(pkgs)}):")
-                        for name, version in sorted(pkgs.items())[:15]:
-                            if version:
-                                click.echo(f"    {name}=={version}")
-                            else:
-                                click.echo(f"    {name}")
-                        if len(pkgs) > 15:
-                            click.echo(f"    ... and {len(pkgs) - 15} more")
-
-    # Telemetry (external service links)
-    if job.get("telemetry"):
-        telem = _safe_json_loads(job["telemetry"], "telemetry")
-        if telem:
-            click.echo("\nTelemetry:")
-            for name, url in telem.items():
-                if isinstance(url, list):
-                    for u in url:
-                        click.echo(f"  {name}: {u}")
-                else:
-                    click.echo(f"  {name}: {url}")
-
-    # Inputs
+    """Fetch data and display detailed job view with artifacts."""
     inputs = db_ctx.jobs.get_inputs(job["id"])
-    if inputs:
-        click.echo(f"\nInputs ({len(inputs)}):")
-        for inp in inputs:
-            click.echo(f"  {inp['path']}")
-            click.echo(f"    Artifact: {inp['artifact_id']}")
-            click.echo(f"    Size: {format_size(inp['size'])}")
-            for h in inp.get("hashes", []):
-                click.echo(f"    {h['algorithm']}: {h['digest']}")
-
-    # Outputs
     outputs = db_ctx.jobs.get_outputs(job["id"])
-    if outputs:
-        click.echo(f"\nOutputs ({len(outputs)}):")
-        for out in outputs:
-            click.echo(f"  {out['path']}")
-            click.echo(f"    Artifact: {out['artifact_id']}")
-            click.echo(f"    Size: {format_size(out['size'])}")
-            for h in out.get("hashes", []):
-                click.echo(f"    {h['algorithm']}: {h['digest']}")
+    prepared_job = _prepare_job_for_render(job)
+    renderer = ShowRenderer()
+    click.echo(renderer.render_job(prepared_job, inputs, outputs))
 
 
 def _show_artifact(db_ctx, artifact: dict) -> None:
-    """Display detailed artifact view."""
-    click.echo(f"\nArtifact: {artifact['id']}")
-    click.echo(f"Size: {format_size(artifact['size'])}")
-    click.echo(f"First seen: {format_timestamp(artifact['first_seen_at'])}")
-
-    if artifact.get("first_seen_path"):
-        click.echo(f"Original path: {artifact['first_seen_path']}")
-
-    # Hashes
-    hashes = artifact.get("hashes", [])
-    if hashes:
-        click.echo("\nHashes:")
-        for h in hashes:
-            click.echo(f"  {h['algorithm']}: {h['digest']}")
-
-    # Locations
+    """Fetch data and display detailed artifact view."""
     locations = db_ctx.artifacts.get_locations(artifact["id"])
-    if locations:
-        click.echo(f"\nLocations ({len(locations)}):")
-        for loc in locations:
-            click.echo(f"  {loc['path']}")
-
-    # Jobs
     jobs = db_ctx.artifacts.get_jobs(artifact["id"])
-    produced_by = jobs.get("produced_by", [])
-    if produced_by:
-        click.echo(f"\nProduced by ({len(produced_by)} job(s)):")
-        for job in produced_by[:5]:
-            cmd = (job.get("command") or "?")[:47]
-            click.echo(f"  [{job.get('job_uid', '?')}] {cmd}")
 
-    consumed_by = jobs.get("consumed_by", [])
-    if consumed_by:
-        click.echo(f"\nConsumed by ({len(consumed_by)} job(s)):")
-        for job in consumed_by[:5]:
-            cmd = (job.get("command") or "?")[:47]
-            click.echo(f"  [{job.get('job_uid', '?')}] {cmd}")
+    composite_summary = None
+    components = None
+    composite_repo = cast(Any, optional_repo(db_ctx, "composites"))
+    if composite_repo is not None:
+        summary = composite_repo.get(artifact["id"])
+        if isinstance(summary, dict):
+            composite_summary = summary
+            components = composite_repo.get_components(artifact["id"], limit=10) or None
+
+    renderer = ShowRenderer()
+    click.echo(renderer.render_artifact(artifact, locations, jobs, composite_summary, components))
 
 
 @click.command("show")

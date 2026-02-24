@@ -25,6 +25,26 @@ class DatabaseContext(Protocol):
     def sessions(self) -> Any: ...
 
 
+def resolve_repo_url_or_local_uri(
+    vcs: GitVCSProvider,
+    repo_root: str,
+    logger: Any | None = None,
+) -> str:
+    """Resolve remote URL, falling back to local file:// repo URI."""
+    remote_url = vcs.get_remote_url(repo_root)
+    if remote_url:
+        return remote_url
+
+    fallback_uri = Path(repo_root).resolve().as_uri()
+    active_logger = logger or get_logger()
+    active_logger.warning(
+        "No git remote configured for %s; using local repository URI %s for session registration",
+        repo_root,
+        fallback_uri,
+    )
+    return fallback_uri
+
+
 def hash_files_blake3(paths: list[Path]) -> dict[str, str]:
     """Compute BLAKE3 hashes for paths in one backend batch call."""
     if not paths:
@@ -49,7 +69,7 @@ def resolve_git_context(repo_root: Path, git_commit: str | None = None) -> GitCo
             return GitContext(repo=None, commit=git_commit, branch=None)
 
         return GitContext(
-            repo=vcs.get_remote_url(root),
+            repo=resolve_repo_url_or_local_uri(vcs, root),
             commit=git_commit or vcs.get_commit_hash(root),
             branch=vcs.get_branch(root),
         )

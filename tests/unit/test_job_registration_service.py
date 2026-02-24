@@ -292,3 +292,57 @@ class TestCreateJobsBatch:
         assert results[1].success is True  # batch succeeded
         assert results[1].job_uid == "job-002"
         assert results[2].success is False  # missing job_uid
+
+
+class TestLinkJobArtifacts:
+    """Tests for JobRegistrationService.link_job_artifacts()."""
+
+    @pytest.fixture
+    def mock_client(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def service(self, mock_client):
+        return JobRegistrationService(client=mock_client)
+
+    def test_accepts_artifact_hash_references(self, service, mock_client):
+        mock_client.register_job_inputs.return_value = ({"inputs_linked": 1}, None)
+        mock_client.register_job_outputs.return_value = ({"outputs_linked": 0}, None)
+
+        result = service.link_job_artifacts(
+            session_hash="session123",
+            job_uid="job-001",
+            inputs=[
+                {
+                    "artifact_hash": "fd8e8ec8-47e2-4a0b-b4f5-a56f8dbd2c70",
+                    "path": "/data/input.csv",
+                }
+            ],
+            outputs=[],
+        )
+
+        assert result.success is True
+        assert result.inputs_linked == 1
+        mock_client.register_job_inputs.assert_called_once()
+        sent_artifacts = mock_client.register_job_inputs.call_args.kwargs["artifacts"]
+        assert sent_artifacts[0]["artifact_hash"] == "fd8e8ec8-47e2-4a0b-b4f5-a56f8dbd2c70"
+
+    def test_accepts_legacy_artifact_id_references(self, service, mock_client):
+        mock_client.register_job_inputs.return_value = ({"inputs_linked": 1}, None)
+        mock_client.register_job_outputs.return_value = ({"outputs_linked": 0}, None)
+
+        result = service.link_job_artifacts(
+            session_hash="session123",
+            job_uid="job-001",
+            inputs=[
+                {
+                    "artifact_id": "fd8e8ec8-47e2-4a0b-b4f5-a56f8dbd2c70",
+                    "path": "/data/input.csv",
+                }
+            ],
+            outputs=[],
+        )
+
+        assert result.success is True
+        sent_artifacts = mock_client.register_job_inputs.call_args.kwargs["artifacts"]
+        assert sent_artifacts[0]["artifact_hash"] == "fd8e8ec8-47e2-4a0b-b4f5-a56f8dbd2c70"

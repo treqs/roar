@@ -7,6 +7,7 @@ ORM, following the Repository pattern for clean data access.
 
 from .artifact import SQLAlchemyArtifactRepository, SQLiteArtifactRepository
 from .collection import SQLAlchemyCollectionRepository, SQLiteCollectionRepository
+from .composite import SQLAlchemyCompositeRepository
 from .hash_cache import SQLAlchemyHashCacheRepository, SQLiteHashCacheRepository
 from .job import SQLAlchemyJobRepository, SQLiteJobRepository
 from .session import SQLAlchemySessionRepository, SQLiteSessionRepository
@@ -14,6 +15,7 @@ from .session import SQLAlchemySessionRepository, SQLiteSessionRepository
 __all__ = [
     "SQLAlchemyArtifactRepository",
     "SQLAlchemyCollectionRepository",
+    "SQLAlchemyCompositeRepository",
     # SQLAlchemy implementations (primary)
     "SQLAlchemyHashCacheRepository",
     "SQLAlchemyJobRepository",

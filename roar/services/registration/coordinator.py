@@ -18,6 +18,7 @@ from ...core.interfaces.registration import (
     IRegistrationCoordinator,
 )
 from ...core.logging import get_logger
+from . import _artifact_ref
 from .artifact import ArtifactRegistrationService
 from .job import JobRegistrationService
 from .session import SessionRegistrationService
@@ -156,6 +157,7 @@ class RegistrationCoordinator(IRegistrationCoordinator):
 
         # Phase 4: Link job artifacts
         self._logger.debug("Phase 4: Linking artifacts to %d jobs", len(job_uids_created))
+        artifact_hash_cache: dict[str, str] = {}
 
         for job in jobs:
             job_uid = job.get("job_uid")
@@ -169,11 +171,29 @@ class RegistrationCoordinator(IRegistrationCoordinator):
             if not inputs and not outputs:
                 continue
 
+            resolved_inputs, input_resolution_errors = self._resolve_io_artifact_hashes(
+                inputs,
+                artifact_hash_cache,
+                "input",
+            )
+            resolved_outputs, output_resolution_errors = self._resolve_io_artifact_hashes(
+                outputs,
+                artifact_hash_cache,
+                "output",
+            )
+            resolution_errors = input_resolution_errors + output_resolution_errors
+            if resolution_errors:
+                links_failed += 1
+                errors.extend([f"Link {job_uid}: {msg}" for msg in resolution_errors])
+
+            if not resolved_inputs and not resolved_outputs:
+                continue
+
             link_result = self.job_service.link_job_artifacts(
                 session_hash=session_hash,
                 job_uid=job_uid,
-                inputs=inputs,
-                outputs=outputs,
+                inputs=resolved_inputs,
+                outputs=resolved_outputs,
             )
 
             if link_result.success:
@@ -209,12 +229,51 @@ class RegistrationCoordinator(IRegistrationCoordinator):
             errors=errors,
         )
 
+    def _resolve_io_artifact_hashes(
+        self,
+        items: list[dict[str, Any]],
+        artifact_hash_cache: dict[str, str],
+        artifact_kind: str,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Resolve hash-based artifact refs to artifact-hash refs for link phase."""
+        resolved_items: list[dict[str, Any]] = []
+        errors: list[str] = []
+
+        for item in items:
+            ref_cache_key = _artifact_ref.cache_key(item)
+            artifact_hash = artifact_hash_cache.get(ref_cache_key) if ref_cache_key else None
+
+            if not artifact_hash:
+                artifact_hash, lookup_error = self._resolve_artifact_hash(item)
+                if lookup_error or not artifact_hash:
+                    ref_preview = _artifact_ref.preview(item)
+                    errors.append(
+                        f"{artifact_kind} artifact {ref_preview or '<unknown>'} could not be resolved: {lookup_error or 'unknown error'}"
+                    )
+                    continue
+                if ref_cache_key:
+                    artifact_hash_cache[ref_cache_key] = artifact_hash
+
+            resolved: dict[str, Any] = {
+                "artifact_hash": artifact_hash,
+                "path": item.get("path"),
+            }
+            if item.get("byte_ranges") is not None:
+                resolved["byte_ranges"] = item["byte_ranges"]
+            resolved_items.append(resolved)
+
+        return resolved_items, errors
+
+    def _resolve_artifact_hash(self, artifact_ref: dict[str, Any]) -> tuple[str | None, str | None]:
+        """Resolve content hash for the given artifact reference."""
+        return self.artifact_service.resolve_artifact_hash(artifact_ref)
+
     def _extract_io_list(
         self,
         job: dict,
         structured_key: str,
         hash_list_key: str,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """
         Extract I/O list from job dict.
 
@@ -227,23 +286,35 @@ class RegistrationCoordinator(IRegistrationCoordinator):
             hash_list_key: Key for hash-only list (e.g., "_input_hashes")
 
         Returns:
-            List of {hash, path} dicts
+            List of artifact refs with path, using either `hash` or `hashes`.
         """
         # Prefer structured format with path
         structured = job.get(structured_key, [])
         if structured:
-            result = []
+            result: list[dict[str, Any]] = []
             for item in structured:
                 h = item.get("hash")
+                hashes = item.get("hashes")
                 p = item.get("path")
-                if h and p:
-                    item_dict: dict[str, Any] = {"hash": h, "path": p}
+                has_identity = bool(h) or bool(hashes)
+                if has_identity and p:
+                    item_dict: dict[str, Any] = {"path": p}
+                    if h:
+                        item_dict["hash"] = h
+                    elif hashes:
+                        item_dict["hashes"] = hashes
                     br = item.get("byte_ranges")
                     if br is not None:
                         item_dict["byte_ranges"] = br
                     result.append(item_dict)
-                elif h:
-                    self._logger.warning("Dropping I/O item %s: missing path", h[:12])
+                elif has_identity:
+                    preview = h
+                    if not preview and isinstance(hashes, list) and hashes:
+                        preview = hashes[0].get("digest")
+                    if preview:
+                        self._logger.warning("Dropping I/O item %s: missing path", preview[:12])
+                    else:
+                        self._logger.warning("Dropping I/O item: missing path")
             return result
 
         # Fallback to hash-only format (path will be empty)

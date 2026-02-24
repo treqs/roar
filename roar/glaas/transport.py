@@ -6,6 +6,7 @@ import json
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from typing import Any
 
 
 def _get_logger():
@@ -14,7 +15,7 @@ def _get_logger():
     return get_logger()
 
 
-def parse_json_response(response_body: str, http_status: int) -> tuple[dict | None, str | None]:
+def parse_json_response(response_body: str, http_status: int) -> tuple[Any | None, str | None]:
     """Parse JSON response with descriptive error messages."""
     if not response_body:
         return None, f"Server returned empty response (HTTP {http_status})"
@@ -35,7 +36,7 @@ def parse_json_response(response_body: str, http_status: int) -> tuple[dict | No
             f"Invalid JSON in response (HTTP {http_status}) at position {e.pos}: '{preview}...'"
         )
 
-    return parsed if isinstance(parsed, dict) else None, None
+    return parsed, None
 
 
 def request_json(
@@ -45,7 +46,7 @@ def request_json(
     path: str,
     body: dict | None,
     auth_header_factory: Callable[[str, str, bytes | None], str | None],
-) -> tuple[dict | None, str | None]:
+) -> tuple[Any | None, str | None]:
     """
     Make an authenticated JSON request.
 
@@ -88,8 +89,7 @@ def request_json(
                 return None, error
 
             if isinstance(result, dict) and result.get("success") and "data" in result:
-                data = result["data"]
-                return data if isinstance(data, dict) else None, None
+                return result["data"], None
             return result, None
     except urllib.error.HTTPError as e:
         error_body = e.read().decode() if e.fp else ""

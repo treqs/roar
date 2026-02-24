@@ -85,6 +85,7 @@ def test_compute_hashes_batch_native_preserves_explicit_workers(
     fake_native = _FakeNative()
     monkeypatch.setattr(backend, "_hash_native", fake_native)
     monkeypatch.setattr(backend.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(backend.os.path, "isfile", lambda _path: True)
 
     paths = [f"/tmp/f{i}" for i in range(32)]
     result = backend.compute_hashes_batch(paths, ["sha256"], workers=3)
@@ -99,6 +100,7 @@ def test_compute_hashes_batch_native_auto_workers_for_large_batches(
     fake_native = _FakeNative()
     monkeypatch.setattr(backend, "_hash_native", fake_native)
     monkeypatch.setattr(backend.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(backend.os.path, "isfile", lambda _path: True)
     monkeypatch.setattr(backend.os.path, "getsize", lambda _path: 1024)
 
     paths = [f"/tmp/f{i}" for i in range(80)]
@@ -119,3 +121,21 @@ def test_compute_hashes_batch_native_auto_workers_disabled_for_tiny_batches(
     backend.compute_hashes_batch(paths, ["sha256"])
 
     assert fake_native.last_workers is None
+
+
+def test_compute_hashes_batch_native_skips_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_native = _FakeNative()
+    monkeypatch.setattr(backend, "_hash_native", fake_native)
+
+    file_path = tmp_path / "artifact.bin"
+    file_path.write_bytes(b"artifact")
+    dir_path = tmp_path / "dataset"
+    dir_path.mkdir()
+
+    result = backend.compute_hashes_batch([dir_path, file_path], ["sha256"])
+
+    assert fake_native.last_paths == [str(file_path)]
+    assert set(result) == {str(file_path)}

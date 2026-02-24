@@ -6,6 +6,7 @@ Consolidates job registration logic from put.py and coordinator.py.
 
 import json
 from functools import cached_property
+from typing import Any
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
@@ -18,6 +19,7 @@ from ...core.interfaces.registration import (
 from ...core.logging import get_logger
 from ...core.validation import validate_job_registration
 from ...glaas_client import GlaasClient
+from . import _artifact_ref
 
 # Maximum artifacts per request to avoid exceeding server body-parser limits (~100KB-1MB)
 MAX_ARTIFACTS_PER_REQUEST = 100
@@ -319,8 +321,8 @@ class JobRegistrationService(IJobRegistrar):
         self,
         session_hash: str,
         job_uid: str,
-        inputs: list[dict[str, str]] | None,
-        outputs: list[dict[str, str]] | None,
+        inputs: list[dict[str, Any]] | None,
+        outputs: list[dict[str, Any]] | None,
     ) -> JobLinkResult:
         """
         Link inputs/outputs to an existing job using session-scoped endpoints.
@@ -331,26 +333,14 @@ class JobRegistrationService(IJobRegistrar):
         Args:
             session_hash: Session this job belongs to
             job_uid: Job UID to link artifacts to
-            inputs: List of {hash, path, size, source_type, metadata} dicts for inputs
-            outputs: List of {hash, path, size, source_type, metadata} dicts for outputs
+            inputs: List of {artifact_hash, path, byte_ranges} dicts for inputs
+            outputs: List of {artifact_hash, path, byte_ranges} dicts for outputs
 
         Returns:
             JobLinkResult with counts of linked artifacts
         """
-        # Filter to only include items with valid data
-        valid_inputs = []
-        for item in inputs or []:
-            if item.get("hash") and item.get("path"):
-                valid_inputs.append(item)
-            elif item.get("hash"):
-                self._logger.warning("Dropping input %s: missing path", item["hash"][:12])
-
-        valid_outputs = []
-        for item in outputs or []:
-            if item.get("hash") and item.get("path"):
-                valid_outputs.append(item)
-            elif item.get("hash"):
-                self._logger.warning("Dropping output %s: missing path", item["hash"][:12])
+        valid_inputs = self._normalize_link_artifacts(inputs or [], "input")
+        valid_outputs = self._normalize_link_artifacts(outputs or [], "output")
 
         if not valid_inputs and not valid_outputs:
             self._logger.debug("No artifacts to link for job %s", job_uid)
@@ -437,3 +427,45 @@ class JobRegistrationService(IJobRegistrar):
             inputs_linked=inputs_linked,
             outputs_linked=outputs_linked,
         )
+
+    def _normalize_link_artifacts(
+        self,
+        items: list[dict[str, Any]],
+        artifact_kind: str,
+    ) -> list[dict[str, Any]]:
+        """Normalize link artifacts and keep only entries with artifact hash + path."""
+        valid_items: list[dict[str, Any]] = []
+
+        for item in items:
+            path = item.get("path")
+            if not path:
+                ref_preview = _artifact_ref.preview(item)
+                if ref_preview:
+                    self._logger.warning(
+                        "Dropping %s %s: missing path",
+                        artifact_kind,
+                        ref_preview,
+                    )
+                else:
+                    self._logger.warning("Dropping %s artifact: missing path", artifact_kind)
+                continue
+
+            artifact_hash = item.get("artifact_hash") or item.get("artifact_id")
+            if not artifact_hash:
+                self._logger.warning(
+                    "Dropping %s artifact for path %s: missing artifact_hash",
+                    artifact_kind,
+                    path,
+                )
+                continue
+
+            normalized: dict[str, Any] = {
+                "artifact_hash": artifact_hash,
+                "path": path,
+            }
+            if item.get("byte_ranges") is not None:
+                normalized["byte_ranges"] = item["byte_ranges"]
+
+            valid_items.append(normalized)
+
+        return valid_items

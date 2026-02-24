@@ -153,6 +153,26 @@ CONFIGURABLE_KEYS = {
         "default": True,
         "description": "Output debug logs to ~/.roar/roar.log",
     },
+    "composites.run.enabled": {
+        "type": bool,
+        "default": True,
+        "description": "Enable local composite materialization during roar run",
+    },
+    "composites.run.min_confidence": {
+        "type": float,
+        "default": 0.80,
+        "description": "Minimum dataset confidence for run-time composite materialization",
+    },
+    "composites.run.min_components": {
+        "type": int,
+        "default": 2,
+        "description": "Minimum leaf components required to materialize a run composite",
+    },
+    "composites.run.max_roots_per_job": {
+        "type": int,
+        "default": 4,
+        "description": "Maximum composite roots materialized per run job",
+    },
 }
 
 
@@ -360,6 +380,16 @@ def config_set(key: str, value: str, start_dir: str | None = None):
             typed_value = False
         else:
             raise ValueError(f"Invalid boolean value: {value}")
+    elif key_info["type"] is int:  # type: ignore[index]
+        try:
+            typed_value = int(value)
+        except ValueError as exc:
+            raise ValueError(f"Invalid integer value: {value}") from exc
+    elif key_info["type"] is float:  # type: ignore[index]
+        try:
+            typed_value = float(value)
+        except ValueError as exc:
+            raise ValueError(f"Invalid float value: {value}") from exc
     elif key_info["type"] is list:  # type: ignore[index]
         # Parse comma-separated list
         if value.strip() == "":
@@ -391,6 +421,13 @@ def config_set(key: str, value: str, start_dir: str | None = None):
         typed_value = value
     else:
         typed_value = value
+
+    if key == "composites.run.min_confidence" and not (0.0 <= float(typed_value) <= 1.0):
+        raise ValueError("composites.run.min_confidence must be between 0.0 and 1.0")
+    if key == "composites.run.min_components" and int(typed_value) < 2:
+        raise ValueError("composites.run.min_components must be >= 2")
+    if key == "composites.run.max_roots_per_job" and int(typed_value) < 1:
+        raise ValueError("composites.run.max_roots_per_job must be >= 1")
 
     # Load existing config, update, and save
     config = load_config(start_dir=start_dir)

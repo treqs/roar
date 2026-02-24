@@ -66,6 +66,12 @@ def glaas_configured_with_local_remote(temp_git_repo, glaas_url):
         check=True,
         capture_output=True,
     )
+    subprocess.run(
+        [sys.executable, "-m", "roar", "config", "set", "filters.ignore_tmp_files", "false"],
+        cwd=temp_git_repo,
+        check=True,
+        capture_output=True,
+    )
     return temp_git_repo
 
 
@@ -427,13 +433,16 @@ def sample_input_data(temp_git_repo: Path, git_commit: Callable) -> dict[str, Pa
     data_files = {}
 
     input_csv = temp_git_repo / "input.csv"
+    # Include a per-repo token so artifact hashes stay unique across parallel live runs.
+    token = temp_git_repo.name
     input_csv.write_text(
-        """id,feature_a,feature_b,label
+        f"""id,feature_a,feature_b,label
 1,0.5,0.3,positive
 2,0.8,0.1,negative
 3,0.2,0.9,positive
 4,0.6,0.4,negative
 5,0.1,0.7,positive
+6,0.9,0.2,{token}
 """
     )
     data_files["input"] = input_csv
@@ -451,6 +460,7 @@ def sample_input_data(temp_git_repo: Path, git_commit: Callable) -> dict[str, Pa
 class TestFullPipelineLiveGlaas:
     """Full end-to-end tests with build steps, training steps, registration, and reproduction."""
 
+    @pytest.mark.timeout(180)
     def test_full_pipeline_with_build_and_run_steps(
         self,
         glaas_configured_with_local_remote,
@@ -862,6 +872,7 @@ class TestFullPipelineLiveGlaas:
         except urllib.error.URLError:
             pytest.skip("Could not connect to GLaaS API")
 
+    @pytest.mark.timeout(120)
     def test_reproduce_executes_build_steps_first(
         self,
         glaas_configured_with_local_remote,

@@ -520,3 +520,122 @@ class TestRegisterService:
         assert result.success is True
         # get_status should not be called when tagging is disabled
         mock_vcs.get_status.assert_not_called()
+
+    def test_get_git_context_falls_back_to_local_repo_uri_when_remote_missing(self, tmp_path):
+        """If no origin remote exists, use a local file:// repo URI and warn."""
+        mock_logger = MagicMock()
+        service = RegisterService(logger=mock_logger)
+
+        with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
+            mock_vcs = MagicMock()
+            mock_vcs.get_repo_root.return_value = str(tmp_path)
+            mock_vcs.get_remote_url.return_value = None
+            mock_vcs.get_commit_hash.return_value = "abc123def456"
+            mock_vcs.get_branch.return_value = "main"
+            mock_git.return_value = mock_vcs
+
+            git_context = service._get_git_context(tmp_path)
+
+        assert git_context.repo == tmp_path.resolve().as_uri()
+        assert git_context.commit == "abc123def456"
+        assert git_context.branch == "main"
+        assert mock_logger.warning.call_count >= 1
+        assert any(
+            "No git remote configured" in str(call.args[0])
+            for call in mock_logger.warning.call_args_list
+        )
+
+    def test_register_artifact_lineage_uses_local_repo_uri_when_remote_missing(
+        self,
+        service,
+        tmp_path,
+        mock_lineage_collector,
+        mock_session_service,
+        mock_coordinator,
+    ):
+        """Registration should not fail solely because origin remote is missing."""
+        artifact_file = tmp_path / "file.csv"
+        artifact_file.write_text("data")
+
+        # Mock LineageData
+        from roar.core.interfaces.upload import LineageData
+
+        mock_lineage = LineageData(
+            jobs=[{"id": 1, "job_uid": "job1"}],
+            artifacts=[{"id": "a1"}],
+            artifact_hashes={"hash1"},
+            pipeline={"id": 1},
+        )
+        mock_lineage_collector.collect.return_value = mock_lineage
+
+        # Mock session registration success
+        mock_session_result = MagicMock()
+        mock_session_result.success = True
+        mock_session_service.register.return_value = mock_session_result
+        mock_session_service.compute_session_hash.return_value = "session_hash_123"
+
+        # Mock coordinator batch result
+        from roar.core.interfaces.registration import BatchRegistrationResult
+
+        mock_batch_result = BatchRegistrationResult(
+            session_registered=True,
+            jobs_created=1,
+            jobs_failed=0,
+            artifacts_registered=1,
+            artifacts_failed=0,
+            links_created=1,
+            links_failed=0,
+            errors=[],
+        )
+        mock_coordinator.register_lineage.return_value = mock_batch_result
+
+        # Mock database context
+        with patch(
+            "roar.services.registration.register_service.create_database_context"
+        ) as mock_ctx:
+            mock_db = MagicMock()
+            mock_db.__enter__ = MagicMock(return_value=mock_db)
+            mock_db.__exit__ = MagicMock(return_value=None)
+            mock_db.artifacts.get_by_hash.return_value = {
+                "id": "1",
+                "hashes": [{"algorithm": "blake3", "digest": "abc123"}],
+            }
+            mock_db.sessions.get_active.return_value = {
+                "id": 1,
+                "git_commit": "abc",
+                "git_branch": "main",
+            }
+            mock_ctx.return_value = mock_db
+
+            # Mock git context retrieval with missing remote
+            with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
+                mock_vcs = MagicMock()
+                mock_vcs.get_repo_root.return_value = str(tmp_path)
+                mock_vcs.get_remote_url.return_value = None
+                mock_vcs.get_commit_hash.return_value = "abc123def456"
+                mock_vcs.get_branch.return_value = "main"
+                mock_vcs.get_status.return_value = (True, [])  # Clean repo
+                mock_git.return_value = mock_vcs
+
+                # Disable tagging + omit filtering for focused behavior
+                with patch("roar.services.registration.register_service.config_get") as mock_config:
+
+                    def config_side_effect(key):
+                        if key == "registration.tagging.enabled":
+                            return False
+                        if key == "registration.omit":
+                            return {"enabled": False}
+                        return None
+
+                    mock_config.side_effect = config_side_effect
+
+                    result = service.register_artifact_lineage(
+                        artifact_path=str(artifact_file),
+                        roar_dir=tmp_path / ".roar",
+                        cwd=tmp_path,
+                    )
+
+        assert result.success is True
+        assert mock_session_service.register.called
+        registered_git_context = mock_session_service.register.call_args.args[1]
+        assert registered_git_context.repo == tmp_path.resolve().as_uri()
