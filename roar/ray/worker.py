@@ -46,6 +46,8 @@ def setup() -> None:
     builtins.open = _tracking_open
     _patch_boto3()
     _patch_pandas()
+    _patch_pyarrow_filesystem()
+    _patch_ray_data()
     setup._roar_worker_ready = True
 
 
@@ -250,3 +252,131 @@ def _patch_pandas() -> None:
 
     _tracked_to_parquet._roar_worker_patched = True
     pd.DataFrame.to_parquet = _tracked_to_parquet
+
+
+def _patch_pyarrow_filesystem() -> None:
+    """
+    Capture Arrow filesystem reads/writes done by Ray Data worker internals.
+
+    Ray Data relies heavily on pyarrow C++ file IO paths that bypass Python's
+    builtins.open. Wrapping filesystem stream open methods closes that gap.
+    """
+    try:
+        import pyarrow.fs as pafs  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return
+
+    if getattr(pafs, "_roar_worker_fs_patched", False):
+        return
+
+    wrappers = {
+        "open_input_file": "r",
+        "open_input_stream": "r",
+        "open_output_stream": "w",
+        "open_append_stream": "a",
+    }
+
+    for method_name, mode in wrappers.items():
+        original_method = getattr(pafs.FileSystem, method_name, None)
+        if not callable(original_method):
+            continue
+
+        def _make_wrapper(original, mode_value):  # noqa: ANN001
+            def _wrapped(self, path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+                result = original(self, path, *args, **kwargs)
+                _log_arrow_access(path, mode_value)
+                return result
+
+            _wrapped._roar_worker_patched = True
+            return _wrapped
+
+        try:
+            setattr(pafs.FileSystem, method_name, _make_wrapper(original_method, mode))
+        except Exception:  # noqa: BLE001
+            continue
+
+    pafs._roar_worker_fs_patched = True
+
+
+def _patch_ray_data() -> None:
+    """
+    Fallback capture for Ray Data APIs when Arrow filesystem monkeypatching
+    is unavailable in the worker runtime.
+    """
+    try:
+        import ray.data as ray_data  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return
+
+    if getattr(ray_data, "_roar_worker_ray_data_patched", False):
+        return
+
+    for method_name, mode in (
+        ("read_csv", "r"),
+        ("read_parquet", "r"),
+        ("read_json", "r"),
+        ("read_text", "r"),
+    ):
+        original_method = getattr(ray_data, method_name, None)
+        if not callable(original_method) or getattr(original_method, "_roar_worker_patched", False):
+            continue
+
+        def _make_read_wrapper(original, mode_value):  # noqa: ANN001
+            def _wrapped(paths, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+                result = original(paths, *args, **kwargs)
+                for path in _iter_data_paths(paths):
+                    _log_arrow_access(path, mode_value)
+                return result
+
+            _wrapped._roar_worker_patched = True
+            return _wrapped
+
+        setattr(ray_data, method_name, _make_read_wrapper(original_method, mode))
+
+    try:
+        from ray.data.dataset import Dataset  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        ray_data._roar_worker_ray_data_patched = True
+        return
+
+    for method_name, mode in (
+        ("write_parquet", "w"),
+        ("write_csv", "w"),
+        ("write_json", "w"),
+    ):
+        original_method = getattr(Dataset, method_name, None)
+        if not callable(original_method) or getattr(original_method, "_roar_worker_patched", False):
+            continue
+
+        def _make_write_wrapper(original, mode_value):  # noqa: ANN001
+            def _wrapped(self, path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+                result = original(self, path, *args, **kwargs)
+                _log_arrow_access(path, mode_value)
+                return result
+
+            _wrapped._roar_worker_patched = True
+            return _wrapped
+
+        setattr(Dataset, method_name, _make_write_wrapper(original_method, mode))
+
+    ray_data._roar_worker_ray_data_patched = True
+
+
+def _iter_data_paths(paths: Any) -> list[str]:
+    if isinstance(paths, (str, bytes, os.PathLike)):
+        return [os.fspath(paths)]
+    if isinstance(paths, (list, tuple, set)):
+        return [os.fspath(path) for path in paths if isinstance(path, (str, bytes, os.PathLike))]
+    return []
+
+
+def _log_arrow_access(path: Any, mode: str) -> None:
+    if not isinstance(path, (str, bytes, os.PathLike)):
+        return
+    try:
+        resolved = os.path.abspath(os.fspath(path))
+    except Exception:  # noqa: BLE001
+        return
+    if any(resolved.startswith(prefix) for prefix in _SKIP_PREFIXES):
+        return
+    _log_access(resolved, mode, capture_method="tracer")
