@@ -232,6 +232,17 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
         env_vars = dict(runtime_env.get("env_vars", {}) or {})
         env_vars["ROAR_WORKER"] = "1"
         env_vars["ROAR_LOG_DIR"] = os.environ.get("ROAR_LOG_DIR", "/shared/.roar-logs")
+        for key in (
+            "AWS_ENDPOINT_URL",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "AWS_DEFAULT_REGION",
+            "AWS_REGION",
+        ):
+            value = os.environ.get(key)
+            if value:
+                env_vars.setdefault(key, value)
         runtime_env["env_vars"] = env_vars
         runtime_env["worker_process_setup_hook"] = "roar.ray.worker.setup"
         kwargs["runtime_env"] = runtime_env
