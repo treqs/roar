@@ -113,6 +113,14 @@ default = "auto"
 # Allow runtime fallback to another tracer backend
 fallback_enabled = true
 
+[ray]
+# Enable automatic Ray worker instrumentation
+enabled = true
+# Inject roar-cli into runtime_env.pip for remote workers
+pip_install = true
+# Shared log directory for Ray worker I/O capture
+log_dir = "/shared/.roar-logs"
+
 [reversible]
 # Enable file preservation before overwrites during roar run
 enabled = false

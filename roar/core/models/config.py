@@ -179,6 +179,14 @@ class LoggingConfig(ConfigBaseModel):
     file: bool = True
 
 
+class RayConfig(ConfigBaseModel):
+    """Ray integration configuration section."""
+
+    enabled: bool = True
+    pip_install: bool = True
+    log_dir: str = "/shared/.roar-logs"
+
+
 class RunCompositeConfig(ConfigBaseModel):
     """Run-time composite materialization policy."""
 
@@ -212,6 +220,7 @@ class RoarConfig(ConfigBaseModel):
     tracer: TracerConfig = Field(default_factory=TracerConfig)
     reversible: ReversibleConfig = Field(default_factory=ReversibleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    ray: RayConfig = Field(default_factory=RayConfig)
     composites: CompositesConfig = Field(default_factory=CompositesConfig)
 
     def get(self, key: str, default: Any = None) -> Any:

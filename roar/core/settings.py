@@ -29,6 +29,7 @@ from .models.config import (
     LoggingConfig,
     OutputConfig,
     ProxyConfig,
+    RayConfig,
     RegisterConfig,
     ReversibleConfig,
     TracerConfig,
@@ -209,6 +210,7 @@ class RoarSettings(BaseSettings):
     tracer: TracerConfig = TracerConfig()
     reversible: ReversibleConfig = ReversibleConfig()
     logging: LoggingConfig = LoggingConfig()
+    ray: RayConfig = RayConfig()
     composites: CompositesConfig = CompositesConfig()
     env: dict[str, str] = {}
 
@@ -301,6 +303,7 @@ class RoarSettings(BaseSettings):
             "tracer": self.tracer.model_dump(),
             "reversible": self.reversible.model_dump(),
             "logging": self.logging.model_dump(),
+            "ray": self.ray.model_dump(),
             "composites": self.composites.model_dump(),
             "env": dict(self.env),
         }

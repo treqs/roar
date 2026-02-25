@@ -221,6 +221,9 @@ def _write_log():
 # Ray integration (active only when ROAR_WRAP=1)
 # ------------------------------------------------------------------------------
 
+_DEFAULT_RAY_LOG_DIR = "/shared/.roar-logs"
+
+
 def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
     """
     Monkey-patch ray.init so that roar's worker setup hook is injected
@@ -229,11 +232,20 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
     _real_ray_init = ray_module.init
 
     def _roar_ray_init(*args, **kwargs):
+        ray_config = _load_ray_config()
+        if not ray_config["enabled"]:
+            return _real_ray_init(*args, **kwargs)
+
         runtime_env = dict(kwargs.pop("runtime_env", None) or {})
         env_vars = dict(runtime_env.get("env_vars", {}) or {})
-        runtime_env["pip"] = _merge_roar_runtime_env_pip(runtime_env.get("pip"))
+        if ray_config["pip_install"]:
+            runtime_env["pip"] = _merge_roar_runtime_env_pip(runtime_env.get("pip"))
+        else:
+            runtime_env.pop("pip", None)
+
         env_vars["ROAR_WORKER"] = "1"
-        env_vars["ROAR_LOG_DIR"] = os.environ.get("ROAR_LOG_DIR", "/shared/.roar-logs")
+        env_vars["ROAR_LOG_DIR"] = ray_config["log_dir"]
+        os.environ.setdefault("ROAR_LOG_DIR", ray_config["log_dir"])
         for key in (
             "AWS_ENDPOINT_URL",
             "AWS_ACCESS_KEY_ID",
@@ -251,6 +263,37 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
         return _real_ray_init(*args, **kwargs)
 
     ray_module.init = _roar_ray_init
+
+
+def _load_ray_config() -> dict[str, object]:
+    config_enabled = True
+    config_pip_install = True
+    config_log_dir = _DEFAULT_RAY_LOG_DIR
+
+    try:
+        from roar.config import load_config  # noqa: PLC0415
+
+        start_dir = os.environ.get("ROAR_PROJECT_DIR") or os.getcwd()
+        config = load_config(start_dir=start_dir)
+        ray_section = config.get("ray", {})
+        if isinstance(ray_section, dict):
+            config_enabled = bool(ray_section.get("enabled", True))
+            config_pip_install = bool(ray_section.get("pip_install", True))
+            maybe_log_dir = ray_section.get("log_dir")
+            if isinstance(maybe_log_dir, str) and maybe_log_dir.strip():
+                config_log_dir = maybe_log_dir
+    except Exception:
+        pass
+
+    env_log_dir = os.environ.get("ROAR_LOG_DIR")
+    if env_log_dir:
+        config_log_dir = env_log_dir
+
+    return {
+        "enabled": config_enabled,
+        "pip_install": config_pip_install,
+        "log_dir": config_log_dir,
+    }
 
 
 def _merge_roar_runtime_env_pip(existing_pip):  # noqa: ANN001
@@ -305,10 +348,12 @@ def _collect_ray_io() -> None:
     if os.environ.get("ROAR_WRAP") != "1":
         return
     try:
+        ray_config = _load_ray_config()
+        log_dir = os.environ.get("ROAR_LOG_DIR", str(ray_config["log_dir"]))
         from roar.ray.collector import collect  # noqa: PLC0415
         collect(
             project_dir=os.environ.get("ROAR_PROJECT_DIR"),
-            log_dir=os.environ.get("ROAR_LOG_DIR"),
+            log_dir=log_dir,
         )
     except Exception:  # noqa: BLE001
         pass

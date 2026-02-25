@@ -128,6 +128,21 @@ CONFIGURABLE_KEYS = {
         "default": False,
         "description": "Enable S3 proxy for lineage tracking during roar run",
     },
+    "ray.enabled": {
+        "type": bool,
+        "default": True,
+        "description": "Enable automatic Ray runtime instrumentation",
+    },
+    "ray.pip_install": {
+        "type": bool,
+        "default": True,
+        "description": "Inject roar-cli into Ray runtime_env.pip for remote workers",
+    },
+    "ray.log_dir": {
+        "type": str,
+        "default": "/shared/.roar-logs",
+        "description": "Shared Ray worker log directory for roar collection",
+    },
     "tracer.default": {
         "type": str,
         "default": "auto",
