@@ -36,14 +36,30 @@ def tracking_open(*args, **kwargs):
 builtins.open = tracking_open
 
 # ------------------------------------------------------------------------------
-# Track imports
+# Track imports (and patch Ray when ROAR_WRAP=1)
 # ------------------------------------------------------------------------------
 _real_import = builtins.__import__
+_ray_patched = False
 
 
 def tracking_import(name, globals=None, locals=None, fromlist=(), level=0):
+    global _ray_patched
     imported_modules.add(name)
-    return _real_import(name, globals, locals, fromlist, level)
+    module = _real_import(name, globals, locals, fromlist, level)
+    if (
+        not _ray_patched
+        and os.environ.get("ROAR_WRAP") == "1"
+        and (name == "ray" or name.startswith("ray."))
+    ):
+        try:
+            import sys as _sys
+            _ray_module = _sys.modules.get("ray")
+            if _ray_module is not None and hasattr(_ray_module, "init"):
+                _patch_ray_init(_ray_module)
+                _ray_patched = True
+        except Exception:
+            pass
+    return module
 
 
 builtins.__import__ = tracking_import
@@ -200,4 +216,43 @@ def _write_log():
         json.dump(data, f)
 
 
+# ------------------------------------------------------------------------------
+# Ray integration (active only when ROAR_WRAP=1)
+# ------------------------------------------------------------------------------
+
+def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
+    """
+    Monkey-patch ray.init so that roar's worker setup hook is injected
+    into every Ray cluster the driver connects to.
+    """
+    _real_ray_init = ray_module.init
+
+    def _roar_ray_init(*args, **kwargs):
+        runtime_env = dict(kwargs.pop("runtime_env", None) or {})
+        env_vars = dict(runtime_env.get("env_vars", {}) or {})
+        env_vars["ROAR_WORKER"] = "1"
+        env_vars["ROAR_LOG_DIR"] = os.environ.get("ROAR_LOG_DIR", "/shared/.roar-logs")
+        runtime_env["env_vars"] = env_vars
+        runtime_env["worker_process_setup_hook"] = "roar.ray.worker.setup"
+        kwargs["runtime_env"] = runtime_env
+        return _real_ray_init(*args, **kwargs)
+
+    ray_module.init = _roar_ray_init
+
+
+def _collect_ray_io() -> None:
+    """Atexit hook: collect worker I/O logs and write to the roar DB."""
+    if os.environ.get("ROAR_WRAP") != "1":
+        return
+    try:
+        from roar.ray.collector import collect  # noqa: PLC0415
+        collect(
+            project_dir=os.environ.get("ROAR_PROJECT_DIR"),
+            log_dir=os.environ.get("ROAR_LOG_DIR"),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 atexit.register(_write_log)
+atexit.register(_collect_ray_io)

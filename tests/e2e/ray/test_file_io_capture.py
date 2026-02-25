@@ -74,7 +74,9 @@ def reset_roar_state(ray_cluster):
             "ray-head",
             "bash",
             "-c",
-            "rm -rf /app/.roar && roar init --path /app",
+            # Reset the roar DB and clear stale worker logs so previous
+            # tests don't pollute the next one.
+            "rm -rf /app/.roar /shared/.roar-logs && roar init --path /app -n",
         ],
         check=False,
         capture_output=True,
@@ -103,7 +105,7 @@ class TestFileIOCapture:
         # roar should have captured this as an output artifact.
         rows = _query_roar_db(
             COMPOSE_FILE,
-            "SELECT path FROM artifacts WHERE path LIKE '%output.json'",
+            "SELECT first_seen_path FROM artifacts WHERE first_seen_path LIKE '%output.json'",
         )
         assert len(rows) >= 1, (
             "Expected /shared/output.json to appear in roar artifacts, "
@@ -126,8 +128,8 @@ class TestFileIOCapture:
 
         rows = _query_roar_db(
             COMPOSE_FILE,
-            "SELECT path FROM job_inputs ji JOIN artifacts a ON ji.artifact_id = a.id "
-            "WHERE a.path LIKE '%input.json'",
+            "SELECT ji.path FROM job_inputs ji JOIN artifacts a ON ji.artifact_id = a.id "
+            "WHERE ji.path LIKE '%input.json'",
         )
         assert len(rows) >= 1, (
             "Expected /shared/input.json to appear as a job input, "
@@ -150,9 +152,9 @@ class TestFileIOCapture:
 
         rows = _query_roar_db(
             COMPOSE_FILE,
-            "SELECT path FROM artifacts WHERE path LIKE '/shared/%'",
+            "SELECT first_seen_path FROM artifacts WHERE first_seen_path LIKE '/shared/%'",
         )
-        captured_paths = {r["path"] for r in rows}
+        captured_paths = {r["first_seen_path"] for r in rows}
 
         assert any("pipeline_input.csv" in p for p in captured_paths), (
             "pipeline_input.csv not captured"

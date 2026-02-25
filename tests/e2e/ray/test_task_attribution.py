@@ -45,9 +45,9 @@ class TestTaskAttribution:
         # roar should record task_id in artifact metadata or a separate table
         rows = _query_roar_db(
             COMPOSE_FILE,
-            "SELECT a.path, a.metadata "
+            "SELECT a.first_seen_path AS path, a.metadata "
             "FROM artifacts a "
-            "WHERE a.path LIKE '%attributed%'",
+            "WHERE a.first_seen_path LIKE '%attributed%'",
         )
         assert len(rows) >= 6, (
             f"Expected 6 attributed output files, got {len(rows)}. "
@@ -82,7 +82,7 @@ class TestTaskAttribution:
             COMPOSE_FILE,
             "SELECT DISTINCT json_extract(metadata, '$.ray_task_id') as task_id "
             "FROM artifacts "
-            "WHERE path LIKE '%attributed%' AND metadata IS NOT NULL",
+            "WHERE first_seen_path LIKE '%attributed%' AND metadata IS NOT NULL",
         )
         task_ids = {r["task_id"] for r in rows if r["task_id"]}
         assert len(task_ids) >= 6, (
@@ -109,7 +109,7 @@ class TestTaskAttribution:
             "SELECT COUNT(*) as cnt "
             "FROM job_inputs ji "
             "JOIN artifacts a ON ji.artifact_id = a.id "
-            "WHERE a.path LIKE '%attributed%'",
+            "WHERE ji.path LIKE '%attributed%'",
         )
         count = rows[0]["cnt"] if rows else 0
         assert count >= 6, (

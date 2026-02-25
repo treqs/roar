@@ -109,6 +109,26 @@ def _wait_for_workers(compose_file: Path) -> None:
     raise RuntimeError("Timed out waiting for both Ray workers to register")
 
 
+def _ensure_roar_db(compose_file: Path) -> None:
+    """
+    Ensure roar is initialised on the head node before tests run.
+    Idempotent: harmless if .roar already exists.
+    """
+    subprocess.run(
+        _compose_args(
+            compose_file,
+            "exec",
+            "-T",
+            "ray-head",
+            "bash",
+            "-c",
+            "test -f /app/.roar/roar.db || (rm -rf /app/.roar && roar init --path /app -n)",
+        ),
+        check=False,
+        capture_output=True,
+    )
+
+
 @pytest.fixture(scope="session")
 def ray_cluster() -> dict[str, str]:
     subprocess.run(
@@ -118,6 +138,7 @@ def ray_cluster() -> dict[str, str]:
     try:
         _wait_for_ray_head(COMPOSE_FILE)
         _wait_for_workers(COMPOSE_FILE)
+        _ensure_roar_db(COMPOSE_FILE)
         yield {
             "head_address": "ray://localhost:10001",
             "dashboard_url": "http://localhost:8265",
@@ -147,10 +168,20 @@ def submit_job_on_head(
     env: Mapping[str, str] | None = None,
 ) -> tuple[str, str, int]:
     compose_path = Path(compose_file)
+    merged_env = dict(env or {})
+
+    # When ROAR_WRAP=1, inject PYTHONPATH so sitecustomize.py activates on the
+    # driver, and set ROAR_PROJECT_DIR so the collector knows where roar.db lives.
+    if merged_env.get("ROAR_WRAP") == "1":
+        inject_dir = "/app/roar/services/execution/inject"
+        existing_pp = merged_env.get("PYTHONPATH", "")
+        merged_env["PYTHONPATH"] = f"{inject_dir}:{existing_pp}" if existing_pp else inject_dir
+        merged_env.setdefault("ROAR_PROJECT_DIR", "/app")
+        merged_env.setdefault("ROAR_LOG_DIR", "/shared/.roar-logs")
+
     command = ["docker", "compose", "-f", str(compose_path), "exec", "-T"]
-    if env:
-        for key, value in env.items():
-            command.extend(["-e", f"{key}={value}"])
+    for key, value in merged_env.items():
+        command.extend(["-e", f"{key}={value}"])
     command.extend(["ray-head", "python", script_path])
 
     result = subprocess.run(command, capture_output=True, text=True, check=False)
