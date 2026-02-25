@@ -21,6 +21,12 @@ _WRITE_OPS = frozenset({"PutObject", "CompleteMultipartUpload"})
 _CAPTURE_PRIORITY = {"python": 0, "proxy": 1, "tracer": 2}
 
 
+def _get_logger():
+    from roar.core.logging import get_logger  # noqa: PLC0415
+
+    return get_logger()
+
+
 def collect(
     project_dir: str | None = None,
     log_dir: str | None = None,
@@ -129,12 +135,15 @@ def collect(
 def _read_events(log_path: Path) -> dict[str, list[dict[str, Any]]]:
     # task_id -> list of event dicts
     task_events: dict[str, list[dict[str, Any]]] = {}
+    logger = _get_logger()
 
     for log_file in sorted(log_path.glob("*.jsonl")):
         task_id = log_file.stem
         events: list[dict[str, Any]] = []
         try:
-            for line in log_file.read_text(encoding="utf-8").splitlines():
+            for line_number, line in enumerate(
+                log_file.read_text(encoding="utf-8").splitlines(), start=1
+            ):
                 stripped = line.strip()
                 if not stripped:
                     continue
@@ -142,10 +151,20 @@ def _read_events(log_path: Path) -> dict[str, list[dict[str, Any]]]:
                     payload = json.loads(stripped)
                     if isinstance(payload, dict):
                         events.append(payload)
+                    else:
+                        logger.warning(
+                            "Skipping non-object JSON payload in Ray log %s line %d",
+                            log_file,
+                            line_number,
+                        )
                 except json.JSONDecodeError:
-                    pass
-        except OSError:
-            pass
+                    logger.warning(
+                        "Skipping malformed JSON line in Ray log %s line %d",
+                        log_file,
+                        line_number,
+                    )
+        except OSError as exc:
+            logger.warning("Skipping unreadable Ray log %s: %s", log_file, exc)
 
         if events:
             task_events[task_id] = task_events.get(task_id, []) + events
