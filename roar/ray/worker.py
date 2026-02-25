@@ -2,15 +2,19 @@
 roar Ray worker setup hook.
 
 Installed via runtime_env.worker_process_setup_hook when ROAR_WRAP=1.
-Patches builtins.open to capture per-task file I/O, writing each event
-immediately to ROAR_LOG_DIR/<task_id>.jsonl on the shared volume.
+Patches builtins.open to capture per-task file I/O and write events through
+either a Ray actor aggregator (default on real clusters) or filesystem logs
+when a shared volume is available.
 """
 from __future__ import annotations
 
+import atexit
 import builtins
 import json
 import os
+import threading
 import time
+import uuid
 from typing import Any
 
 # Captured at module import time so the hook doesn't recursively call itself.
@@ -18,6 +22,11 @@ _real_open = builtins.open
 
 _LOG_DIR: str = ""
 _SKIP_PREFIXES: tuple[str, ...] = ()
+_BACKEND: str = "filesystem"
+_actor: Any = None
+_event_buffer: list[dict[str, Any]] = []
+_buffer_lock = threading.Lock()
+_FLUSH_THRESHOLD = 50
 
 
 def setup() -> None:
@@ -27,13 +36,17 @@ def setup() -> None:
     Sets up the file I/O tracking shim. Writes are non-blocking:
     each open() call appends a JSON line to the shared log dir.
     """
-    global _LOG_DIR, _SKIP_PREFIXES
+    global _BACKEND, _LOG_DIR, _SKIP_PREFIXES
 
     if getattr(setup, "_roar_worker_ready", False):
         return
 
     _LOG_DIR = os.environ.get("ROAR_LOG_DIR", "/shared/.roar-logs")
-    os.makedirs(_LOG_DIR, exist_ok=True)
+    _BACKEND = _choose_backend()
+    if _BACKEND == "actor":
+        _init_actor()
+    else:
+        os.makedirs(_LOG_DIR, exist_ok=True)
 
     # Paths we must never recurse into (the log dir itself, /proc, /sys ...)
     _SKIP_PREFIXES = (
@@ -48,7 +61,70 @@ def setup() -> None:
     _patch_pandas()
     _patch_pyarrow_filesystem()
     _patch_ray_data()
+    atexit.register(_flush_worker_buffer)
     setup._roar_worker_ready = True
+
+
+def _choose_backend() -> str:
+    configured = os.environ.get("ROAR_LOG_BACKEND")
+    if configured:
+        selected = configured.strip().lower()
+        if selected in {"actor", "filesystem"}:
+            return selected
+
+    if _shared_fs_available(_LOG_DIR):
+        return "filesystem"
+    return "actor"
+
+
+def _shared_fs_available(log_dir: str) -> bool:
+    sentinel_path = os.path.join(log_dir, f".roar-sentinel-{uuid.uuid4().hex}")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        with _real_open(sentinel_path, "w", encoding="utf-8") as handle:
+            handle.write("ok")
+        os.unlink(sentinel_path)
+        return True
+    except OSError:
+        return False
+
+
+def _init_actor() -> None:
+    global _actor
+
+    try:
+        import ray  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        _actor = None
+        return
+
+    job_id = os.environ.get("ROAR_JOB_ID", "default")
+    actor_name = f"roar-log-collector-{job_id}"
+
+    try:
+        _actor = ray.get_actor(actor_name, namespace="roar")
+        return
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        from roar.ray.actor import RoarLogCollectorActor  # noqa: PLC0415
+
+        _actor = RoarLogCollectorActor.options(
+            name=actor_name,
+            namespace="roar",
+            lifetime="detached",
+            num_cpus=0,
+        ).remote()
+        return
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Named actor creation races are expected. Retry lookup after a failed create.
+    try:
+        _actor = ray.get_actor(actor_name, namespace="roar")
+    except Exception:  # noqa: BLE001
+        _actor = None
 
 
 def _tracking_open(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
@@ -113,12 +189,11 @@ def _log_access(
     hash_value: str | None = None,
     byte_range: str | None = None,
 ) -> None:
-    """Append one JSON line to the task-specific log file."""
+    """Record one file access event for later collection."""
     task_id, node_id = _runtime_context_ids()
     if not task_id:
         return
 
-    log_file = os.path.join(_LOG_DIR, f"{task_id}.jsonl")
     payload: dict[str, Any] = {
         "path": path,
         "mode": mode,
@@ -138,10 +213,51 @@ def _log_access(
     if byte_range:
         payload["byte_range"] = byte_range
 
+    if _BACKEND == "actor" and _actor is not None:
+        with _buffer_lock:
+            _event_buffer.append(payload)
+            should_flush = len(_event_buffer) >= _FLUSH_THRESHOLD
+        if should_flush:
+            _flush_to_actor()
+        return
+
+    _write_to_file(task_id, payload)
+
+
+def _write_to_file(task_id: str, payload: dict[str, Any]) -> None:
+    log_file = os.path.join(_LOG_DIR, f"{task_id}.jsonl")
     entry = json.dumps(payload)
+    os.makedirs(_LOG_DIR, exist_ok=True)
     # Use _real_open so we don't recurse through our own hook.
     with _real_open(log_file, "a", encoding="utf-8") as fh:
         fh.write(entry + "\n")
+
+
+def _flush_to_actor() -> None:
+    if _BACKEND != "actor" or _actor is None:
+        return
+
+    with _buffer_lock:
+        if not _event_buffer:
+            return
+        batch = list(_event_buffer)
+        _event_buffer.clear()
+
+    try:
+        _actor.append_batch.remote(batch)
+    except Exception:  # noqa: BLE001
+        _write_batch_to_filesystem(batch)
+
+
+def _write_batch_to_filesystem(batch: list[dict[str, Any]]) -> None:
+    for payload in batch:
+        task_id = _to_text(payload.get("task_id"))
+        if task_id:
+            _write_to_file(task_id, payload)
+
+
+def _flush_worker_buffer() -> None:
+    _flush_to_actor()
 
 
 def _patch_boto3() -> None:
