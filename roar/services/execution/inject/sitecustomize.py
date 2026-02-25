@@ -4,6 +4,7 @@ import importlib.metadata as importlib_metadata
 import json
 import os
 import sys
+import threading
 
 # ------------------------------------------------------------------------------
 # Data structures the parent will ingest
@@ -222,6 +223,10 @@ def _write_log():
 # ------------------------------------------------------------------------------
 
 _DEFAULT_RAY_LOG_DIR = "/shared/.roar-logs"
+_DEFAULT_RAY_NODE_POLL_INTERVAL_SECONDS = 5.0
+_ray_node_poller_lock = threading.Lock()
+_ray_node_poller_stop = threading.Event()
+_ray_node_poller_thread = None
 
 
 def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
@@ -260,9 +265,118 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
         runtime_env["env_vars"] = env_vars
         runtime_env["worker_process_setup_hook"] = "roar.ray.worker.setup"
         kwargs["runtime_env"] = runtime_env
-        return _real_ray_init(*args, **kwargs)
+        result = _real_ray_init(*args, **kwargs)
+        _start_ray_node_poller(ray_module)
+        return result
 
     ray_module.init = _roar_ray_init
+
+
+def _start_ray_node_poller(ray_module) -> None:  # noqa: ANN001
+    global _ray_node_poller_thread
+
+    if os.environ.get("ROAR_RAY_AUTOSCALING", "1").strip() in {"0", "false", "False"}:
+        return
+
+    with _ray_node_poller_lock:
+        if _ray_node_poller_thread is not None and _ray_node_poller_thread.is_alive():
+            return
+
+        seen_node_ids = _active_ray_node_ids(ray_module)
+        poll_interval = _ray_node_poll_interval_seconds()
+        if poll_interval <= 0:
+            return
+
+        _ray_node_poller_stop.clear()
+        _ray_node_poller_thread = threading.Thread(
+            target=_ray_node_poller_loop,
+            args=(ray_module, seen_node_ids, poll_interval),
+            name="roar-ray-node-poller",
+            daemon=True,
+        )
+        _ray_node_poller_thread.start()
+
+
+def _ray_node_poller_loop(ray_module, seen_node_ids, poll_interval):  # noqa: ANN001
+    while not _ray_node_poller_stop.wait(poll_interval):
+        _prime_new_ray_nodes(ray_module, seen_node_ids)
+
+
+def _ray_node_poll_interval_seconds() -> float:
+    raw = os.environ.get("ROAR_RAY_NODE_POLL_INTERVAL")
+    if not raw:
+        return _DEFAULT_RAY_NODE_POLL_INTERVAL_SECONDS
+    try:
+        return float(raw)
+    except ValueError:
+        return _DEFAULT_RAY_NODE_POLL_INTERVAL_SECONDS
+
+
+def _active_ray_node_ids(ray_module) -> set[str]:  # noqa: ANN001
+    node_ids: set[str] = set()
+    try:
+        nodes = ray_module.nodes()
+    except Exception:
+        return node_ids
+
+    for node in nodes:
+        if not isinstance(node, dict) or not node.get("Alive"):
+            continue
+        node_id = node.get("NodeID")
+        if node_id:
+            node_ids.add(str(node_id))
+    return node_ids
+
+
+def _prime_new_ray_nodes(ray_module, seen_node_ids):  # noqa: ANN001
+    current_node_ids = _active_ray_node_ids(ray_module)
+    if not current_node_ids:
+        return
+
+    new_node_ids = sorted(current_node_ids - seen_node_ids)
+    for node_id in new_node_ids:
+        _prime_ray_node(ray_module, node_id)
+
+    seen_node_ids.update(current_node_ids)
+
+
+def _prime_ray_node(ray_module, node_id: str) -> None:  # noqa: ANN001
+    try:
+        node_resource = _node_resource_key(ray_module, node_id)
+        remote_options = {"num_cpus": 0}
+        if node_resource:
+            remote_options["resources"] = {node_resource: 0.001}
+
+        @ray_module.remote(**remote_options)
+        def _roar_prime_task():  # noqa: ANN202
+            return 1
+
+        ray_module.get(_roar_prime_task.remote(), timeout=10)
+    except Exception:
+        pass
+
+
+def _node_resource_key(ray_module, node_id: str) -> str | None:  # noqa: ANN001
+    try:
+        nodes = ray_module.nodes()
+    except Exception:
+        return None
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("NodeID")) != node_id:
+            continue
+        resources = node.get("Resources")
+        if not isinstance(resources, dict):
+            return None
+        for key in resources:
+            key_text = str(key)
+            if key_text.startswith("node:"):
+                return key_text
+        return None
+
+    return None
 
 
 def _load_ray_config() -> dict[str, object]:
@@ -359,5 +473,10 @@ def _collect_ray_io() -> None:
         pass
 
 
+def _stop_ray_node_poller() -> None:
+    _ray_node_poller_stop.set()
+
+
 atexit.register(_write_log)
 atexit.register(_collect_ray_io)
+atexit.register(_stop_ray_node_poller)
