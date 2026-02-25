@@ -3,7 +3,10 @@ import builtins
 import importlib.metadata as importlib_metadata
 import json
 import os
+import shutil
 import sys
+import tempfile
+import textwrap
 import threading
 import uuid
 
@@ -226,9 +229,12 @@ def _write_log():
 
 _DEFAULT_RAY_LOG_DIR = "/shared/.roar-logs"
 _DEFAULT_RAY_NODE_POLL_INTERVAL_SECONDS = 5.0
+_NODE_AGENT_RESOURCE_FRACTION = 0.0001
 _ray_node_poller_lock = threading.Lock()
 _ray_node_poller_stop = threading.Event()
 _ray_node_poller_thread = None
+_ray_node_agents_lock = threading.Lock()
+_ray_node_agents = {}
 
 
 def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
@@ -273,8 +279,10 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
                 env_vars.setdefault(key, value)
         runtime_env["env_vars"] = env_vars
         runtime_env["worker_process_setup_hook"] = "roar.ray.worker.setup"
+        runtime_env = _prepare_worker_runtime_env(runtime_env, job_id)
         kwargs["runtime_env"] = runtime_env
         result = _real_ray_init(*args, **kwargs)
+        _spawn_node_agents(ray_module, job_id, str(ray_config["log_dir"]))
         _start_ray_node_poller(ray_module)
         return result
 
@@ -287,10 +295,174 @@ def _patch_ray_shutdown(ray_module) -> None:  # noqa: ANN001
         return
 
     def _roar_ray_shutdown(*args, **kwargs):
-        _collect_ray_io()
+        proxy_logs = _collect_node_agent_logs(ray_module)
+        _collect_ray_io(proxy_logs=proxy_logs)
         return real_ray_shutdown(*args, **kwargs)
 
     ray_module.shutdown = _roar_ray_shutdown
+
+
+def _prepare_worker_runtime_env(runtime_env, job_id: str):  # noqa: ANN001
+    runtime_env = dict(runtime_env or {})
+    tmp_dir = tempfile.mkdtemp(prefix=f"roar-worker-env-{job_id[:8]}-")
+
+    existing_working_dir = runtime_env.get("working_dir")
+    if isinstance(existing_working_dir, str) and existing_working_dir.strip():
+        if os.path.isdir(existing_working_dir):
+            _merge_working_dir(existing_working_dir, tmp_dir)
+        else:
+            _warn_roar(
+                "Skipping working_dir merge for non-local path %s while preparing Ray worker wrapper",
+                existing_working_dir,
+            )
+
+    try:
+        from pathlib import Path  # noqa: PLC0415
+
+        import roar  # noqa: PLC0415
+        from roar.services.execution.tracer_backends import find_preload_library  # noqa: PLC0415
+
+        preload_library = find_preload_library(Path(roar.__file__).resolve().parent)
+        if preload_library:
+            shutil.copy2(preload_library, os.path.join(tmp_dir, "libroar_tracer_preload.so"))
+    except Exception:
+        pass
+
+    wrapper_path = os.path.join(tmp_dir, "roar_worker_wrapper.sh")
+    with _real_open(wrapper_path, "w", encoding="utf-8") as handle:
+        handle.write(
+            textwrap.dedent(
+                """
+                #!/bin/bash
+                if [ -f "./libroar_tracer_preload.so" ]; then
+                    export LD_PRELOAD="$(pwd)/libroar_tracer_preload.so"
+                fi
+                exec python3 "$@"
+                """
+            ).strip()
+            + "\n"
+        )
+    os.chmod(wrapper_path, 0o755)
+
+    runtime_env["working_dir"] = tmp_dir
+    runtime_env["py_executable"] = "bash ./roar_worker_wrapper.sh"
+    return runtime_env
+
+
+def _merge_working_dir(source_dir: str, target_dir: str) -> None:
+    for entry in os.listdir(source_dir):
+        src = os.path.join(source_dir, entry)
+        dst = os.path.join(target_dir, entry)
+        try:
+            if os.path.isdir(src):
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dst)
+        except Exception:
+            continue
+
+
+def _warn_roar(message: str, *args) -> None:
+    text = message % args if args else message
+    try:
+        from roar.core.logging import get_logger  # noqa: PLC0415
+
+        get_logger().warning(text)
+        return
+    except Exception:
+        pass
+
+    try:
+        sys.stderr.write(text + "\n")
+    except Exception:
+        pass
+
+
+def _spawn_node_agents(ray_module, job_id: str, log_dir: str) -> None:  # noqa: ANN001
+    try:
+        from roar.ray.node_agent import RoarNodeAgent, build_node_agent_name  # noqa: PLC0415
+    except Exception:
+        return
+
+    try:
+        nodes = ray_module.nodes()
+    except Exception:
+        return
+
+    for node in nodes:
+        if not isinstance(node, dict) or not node.get("Alive"):
+            continue
+
+        node_id = str(node.get("NodeID") or "")
+        if not node_id:
+            continue
+
+        with _ray_node_agents_lock:
+            if node_id in _ray_node_agents:
+                continue
+
+        actor_name = build_node_agent_name(job_id, node_id)
+        agent = None
+        try:
+            agent = ray_module.get_actor(actor_name, namespace="roar")
+        except Exception:
+            remote_options = {
+                "name": actor_name,
+                "namespace": "roar",
+                "lifetime": "detached",
+                "num_cpus": 0,
+            }
+
+            node_resource = _node_resource_key(ray_module, node_id)
+            if node_resource:
+                remote_options["resources"] = {node_resource: _NODE_AGENT_RESOURCE_FRACTION}
+            else:
+                remote_options["resources"] = {f"node:{node_id}": _NODE_AGENT_RESOURCE_FRACTION}
+
+            try:
+                agent = RoarNodeAgent.options(**remote_options).remote(
+                    job_id=job_id,
+                    log_dir=log_dir,
+                )
+            except Exception:
+                agent = None
+
+        if agent is not None:
+            with _ray_node_agents_lock:
+                _ray_node_agents[node_id] = {"name": actor_name, "actor": agent}
+
+
+def _collect_node_agent_logs(ray_module) -> dict[str, dict]:  # noqa: ANN001
+    with _ray_node_agents_lock:
+        node_agents = dict(_ray_node_agents)
+        _ray_node_agents.clear()
+
+    proxy_logs: dict[str, dict] = {}
+    for node_id, info in node_agents.items():
+        if not isinstance(info, dict):
+            continue
+        agent = info.get("actor")
+        if agent is None:
+            continue
+
+        try:
+            payload = ray_module.get(agent.collect_logs.remote(), timeout=15)
+            if isinstance(payload, dict):
+                payload.setdefault("node_id", node_id)
+                proxy_logs[node_id] = payload
+        except Exception:
+            pass
+        finally:
+            try:
+                ray_module.get(agent.shutdown.remote(), timeout=5)
+            except Exception:
+                pass
+            try:
+                ray_module.kill(agent)
+            except Exception:
+                pass
+
+    return proxy_logs
 
 
 def _start_ray_node_poller(ray_module) -> None:  # noqa: ANN001
@@ -357,6 +529,13 @@ def _prime_new_ray_nodes(ray_module, seen_node_ids):  # noqa: ANN001
     new_node_ids = sorted(current_node_ids - seen_node_ids)
     for node_id in new_node_ids:
         _prime_ray_node(ray_module, node_id)
+
+    if new_node_ids:
+        _spawn_node_agents(
+            ray_module,
+            job_id=str(os.environ.get("ROAR_JOB_ID", "default")),
+            log_dir=str(os.environ.get("ROAR_LOG_DIR", _DEFAULT_RAY_LOG_DIR)),
+        )
 
     seen_node_ids.update(current_node_ids)
 
@@ -478,7 +657,7 @@ def _resolve_roar_requirement() -> str:
     return "roar-cli"
 
 
-def _collect_ray_io() -> None:
+def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
     """Atexit hook: collect worker I/O logs and write to the roar DB."""
     if os.environ.get("ROAR_WRAP") != "1":
         return
@@ -489,6 +668,7 @@ def _collect_ray_io() -> None:
         collect(
             project_dir=os.environ.get("ROAR_PROJECT_DIR"),
             log_dir=log_dir,
+            proxy_logs=proxy_logs or {},
         )
     except Exception:  # noqa: BLE001
         pass
