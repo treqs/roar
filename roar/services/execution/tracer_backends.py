@@ -81,6 +81,14 @@ def find_roard(package_path: Path) -> str | None:
     )
 
 
+def find_proxy_binary(package_path: Path) -> str | None:
+    """Find the roar-proxy binary."""
+    return _find_binary(
+        package_path=package_path,
+        binary_name="roar-proxy",
+    )
+
+
 def find_preload_library(package_path: Path) -> str | None:
     """
     Find the preload interposer shared library.
