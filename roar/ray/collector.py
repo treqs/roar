@@ -16,6 +16,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from roar.services.execution.proxy import parse_log_line
+
 _READ_OPS = frozenset({"GetObject"})
 _WRITE_OPS = frozenset({"PutObject", "CompleteMultipartUpload"})
 _CAPTURE_PRIORITY = {"python": 0, "proxy": 1, "tracer": 2}
@@ -30,6 +32,7 @@ def _get_logger():
 def collect(
     project_dir: str | None = None,
     log_dir: str | None = None,
+    proxy_logs: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """
     Collect Ray worker I/O logs and write to the roar SQLite database.
@@ -52,6 +55,7 @@ def collect(
         return  # roar not initialised; nothing to do
 
     task_events = _collect_events(log_path)
+    _merge_proxy_logs(task_events, proxy_logs or {})
     if not task_events:
         return
 
@@ -221,6 +225,46 @@ def _read_events(log_path: Path) -> dict[str, list[dict[str, Any]]]:
             task_events[task_id] = task_events.get(task_id, []) + events
 
     return task_events
+
+
+def _merge_proxy_logs(
+    task_events: dict[str, list[dict[str, Any]]],
+    proxy_logs: dict[str, dict[str, Any]],
+) -> None:
+    for fallback_node_id, payload in proxy_logs.items():
+        if not isinstance(payload, dict):
+            continue
+
+        node_id = _to_text(payload.get("node_id")) or _to_text(fallback_node_id)
+        lines = payload.get("proxy_log_lines")
+        if not isinstance(lines, list):
+            continue
+
+        task_id = f"proxy-{node_id or 'unknown'}"
+        events = task_events.setdefault(task_id, [])
+        for line in lines:
+            if not isinstance(line, str):
+                continue
+
+            parsed = parse_log_line(line)
+            if parsed is None:
+                continue
+
+            mode = "r" if parsed.operation in _READ_OPS else "w"
+            event: dict[str, Any] = {
+                "path": f"s3://{parsed.bucket}/{parsed.key}",
+                "mode": mode,
+                "task_id": task_id,
+                "source_type": "s3",
+                "capture_method": "proxy",
+                "operation": parsed.operation,
+            }
+            if node_id:
+                event["node_id"] = node_id
+            if parsed.etag:
+                event["hash"] = parsed.etag
+
+            events.append(event)
 
 
 def _aggregate_paths(task_events: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:

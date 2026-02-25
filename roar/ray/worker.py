@@ -61,6 +61,7 @@ def setup() -> None:
     _patch_pandas()
     _patch_pyarrow_filesystem()
     _patch_ray_data()
+    _configure_local_proxy_endpoint()
     atexit.register(_flush_worker_buffer)
     setup._roar_worker_ready = True
 
@@ -258,6 +259,39 @@ def _write_batch_to_filesystem(batch: list[dict[str, Any]]) -> None:
 
 def _flush_worker_buffer() -> None:
     _flush_to_actor()
+
+
+def _configure_local_proxy_endpoint() -> None:
+    if os.environ.get("AWS_ENDPOINT_URL"):
+        return
+
+    job_id = os.environ.get("ROAR_JOB_ID")
+    if not job_id:
+        return
+
+    try:
+        import ray  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return
+
+    try:
+        node_id = _to_text(ray.get_runtime_context().get_node_id())
+    except Exception:  # noqa: BLE001
+        return
+    if not node_id:
+        return
+
+    try:
+        from roar.ray.node_agent import build_node_agent_name  # noqa: PLC0415
+
+        actor_name = build_node_agent_name(job_id, node_id)
+        agent = ray.get_actor(actor_name, namespace="roar")
+        port = ray.get(agent.get_proxy_port.remote(), timeout=5)
+    except Exception:  # noqa: BLE001
+        return
+
+    if isinstance(port, int) and port > 0:
+        os.environ.setdefault("AWS_ENDPOINT_URL", f"http://127.0.0.1:{port}")
 
 
 def _patch_boto3() -> None:
