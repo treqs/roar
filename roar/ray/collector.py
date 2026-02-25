@@ -2,9 +2,9 @@
 roar Ray log collector.
 
 Called from the driver process atexit handler (when ROAR_WRAP=1).
-Scans ROAR_LOG_DIR for per-task JSONL logs written by workers,
-de-duplicates paths, and inserts artifact + job_input/output rows
-into the roar DB at ROAR_PROJECT_DIR/.roar/roar.db.
+Collects worker events from a Ray actor aggregator when available, with
+filesystem JSONL logs as a fallback. De-duplicates paths and inserts
+artifact + job_input/output rows into ROAR_PROJECT_DIR/.roar/roar.db.
 """
 from __future__ import annotations
 
@@ -50,10 +50,8 @@ def collect(
 
     if not os.path.exists(db_path):
         return  # roar not initialised; nothing to do
-    if not log_path.exists():
-        return  # no worker logs produced
 
-    task_events = _read_events(log_path)
+    task_events = _collect_events(log_path)
     if not task_events:
         return
 
@@ -123,13 +121,66 @@ def collect(
         conn.commit()
         # Consume logs once to keep collection idempotent if collect() is called
         # multiple times during shutdown.
-        for log_file in log_path.glob("*.jsonl"):
-            try:
-                log_file.unlink()
-            except OSError:
-                pass
+        if log_path.exists():
+            for log_file in log_path.glob("*.jsonl"):
+                try:
+                    log_file.unlink()
+                except OSError:
+                    pass
     finally:
         conn.close()
+
+
+def _collect_events(log_path: Path) -> dict[str, list[dict[str, Any]]]:
+    try:
+        import ray  # noqa: PLC0415
+
+        if ray.is_initialized():
+            actor_events = _collect_from_actor()
+            if actor_events is not None:
+                return _group_events_by_task(actor_events)
+    except Exception:  # noqa: BLE001
+        pass
+
+    if not log_path.exists():
+        return {}
+    return _read_events(log_path)
+
+
+def _collect_from_actor() -> list[dict[str, Any]] | None:
+    try:
+        import ray  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None
+
+    job_id = os.environ.get("ROAR_JOB_ID", "default")
+    actor_name = f"roar-log-collector-{job_id}"
+
+    try:
+        actor = ray.get_actor(actor_name, namespace="roar")
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        events = ray.get(actor.get_all.remote(), timeout=30)
+        if not isinstance(events, list):
+            return []
+        return [event for event in events if isinstance(event, dict)]
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        try:
+            ray.kill(actor)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _group_events_by_task(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    task_events: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        task_id = _to_text(event.get("task_id")) or "unknown"
+        task_events.setdefault(task_id, []).append(event)
+    return task_events
 
 
 def _read_events(log_path: Path) -> dict[str, list[dict[str, Any]]]:

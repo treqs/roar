@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import threading
+import uuid
 
 # ------------------------------------------------------------------------------
 # Data structures the parent will ingest
@@ -58,6 +59,7 @@ def tracking_import(name, globals=None, locals=None, fromlist=(), level=0):
             _ray_module = _sys.modules.get("ray")
             if _ray_module is not None and hasattr(_ray_module, "init"):
                 _patch_ray_init(_ray_module)
+                _patch_ray_shutdown(_ray_module)
                 _ray_patched = True
         except Exception:
             pass
@@ -248,9 +250,16 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
         else:
             runtime_env.pop("pip", None)
 
+        job_id = os.environ.get("ROAR_JOB_ID") or env_vars.get("ROAR_JOB_ID")
+        if not job_id:
+            job_id = uuid.uuid4().hex[:8]
+        job_id = str(job_id)
+
         env_vars["ROAR_WORKER"] = "1"
         env_vars["ROAR_LOG_DIR"] = ray_config["log_dir"]
+        env_vars["ROAR_JOB_ID"] = job_id
         os.environ.setdefault("ROAR_LOG_DIR", ray_config["log_dir"])
+        os.environ.setdefault("ROAR_JOB_ID", job_id)
         for key in (
             "AWS_ENDPOINT_URL",
             "AWS_ACCESS_KEY_ID",
@@ -270,6 +279,18 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
         return result
 
     ray_module.init = _roar_ray_init
+
+
+def _patch_ray_shutdown(ray_module) -> None:  # noqa: ANN001
+    real_ray_shutdown = getattr(ray_module, "shutdown", None)
+    if not callable(real_ray_shutdown):
+        return
+
+    def _roar_ray_shutdown(*args, **kwargs):
+        _collect_ray_io()
+        return real_ray_shutdown(*args, **kwargs)
+
+    ray_module.shutdown = _roar_ray_shutdown
 
 
 def _start_ray_node_poller(ray_module) -> None:  # noqa: ANN001
