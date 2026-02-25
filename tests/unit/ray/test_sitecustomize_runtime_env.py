@@ -29,6 +29,7 @@ def test_patch_ray_init_injects_roar_pip_dependency(monkeypatch: pytest.MonkeyPa
     fake_ray = SimpleNamespace(init=fake_ray_init)
 
     monkeypatch.setenv("ROAR_LOG_DIR", "/tmp/roar-ray")
+    monkeypatch.delenv("ROAR_JOB_ID", raising=False)
     monkeypatch.setattr(sitecustomize.importlib_metadata, "version", lambda _: "9.8.7")
 
     sitecustomize._patch_ray_init(fake_ray)
@@ -37,6 +38,7 @@ def test_patch_ray_init_injects_roar_pip_dependency(monkeypatch: pytest.MonkeyPa
     assert result == "ok"
     runtime_env = calls[-1]["runtime_env"]
     assert runtime_env["pip"] == ["roar-cli==9.8.7"]
+    assert runtime_env["env_vars"]["ROAR_JOB_ID"]
 
 
 def test_patch_ray_init_skips_injection_when_ray_disabled(
@@ -89,3 +91,18 @@ log_dir = "/tmp/roar-ray-config"
     runtime_env = calls[-1]["runtime_env"]
     assert "pip" not in runtime_env
     assert runtime_env["env_vars"]["ROAR_LOG_DIR"] == "/tmp/roar-ray-config"
+
+
+def test_patch_ray_shutdown_collects_before_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    call_order: list[str] = []
+
+    def fake_shutdown(*_args, **_kwargs):
+        call_order.append("shutdown")
+
+    fake_ray = SimpleNamespace(shutdown=fake_shutdown)
+    monkeypatch.setattr(sitecustomize, "_collect_ray_io", lambda: call_order.append("collect"))
+
+    sitecustomize._patch_ray_shutdown(fake_ray)
+    fake_ray.shutdown()
+
+    assert call_order == ["collect", "shutdown"]
