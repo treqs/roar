@@ -1,5 +1,6 @@
 import atexit
 import builtins
+import importlib.metadata as importlib_metadata
 import json
 import os
 import sys
@@ -230,6 +231,7 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
     def _roar_ray_init(*args, **kwargs):
         runtime_env = dict(kwargs.pop("runtime_env", None) or {})
         env_vars = dict(runtime_env.get("env_vars", {}) or {})
+        runtime_env["pip"] = _merge_roar_runtime_env_pip(runtime_env.get("pip"))
         env_vars["ROAR_WORKER"] = "1"
         env_vars["ROAR_LOG_DIR"] = os.environ.get("ROAR_LOG_DIR", "/shared/.roar-logs")
         for key in (
@@ -249,6 +251,53 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
         return _real_ray_init(*args, **kwargs)
 
     ray_module.init = _roar_ray_init
+
+
+def _merge_roar_runtime_env_pip(existing_pip):  # noqa: ANN001
+    pip_dependencies = _coerce_runtime_env_pip(existing_pip)
+    pip_dependencies = [
+        dep
+        for dep in pip_dependencies
+        if _requirement_name(dep) not in {"roar-cli", "roar"}
+    ]
+    pip_dependencies.append(_resolve_roar_requirement())
+    return pip_dependencies
+
+
+def _coerce_runtime_env_pip(value):  # noqa: ANN001
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if item]
+    return []
+
+
+def _requirement_name(requirement: str) -> str:
+    text = requirement.strip()
+    if not text:
+        return ""
+
+    for delimiter in ("@", "==", ">=", "<=", "~=", "!=", ">", "<", ";", "["):
+        index = text.find(delimiter)
+        if index > 0:
+            text = text[:index]
+            break
+
+    return text.strip().lower()
+
+
+def _resolve_roar_requirement() -> str:
+    for package_name in ("roar-cli", "roar"):
+        try:
+            return f"{package_name}=={importlib_metadata.version(package_name)}"
+        except importlib_metadata.PackageNotFoundError:
+            continue
+        except Exception:  # noqa: BLE001
+            break
+
+    return "roar-cli"
 
 
 def _collect_ray_io() -> None:
