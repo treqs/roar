@@ -8,6 +8,7 @@ for registering artifacts with GLaaS.
 
 from pathlib import Path
 
+from ...core.digests import extract_primary_digest
 from ...core.interfaces.upload import LineageData
 from ...db.context import create_database_context
 
@@ -32,12 +33,9 @@ def compute_io_signature(job: dict) -> str:
     return f"{inputs}|{outputs}"
 
 
-def _get_blake3(item: dict) -> str | None:
-    """Extract blake3 hash from item's hashes list."""
-    for h in item.get("hashes", []):
-        if h.get("algorithm") == "blake3":
-            return h.get("digest")
-    return None
+def _extract_primary_digest(item: dict) -> str | None:
+    """Backward-compatible wrapper around shared digest extraction."""
+    return extract_primary_digest(item)
 
 
 class LineageCollector:
@@ -127,8 +125,12 @@ class LineageCollector:
             inputs = ctx_db.jobs.get_inputs(job_id)
             outputs = ctx_db.jobs.get_outputs(job_id)
 
-            job_dict["_input_hashes"] = [h for h in (_get_blake3(inp) for inp in inputs) if h]
-            job_dict["_output_hashes"] = [h for h in (_get_blake3(out) for out in outputs) if h]
+            job_dict["_input_hashes"] = [
+                h for h in (_extract_primary_digest(inp) for inp in inputs) if h
+            ]
+            job_dict["_output_hashes"] = [
+                h for h in (_extract_primary_digest(out) for out in outputs) if h
+            ]
 
             # Structured inputs/outputs with hash, path, and byte_ranges
             job_dict["_inputs"] = [
@@ -138,7 +140,7 @@ class LineageCollector:
                     "byte_ranges": inp.get("byte_ranges"),
                 }
                 for inp in inputs
-                if (h := _get_blake3(inp))
+                if (h := _extract_primary_digest(inp))
             ]
             job_dict["_outputs"] = [
                 {
@@ -147,7 +149,7 @@ class LineageCollector:
                     "byte_ranges": out.get("byte_ranges"),
                 }
                 for out in outputs
-                if (h := _get_blake3(out))
+                if (h := _extract_primary_digest(out))
             ]
 
             build_job_ids.add(job_id)
@@ -187,7 +189,12 @@ class LineageCollector:
         """Get artifact info for all lineage hashes."""
         artifacts = []
         for h in hashes:
+            # Prefer blake3 lookups, but allow composite digests in lineage links.
             artifact = ctx_db.artifacts.get_by_hash(h, algorithm="blake3")
+            if not artifact:
+                artifact = ctx_db.artifacts.get_by_hash(h, algorithm="composite-blake3")
+            if not artifact:
+                artifact = ctx_db.artifacts.get_by_hash(h)
             if artifact:
                 artifact["hash"] = h  # Add the hash we looked up
                 artifacts.append(artifact)

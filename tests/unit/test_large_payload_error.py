@@ -152,7 +152,13 @@ class TestBatchingIntegration:
         service = JobRegistrationService(client=mock_client)
 
         # 500 inputs should result in 5 batches of 100
-        inputs = [{"hash": f"h{i:032d}", "path": f"/path/{i}"} for i in range(500)]
+        inputs = [
+            {
+                "artifact_id": f"00000000-0000-4000-8000-{i:012d}",
+                "path": f"/path/{i}",
+            }
+            for i in range(500)
+        ]
 
         result = service.link_job_artifacts(
             session_hash="test_session",
@@ -181,7 +187,13 @@ class TestBatchingIntegration:
         service = JobRegistrationService(client=mock_client)
 
         # 350 outputs should result in 4 batches (100, 100, 100, 50)
-        outputs = [{"hash": f"h{i:032d}", "path": f"/path/{i}"} for i in range(350)]
+        outputs = [
+            {
+                "artifact_id": f"00000000-0000-4000-8000-{i:012d}",
+                "path": f"/path/{i}",
+            }
+            for i in range(350)
+        ]
 
         result = service.link_job_artifacts(
             session_hash="test_session",
@@ -207,7 +219,13 @@ class TestBatchingIntegration:
 
         service = JobRegistrationService(client=mock_client)
 
-        inputs = [{"hash": f"h{i:032d}", "path": f"/path/{i}"} for i in range(500)]
+        inputs = [
+            {
+                "artifact_id": f"00000000-0000-4000-8000-{i:012d}",
+                "path": f"/path/{i}",
+            }
+            for i in range(500)
+        ]
 
         result = service.link_job_artifacts(
             session_hash="test_session",
@@ -240,7 +258,7 @@ class TestLargePayloadError:
         # Each artifact is ~200 bytes, so 5000 * 200 = ~1MB which should exceed most limits
         inputs = [
             {
-                "hash": f"hash{i:032d}",
+                "artifact_id": f"00000000-0000-4000-8000-{i:012d}",
                 "path": f"/workspace/data/very/long/path/to/file/number/{i}.zarr",
                 "metadata": {"description": f"This is artifact number {i} with extra padding" * 3},
             }

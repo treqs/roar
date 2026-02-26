@@ -73,7 +73,7 @@ class GlaasClient:
 
     def _parse_json_response(
         self, response_body: str, http_status: int
-    ) -> tuple[dict | None, str | None]:
+    ) -> tuple[Any | None, str | None]:
         """Parse JSON response with descriptive error messages."""
         return parse_json_response(response_body, http_status)
 
@@ -117,7 +117,7 @@ class GlaasClient:
         method: str,
         path: str,
         body: dict | None = None,
-    ) -> tuple[dict | None, str | None]:
+    ) -> tuple[Any | None, str | None]:
         """Make authenticated request. Returns (response_dict, error_message)."""
         if not self.base_url:
             return None, "GLaaS URL not configured"
@@ -196,6 +196,30 @@ class GlaasClient:
         if result is None:
             return 0, 0, None
         return result.get("created", 0) + result.get("existing", 0), 0, None
+
+    def register_composite_artifact(
+        self,
+        payload: dict[str, Any],
+    ) -> tuple[dict | None, str | None]:
+        """
+        Register a composite artifact and its stored component subset.
+
+        Args:
+            payload: Composite registration payload for /api/v1/artifacts/composites
+
+        Returns (result, error_message).
+        """
+        result, error = self._request("POST", "/api/v1/artifacts/composites", payload)
+        return result, error
+
+    def get_composite_components(self, hash_prefix: str) -> tuple[dict | None, str | None]:
+        """
+        Fetch stored component membership rows for a composite artifact.
+
+        Returns (result, error_message).
+        """
+        result, error = self._request("GET", f"/api/v1/artifacts/{hash_prefix}/components")
+        return result, error
 
     def get_artifact(self, hash_prefix: str) -> dict:
         """
@@ -388,12 +412,12 @@ class GlaasClient:
         Args:
             session_hash: Session this job belongs to
             job_uid: The job's unique identifier
-            artifacts: List of dicts with {hash, size, path, source_type, metadata}
+            artifacts: List of dicts with {artifact_hash, path, byte_ranges?}
 
         Returns (result, error_message).
         result contains: job_uid, inputs_linked
         """
-        body: dict[str, Any] = {"artifacts": artifacts}
+        body: dict[str, Any] = {"artifacts": self._map_artifacts_for_api(artifacts)}
         result, error = self._request(
             "POST",
             f"/api/v1/sessions/{session_hash}/jobs/{job_uid}/inputs",
@@ -413,18 +437,38 @@ class GlaasClient:
         Args:
             session_hash: Session this job belongs to
             job_uid: The job's unique identifier
-            artifacts: List of dicts with {hash, size, path, source_type, metadata}
+            artifacts: List of dicts with {artifact_hash, path, byte_ranges?}
 
         Returns (result, error_message).
         result contains: job_uid, outputs_linked
         """
-        body: dict[str, Any] = {"artifacts": artifacts}
+        body: dict[str, Any] = {"artifacts": self._map_artifacts_for_api(artifacts)}
         result, error = self._request(
             "POST",
             f"/api/v1/sessions/{session_hash}/jobs/{job_uid}/outputs",
             body,
         )
         return result, error
+
+    @staticmethod
+    def _map_artifacts_for_api(artifacts: list[dict]) -> list[dict]:
+        """Map internal artifact dicts to the API schema.
+
+        Internally we use ``artifact_hash`` for content identity. Legacy callers
+        may still send ``artifact_id`` (historical misnomer). The GLaaS API
+        ``jobArtifactBatchSchema`` expects ``hash``.
+        """
+        mapped: list[dict] = []
+        for a in artifacts:
+            artifact_hash = a.get("artifact_hash", a.get("artifact_id", a.get("hash", "")))
+            entry: dict[str, Any] = {
+                "hash": artifact_hash,
+                "path": a["path"],
+            }
+            if "byte_ranges" in a and a["byte_ranges"] is not None:
+                entry["byte_ranges"] = a["byte_ranges"]
+            mapped.append(entry)
+        return mapped
 
     def get_session(self, session_hash: str) -> tuple[dict | None, str | None]:
         """

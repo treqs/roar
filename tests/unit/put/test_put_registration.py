@@ -329,6 +329,10 @@ class TestPutRegistrationIntegration:
                     inputs_linked=1,
                     outputs_linked=0,
                 )
+                mock_coordinator.artifact_service.resolve_artifact_hash.side_effect = lambda ref: (
+                    "resolved-art-1",
+                    None,
+                )
                 MockCoordinator.return_value = mock_coordinator
 
                 result = service.put(

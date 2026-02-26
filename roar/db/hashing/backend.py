@@ -102,13 +102,16 @@ def compute_hashes_batch(
     """Compute hashes for multiple files, optionally in native parallel mode."""
     normalized = normalize_algorithms(algorithms)
     string_paths = [str(path) for path in paths]
+    hashable_paths = [path for path in string_paths if os.path.isfile(path)]
+    if not hashable_paths:
+        return {}
 
     if _hash_native is not None:
-        selected_workers = _resolve_native_workers(string_paths, workers)
-        return _hash_native.compute_hashes_batch(string_paths, normalized, selected_workers)
+        selected_workers = _resolve_native_workers(hashable_paths, workers)
+        return _hash_native.compute_hashes_batch(hashable_paths, normalized, selected_workers)
 
     output: dict[str, dict[str, str]] = {}
-    for path in string_paths:
+    for path in hashable_paths:
         if hashes := compute_hashes(path, normalized):
             output[path] = hashes
     return output

@@ -28,6 +28,8 @@ from .models import (
     Base,
     Collection,
     CollectionMember,
+    CompositeArtifactComponent,
+    CompositeMembershipIndex,
     HashCache,
     Job,
     JobInput,
@@ -43,6 +45,8 @@ __all__ = [
     "Base",
     "Collection",
     "CollectionMember",
+    "CompositeArtifactComponent",
+    "CompositeMembershipIndex",
     # Context
     "DatabaseContext",
     "HashCache",

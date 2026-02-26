@@ -1,6 +1,12 @@
 """Unit tests for lineage collector service."""
 
-from roar.services.upload.lineage_collector import LineageCollector, compute_io_signature
+from unittest.mock import Mock
+
+from roar.services.upload.lineage_collector import (
+    LineageCollector,
+    _extract_primary_digest,
+    compute_io_signature,
+)
 
 
 class TestComputeIoSignature:
@@ -139,3 +145,84 @@ class TestDeduplicateReruns:
         ]
         result = collector._deduplicate_reruns(jobs)
         assert [j["id"] for j in result] == [1, 2, 3]
+
+
+class TestCompositeDigestHandling:
+    """Coverage for composite-aware digest extraction and lookup."""
+
+    def test_extract_primary_digest_prefers_blake3(self):
+        digest = _extract_primary_digest(
+            {
+                "hashes": [
+                    {"algorithm": "composite-blake3", "digest": "c" * 64},
+                    {"algorithm": "blake3", "digest": "b" * 64},
+                ]
+            }
+        )
+        assert digest == "b" * 64
+
+    def test_extract_primary_digest_uses_composite_blake3_when_needed(self):
+        digest = _extract_primary_digest(
+            {"hashes": [{"algorithm": "composite-blake3", "digest": "c" * 64}]}
+        )
+        assert digest == "c" * 64
+
+    def test_build_job_io_keeps_composite_hashes(self):
+        collector = LineageCollector()
+        ctx_db = Mock()
+        ctx_db.jobs.get_latest_build_jobs.return_value = [
+            {"id": 42, "job_uid": "build-42", "timestamp": 1.0}
+        ]
+        ctx_db.jobs.get_inputs.return_value = [
+            {
+                "hashes": [{"algorithm": "composite-blake3", "digest": "a" * 64}],
+                "path": "/tmp/dataset-in",
+                "first_seen_path": "/tmp/dataset-in",
+                "byte_ranges": None,
+            }
+        ]
+        ctx_db.jobs.get_outputs.return_value = [
+            {
+                "hashes": [{"algorithm": "composite-blake3", "digest": "b" * 64}],
+                "path": "/tmp/dataset-out",
+                "first_seen_path": "/tmp/dataset-out",
+                "byte_ranges": None,
+            }
+        ]
+
+        jobs = collector._add_build_jobs(
+            ctx_db=ctx_db,
+            pipeline={"id": 1},
+            lineage_jobs=[],
+            lineage_artifact_hashes=set(),
+        )
+        assert jobs[0]["_input_hashes"] == ["a" * 64]
+        assert jobs[0]["_output_hashes"] == ["b" * 64]
+        assert jobs[0]["_inputs"][0]["path"] == "/tmp/dataset-in"
+        assert jobs[0]["_outputs"][0]["path"] == "/tmp/dataset-out"
+
+    def test_artifact_lookup_falls_back_to_composite_algorithm(self):
+        collector = LineageCollector()
+        ctx_db = Mock()
+
+        def lookup(hash_value: str, algorithm: str | None = None):
+            if algorithm == "blake3":
+                return None
+            if algorithm == "composite-blake3":
+                return {
+                    "id": "artifact-composite",
+                    "hashes": [{"algorithm": "composite-blake3", "digest": hash_value}],
+                    "size": 1,
+                }
+            return None
+
+        ctx_db.artifacts.get_by_hash.side_effect = lookup
+        composite_hash = "d" * 64
+        artifacts = collector._get_artifact_info(ctx_db, {composite_hash})
+
+        assert len(artifacts) == 1
+        assert artifacts[0]["hash"] == composite_hash
+        assert ctx_db.artifacts.get_by_hash.call_args_list[0].kwargs == {"algorithm": "blake3"}
+        assert ctx_db.artifacts.get_by_hash.call_args_list[1].kwargs == {
+            "algorithm": "composite-blake3"
+        }

@@ -32,6 +32,19 @@ class JobRepository(Protocol):
     def get_outputs(self, job_id: int) -> list[dict[str, Any]]: ...
 
 
+class OutputFilter(Protocol):
+    """Strategy for filtering outputs during implicit/session resolution."""
+
+    def should_include(self, output: dict[str, Any]) -> bool: ...
+
+
+class DefaultOutputFilter:
+    """Exclude composites (backward-compatible default)."""
+
+    def should_include(self, output: dict[str, Any]) -> bool:
+        return output.get("kind") != "composite"
+
+
 @dataclass
 class ResolvedSource:
     """A resolved source ready for upload."""
@@ -39,6 +52,8 @@ class ResolvedSource:
     path: Path
     exists: bool
     relative_key: str = ""  # Key for upload (relative to source dir or just filename)
+    source_root: Path | None = None  # Directory root when source is a directory
+    artifact_kind: str | None = None  # Kind for implicit/session outputs (primitive/composite)
 
 
 # Pattern for job reference: @N where N is a positive integer
@@ -62,6 +77,7 @@ class SourceResolver:
         repo_root: Path | None = None,
         session_repo: SessionRepository | None = None,
         job_repo: JobRepository | None = None,
+        output_filter: OutputFilter | None = None,
     ):
         """
         Initialize resolver.
@@ -70,10 +86,13 @@ class SourceResolver:
             repo_root: Repository root directory for relative path resolution.
             session_repo: Session repository for job reference resolution.
             job_repo: Job repository for fetching job outputs.
+            output_filter: Strategy for filtering outputs during implicit/session
+                resolution. Defaults to ``DefaultOutputFilter`` (excludes composites).
         """
         self._repo_root = Path(repo_root) if repo_root else Path.cwd()
         self._session_repo = session_repo
         self._job_repo = job_repo
+        self._output_filter = output_filter or DefaultOutputFilter()
         self._logger = get_logger()
 
     def resolve(self, sources: list[str]) -> list[ResolvedSource]:
@@ -172,7 +191,14 @@ class SourceResolver:
         for item in directory.rglob("*"):
             if item.is_file():
                 relative_key = str(item.relative_to(directory))
-                results.append(ResolvedSource(path=item, exists=True, relative_key=relative_key))
+                results.append(
+                    ResolvedSource(
+                        path=item,
+                        exists=True,
+                        relative_key=relative_key,
+                        source_root=directory,
+                    )
+                )
 
         return results
 
@@ -207,9 +233,18 @@ class SourceResolver:
             job_id = step["id"]
             outputs = self._job_repo.get_outputs(job_id)
             for output in outputs:
+                if not self._should_include_output(output):
+                    continue
                 path = Path(output["path"])
                 results.append(
-                    ResolvedSource(path=path, exists=path.exists(), relative_key=path.name)
+                    ResolvedSource(
+                        path=path,
+                        exists=path.exists(),
+                        relative_key=path.name,
+                        artifact_kind=output.get("kind")
+                        if isinstance(output.get("kind"), str)
+                        else None,
+                    )
                 )
 
         return results
@@ -251,7 +286,22 @@ class SourceResolver:
 
         results: list[ResolvedSource] = []
         for output in outputs:
+            if not self._should_include_output(output):
+                continue
             path = Path(output["path"])
-            results.append(ResolvedSource(path=path, exists=path.exists(), relative_key=path.name))
+            results.append(
+                ResolvedSource(
+                    path=path,
+                    exists=path.exists(),
+                    relative_key=path.name,
+                    artifact_kind=output.get("kind")
+                    if isinstance(output.get("kind"), str)
+                    else None,
+                )
+            )
 
         return results
+
+    def _should_include_output(self, output: dict[str, Any]) -> bool:
+        """Filter outputs for implicit/session resolution."""
+        return self._output_filter.should_include(output)

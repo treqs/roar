@@ -15,6 +15,7 @@ from .command import CommandContext, CommandResult
 from .config import (
     AnalyzersConfig,
     CleanupConfig,
+    CompositesConfig,
     FiltersConfig,
     GlaasConfig,
     HashConfig,
@@ -22,6 +23,7 @@ from .config import (
     OutputConfig,
     RegisterConfig,
     RoarConfig,
+    RunCompositeConfig,
 )
 
 # DAG visualization models
@@ -32,6 +34,7 @@ from .dag import (
     DagNodeState,
     DagVisualization,
 )
+from .dataset_identifier import DatasetIdentifier
 
 # GLaaS API models
 from .glaas import (
@@ -107,6 +110,7 @@ __all__ = [
     "CommandContext",
     "CommandResult",
     "CompleteLiveJobRequest",
+    "CompositesConfig",
     "ContainerInfo",
     "CreateDagRequest",
     "CreateLiveJobRequest",
@@ -116,6 +120,7 @@ __all__ = [
     "DagNodeState",
     "DagResponse",
     "DagVisualization",
+    "DatasetIdentifier",
     "FileClassification",
     "FilteredFiles",
     "FiltersConfig",
@@ -150,6 +155,7 @@ __all__ = [
     "RoarBaseModel",
     "RoarConfig",
     "RunArguments",
+    "RunCompositeConfig",
     "RunContext",
     "RunResult",
     "RuntimeInfo",

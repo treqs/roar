@@ -166,6 +166,14 @@ class SQLAlchemyJobRepository(JobRepository):
 
         return None
 
+    def update_metadata(self, job_id: int, metadata: str | None) -> None:
+        """Update metadata JSON for a job."""
+        job = self._session.get(Job, job_id)
+        if not job:
+            raise ValueError(f"Job not found: {job_id}")
+        job.metadata_ = metadata
+        self._session.flush()
+
     def add_input(
         self, job_id: int, artifact_id: str, path: str, byte_ranges: list[list[int]] | None = None
     ) -> None:
@@ -259,6 +267,8 @@ class SQLAlchemyJobRepository(JobRepository):
                 JobInput.byte_ranges,
                 Artifact.size,
                 Artifact.first_seen_path,
+                Artifact.kind,
+                Artifact.component_count,
             )
             .join(Artifact, JobInput.artifact_id == Artifact.id)
             .where(JobInput.job_id == job_id)
@@ -266,13 +276,15 @@ class SQLAlchemyJobRepository(JobRepository):
         rows = self._session.execute(query).all()
 
         results = []
-        for path, artifact_id, byte_ranges, size, first_seen_path in rows:
+        for path, artifact_id, byte_ranges, size, first_seen_path, kind, component_count in rows:
             hashes = self._artifact_repository.get_hashes(artifact_id)
             results.append(
                 {
                     "path": path or first_seen_path,  # Use artifact path as fallback
                     "artifact_id": artifact_id,
                     "size": size,
+                    "kind": kind,
+                    "component_count": component_count,
                     "hashes": hashes,
                     # Backward compatibility: artifact_hash is the primary hash digest
                     "artifact_hash": hashes[0]["digest"] if hashes else None,
@@ -299,6 +311,8 @@ class SQLAlchemyJobRepository(JobRepository):
                 JobOutput.byte_ranges,
                 Artifact.size,
                 Artifact.first_seen_path,
+                Artifact.kind,
+                Artifact.component_count,
             )
             .join(Artifact, JobOutput.artifact_id == Artifact.id)
             .where(JobOutput.job_id == job_id)
@@ -306,13 +320,15 @@ class SQLAlchemyJobRepository(JobRepository):
         rows = self._session.execute(query).all()
 
         results = []
-        for path, artifact_id, byte_ranges, size, first_seen_path in rows:
+        for path, artifact_id, byte_ranges, size, first_seen_path, kind, component_count in rows:
             hashes = self._artifact_repository.get_hashes(artifact_id)
             results.append(
                 {
                     "path": path or first_seen_path,  # Use artifact path as fallback
                     "artifact_id": artifact_id,
                     "size": size,
+                    "kind": kind,
+                    "component_count": component_count,
                     "hashes": hashes,
                     # Backward compatibility: artifact_hash is the primary hash digest
                     "artifact_hash": hashes[0]["digest"] if hashes else None,

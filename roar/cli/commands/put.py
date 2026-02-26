@@ -239,6 +239,9 @@ def put(
         except ValueError as e:
             logger.debug("ValueError: %s", e)
             raise click.ClickException(str(e)) from e
+        except Exception as e:  # pragma: no cover - defensive CLI boundary
+            logger.error("Unexpected put failure: %s", e)
+            raise click.ClickException(f"Unexpected error during put: {e}") from e
 
         logger.debug(
             "PutService.put() returned: success=%s, job_id=%s, dry_run=%s, files=%d, error=%s",
@@ -264,7 +267,7 @@ def put(
             if result.error:
                 for error in result.error.split("; "):
                     click.echo(f"  - {error}", err=True)
-            raise SystemExit(1)
+            raise click.ClickException("Registration completed with errors")
 
         # Create git tag after successful upload
         if not no_tag and git_commit:
@@ -281,10 +284,36 @@ def put(
         click.echo(f"Published {len(result.uploaded_files)} file(s) to {destination}")
         for item in result.uploaded_files:
             click.echo(f"  {item['local_path']} -> {item['remote_url']}")
+        if result.composites_registered:
+            click.echo(f"\nRegistered {len(result.composites_registered)} composite artifact(s):")
+            for composite in result.composites_registered:
+                root_path = composite.get("root_path", "(unknown)")
+                digest = composite.get("hash")
+                digest_preview = (
+                    f"{digest[:12]}..." if isinstance(digest, str) and len(digest) > 12 else digest
+                )
+                stored = composite.get("component_count_stored")
+                total = composite.get("component_count_total")
+                component_summary = ""
+                if isinstance(stored, int) and isinstance(total, int):
+                    component_summary = f" ({stored}/{total} components stored)"
+                artifact_id = composite.get("artifact_id")
+                artifact_suffix = (
+                    f" id={artifact_id}" if isinstance(artifact_id, str) and artifact_id else ""
+                )
+                click.echo(f"  {root_path} -> {digest_preview}{component_summary}{artifact_suffix}")
+                if composite.get("local_persisted") is False:
+                    local_error = composite.get("local_error")
+                    detail = (
+                        f": {local_error}" if isinstance(local_error, str) and local_error else ""
+                    )
+                    click.echo(
+                        f"Warning: local composite metadata was not persisted for {root_path}{detail}",
+                        err=True,
+                    )
         click.echo(f"\nJob created: step {result.job_id}")
         if git_tag:
             click.echo(f"Git tag: {git_tag}")
-
         # Show GLaaS registration info
         web_url = config_get("glaas.web_url") or "https://glaas.ai"
         session_hash = result.session_hash or ""

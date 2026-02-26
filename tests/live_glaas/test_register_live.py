@@ -57,6 +57,12 @@ def glaas_configured(temp_git_repo, glaas_url):
         check=True,
         capture_output=True,
     )
+    subprocess.run(
+        [sys.executable, "-m", "roar", "config", "set", "filters.ignore_tmp_files", "false"],
+        cwd=temp_git_repo,
+        check=True,
+        capture_output=True,
+    )
     return temp_git_repo
 
 

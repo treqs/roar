@@ -132,11 +132,13 @@ class TestResolveDirectory:
 
         # Assert — relative_key should be relative to the source directory, not repo root
         keys = {r.relative_key for r in results}
+        roots = {r.source_root for r in results}
         assert "model.pt" in keys
         assert "optimizer.pt" in keys
         assert "epoch1/weights.pt" in keys
         # Should NOT contain the full repo-relative path
         assert not any(".nanochat" in k for k in keys)
+        assert roots == {checkpoints}
 
     def test_file_source_has_filename_as_relative_key(self, tmp_path: Path):
         """A single file source should have relative_key set to just the filename."""
@@ -152,6 +154,7 @@ class TestResolveDirectory:
         # Assert
         assert len(results) == 1
         assert results[0].relative_key == "model.pt"
+        assert results[0].source_root is None
 
 
 class TestResolveJobReference:
@@ -230,6 +233,34 @@ class TestResolveJobReference:
         assert "Step 5" in str(exc_info.value)
         assert "not found" in str(exc_info.value)
 
+    def test_resolve_job_reference_skips_composite_outputs_by_default(self, tmp_path: Path):
+        """Resolving @N ignores composite outputs unless explicitly enabled."""
+        model_file = tmp_path / "model.pt"
+        model_file.write_text("model")
+        dataset_root = tmp_path / "dataset"
+        dataset_root.mkdir()
+
+        mock_sessions = Mock()
+        mock_sessions.get_active.return_value = {"id": 1}
+        mock_sessions.get_step_by_number.return_value = {"id": 42}
+
+        mock_jobs = Mock()
+        mock_jobs.get_outputs.return_value = [
+            {"path": str(model_file), "artifact_id": "art1", "kind": "primitive"},
+            {"path": str(dataset_root), "artifact_id": "comp1", "kind": "composite"},
+        ]
+
+        resolver = SourceResolver(
+            repo_root=tmp_path,
+            session_repo=mock_sessions,
+            job_repo=mock_jobs,
+        )
+
+        results = resolver.resolve(["@2"])
+
+        assert len(results) == 1
+        assert results[0].path == model_file
+
 
 class TestResolveDefaultSessionOutputs:
     """Tests for resolving default (all session outputs)."""
@@ -306,3 +337,31 @@ class TestResolveDefaultSessionOutputs:
 
         # Assert
         assert len(results) == 0
+
+    def test_resolve_empty_sources_skips_composite_outputs_by_default(self, tmp_path: Path):
+        """Implicit session outputs should skip composite artifacts by default."""
+        model_file = tmp_path / "model.pt"
+        model_file.write_text("model")
+        dataset_root = tmp_path / "dataset"
+        dataset_root.mkdir()
+
+        mock_sessions = Mock()
+        mock_sessions.get_active.return_value = {"id": 1}
+        mock_sessions.get_steps.return_value = [{"id": 10, "step_number": 1}]
+
+        mock_jobs = Mock()
+        mock_jobs.get_outputs.return_value = [
+            {"path": str(model_file), "artifact_id": "art1", "kind": "primitive"},
+            {"path": str(dataset_root), "artifact_id": "comp1", "kind": "composite"},
+        ]
+
+        resolver = SourceResolver(
+            repo_root=tmp_path,
+            session_repo=mock_sessions,
+            job_repo=mock_jobs,
+        )
+
+        results = resolver.resolve([])
+
+        assert len(results) == 1
+        assert results[0].path == model_file

@@ -226,3 +226,96 @@ class TestRegisterJobsBatch:
             assert job_ids == []
             assert len(errors) == 2
             assert error == "HTTP 500: Internal Server Error"
+
+
+class TestCompositeAndLabelWrappers:
+    """Test thin client wrappers for composite artifact endpoints."""
+
+    def test_register_composite_artifact_calls_expected_endpoint(self):
+        client = GlaasClient(base_url="http://localhost:9999")
+        payload = {"hash": "abc12345", "components": []}
+
+        with patch.object(client, "_request") as mock_request:
+            mock_request.return_value = ({"artifact_id": "a1"}, None)
+
+            result, error = client.register_composite_artifact(payload)
+
+            mock_request.assert_called_once_with("POST", "/api/v1/artifacts/composites", payload)
+            assert error is None
+            assert result == {"artifact_id": "a1"}
+
+    def test_get_composite_components_calls_expected_endpoint(self):
+        client = GlaasClient(base_url="http://localhost:9999")
+
+        with patch.object(client, "_request") as mock_request:
+            mock_request.return_value = ({"components": [{"relativePath": "f"}]}, None)
+
+            result, error = client.get_composite_components("abc12345")
+
+            mock_request.assert_called_once_with("GET", "/api/v1/artifacts/abc12345/components")
+            assert error is None
+            assert result == {"components": [{"relativePath": "f"}]}
+
+
+class TestArtifactHashMapping:
+    """Verify that register_job_inputs/outputs map internal hash keys to API payloads."""
+
+    def test_map_artifacts_for_api_uses_artifact_hash(self):
+        mapped = GlaasClient._map_artifacts_for_api(
+            [
+                {"artifact_hash": "abc123def456", "path": "/data/input.csv"},
+            ]
+        )
+        assert mapped == [{"hash": "abc123def456", "path": "/data/input.csv"}]
+
+    def test_map_artifacts_for_api_accepts_legacy_artifact_id(self):
+        mapped = GlaasClient._map_artifacts_for_api(
+            [
+                {"artifact_id": "abc123def456", "path": "/data/input.csv"},
+            ]
+        )
+        assert mapped == [{"hash": "abc123def456", "path": "/data/input.csv"}]
+
+    def test_map_artifacts_for_api_preserves_byte_ranges(self):
+        mapped = GlaasClient._map_artifacts_for_api(
+            [
+                {"artifact_hash": "abc123", "path": "/data/f.csv", "byte_ranges": [[0, 99]]},
+            ]
+        )
+        assert mapped == [{"hash": "abc123", "path": "/data/f.csv", "byte_ranges": [[0, 99]]}]
+
+    def test_map_artifacts_for_api_falls_back_to_hash_key(self):
+        mapped = GlaasClient._map_artifacts_for_api(
+            [
+                {"hash": "abc123def456", "path": "/data/input.csv"},
+            ]
+        )
+        assert mapped == [{"hash": "abc123def456", "path": "/data/input.csv"}]
+
+    def test_register_job_inputs_sends_mapped_payload(self):
+        client = GlaasClient(base_url="http://localhost:9999")
+        with patch.object(client, "_request") as mock_request:
+            mock_request.return_value = ({"inputs_linked": 1}, None)
+
+            client.register_job_inputs(
+                session_hash="sess123",
+                job_uid="job-001",
+                artifacts=[{"artifact_hash": "hash123abc", "path": "/input.csv"}],
+            )
+
+            call_body = mock_request.call_args[0][2]
+            assert call_body == {"artifacts": [{"hash": "hash123abc", "path": "/input.csv"}]}
+
+    def test_register_job_outputs_sends_mapped_payload(self):
+        client = GlaasClient(base_url="http://localhost:9999")
+        with patch.object(client, "_request") as mock_request:
+            mock_request.return_value = ({"outputs_linked": 1}, None)
+
+            client.register_job_outputs(
+                session_hash="sess123",
+                job_uid="job-001",
+                artifacts=[{"artifact_hash": "hash456def", "path": "/output.csv"}],
+            )
+
+            call_body = mock_request.call_args[0][2]
+            assert call_body == {"artifacts": [{"hash": "hash456def", "path": "/output.csv"}]}

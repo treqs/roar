@@ -6,6 +6,7 @@ Consolidates artifact registration logic from put.py and coordinator.py.
 
 import json
 from functools import cached_property
+from typing import Any
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import (
@@ -15,6 +16,7 @@ from ...core.interfaces.registration import (
 from ...core.logging import get_logger
 from ...core.validation import validate_artifact_registration
 from ...glaas_client import GlaasClient
+from . import _artifact_ref
 
 # Server body-parser limit is ~100KB, use 90KB for safety margin
 MAX_BATCH_SIZE_BYTES = 90 * 1024  # 90KB
@@ -284,6 +286,27 @@ class ArtifactRegistrationService(IArtifactRegistrar):
             error_count=total_errors + len(errors),
             errors=errors,
         )
+
+    def resolve_artifact_hash(self, artifact_ref: dict[str, Any]) -> tuple[str | None, str | None]:
+        """Resolve a server artifact hash from a hash/hash-list artifact reference.
+
+        Returns the canonical content hash (not the server UUID) because the
+        job-linking endpoints (``/jobs/:uid/inputs``, ``/jobs/:uid/outputs``)
+        identify artifacts by their content hash.
+        """
+        digest = _artifact_ref.extract_digest(artifact_ref)
+        if not digest:
+            return None, "missing hash/hash list"
+
+        try:
+            artifact = self.client.get_artifact(digest)
+        except Exception as exc:  # pragma: no cover - exercised via coordinator tests with mocks
+            return None, str(exc)
+
+        artifact_hash = artifact.get("hash") if isinstance(artifact, dict) else None
+        if not isinstance(artifact_hash, str) or not artifact_hash:
+            return None, f"artifact lookup returned no hash for digest {digest}"
+        return artifact_hash, None
 
     def build_artifact_payload(
         self,

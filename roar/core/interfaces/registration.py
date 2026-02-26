@@ -10,7 +10,7 @@ with GLaaS, following the 4-phase registration pattern:
 """
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass
@@ -157,8 +157,8 @@ class IJobRegistrar(Protocol):
         self,
         session_hash: str,
         job_uid: str,
-        inputs: list[dict[str, str]] | None,
-        outputs: list[dict[str, str]] | None,
+        inputs: list[dict[str, Any]] | None,
+        outputs: list[dict[str, Any]] | None,
     ) -> JobLinkResult:
         """Link inputs/outputs to an existing job AFTER artifacts registered."""
         ...

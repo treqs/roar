@@ -5,6 +5,7 @@ Provides file hashing with caching support.
 """
 
 import os
+import stat as stat_module
 
 from ...core.interfaces.repositories import HashCacheRepository
 from ...core.interfaces.services import HashingService
@@ -92,6 +93,11 @@ class DefaultHashingService(HashingService):
             try:
                 stat = os.stat(path)
             except OSError:
+                continue
+
+            # Only hash regular files. Directories and special files should not
+            # be treated as content-addressed artifacts.
+            if not stat_module.S_ISREG(stat.st_mode):
                 continue
 
             cached = self._hash_cache.get_cached_hashes(path)

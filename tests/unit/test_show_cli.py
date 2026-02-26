@@ -677,3 +677,103 @@ class TestShowEdgeCases:
         assert "libcudnn8==8.6.0" in result.output
         assert "Packages (build_dpkg, 1)" in result.output
         assert "gcc-12==12.3.0" in result.output
+
+    def test_show_job_displays_primitive_and_composite_artifact_kinds(self, runner, mock_ctx):
+        """Job view should show artifact kind for mixed primitive/composite I/O."""
+        with patch.object(show_module, "create_database_context") as mock_db:
+            db_ctx = MagicMock()
+            mock_db.return_value.__enter__.return_value = db_ctx
+
+            db_ctx.sessions.get_active.return_value = {"id": 1, "hash": "session123"}
+            db_ctx.sessions.get_step_by_number.return_value = {
+                "id": 1,
+                "job_uid": "mixkind1",
+                "step_number": 1,
+                "timestamp": 1700000000.0,
+                "duration_seconds": 10.0,
+                "exit_code": 0,
+                "command": "python train.py",
+                "job_type": None,
+                "step_name": None,
+                "step_identity": None,
+                "git_commit": None,
+                "git_branch": None,
+                "metadata": None,
+                "telemetry": None,
+            }
+            db_ctx.jobs.get_inputs.return_value = [
+                {
+                    "path": "/data/input/train.csv",
+                    "artifact_id": "art-in-1",
+                    "kind": "primitive",
+                    "component_count": None,
+                    "size": 123,
+                    "hashes": [],
+                }
+            ]
+            db_ctx.jobs.get_outputs.return_value = [
+                {
+                    "path": "/data/output/model.pt",
+                    "artifact_id": "art-out-1",
+                    "kind": "primitive",
+                    "component_count": None,
+                    "size": 456,
+                    "hashes": [],
+                },
+                {
+                    "path": "/data/output/dataset",
+                    "artifact_id": "art-out-2",
+                    "kind": "composite",
+                    "component_count": 3,
+                    "size": 789,
+                    "hashes": [],
+                },
+            ]
+
+            result = runner.invoke(show, ["@1"], obj=mock_ctx)
+
+        assert result.exit_code == 0
+        assert "Kind: primitive" in result.output
+        assert "Kind: composite (3 components)" in result.output
+
+    def test_show_artifact_displays_local_composite_details(self, runner, mock_ctx):
+        """Artifact display includes local composite details when available."""
+        full_hash = "a1b2c3d4e5f67890" * 4
+
+        with patch.object(show_module, "create_database_context") as mock_db:
+            db_ctx = MagicMock()
+            mock_db.return_value.__enter__.return_value = db_ctx
+
+            db_ctx.jobs.get_by_uid.return_value = None
+            db_ctx.artifacts.get_by_hash.return_value = {
+                "id": "artifact-comp-1",
+                "kind": "composite",
+                "component_count": 2000,
+                "size": 1024,
+                "first_seen_at": 1700000000.0,
+                "first_seen_path": "/data/dataset",
+                "hashes": [{"algorithm": "composite-blake3", "digest": full_hash}],
+            }
+            db_ctx.artifacts.get_locations.return_value = [{"path": "/data/dataset"}]
+            db_ctx.artifacts.get_jobs.return_value = {"produced_by": [], "consumed_by": []}
+
+            db_ctx.composites = MagicMock()
+            db_ctx.composites.get.return_value = {
+                "artifact_id": "artifact-comp-1",
+                "kind": "composite",
+                "component_count": 2000,
+                "membership_index": {"total_components": 2000, "stored_components": 1000},
+            }
+            db_ctx.composites.get_components.return_value = [
+                {
+                    "relative_path": "train/part-0000.parquet",
+                    "leaf_kind": "file",
+                    "component_digest": "abc12345" * 8,
+                }
+            ]
+
+            result = runner.invoke(show, [full_hash], obj=mock_ctx)
+
+        assert result.exit_code == 0
+        assert "Kind: composite" in result.output
+        assert "Composite details:" in result.output

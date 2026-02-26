@@ -236,3 +236,57 @@ class TestSchemaMigration:
         assert "byte_ranges" in output_columns
 
         conn.close()
+
+    def test_schema_migration_adds_composite_tables(self, tmp_path):
+        """Verify migration adds composite schema to existing databases."""
+        import sqlite3
+
+        db_path = tmp_path / "test_composite.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+
+        # Old schema: artifacts exists but lacks composite columns/tables.
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_uid TEXT UNIQUE,
+                timestamp REAL NOT NULL,
+                command TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS job_inputs (
+                job_id INTEGER NOT NULL,
+                artifact_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                PRIMARY KEY (job_id, artifact_id, path)
+            );
+            CREATE TABLE IF NOT EXISTS job_outputs (
+                job_id INTEGER NOT NULL,
+                artifact_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                PRIMARY KEY (job_id, artifact_id, path)
+            );
+            CREATE TABLE IF NOT EXISTS artifacts (
+                id TEXT PRIMARY KEY,
+                size INTEGER NOT NULL,
+                first_seen_at REAL NOT NULL,
+                first_seen_path TEXT
+            );
+        """)
+
+        run_migrations(conn)
+
+        artifact_cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(artifacts)").fetchall()
+        }
+        assert "kind" in artifact_cols
+        assert "component_count" in artifact_cols
+
+        tables = {
+            row["name"]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        assert "composite_artifact_components" in tables
+        assert "composite_membership_indexes" in tables
+
+        conn.close()

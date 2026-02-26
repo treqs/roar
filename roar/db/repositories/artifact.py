@@ -484,6 +484,8 @@ class SQLAlchemyArtifactRepository(ArtifactRepository):
             "source_url": artifact.source_url,
             "uploaded_to": artifact.uploaded_to,
             "synced_at": artifact.synced_at,
+            "kind": artifact.kind,
+            "component_count": artifact.component_count,
             "metadata": artifact.metadata_,
         }
 

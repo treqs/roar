@@ -179,6 +179,21 @@ class LoggingConfig(ConfigBaseModel):
     file: bool = True
 
 
+class RunCompositeConfig(ConfigBaseModel):
+    """Run-time composite materialization policy."""
+
+    enabled: bool = True
+    min_confidence: Annotated[float, Field(ge=0.0, le=1.0)] = 0.80
+    min_components: Annotated[int, Field(ge=2, le=100_000)] = 2
+    max_roots_per_job: Annotated[int, Field(ge=1, le=128)] = 4
+
+
+class CompositesConfig(ConfigBaseModel):
+    """Composite artifact behavior configuration."""
+
+    run: RunCompositeConfig = Field(default_factory=RunCompositeConfig)
+
+
 class RoarConfig(ConfigBaseModel):
     """Complete roar configuration.
 
@@ -197,6 +212,7 @@ class RoarConfig(ConfigBaseModel):
     tracer: TracerConfig = Field(default_factory=TracerConfig)
     reversible: ReversibleConfig = Field(default_factory=ReversibleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    composites: CompositesConfig = Field(default_factory=CompositesConfig)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get config value by dot-notation key.

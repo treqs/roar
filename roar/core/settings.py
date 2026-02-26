@@ -22,6 +22,7 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from .models.config import (
     AnalyzersConfig,
     CleanupConfig,
+    CompositesConfig,
     FiltersConfig,
     GlaasConfig,
     HashConfig,
@@ -208,6 +209,7 @@ class RoarSettings(BaseSettings):
     tracer: TracerConfig = TracerConfig()
     reversible: ReversibleConfig = ReversibleConfig()
     logging: LoggingConfig = LoggingConfig()
+    composites: CompositesConfig = CompositesConfig()
     env: dict[str, str] = {}
 
     # Internal fields (not from config)
@@ -299,6 +301,7 @@ class RoarSettings(BaseSettings):
             "tracer": self.tracer.model_dump(),
             "reversible": self.reversible.model_dump(),
             "logging": self.logging.model_dump(),
+            "composites": self.composites.model_dump(),
             "env": dict(self.env),
         }
         if self._config_file:

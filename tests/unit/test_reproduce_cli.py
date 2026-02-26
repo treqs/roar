@@ -94,6 +94,39 @@ class TestReproduceCLI:
         # Should NOT call service.reproduce (no actual setup)
         mock_service.reproduce.assert_not_called()
 
+    def test_reproduce_default_shows_pipeline_steps(
+        self, runner, mock_glaas_client, mock_pipeline_info
+    ):
+        """Preview output should include build and run step listings."""
+        hash_prefix = "abc123def456"
+
+        with (
+            patch.object(reproduce_module, "load_config") as mock_config,
+            patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
+            patch.object(reproduce_module, "ReproductionService") as mock_service_cls,
+        ):
+            mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
+            mock_glaas_cls.return_value = mock_glaas_client
+
+            mock_service = MagicMock()
+            mock_service._lookup_pipeline.return_value = (mock_pipeline_info, None)
+            mock_service_cls.return_value = mock_service
+
+            ctx = MagicMock()
+            ctx.roar_dir = Path("/tmp/.roar")
+            ctx.cwd = Path("/tmp")
+
+            result = runner.invoke(
+                reproduce,
+                [hash_prefix],
+                obj=ctx,
+            )
+
+        assert result.exit_code == 0, f"Exit code was {result.exit_code}: {result.output}"
+        assert "Build Steps" in result.output
+        assert "Run Steps" in result.output
+        assert "python train.py" in result.output
+
     def test_reproduce_run_does_full_reproduction(self, runner, mock_glaas_client):
         """'roar reproduce <hash> --run' clones, sets up venv, and runs pipeline."""
         hash_prefix = "abc123def456"
@@ -185,24 +218,6 @@ class TestReproduceCLI:
         mock_service.reproduce.assert_called_once()
         call_kwargs = mock_service.reproduce.call_args.kwargs
         assert call_kwargs["auto_confirm"] is True
-
-    def test_reproduce_preview_flag_not_recognized(self, runner):
-        """The --preview flag should not be recognized (removed from CLI)."""
-        hash_prefix = "abc123def456"
-
-        ctx = MagicMock()
-        ctx.roar_dir = Path("/tmp/.roar")
-        ctx.cwd = Path("/tmp")
-
-        result = runner.invoke(
-            reproduce,
-            [hash_prefix, "--preview"],
-            obj=ctx,
-        )
-
-        # Should fail with unknown option error
-        assert result.exit_code != 0
-        assert "preview" in result.output.lower() or "no such option" in result.output.lower()
 
     def test_reproduce_default_does_not_create_directories(
         self, runner, mock_glaas_client, mock_pipeline_info, tmp_path

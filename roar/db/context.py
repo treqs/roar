@@ -15,6 +15,7 @@ from .engine import create_roar_engine, create_session_factory, init_database
 from .repositories import (
     SQLAlchemyArtifactRepository,
     SQLAlchemyCollectionRepository,
+    SQLAlchemyCompositeRepository,
     SQLAlchemyHashCacheRepository,
     SQLAlchemyJobRepository,
     SQLAlchemySessionRepository,
@@ -58,6 +59,7 @@ class DatabaseContext:
         self._job_repo: SQLAlchemyJobRepository | None = None
         self._session_repo: SQLAlchemySessionRepository | None = None
         self._collection_repo: SQLAlchemyCollectionRepository | None = None
+        self._composite_repo: SQLAlchemyCompositeRepository | None = None
 
         # Services (initialized on connect)
         self._hashing_service: DefaultHashingService | None = None
@@ -78,6 +80,7 @@ class DatabaseContext:
         self._job_repo = SQLAlchemyJobRepository(self._session, self._artifact_repo)
         self._session_repo = SQLAlchemySessionRepository(self._session)
         self._collection_repo = SQLAlchemyCollectionRepository(self._session)
+        self._composite_repo = SQLAlchemyCompositeRepository(self._session)
 
         # Initialize services
         self._hashing_service = DefaultHashingService(self._hash_cache_repo)
@@ -198,6 +201,16 @@ class DatabaseContext:
             )
         return self._collection_repo
 
+    @property
+    def composites(self) -> SQLAlchemyCompositeRepository:
+        """Composite repository for component rows and membership metadata."""
+        if self._composite_repo is None:
+            raise DatabaseConnectionError(
+                "DatabaseContext not connected. Use as context manager.",
+                db_path=str(self.db_path),
+            )
+        return self._composite_repo
+
     # -------------------------------------------------------------------------
     # Service properties
     # -------------------------------------------------------------------------
@@ -241,6 +254,28 @@ class DatabaseContext:
                 db_path=str(self.db_path),
             )
         return self._job_recording_service
+
+
+def optional_repo(db_ctx: object, name: str) -> object | None:
+    """
+    Resolve an optional repository attribute safely.
+
+    Mock-based tests auto-create unknown attributes on ``MagicMock``. To avoid
+    treating those as real repos, only return attributes that are explicitly
+    present on the instance ``__dict__`` or declared as a class-level property.
+    """
+    instance_dict = getattr(db_ctx, "__dict__", {})
+    if isinstance(instance_dict, dict) and name in instance_dict:
+        return instance_dict[name]
+
+    descriptor = getattr(type(db_ctx), name, None)
+    if isinstance(descriptor, property):
+        try:
+            return getattr(db_ctx, name)
+        except Exception:
+            return None
+
+    return None
 
 
 def create_database_context(roar_dir: Path) -> DatabaseContext:
