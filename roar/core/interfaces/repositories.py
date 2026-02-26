@@ -67,6 +67,7 @@ class JobRepository(Protocol):
         self,
         command: str,
         timestamp: float,
+        job_uid: str | None = None,
         step_identity: str | None = None,
         session_id: int | None = None,
         step_number: int | None = None,

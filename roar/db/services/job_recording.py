@@ -61,6 +61,7 @@ class JobRecordingService:
         self,
         command: str,
         timestamp: float,
+        job_uid: str | None = None,
         git_repo: str | None = None,
         git_commit: str | None = None,
         git_branch: str | None = None,
@@ -82,6 +83,7 @@ class JobRecordingService:
         Args:
             command: Full command string that was executed
             timestamp: Job start time (Unix timestamp)
+            job_uid: Optional deterministic job UID to persist
             git_repo: Repository URL or path
             git_commit: Git commit hash
             git_branch: Git branch name
@@ -138,6 +140,7 @@ class JobRecordingService:
         job_id, job_uid = self._job_repo.create(
             command=command,
             timestamp=timestamp,
+            job_uid=job_uid,
             step_identity=step_identity,
             session_id=session_id,
             step_number=step_number,

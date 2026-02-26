@@ -424,6 +424,7 @@ class ExecutionJobRecorder:
         start_time: float,
         is_build: bool,
         s3_entries: list[S3LogEntry] | None = None,
+        run_job_uid: str | None = None,
     ) -> tuple[int, str, list[dict[str, Any]], list[dict[str, Any]], list[int], list[int]]:
         """Record job and return tuple expected by RunCoordinator."""
         from ...db.context import create_database_context
@@ -463,6 +464,7 @@ class ExecutionJobRecorder:
             job_id, job_uid = db_ctx.job_recording.record_job(
                 command=shlex.join(ctx.command),
                 timestamp=start_time,
+                job_uid=run_job_uid,
                 step_name=ctx.step_name,
                 git_repo=git_repo,
                 git_commit=git_commit,

@@ -66,6 +66,7 @@ class SQLAlchemyJobRepository(JobRepository):
         self,
         command: str,
         timestamp: float,
+        job_uid: str | None = None,
         step_identity: str | None = None,
         session_id: int | None = None,
         step_number: int | None = None,
@@ -102,10 +103,10 @@ class SQLAlchemyJobRepository(JobRepository):
             (job_id, job_uid) tuple.
         """
         script = self._extract_script(command)
-        job_uid = os.environ.get("ROAR_JOB_ID") or secrets.token_hex(4)
+        resolved_job_uid = job_uid or secrets.token_hex(4)
 
         job = Job(
-            job_uid=job_uid,
+            job_uid=resolved_job_uid,
             timestamp=timestamp,
             command=command,
             script=script,
@@ -124,7 +125,7 @@ class SQLAlchemyJobRepository(JobRepository):
         )
         self._session.add(job)
         self._session.flush()
-        return job.id, job_uid
+        return job.id, resolved_job_uid
 
     def get(self, job_id: int) -> dict[str, Any] | None:
         """

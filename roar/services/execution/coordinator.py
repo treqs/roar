@@ -243,7 +243,15 @@ class RunCoordinator:
             # Record in database
             self.logger.debug("Recording job in database")
             job_id, job_uid, read_file_info, written_file_info, stale_upstream, stale_downstream = (
-                self._record_job(ctx, prov, tracer_result, start_time, is_build, s3_entries)
+                self._record_job(
+                    ctx,
+                    prov,
+                    tracer_result,
+                    start_time,
+                    is_build,
+                    s3_entries,
+                    run_job_uid=run_job_uid,
+                )
             )
             self.logger.debug(
                 "Job recorded: id=%d, uid=%s, inputs=%d, outputs=%d",
@@ -285,6 +293,7 @@ class RunCoordinator:
         start_time: float,
         is_build: bool,
         s3_entries: list | None = None,
+        run_job_uid: str | None = None,
     ) -> tuple:
         """Record job in database and return file info.
 
@@ -297,6 +306,7 @@ class RunCoordinator:
             start_time=start_time,
             is_build=is_build,
             s3_entries=s3_entries,
+            run_job_uid=run_job_uid,
         )
 
     def _backup_previous_outputs(self, ctx: RunContext) -> None:
