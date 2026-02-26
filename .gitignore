@@ -223,3 +223,5 @@ roar/bin/*
 .roar/
 
 .ralph
+# Ray benchmark results
+tests/benchmarks/results/
