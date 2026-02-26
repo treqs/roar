@@ -167,6 +167,29 @@ class SQLAlchemyJobRepository(JobRepository):
 
         return None
 
+    def get_by_parent_uids(
+        self, parent_job_uids: list[str], job_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        """
+        Get jobs whose parent_job_uid matches any of the provided UIDs.
+
+        Args:
+            parent_job_uids: Parent job UID values to match
+            job_type: Optional job type filter (e.g. ``ray_task``)
+
+        Returns:
+            Matching job dicts sorted by timestamp ascending.
+        """
+        if not parent_job_uids:
+            return []
+
+        query = select(Job).where(Job.parent_job_uid.in_(parent_job_uids))
+        if job_type is not None:
+            query = query.where(Job.job_type == job_type)
+
+        rows = self._session.execute(query.order_by(Job.timestamp.asc())).scalars().all()
+        return [self._job_to_dict(row) for row in rows]
+
     def update_metadata(self, job_id: int, metadata: str | None) -> None:
         """Update metadata JSON for a job."""
         job = self._session.get(Job, job_id)

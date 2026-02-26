@@ -319,3 +319,100 @@ def test_collect_includes_ray_task_jobs_with_parent_links(tmp_path):
     assert jobs_by_uid["task2222"]["job_type"] == "ray_task"
     assert jobs_by_uid["task1111"]["parent_job_uid"] == "driver01"
     assert jobs_by_uid["task2222"]["parent_job_uid"] == "driver01"
+
+
+def test_collect_includes_parent_linked_ray_tasks_without_driver_input_edges(tmp_path):
+    roar_dir = tmp_path / ".roar"
+    roar_dir.mkdir(parents=True, exist_ok=True)
+    db_path = roar_dir / "roar.db"
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA)
+    run_migrations(conn)
+
+    artifact_rows = [
+        ("art-task-1", "1" * 64, "/tmp/task1.ckpt"),
+        ("art-task-2", "2" * 64, "/tmp/task2.ckpt"),
+        ("art-task-3", "3" * 64, "/tmp/task3.ckpt"),
+        ("art-driver", "4" * 64, "/tmp/model.json"),
+    ]
+    for artifact_id, digest, path in artifact_rows:
+        conn.execute(
+            """
+            INSERT INTO artifacts (id, size, first_seen_at, first_seen_path, path, kind)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (artifact_id, 1, 1.0, path, path, "primitive"),
+        )
+        conn.execute(
+            """
+            INSERT INTO artifact_hashes (artifact_id, algorithm, digest)
+            VALUES (?, ?, ?)
+            """,
+            (artifact_id, "blake3", digest),
+        )
+
+    conn.execute(
+        """
+        INSERT INTO jobs (job_uid, timestamp, command, job_type, parent_job_uid)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("task-a", 1.0, "ray_task:process", "ray_task", "driver-main"),
+    )
+    conn.execute(
+        """
+        INSERT INTO jobs (job_uid, timestamp, command, job_type, parent_job_uid)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("task-b", 1.1, "ray_task:process", "ray_task", "driver-main"),
+    )
+    conn.execute(
+        """
+        INSERT INTO jobs (job_uid, timestamp, command, job_type, parent_job_uid)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("task-c", 1.2, "ray_task:process", "ray_task", "driver-main"),
+    )
+    conn.execute(
+        """
+        INSERT INTO jobs (job_uid, timestamp, command, job_type, parent_job_uid)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("driver-main", 2.0, "python train.py", None, None),
+    )
+
+    job_ids = {
+        row["job_uid"]: row["id"]
+        for row in conn.execute("SELECT id, job_uid FROM jobs").fetchall()
+    }
+
+    conn.execute(
+        "INSERT INTO job_outputs (job_id, artifact_id, path) VALUES (?, ?, ?)",
+        (job_ids["task-a"], "art-task-1", "/tmp/task1.ckpt"),
+    )
+    conn.execute(
+        "INSERT INTO job_outputs (job_id, artifact_id, path) VALUES (?, ?, ?)",
+        (job_ids["task-b"], "art-task-2", "/tmp/task2.ckpt"),
+    )
+    conn.execute(
+        "INSERT INTO job_outputs (job_id, artifact_id, path) VALUES (?, ?, ?)",
+        (job_ids["task-c"], "art-task-3", "/tmp/task3.ckpt"),
+    )
+    conn.execute(
+        "INSERT INTO job_outputs (job_id, artifact_id, path) VALUES (?, ?, ?)",
+        (job_ids["driver-main"], "art-driver", "/tmp/model.json"),
+    )
+    conn.commit()
+    conn.close()
+
+    lineage = LineageCollector().collect(["4" * 64], roar_dir)
+    jobs_by_uid = {job["job_uid"]: job for job in lineage.jobs}
+
+    assert {"driver-main", "task-a", "task-b", "task-c"} <= set(jobs_by_uid)
+    assert jobs_by_uid["task-a"]["job_type"] == "ray_task"
+    assert jobs_by_uid["task-b"]["job_type"] == "ray_task"
+    assert jobs_by_uid["task-c"]["job_type"] == "ray_task"
+    assert jobs_by_uid["task-a"]["parent_job_uid"] == "driver-main"
+    assert jobs_by_uid["task-b"]["parent_job_uid"] == "driver-main"
+    assert jobs_by_uid["task-c"]["parent_job_uid"] == "driver-main"

@@ -92,6 +92,12 @@ class JobRepository(Protocol):
         """Get job by UID."""
         ...
 
+    def get_by_parent_uids(
+        self, parent_job_uids: list[str], job_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Get jobs whose parent_job_uid is in the provided list."""
+        ...
+
     def get_inputs(self, job_id: int) -> list[dict[str, Any]]:
         """Get job input artifacts."""
         ...

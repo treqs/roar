@@ -89,6 +89,10 @@ class LineageCollector:
                     ctx_db, pipeline, lineage_jobs, lineage_artifact_hashes
                 )
 
+            # Include Ray task jobs linked by parent_job_uid even when the
+            # driver doesn't directly read each task output artifact.
+            lineage_jobs = self._add_parent_linked_ray_tasks(ctx_db, lineage_jobs)
+
             # Deduplicate re-runs
             lineage_jobs = self._deduplicate_reruns(lineage_jobs)
 
@@ -157,6 +161,63 @@ class LineageCollector:
 
         # Combine build jobs with lineage jobs, avoiding duplicates
         return build_job_list + [j for j in lineage_jobs if j["id"] not in build_job_ids]
+
+    def _add_parent_linked_ray_tasks(self, ctx_db, lineage_jobs: list[dict]) -> list[dict]:
+        """Include Ray task jobs reachable via parent_job_uid edges."""
+        if not lineage_jobs:
+            return lineage_jobs
+
+        seen_ids = {job["id"] for job in lineage_jobs}
+        result = list(lineage_jobs)
+        frontier = {str(job["job_uid"]) for job in lineage_jobs if job.get("job_uid")}
+
+        while frontier:
+            ray_children = ctx_db.jobs.get_by_parent_uids(list(frontier), job_type="ray_task")
+            next_frontier: set[str] = set()
+
+            for child in ray_children:
+                child_id = child["id"]
+                if child_id in seen_ids:
+                    continue
+
+                job_dict = dict(child)
+                inputs = ctx_db.jobs.get_inputs(child_id)
+                outputs = ctx_db.jobs.get_outputs(child_id)
+
+                job_dict["_input_hashes"] = [
+                    h for h in (_extract_primary_digest(inp) for inp in inputs) if h
+                ]
+                job_dict["_output_hashes"] = [
+                    h for h in (_extract_primary_digest(out) for out in outputs) if h
+                ]
+                job_dict["_inputs"] = [
+                    {
+                        "hash": h,
+                        "path": inp.get("path") or inp.get("first_seen_path", ""),
+                        "byte_ranges": inp.get("byte_ranges"),
+                    }
+                    for inp in inputs
+                    if (h := _extract_primary_digest(inp))
+                ]
+                job_dict["_outputs"] = [
+                    {
+                        "hash": h,
+                        "path": out.get("path") or out.get("first_seen_path", ""),
+                        "byte_ranges": out.get("byte_ranges"),
+                    }
+                    for out in outputs
+                    if (h := _extract_primary_digest(out))
+                ]
+
+                result.append(job_dict)
+                seen_ids.add(child_id)
+                child_uid = job_dict.get("job_uid")
+                if child_uid:
+                    next_frontier.add(str(child_uid))
+
+            frontier = next_frontier
+
+        return result
 
     def _deduplicate_reruns(self, jobs: list[dict]) -> list[dict]:
         """
