@@ -307,3 +307,38 @@ def test_finalise_fragment_emits_fragment_to_collector_actor(
     assert emitted
     assert emitted[0]["job_uid"] == "abcd1234"
     assert emitted[0]["ended_at"] == 10.0
+
+
+def test_flush_current_fragment_finalises_last_task_fragment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.ray.roar_worker as roar_worker
+    from roar.ray.fragment import TaskFragment
+
+    fragment = TaskFragment(
+        job_uid="flush1234",
+        parent_job_uid="parent123",
+        ray_task_id="task-9",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="train",
+        started_at=1.0,
+        ended_at=1.0,
+        exit_code=0,
+    )
+    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
+    monkeypatch.setattr(roar_worker, "_current_task_id", "task-9")
+
+    finalised: list[str] = []
+    monkeypatch.setattr(
+        roar_worker,
+        "_finalise_fragment",
+        lambda value: finalised.append(value.job_uid),
+    )
+
+    roar_worker._flush_current_fragment()
+
+    assert finalised == ["flush1234"]
+    assert roar_worker._current_fragment is None
+    assert roar_worker._current_task_id is None

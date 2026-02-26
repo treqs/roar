@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import builtins
 import hashlib
 import os
@@ -106,6 +107,18 @@ def _start_fragment(task_id: str) -> TaskFragment:
 def _finalise_fragment(fragment: TaskFragment) -> None:
     fragment.ended_at = time.time()
     _emit_fragment(fragment)
+
+
+def _flush_current_fragment() -> None:
+    global _current_fragment, _current_task_id
+
+    fragment = _current_fragment
+    if fragment is None:
+        return
+
+    _current_fragment = None
+    _current_task_id = None
+    _finalise_fragment(fragment)
 
 
 def _check_task_boundary() -> None:
@@ -361,6 +374,7 @@ def _startup() -> None:
     _actor_attribution_mode = _get_actor_attribution()
     builtins.open = _tracking_open
     _patch_boto3()
+    atexit.register(_flush_current_fragment)
     _startup_complete = True
 
 
