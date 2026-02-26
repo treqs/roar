@@ -234,6 +234,8 @@ def _write_log():
 _DEFAULT_RAY_LOG_DIR = "/shared/.roar-logs"
 _DEFAULT_RAY_NODE_POLL_INTERVAL_SECONDS = 5.0
 _NODE_AGENT_RESOURCE_FRACTION = 0.0001
+_WORKER_SETUP_HOOK_ENV_VAR = "__RAY_WORKER_PROCESS_SETUP_HOOK_ENV_VAR"
+_WORKER_SETUP_HOOK = "roar.ray.roar_worker._startup"
 _ray_node_poller_lock = threading.Lock()
 _ray_node_poller_stop = threading.Event()
 _ray_node_poller_thread = None
@@ -378,9 +380,12 @@ def _prepare_worker_runtime_env(runtime_env, job_id: str):  # noqa: ANN001
         pass
 
     _write_worker_wrapper(tmp_dir)
+    env_vars = dict(runtime_env.get("env_vars", {}) or {})
+    env_vars[_WORKER_SETUP_HOOK_ENV_VAR] = _WORKER_SETUP_HOOK
     runtime_env["working_dir"] = tmp_dir
     runtime_env["py_executable"] = "bash ./roar_worker_wrapper.sh"
-    runtime_env["worker_process_setup_hook"] = "roar.ray.roar_worker._startup"
+    runtime_env["worker_process_setup_hook"] = _WORKER_SETUP_HOOK
+    runtime_env["env_vars"] = env_vars
     return runtime_env
 
 

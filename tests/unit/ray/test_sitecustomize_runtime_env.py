@@ -11,6 +11,8 @@ import pytest
 
 from roar.services.execution.inject import sitecustomize
 
+_SETUP_HOOK_ENV = "__RAY_WORKER_PROCESS_SETUP_HOOK_ENV_VAR"
+
 
 @pytest.fixture(autouse=True)
 def _restore_builtins():
@@ -282,6 +284,7 @@ def test_prepare_worker_runtime_env_sets_roar_worker_and_preload(
     working_dir = Path(str(prepared["working_dir"]))
     assert prepared["py_executable"] == "bash ./roar_worker_wrapper.sh"
     assert prepared["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
+    assert prepared["env_vars"][_SETUP_HOOK_ENV] == "roar.ray.roar_worker._startup"
     assert (working_dir / "user-file.txt").read_text(encoding="utf-8") == "hello"
     assert (working_dir / "libroar_tracer_preload.so").read_text(encoding="utf-8") == "preload"
     assert not (working_dir / "sitecustomize.py").exists()
@@ -309,6 +312,7 @@ def test_prepare_worker_runtime_env_warns_when_working_dir_is_not_local(
     assert warnings
     assert prepared["py_executable"] == "bash ./roar_worker_wrapper.sh"
     assert prepared["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
+    assert prepared["env_vars"][_SETUP_HOOK_ENV] == "roar.ray.roar_worker._startup"
     assert Path(str(prepared["working_dir"])).exists()
 
 
@@ -337,6 +341,7 @@ def test_prepare_worker_runtime_env_uses_wrapper_worker_entrypoint(
     prepared = sitecustomize._prepare_worker_runtime_env({}, "jobworker")
     assert prepared["py_executable"] == "bash ./roar_worker_wrapper.sh"
     assert prepared["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
+    assert prepared["env_vars"][_SETUP_HOOK_ENV] == "roar.ray.roar_worker._startup"
 
 
 def test_prepare_worker_runtime_env_does_not_write_worker_sitecustomize(
@@ -368,6 +373,7 @@ def test_prepare_worker_runtime_env_uses_roar_worker_entrypoint(
 
     assert prepared["py_executable"] == "bash ./roar_worker_wrapper.sh"
     assert prepared["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
+    assert prepared["env_vars"][_SETUP_HOOK_ENV] == "roar.ray.roar_worker._startup"
 
 
 def test_patch_ray_init_sets_driver_job_uid_for_workers(
@@ -394,4 +400,5 @@ def test_patch_ray_init_sets_driver_job_uid_for_workers(
     runtime_env = calls[-1]["runtime_env"]
     assert runtime_env["py_executable"] == "bash ./roar_worker_wrapper.sh"
     assert runtime_env["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
+    assert runtime_env["env_vars"][_SETUP_HOOK_ENV] == "roar.ray.roar_worker._startup"
     assert runtime_env["env_vars"]["ROAR_DRIVER_JOB_UID"] == "driver-uid-1234"
