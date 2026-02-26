@@ -606,33 +606,46 @@ class RegisterService:
         """Prepare artifacts for registration with required fields."""
         prepared = []
         for art in artifacts:
-            # Prefer explicit blake3 entries when multiple algorithms are present.
-            art_hash = None
+            normalized_hashes: list[dict[str, str]] = []
+            seen: set[tuple[str, str]] = set()
             for h in art.get("hashes", []):
                 if not isinstance(h, dict):
                     continue
                 algorithm = h.get("algorithm")
                 digest = h.get("digest")
-                if (
-                    isinstance(algorithm, str)
-                    and algorithm.strip().lower() == "blake3"
-                    and isinstance(digest, str)
-                    and digest
-                ):
-                    art_hash = digest
-                    break
+                if not isinstance(algorithm, str) or not isinstance(digest, str):
+                    continue
+                algorithm_name = algorithm.strip().lower()
+                digest_value = digest.strip()
+                if not algorithm_name or not digest_value:
+                    continue
+                pair = (algorithm_name, digest_value)
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                normalized_hashes.append({"algorithm": algorithm_name, "digest": digest_value})
 
-            if not art_hash:
+            # Prefer blake3 first when present while preserving remaining order.
+            blake3_hashes = [h for h in normalized_hashes if h["algorithm"] == "blake3"]
+            other_hashes = [h for h in normalized_hashes if h["algorithm"] != "blake3"]
+            ordered_hashes = blake3_hashes + other_hashes
+
+            if not ordered_hashes:
                 hash_value = art.get("hash")
-                if isinstance(hash_value, str) and hash_value:
-                    art_hash = hash_value
+                if isinstance(hash_value, str) and hash_value.strip():
+                    ordered_hashes = [
+                        {
+                            "algorithm": "blake3",
+                            "digest": hash_value.strip(),
+                        }
+                    ]
 
-            if not art_hash:
+            if not ordered_hashes:
                 continue
 
             prepared.append(
                 {
-                    "hashes": [{"algorithm": "blake3", "digest": art_hash}],
+                    "hashes": ordered_hashes,
                     "size": art.get("size", 0),
                     "source_type": art.get("source_type"),
                     "session_hash": session_hash,
