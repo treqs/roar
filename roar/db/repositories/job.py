@@ -102,7 +102,7 @@ class SQLAlchemyJobRepository(JobRepository):
             (job_id, job_uid) tuple.
         """
         script = self._extract_script(command)
-        job_uid = secrets.token_hex(4)
+        job_uid = os.environ.get("ROAR_JOB_ID") or secrets.token_hex(4)
 
         job = Job(
             job_uid=job_uid,

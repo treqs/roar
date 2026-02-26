@@ -58,3 +58,22 @@ def test_recording_skips_duplicate_output_for_existing_job_path(tmp_path: Path) 
     assert after_artifacts == before_artifacts
     assert status == "completed"
 
+
+def test_job_create_uses_roar_job_id_env_when_present(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    roar_dir = repo_root / ".roar"
+    roar_dir.mkdir()
+    monkeypatch.setenv("ROAR_JOB_ID", "driver-job-uid-1234")
+
+    with create_database_context(roar_dir) as db_ctx:
+        _job_id, job_uid = db_ctx.jobs.create(
+            command="python train.py",
+            timestamp=1.0,
+            job_type="run",
+        )
+
+    assert job_uid == "driver-job-uid-1234"
