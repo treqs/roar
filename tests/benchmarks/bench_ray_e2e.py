@@ -27,8 +27,8 @@ from tests.benchmarks.ray_bench_utils import (
     write_results,
 )
 
-DEFAULT_ITERATIONS = 5
-QUICK_ITERATIONS = 3
+DEFAULT_ITERATIONS = 10
+QUICK_ITERATIONS = 5
 WARMUP_RUNS = 1
 RESULT_FILE = "ray_e2e_latest.json"
 BUCKET = "bench-e2e"
@@ -111,31 +111,49 @@ def _run_job_once(*, task_count: int, n_files: int, n_s3_ops: int, runtime_env: 
     return time.perf_counter() - start
 
 
-def _measure_scenario(
+def _measure_scenario_interleaved(
     *,
     task_count: int,
     n_files: int,
     n_s3_ops: int,
     iterations: int,
-    runtime_env: dict | None,
-) -> list[float]:
+    roar_runtime_env: dict,
+) -> tuple[list[float], list[float]]:
     for _ in range(WARMUP_RUNS):
         _run_job_once(
             task_count=task_count,
             n_files=n_files,
             n_s3_ops=n_s3_ops,
-            runtime_env=runtime_env,
+            runtime_env=None,
         )
-
-    return [
         _run_job_once(
             task_count=task_count,
             n_files=n_files,
             n_s3_ops=n_s3_ops,
-            runtime_env=runtime_env,
+            runtime_env=roar_runtime_env,
         )
-        for _ in range(iterations)
-    ]
+
+    baseline_samples: list[float] = []
+    roar_samples: list[float] = []
+    for _ in range(iterations):
+        baseline_samples.append(
+            _run_job_once(
+                task_count=task_count,
+                n_files=n_files,
+                n_s3_ops=n_s3_ops,
+                runtime_env=None,
+            )
+        )
+        roar_samples.append(
+            _run_job_once(
+                task_count=task_count,
+                n_files=n_files,
+                n_s3_ops=n_s3_ops,
+                runtime_env=roar_runtime_env,
+            )
+        )
+
+    return baseline_samples, roar_samples
 
 
 def _make_roar_runtime_env() -> dict:
@@ -184,19 +202,12 @@ def main() -> int:
     try:
         for io_name, cfg in io_levels.items():
             for task_count in task_counts:
-                baseline_samples = _measure_scenario(
+                baseline_samples, roar_samples = _measure_scenario_interleaved(
                     task_count=task_count,
                     n_files=cfg["files"],
                     n_s3_ops=cfg["s3_ops"],
                     iterations=iterations,
-                    runtime_env=None,
-                )
-                roar_samples = _measure_scenario(
-                    task_count=task_count,
-                    n_files=cfg["files"],
-                    n_s3_ops=cfg["s3_ops"],
-                    iterations=iterations,
-                    runtime_env=roar_runtime_env,
+                    roar_runtime_env=roar_runtime_env,
                 )
 
                 baseline_mean = mean(baseline_samples)

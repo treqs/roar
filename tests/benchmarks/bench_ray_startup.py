@@ -54,14 +54,23 @@ def _single_startup_run(runtime_env: dict | None) -> float:
     return elapsed
 
 
-def _measure_runs(run_once, *, iterations: int, warmup_runs: int) -> list[float]:
+def _measure_runs_interleaved(
+    baseline_run_once,
+    roar_run_once,
+    *,
+    iterations: int,
+    warmup_runs: int,
+) -> tuple[list[float], list[float]]:
     for _ in range(warmup_runs):
-        run_once()
+        baseline_run_once()
+        roar_run_once()
 
-    samples: list[float] = []
+    baseline_samples: list[float] = []
+    roar_samples: list[float] = []
     for _ in range(iterations):
-        samples.append(run_once())
-    return samples
+        baseline_samples.append(baseline_run_once())
+        roar_samples.append(roar_run_once())
+    return baseline_samples, roar_samples
 
 
 def _make_roar_runtime_env(*, job_id: str, cold_marker: str | None = None) -> dict:
@@ -87,11 +96,8 @@ def main() -> int:
         print(f"ERROR: {exc}")
         return 2
 
-    baseline_samples = _measure_runs(
-        lambda: _single_startup_run(runtime_env=None),
-        iterations=iterations,
-        warmup_runs=WARMUP_RUNS,
-    )
+    def run_baseline_once() -> float:
+        return _single_startup_run(runtime_env=None)
 
     def run_cold_once() -> float:
         runtime_env = _make_roar_runtime_env(
@@ -103,11 +109,17 @@ def main() -> int:
         finally:
             cleanup_runtime_env(runtime_env)
 
-    cold_samples = _measure_runs(run_cold_once, iterations=iterations, warmup_runs=WARMUP_RUNS)
+    baseline_for_cold_samples, cold_samples = _measure_runs_interleaved(
+        run_baseline_once,
+        run_cold_once,
+        iterations=iterations,
+        warmup_runs=WARMUP_RUNS,
+    )
 
     warm_runtime_env = _make_roar_runtime_env(job_id="startup-warm")
     try:
-        warm_samples = _measure_runs(
+        baseline_for_warm_samples, warm_samples = _measure_runs_interleaved(
+            run_baseline_once,
             lambda: _single_startup_run(warm_runtime_env),
             iterations=iterations,
             warmup_runs=WARMUP_RUNS,
@@ -115,7 +127,10 @@ def main() -> int:
     finally:
         cleanup_runtime_env(warm_runtime_env)
 
+    baseline_samples = baseline_for_cold_samples + baseline_for_warm_samples
     baseline_mean = mean(baseline_samples)
+    cold_baseline_mean = mean(baseline_for_cold_samples)
+    warm_baseline_mean = mean(baseline_for_warm_samples)
     cold_mean = mean(cold_samples)
     warm_mean = mean(warm_samples)
 
@@ -131,15 +146,15 @@ def main() -> int:
             "With roar (cold)",
             f"{cold_mean:.3f}",
             f"{stdev(cold_samples):.3f}",
-            f"{(cold_mean - baseline_mean):+.3f}",
-            f"{percent_delta(cold_mean, baseline_mean):+.1f}%",
+            f"{(cold_mean - cold_baseline_mean):+.3f}",
+            f"{percent_delta(cold_mean, cold_baseline_mean):+.1f}%",
         ],
         [
             "With roar (warm cached)",
             f"{warm_mean:.3f}",
             f"{stdev(warm_samples):.3f}",
-            f"{(warm_mean - baseline_mean):+.3f}",
-            f"{percent_delta(warm_mean, baseline_mean):+.1f}%",
+            f"{(warm_mean - warm_baseline_mean):+.3f}",
+            f"{percent_delta(warm_mean, warm_baseline_mean):+.1f}%",
         ],
     ]
 
@@ -153,22 +168,28 @@ def main() -> int:
             "warmup_runs": WARMUP_RUNS,
             "samples_seconds": {
                 "baseline": baseline_samples,
+                "baseline_cold": baseline_for_cold_samples,
+                "baseline_warm": baseline_for_warm_samples,
                 "roar_cold": cold_samples,
                 "roar_warm": warm_samples,
             },
             "summary_seconds": {
                 "baseline_mean": baseline_mean,
                 "baseline_std": stdev(baseline_samples),
+                "baseline_cold_mean": cold_baseline_mean,
+                "baseline_cold_std": stdev(baseline_for_cold_samples),
+                "baseline_warm_mean": warm_baseline_mean,
+                "baseline_warm_std": stdev(baseline_for_warm_samples),
                 "roar_cold_mean": cold_mean,
                 "roar_cold_std": stdev(cold_samples),
                 "roar_warm_mean": warm_mean,
                 "roar_warm_std": stdev(warm_samples),
             },
             "overhead": {
-                "cold_seconds": cold_mean - baseline_mean,
-                "cold_percent": percent_delta(cold_mean, baseline_mean),
-                "warm_seconds": warm_mean - baseline_mean,
-                "warm_percent": percent_delta(warm_mean, baseline_mean),
+                "cold_seconds": cold_mean - cold_baseline_mean,
+                "cold_percent": percent_delta(cold_mean, cold_baseline_mean),
+                "warm_seconds": warm_mean - warm_baseline_mean,
+                "warm_percent": percent_delta(warm_mean, warm_baseline_mean),
             },
         },
     }

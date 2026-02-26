@@ -60,23 +60,40 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _measure_mode(
+def _run_file_io_once(*, n_files: int, runtime_env: dict | None) -> float:
+    if runtime_env is None:
+        return float(ray.get(_file_io_task.remote(n_files)))
+    return float(ray.get(_file_io_task.options(runtime_env=runtime_env).remote(n_files)))
+
+
+def _measure_mode_interleaved(
     *,
     file_counts: list[int],
     iterations: int,
-    runtime_env: dict | None,
-) -> dict[int, list[float]]:
-    ray.init(address=RAY_ADDRESS, runtime_env=runtime_env, ignore_reinit_error=False, logging_level="ERROR")
+    roar_runtime_env: dict,
+) -> tuple[dict[int, list[float]], dict[int, list[float]]]:
+    ray.init(address=RAY_ADDRESS, ignore_reinit_error=False, logging_level="ERROR")
     try:
+        baseline_series: dict[int, list[float]] = {}
+        roar_series: dict[int, list[float]] = {}
+
         for count in file_counts:
             for _ in range(WARMUP_RUNS):
-                ray.get(_file_io_task.remote(count))
+                _run_file_io_once(n_files=count, runtime_env=None)
+                _run_file_io_once(n_files=count, runtime_env=roar_runtime_env)
 
-        series: dict[int, list[float]] = {}
         for count in file_counts:
-            samples = [float(ray.get(_file_io_task.remote(count))) for _ in range(iterations)]
-            series[count] = samples
-        return series
+            baseline_samples: list[float] = []
+            roar_samples: list[float] = []
+            for _ in range(iterations):
+                baseline_samples.append(_run_file_io_once(n_files=count, runtime_env=None))
+                roar_samples.append(
+                    _run_file_io_once(n_files=count, runtime_env=roar_runtime_env)
+                )
+            baseline_series[count] = baseline_samples
+            roar_series[count] = roar_samples
+
+        return baseline_series, roar_series
     finally:
         ray.shutdown()
 
@@ -97,14 +114,12 @@ def main() -> int:
         print(f"ERROR: {exc}")
         return 2
 
-    baseline_series = _measure_mode(file_counts=file_counts, iterations=iterations, runtime_env=None)
-
     roar_runtime_env = _prepare_worker_runtime_env({}, f"preload-bench-{uuid.uuid4().hex[:8]}")
     try:
-        roar_series = _measure_mode(
+        baseline_series, roar_series = _measure_mode_interleaved(
             file_counts=file_counts,
             iterations=iterations,
-            runtime_env=roar_runtime_env,
+            roar_runtime_env=roar_runtime_env,
         )
     finally:
         cleanup_runtime_env(roar_runtime_env)
