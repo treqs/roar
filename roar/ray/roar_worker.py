@@ -167,6 +167,8 @@ def _log_write(
             capture_method=capture_method,
         )
     )
+    _current_fragment.ended_at = time.time()
+    _emit_fragment(_current_fragment)
 
 
 class _TrackedWriteFile:

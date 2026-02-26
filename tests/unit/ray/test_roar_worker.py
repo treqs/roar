@@ -89,6 +89,48 @@ def test_tracking_open_hashes_written_bytes_on_close(
     assert write_ref.size == len(payload)
 
 
+def test_log_write_emits_fragment_snapshot_on_each_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.ray.roar_worker as roar_worker
+    from roar.ray.fragment import TaskFragment
+
+    fragment = TaskFragment(
+        job_uid="emit1234",
+        parent_job_uid="parent123",
+        ray_task_id="task-9",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="train",
+        started_at=1.0,
+        ended_at=1.0,
+        exit_code=0,
+    )
+    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
+    monkeypatch.setattr(roar_worker.time, "time", lambda: 42.0)
+
+    emitted: list[dict] = []
+    monkeypatch.setattr(
+        roar_worker,
+        "_emit_fragment",
+        lambda value: emitted.append(value.to_dict()),
+    )
+
+    roar_worker._log_write(
+        path="/tmp/out.bin",
+        hash_value="abc123",
+        hash_algorithm="blake3",
+        size=3,
+        capture_method="python",
+    )
+
+    assert emitted
+    assert emitted[0]["job_uid"] == "emit1234"
+    assert emitted[0]["writes"][0]["path"] == "/tmp/out.bin"
+    assert fragment.ended_at == 42.0
+
+
 def test_get_task_and_actor_id_do_not_import_ray_during_startup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
