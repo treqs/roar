@@ -25,7 +25,7 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
 
 
 @click.command("register")
-@click.argument("artifact_path", type=click.Path(exists=True))
+@click.argument("artifact_path", type=click.STRING)
 @click.option(
     "--dry-run",
     is_flag=True,

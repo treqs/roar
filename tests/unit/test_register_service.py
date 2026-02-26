@@ -140,6 +140,66 @@ class TestRegisterService:
             assert result.success is False
             assert "session" in result.error.lower()
 
+    def test_register_artifact_lineage_s3_uri_uses_tracked_path(
+        self,
+        service,
+        tmp_path,
+        mock_lineage_collector,
+    ):
+        """S3 artifact registration should resolve by tracked DB path, not local filesystem."""
+        artifact_path = "s3://output-bucket/results/run123/final_report.json"
+
+        from roar.core.interfaces.upload import LineageData
+
+        mock_lineage_collector.collect.return_value = LineageData(
+            jobs=[],
+            artifacts=[],
+            artifact_hashes={"etag123"},
+            pipeline={"id": 1},
+        )
+
+        with patch(
+            "roar.services.registration.register_service.create_database_context"
+        ) as mock_ctx:
+            mock_db = MagicMock()
+            mock_db.__enter__ = MagicMock(return_value=mock_db)
+            mock_db.__exit__ = MagicMock(return_value=None)
+            mock_db.artifacts.get_by_path.return_value = {
+                "id": "artifact-1",
+                "hashes": [{"algorithm": "etag", "digest": "etag123"}],
+            }
+            mock_db.sessions.get_active.return_value = {
+                "id": 1,
+                "git_commit": "abc123",
+                "git_branch": "main",
+            }
+            mock_ctx.return_value = mock_db
+
+            with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
+                mock_vcs = MagicMock()
+                mock_vcs.get_repo_root.return_value = str(tmp_path)
+                mock_vcs.get_remote_url.return_value = "https://github.com/test/repo"
+                mock_vcs.get_commit_hash.return_value = "abc123"
+                mock_vcs.get_branch.return_value = "main"
+                mock_vcs.get_status.return_value = (True, [])
+                mock_git.return_value = mock_vcs
+
+                with patch("roar.services.registration.register_service.config_get") as mock_config:
+                    mock_config.return_value = False
+                    service._session_service.compute_session_hash.return_value = "session-hash-1"
+
+                    result = service.register_artifact_lineage(
+                        artifact_path=artifact_path,
+                        roar_dir=tmp_path / ".roar",
+                        cwd=tmp_path,
+                        dry_run=True,
+                    )
+
+        assert result.success is True
+        mock_db.artifacts.get_by_path.assert_called_once_with(artifact_path)
+        mock_db.artifacts.get_by_hash.assert_not_called()
+        mock_lineage_collector.collect.assert_called_once_with(["etag123"], tmp_path / ".roar")
+
     def test_register_artifact_lineage_dry_run(self, service, tmp_path, mock_lineage_collector):
         """Test dry-run mode returns counts without calling API."""
         artifact_file = tmp_path / "file.csv"

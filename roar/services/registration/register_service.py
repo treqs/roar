@@ -176,31 +176,52 @@ class RegisterService:
         """
         # Step 1: Resolve artifact path
         resolved_path = self._resolve_path(artifact_path, cwd)
-        if not resolved_path or not os.path.exists(resolved_path):
+        if not resolved_path:
             return RegisterResult(
                 success=False,
                 error=f"File not found: {artifact_path}",
             )
 
-        # Step 2: Compute BLAKE3 hash
-        artifact_hash = self._compute_hash(resolved_path)
-        if not artifact_hash:
+        is_s3_artifact = self._is_s3_url(resolved_path)
+        if not is_s3_artifact and not os.path.exists(resolved_path):
             return RegisterResult(
                 success=False,
-                error=f"Failed to compute hash for: {artifact_path}",
+                error=f"File not found: {artifact_path}",
             )
 
-        self._logger.debug("Artifact hash: %s", artifact_hash[:12])
-
-        # Step 3: Look up artifact in database
+        # Step 2/3: Resolve hash and tracked artifact record
         with create_database_context(roar_dir) as db_ctx:
-            db_artifact = db_ctx.artifacts.get_by_hash(artifact_hash, algorithm="blake3")
-            if not db_artifact:
+            if is_s3_artifact:
+                db_artifact = db_ctx.artifacts.get_by_path(resolved_path)
+                if not db_artifact:
+                    return RegisterResult(
+                        success=False,
+                        error=f"Artifact not tracked by roar: {artifact_path}\n"
+                        "Run 'roar run' to track this artifact first.",
+                    )
+                artifact_hash = self._select_primary_hash(db_artifact)
+            else:
+                artifact_hash = self._compute_hash(resolved_path)
+                if not artifact_hash:
+                    return RegisterResult(
+                        success=False,
+                        error=f"Failed to compute hash for: {artifact_path}",
+                    )
+                db_artifact = db_ctx.artifacts.get_by_hash(artifact_hash, algorithm="blake3")
+                if not db_artifact:
+                    return RegisterResult(
+                        success=False,
+                        error=f"Artifact not tracked by roar: {artifact_path}\n"
+                        "Run 'roar run' to track this artifact first.",
+                    )
+
+            if not artifact_hash:
                 return RegisterResult(
                     success=False,
-                    error=f"Artifact not tracked by roar: {artifact_path}\n"
-                    "Run 'roar run' to track this artifact first.",
+                    error=f"Artifact has no registered hash: {artifact_path}",
                 )
+
+            self._logger.debug("Artifact hash: %s", artifact_hash[:12])
 
             # Step 4: Get active session
             session = db_ctx.sessions.get_active()
@@ -362,7 +383,39 @@ class RegisterService:
         """Resolve artifact path to absolute path."""
         if os.path.isabs(path):
             return path
+        if self._is_s3_url(path):
+            return path
         return str(cwd / path)
+
+    def _is_s3_url(self, path: str) -> bool:
+        parsed = urlparse(path)
+        return parsed.scheme == "s3" and bool(parsed.netloc)
+
+    def _select_primary_hash(self, artifact: dict) -> str | None:
+        hashes = artifact.get("hashes")
+        if isinstance(hashes, list):
+            by_algorithm: dict[str, str] = {}
+            for entry in hashes:
+                if not isinstance(entry, dict):
+                    continue
+                algorithm = entry.get("algorithm")
+                digest = entry.get("digest")
+                if isinstance(algorithm, str) and isinstance(digest, str) and digest:
+                    by_algorithm.setdefault(algorithm.strip().lower(), digest)
+
+            for algorithm in ("blake3", "sha256", "etag"):
+                digest = by_algorithm.get(algorithm)
+                if digest:
+                    return digest
+
+            for digest in by_algorithm.values():
+                if digest:
+                    return digest
+
+        fallback = artifact.get("hash")
+        if isinstance(fallback, str) and fallback:
+            return fallback
+        return None
 
     def _compute_hash(self, path: str) -> str | None:
         """Compute BLAKE3 hash of file."""
