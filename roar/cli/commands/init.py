@@ -120,6 +120,8 @@ enabled = true
 pip_install = true
 # Shared log directory for Ray worker I/O capture
 log_dir = "/shared/.roar-logs"
+# Actor attribution mode for Ray actor methods (per_call | per_actor)
+actor_attribution = "per_call"
 
 [reversible]
 # Enable file preservation before overwrites during roar run

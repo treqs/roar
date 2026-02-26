@@ -20,12 +20,18 @@ from .repositories import (
     SQLAlchemyJobRepository,
     SQLAlchemySessionRepository,
 )
+from .schema import run_migrations
 from .services import (
     DefaultHashingService,
     DefaultLineageService,
     DefaultSessionService,
     JobRecordingService,
 )
+
+try:
+    import sqlite3 as sqlite_module
+except ImportError:
+    import pysqlite3 as sqlite_module  # type: ignore[import-not-found, no-redef]
 
 
 class DatabaseContext:
@@ -71,6 +77,13 @@ class DatabaseContext:
         """Connect to the database and initialize schema if needed."""
         self._engine = create_roar_engine(self.db_path)
         init_database(self._engine)
+        raw_conn = sqlite_module.connect(str(self.db_path))
+        raw_conn.row_factory = sqlite_module.Row
+        try:
+            run_migrations(raw_conn)
+            raw_conn.commit()
+        finally:
+            raw_conn.close()
         session_factory = create_session_factory(self._engine)
         self._session = session_factory()
 

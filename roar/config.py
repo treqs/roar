@@ -143,6 +143,11 @@ CONFIGURABLE_KEYS = {
         "default": "/shared/.roar-logs",
         "description": "Shared Ray worker log directory for roar collection",
     },
+    "ray.actor_attribution": {
+        "type": str,
+        "default": "per_call",
+        "description": "Ray actor attribution mode: per_call (default) or per_actor",
+    },
     "tracer.default": {
         "type": str,
         "default": "auto",

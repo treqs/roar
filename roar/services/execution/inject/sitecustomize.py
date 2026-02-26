@@ -6,7 +6,6 @@ import os
 import shutil
 import sys
 import tempfile
-import textwrap
 import threading
 import uuid
 
@@ -265,11 +264,13 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
         if not job_id:
             job_id = uuid.uuid4().hex[:8]
         job_id = str(job_id)
+        driver_job_uid = str(os.environ.get("ROAR_JOB_ID", ""))
 
         env_vars["ROAR_WORKER"] = "1"
         env_vars["ROAR_LOG_DIR"] = ray_config["log_dir"]
         env_vars["ROAR_LOG_BACKEND"] = "actor"
         env_vars["ROAR_JOB_ID"] = job_id
+        env_vars["ROAR_DRIVER_JOB_UID"] = driver_job_uid
         os.environ.setdefault("ROAR_LOG_DIR", ray_config["log_dir"])
         os.environ.setdefault("ROAR_JOB_ID", job_id)
         for key in (
@@ -284,7 +285,6 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
             if value:
                 env_vars.setdefault(key, value)
         runtime_env["env_vars"] = env_vars
-        runtime_env["worker_process_setup_hook"] = "roar.ray.worker.setup"
         runtime_env = _prepare_worker_runtime_env(runtime_env, job_id)
         kwargs["runtime_env"] = runtime_env
         result = _real_ray_init(*args, **kwargs)
@@ -377,46 +377,27 @@ def _prepare_worker_runtime_env(runtime_env, job_id: str):  # noqa: ANN001
     except Exception:
         pass
 
-    wrapper_path = os.path.join(tmp_dir, "roar_worker_wrapper.sh")
-    with _real_open(wrapper_path, "w", encoding="utf-8") as handle:
-        handle.write(
-            textwrap.dedent(
-                """
-                #!/bin/bash
-                if [ -f "./libroar_tracer_preload.so" ]; then
-                    export LD_PRELOAD="$(pwd)/libroar_tracer_preload.so"
-                fi
-                exec python3 "$@"
-                """
-            ).strip()
-            + "\n"
-        )
-    os.chmod(wrapper_path, 0o755)
-
-    worker_sitecustomize_path = os.path.join(tmp_dir, "sitecustomize.py")
-    with _real_open(worker_sitecustomize_path, "w", encoding="utf-8") as handle:
-        handle.write(
-            textwrap.dedent(
-                """
-                import os
-                import sys
-
-                is_worker_process = any("default_worker.py" in arg for arg in sys.argv)
-                if os.environ.get("ROAR_WORKER") == "1" and is_worker_process:
-                    try:
-                        from roar.ray.worker import setup as _roar_worker_setup
-
-                        _roar_worker_setup()
-                    except Exception:
-                        pass
-                """
-            ).strip()
-            + "\n"
-        )
-
+    _write_worker_wrapper(tmp_dir)
     runtime_env["working_dir"] = tmp_dir
     runtime_env["py_executable"] = "bash ./roar_worker_wrapper.sh"
+    runtime_env["worker_process_setup_hook"] = "roar.ray.roar_worker._startup"
     return runtime_env
+
+
+def _write_worker_wrapper(tmp_dir: str) -> None:
+    wrapper_path = os.path.join(tmp_dir, "roar_worker_wrapper.sh")
+    try:
+        with _real_open(wrapper_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                "#!/usr/bin/env bash\n"
+                "if [ -f \"./libroar_tracer_preload.so\" ]; then\n"
+                "    export LD_PRELOAD=\"$(pwd)/libroar_tracer_preload.so\"\n"
+                "fi\n"
+                "exec python3 \"$@\"\n"
+            )
+        os.chmod(wrapper_path, 0o755)
+    except Exception:
+        pass
 
 
 def _merge_working_dir(source_dir: str, target_dir: str) -> None:

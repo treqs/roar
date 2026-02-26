@@ -9,6 +9,7 @@ def test_load_config_includes_ray_defaults(tmp_path) -> None:
     assert config["ray"]["enabled"] is True
     assert config["ray"]["pip_install"] is True
     assert config["ray"]["log_dir"] == "/shared/.roar-logs"
+    assert config["ray"]["actor_attribution"] == "per_call"
 
 
 def test_load_config_reads_ray_section(tmp_path) -> None:
@@ -19,6 +20,7 @@ def test_load_config_reads_ray_section(tmp_path) -> None:
 enabled = false
 pip_install = false
 log_dir = "/tmp/roar-ray"
+actor_attribution = "per_actor"
 """)
 
     config = load_config(start_dir=str(tmp_path))
@@ -26,3 +28,4 @@ log_dir = "/tmp/roar-ray"
     assert config["ray"]["enabled"] is False
     assert config["ray"]["pip_install"] is False
     assert config["ray"]["log_dir"] == "/tmp/roar-ray"
+    assert config["ray"]["actor_attribution"] == "per_actor"

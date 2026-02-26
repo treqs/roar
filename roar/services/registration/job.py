@@ -120,6 +120,7 @@ class JobRegistrationService(IJobRegistrar):
         job_type: str | None,
         step_number: int,
         metadata: str | None = None,
+        parent_job_uid: str | None = None,
     ) -> JobRegistrationResult:
         """
         Create a job WITHOUT artifact links.
@@ -179,6 +180,7 @@ class JobRegistrationService(IJobRegistrar):
             job_type=job_type,
             step_number=step_number,
             metadata=filtered_metadata,
+            parent_job_uid=parent_job_uid,
         )
 
         if error:
@@ -271,6 +273,8 @@ class JobRegistrationService(IJobRegistrar):
             }
             if filtered_metadata:
                 payload["metadata"] = filtered_metadata
+            if job.get("parent_job_uid") is not None:
+                payload["parent_job_uid"] = job.get("parent_job_uid")
 
             payloads.append(payload)
             payload_indices.append(i)

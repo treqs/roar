@@ -642,6 +642,7 @@ class SQLAlchemyJobRepository(JobRepository):
         return {
             "id": job.id,
             "job_uid": job.job_uid,
+            "parent_job_uid": job.parent_job_uid,
             "timestamp": job.timestamp,
             "command": job.command,
             "script": job.script,

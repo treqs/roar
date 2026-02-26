@@ -99,6 +99,7 @@ class RegisterJobRequest(RoarBaseModel):
     output_hashes: list[str] | None = None
     metadata: str | None = None
     job_type: str | None = None
+    parent_job_uid: str | None = None
 
 
 class RegisterJobsBatchRequest(RoarBaseModel):

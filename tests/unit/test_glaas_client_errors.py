@@ -228,6 +228,95 @@ class TestRegisterJobsBatch:
             assert error == "HTTP 500: Internal Server Error"
 
 
+class TestParentJobUidPayload:
+    """Ensure optional parent_job_uid is serialized correctly."""
+
+    def test_register_job_includes_parent_job_uid_when_present(self):
+        client = GlaasClient(base_url="http://localhost:9999")
+
+        with patch.object(client, "_request") as mock_request:
+            mock_request.return_value = ({"id": 1}, None)
+
+            client.register_job(
+                session_hash="sess123",
+                command="ray_task:train",
+                timestamp=1.0,
+                job_uid="job12345",
+                git_commit="abc123",
+                git_branch="main",
+                duration_seconds=2.5,
+                exit_code=0,
+                job_type="ray_task",
+                step_number=1,
+                parent_job_uid="parent-abc",
+            )
+
+            body = mock_request.call_args[0][2]
+            assert body["parent_job_uid"] == "parent-abc"
+
+    def test_register_job_omits_parent_job_uid_when_absent(self):
+        client = GlaasClient(base_url="http://localhost:9999")
+
+        with patch.object(client, "_request") as mock_request:
+            mock_request.return_value = ({"id": 1}, None)
+
+            client.register_job(
+                session_hash="sess123",
+                command="python train.py",
+                timestamp=1.0,
+                job_uid="job12345",
+                git_commit="abc123",
+                git_branch="main",
+                duration_seconds=2.5,
+                exit_code=0,
+                job_type="run",
+                step_number=1,
+            )
+
+            body = mock_request.call_args[0][2]
+            assert "parent_job_uid" not in body
+
+    def test_register_jobs_batch_preserves_parent_job_uid_fields(self):
+        client = GlaasClient(base_url="http://localhost:9999")
+
+        with patch.object(client, "_request") as mock_request:
+            mock_request.return_value = (
+                {"job_ids": ["id-1", "id-2"], "errors": []},
+                None,
+            )
+
+            jobs = [
+                {
+                    "command": "ray_task:a",
+                    "timestamp": 1.0,
+                    "job_uid": "j1",
+                    "git_commit": "abc",
+                    "git_branch": "main",
+                    "duration_seconds": 1.0,
+                    "exit_code": 0,
+                    "job_type": "ray_task",
+                    "step_number": 1,
+                    "parent_job_uid": "parent-abc",
+                },
+                {
+                    "command": "python train.py",
+                    "timestamp": 2.0,
+                    "job_uid": "j2",
+                    "git_commit": "abc",
+                    "git_branch": "main",
+                    "duration_seconds": 2.0,
+                    "exit_code": 0,
+                    "job_type": "run",
+                    "step_number": 1,
+                },
+            ]
+            client.register_jobs_batch(session_hash="sess123", jobs=jobs)
+
+            body = mock_request.call_args[0][2]
+            assert body["jobs"][0]["parent_job_uid"] == "parent-abc"
+            assert "parent_job_uid" not in body["jobs"][1]
+
+
 class TestCompositeAndLabelWrappers:
     """Test thin client wrappers for composite artifact endpoints."""
 

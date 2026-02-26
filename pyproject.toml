@@ -69,6 +69,7 @@ dev = [
 [project.scripts]
 # This registers `roar` on PATH after pip install
 roar = "roar.__main__:main"
+roar-worker = "roar.ray.roar_worker:main"
 
 [tool.maturin]
 manifest-path = "rust/crates/artifact-hash-py/Cargo.toml"

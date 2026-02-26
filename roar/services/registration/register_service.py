@@ -16,6 +16,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
+from urllib.parse import urlparse
+
+from sqlalchemy import text
 
 from ...config import config_get
 from ...core.interfaces.logger import ILogger
@@ -31,6 +34,21 @@ from ..transfer.common import resolve_repo_url_or_local_uri
 from ..upload.lineage_collector import LineageCollector
 from .coordinator import RegistrationCoordinator
 from .session import SessionRegistrationService
+
+try:
+    from blake3 import blake3 as _blake3_constructor
+except Exception:  # noqa: BLE001
+    _blake3_constructor = None
+
+boto3 = None
+
+
+def _ensure_boto3():
+    global boto3
+    if boto3 is None:
+        import boto3 as _boto3
+
+        boto3 = _boto3
 
 
 @dataclass
@@ -134,6 +152,7 @@ class RegisterService:
         roar_dir: Path,
         cwd: Path,
         dry_run: bool = False,
+        as_blake3: bool = False,
         skip_confirmation: bool = False,
         confirm_callback: Callable[[list[str]], bool] | None = None,
     ) -> RegisterResult:
@@ -145,6 +164,7 @@ class RegisterService:
             roar_dir: Path to .roar directory
             cwd: Current working directory
             dry_run: If True, show what would be registered without calling API
+            as_blake3: If True, upgrade S3 etag-only artifacts to blake3 hashes
             skip_confirmation: If True, skip confirmation prompt even if secrets detected
             confirm_callback: Callback function to prompt user for confirmation.
                               Receives list of detected secret types, returns True to proceed.
@@ -275,6 +295,10 @@ class RegisterService:
                 secrets_redacted=bool(detected_secrets),
             )
 
+        # Step 8.5: Upgrade S3 etag-only artifact hashes to blake3 (optional)
+        if as_blake3:
+            self.upgrade_s3_etags_to_blake3(roar_dir=roar_dir, lineage=lineage)
+
         # Step 9: Check GLaaS configuration
         if not self.glaas_client.is_configured():
             return RegisterResult(
@@ -349,6 +373,157 @@ class RegisterService:
             self._logger.error("Failed to hash file %s: %s", path, e)
             return None
 
+    def upgrade_s3_etags_to_blake3(self, roar_dir: Path, lineage: LineageData) -> None:
+        """
+        Upgrade etag-only S3 artifacts in lineage to include blake3 hashes.
+
+        This keeps existing etag rows and adds a blake3 row via INSERT OR IGNORE.
+        """
+        if not lineage.artifacts:
+            return
+
+        if _blake3_constructor is None:
+            self._logger.warning(
+                "Skipping --as-blake3 upgrade because the blake3 package is not installed."
+            )
+            return
+
+        try:
+            _ensure_boto3()
+        except Exception as e:  # noqa: BLE001
+            self._logger.warning("Skipping --as-blake3 upgrade because boto3 is unavailable: %s", e)
+            return
+
+        assert boto3 is not None
+        s3_client = boto3.client("s3")
+        with create_database_context(roar_dir) as db_ctx:
+            for artifact in lineage.artifacts:
+                if not self._needs_blake3_upgrade(artifact):
+                    continue
+
+                artifact_id = artifact.get("id")
+                if not isinstance(artifact_id, str) or not artifact_id:
+                    continue
+
+                s3_url = self._extract_s3_url(artifact)
+                if not s3_url:
+                    continue
+
+                parsed = self._parse_s3_url(s3_url)
+                if parsed is None:
+                    continue
+                bucket, key = parsed
+
+                digest = self._compute_s3_blake3_digest(s3_client, bucket, key)
+                if not digest:
+                    continue
+
+                db_ctx.session.execute(
+                    text(
+                        """
+                        INSERT OR IGNORE INTO artifact_hashes (artifact_id, algorithm, digest)
+                        VALUES (:artifact_id, 'blake3', :digest)
+                        """
+                    ),
+                    {"artifact_id": artifact_id, "digest": digest},
+                )
+
+                has_blake3_row = db_ctx.session.execute(
+                    text(
+                        """
+                        SELECT 1
+                        FROM artifact_hashes
+                        WHERE artifact_id = :artifact_id
+                          AND algorithm = 'blake3'
+                          AND digest = :digest
+                        LIMIT 1
+                        """
+                    ),
+                    {"artifact_id": artifact_id, "digest": digest},
+                ).scalar_one_or_none()
+
+                if has_blake3_row:
+                    self._attach_blake3_to_artifact(artifact, digest)
+                    lineage.artifact_hashes.add(digest)
+
+    def _needs_blake3_upgrade(self, artifact: dict) -> bool:
+        hashes = artifact.get("hashes")
+        if not isinstance(hashes, list):
+            return False
+
+        has_etag = False
+        has_blake3 = False
+        for entry in hashes:
+            if not isinstance(entry, dict):
+                continue
+            algorithm = entry.get("algorithm")
+            if not isinstance(algorithm, str):
+                continue
+            normalized = algorithm.strip().lower()
+            if normalized == "etag":
+                has_etag = True
+            elif normalized == "blake3":
+                has_blake3 = True
+
+        return has_etag and not has_blake3
+
+    def _extract_s3_url(self, artifact: dict) -> str | None:
+        for key in ("source_url", "first_seen_path", "path"):
+            value = artifact.get(key)
+            if isinstance(value, str) and value.startswith("s3://"):
+                return value
+        return None
+
+    def _parse_s3_url(self, s3_url: str) -> tuple[str, str] | None:
+        parsed = urlparse(s3_url)
+        bucket = parsed.netloc
+        key = parsed.path.lstrip("/")
+        if parsed.scheme != "s3" or not bucket or not key:
+            return None
+        return bucket, key
+
+    def _compute_s3_blake3_digest(self, s3_client, bucket: str, key: str) -> str | None:
+        if _blake3_constructor is None:
+            return None
+
+        try:
+            response = s3_client.get_object(Bucket=bucket, Key=key)
+            body = response.get("Body")
+            if body is None:
+                return None
+
+            hasher = _blake3_constructor()
+            try:
+                while True:
+                    chunk = body.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    hasher.update(bytes(chunk))
+            finally:
+                close = getattr(body, "close", None)
+                if callable(close):
+                    close()
+            return hasher.hexdigest()
+        except Exception as e:  # noqa: BLE001
+            self._logger.warning("Failed to compute blake3 for s3://%s/%s: %s", bucket, key, e)
+            return None
+
+    def _attach_blake3_to_artifact(self, artifact: dict, digest: str) -> None:
+        hashes = artifact.get("hashes")
+        if not isinstance(hashes, list):
+            hashes = []
+            artifact["hashes"] = hashes
+
+        for entry in hashes:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("algorithm") == "blake3" and entry.get("digest") == digest:
+                artifact["hash"] = digest
+                return
+
+        hashes.append({"algorithm": "blake3", "digest": digest})
+        artifact["hash"] = digest
+
     def _get_git_context(self, cwd: Path) -> GitContext:
         """Get git context from repository."""
         try:
@@ -378,13 +553,26 @@ class RegisterService:
         """Prepare artifacts for registration with required fields."""
         prepared = []
         for art in artifacts:
-            # Get the blake3 hash
-            art_hash = art.get("hash")
+            # Prefer explicit blake3 entries when multiple algorithms are present.
+            art_hash = None
+            for h in art.get("hashes", []):
+                if not isinstance(h, dict):
+                    continue
+                algorithm = h.get("algorithm")
+                digest = h.get("digest")
+                if (
+                    isinstance(algorithm, str)
+                    and algorithm.strip().lower() == "blake3"
+                    and isinstance(digest, str)
+                    and digest
+                ):
+                    art_hash = digest
+                    break
+
             if not art_hash:
-                for h in art.get("hashes", []):
-                    if h.get("algorithm") == "blake3":
-                        art_hash = h.get("digest")
-                        break
+                hash_value = art.get("hash")
+                if isinstance(hash_value, str) and hash_value:
+                    art_hash = hash_value
 
             if not art_hash:
                 continue

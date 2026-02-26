@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS composite_membership_indexes (
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_uid TEXT UNIQUE,                -- Random unique ID (like git short hash)
+    parent_job_uid TEXT,                -- Parent job UID for nested/distributed jobs
     timestamp REAL NOT NULL,            -- Start time
     command TEXT NOT NULL,              -- Full command string
     script TEXT,                        -- Primary script (e.g., "train.py")
@@ -258,6 +259,8 @@ def run_migrations(conn) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN status TEXT")
     if "job_type" not in columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN job_type TEXT")
+    if "parent_job_uid" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN parent_job_uid TEXT")
 
     # Add byte_ranges to job_inputs and job_outputs
     cursor = conn.execute("PRAGMA table_info(job_inputs)")

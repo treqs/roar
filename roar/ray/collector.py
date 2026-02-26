@@ -16,6 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from roar.ray.fragment import ArtifactRef, TaskFragment
 from roar.services.execution.proxy import parse_log_line
 
 _READ_OPS = frozenset({"GetObject"})
@@ -54,7 +55,22 @@ def collect(
     if not os.path.exists(db_path):
         return  # roar not initialised; nothing to do
 
-    task_events = _collect_events(log_path)
+    actor_events: list[dict[str, Any]] | None = None
+    actor_fragments: list[dict[str, Any]] = []
+    actor_payload = _collect_actor_payload()
+    if actor_payload is not None:
+        actor_events, actor_fragments = actor_payload
+
+    if actor_fragments:
+        collect_fragments(
+            actor_fragments,
+            project_dir=project_dir,
+            driver_job_uid=os.environ.get("ROAR_DRIVER_JOB_UID"),
+        )
+        _consume_filesystem_logs(log_path)
+        return
+
+    task_events = _collect_events(log_path, actor_events=actor_events)
     _merge_proxy_logs(task_events, proxy_logs or {})
     if not task_events:
         return
@@ -125,17 +141,290 @@ def collect(
         conn.commit()
         # Consume logs once to keep collection idempotent if collect() is called
         # multiple times during shutdown.
-        if log_path.exists():
-            for log_file in log_path.glob("*.jsonl"):
-                try:
-                    log_file.unlink()
-                except OSError:
-                    pass
+        _consume_filesystem_logs(log_path)
     finally:
         conn.close()
 
 
-def _collect_events(log_path: Path) -> dict[str, list[dict[str, Any]]]:
+def collect_fragments(
+    fragments: list[dict],
+    project_dir: str | None = None,
+    driver_job_uid: str | None = None,
+    session_id: int | None = None,
+    step_number: int = 1,
+) -> None:
+    """Write Ray task fragments to the local DB as child jobs."""
+    if project_dir is None:
+        project_dir = os.environ.get("ROAR_PROJECT_DIR", "/app")
+
+    db_path = os.path.join(project_dir, ".roar", "roar.db")
+    if not os.path.exists(db_path):
+        return
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+
+    try:
+        artifact_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(artifacts)").fetchall()
+        }
+        job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        now = time.time()
+
+        for payload in fragments:
+            if not isinstance(payload, dict):
+                continue
+
+            try:
+                fragment = TaskFragment.from_dict(payload)
+            except Exception:  # noqa: BLE001
+                continue
+
+            _insert_fragment_job(
+                conn=conn,
+                job_columns=job_columns,
+                fragment=fragment,
+                driver_job_uid=driver_job_uid,
+                session_id=session_id,
+                step_number=step_number,
+                now=now,
+            )
+
+            row = conn.execute(
+                "SELECT id FROM jobs WHERE job_uid = ? ORDER BY id DESC LIMIT 1",
+                (fragment.job_uid,),
+            ).fetchone()
+            if row is None:
+                continue
+            job_id = int(row["id"])
+
+            for ref in fragment.reads:
+                artifact_id = _upsert_artifact_for_ref(
+                    conn,
+                    columns=artifact_columns,
+                    ref=ref,
+                    now=now,
+                )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO job_inputs
+                        (job_id, artifact_id, path)
+                    VALUES (?, ?, ?)
+                    """,
+                    (job_id, artifact_id, ref.path),
+                )
+
+            for ref in fragment.writes:
+                artifact_id = _upsert_artifact_for_ref(
+                    conn,
+                    columns=artifact_columns,
+                    ref=ref,
+                    now=now,
+                )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO job_outputs
+                        (job_id, artifact_id, path)
+                    VALUES (?, ?, ?)
+                    """,
+                    (job_id, artifact_id, ref.path),
+                )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _insert_fragment_job(
+    conn: sqlite3.Connection,
+    *,
+    job_columns: set[str],
+    fragment: TaskFragment,
+    driver_job_uid: str | None,
+    session_id: int | None,
+    step_number: int,
+    now: float,
+) -> None:
+    command = f"ray_task:{fragment.function_name}" if fragment.function_name else "ray_task"
+    timestamp = fragment.started_at or now
+    duration = max(0.0, float(fragment.ended_at - fragment.started_at))
+    parent_job_uid = fragment.parent_job_uid or driver_job_uid
+
+    fields = [
+        "job_uid",
+        "timestamp",
+        "command",
+        "script",
+        "duration_seconds",
+        "exit_code",
+        "status",
+        "job_type",
+    ]
+    values: list[Any] = [
+        fragment.job_uid,
+        timestamp,
+        command,
+        fragment.function_name,
+        duration,
+        fragment.exit_code,
+        "completed",
+        "ray_task",
+    ]
+
+    if "parent_job_uid" in job_columns:
+        fields.append("parent_job_uid")
+        values.append(parent_job_uid)
+    if "session_id" in job_columns and session_id is not None:
+        fields.append("session_id")
+        values.append(session_id)
+    if "step_number" in job_columns:
+        fields.append("step_number")
+        values.append(step_number)
+    if "metadata" in job_columns:
+        metadata = {
+            "ray_task_id": fragment.ray_task_id,
+            "ray_worker_id": fragment.ray_worker_id,
+            "ray_node_id": fragment.ray_node_id,
+        }
+        if fragment.ray_actor_id:
+            metadata["ray_actor_id"] = fragment.ray_actor_id
+        fields.append("metadata")
+        values.append(json.dumps(metadata))
+
+    placeholders = ", ".join("?" for _ in fields)
+    conn.execute(
+        f"INSERT OR IGNORE INTO jobs ({', '.join(fields)}) VALUES ({placeholders})",
+        values,
+    )
+
+
+def _upsert_artifact_for_ref(
+    conn: sqlite3.Connection,
+    *,
+    columns: set[str],
+    ref: ArtifactRef,
+    now: float,
+) -> str:
+    digest = _normalize_hash(_to_text(ref.hash))
+    algorithm = _to_text(ref.hash_algorithm)
+
+    if digest and algorithm:
+        row = conn.execute(
+            """
+            SELECT artifact_id
+            FROM artifact_hashes
+            WHERE algorithm = ? AND digest = ?
+            LIMIT 1
+            """,
+            (algorithm, digest),
+        ).fetchone()
+        if row is not None:
+            return str(row["artifact_id"])
+
+    if not digest:
+        existing = conn.execute(
+            "SELECT id FROM artifacts WHERE first_seen_path = ? ORDER BY first_seen_at DESC LIMIT 1",
+            (ref.path,),
+        ).fetchone()
+        if existing is not None:
+            return str(existing["id"])
+
+    artifact_id = str(uuid.uuid4())
+    metadata_payload = {"capture_method": ref.capture_method}
+    _insert_artifact(
+        conn,
+        columns=columns,
+        artifact_id=artifact_id,
+        now=now,
+        path=ref.path,
+        source_type=_normalize_source_type(None, ref.path),
+        capture_method=_normalize_capture_method(ref.capture_method),
+        hash_value=digest,
+        metadata=json.dumps(metadata_payload),
+    )
+
+    if digest and algorithm:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO artifact_hashes
+                (artifact_id, algorithm, digest)
+            VALUES (?, ?, ?)
+            """,
+            (artifact_id, algorithm, digest),
+        )
+        existing = conn.execute(
+            """
+            SELECT artifact_id
+            FROM artifact_hashes
+            WHERE algorithm = ? AND digest = ?
+            LIMIT 1
+            """,
+            (algorithm, digest),
+        ).fetchone()
+        if existing is not None:
+            return str(existing["artifact_id"])
+
+    return artifact_id
+
+
+def _collect_actor_payload() -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]]] | None:
+    try:
+        import ray  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None
+
+    is_initialized = getattr(ray, "is_initialized", None)
+    if callable(is_initialized) and not is_initialized():
+        return None
+
+    job_id = os.environ.get("ROAR_JOB_ID", "default")
+    actor_name = f"roar-log-collector-{job_id}"
+
+    try:
+        actor = ray.get_actor(actor_name, namespace="roar")
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        events: list[dict[str, Any]] | None = None
+        get_all = getattr(actor, "get_all", None)
+        get_all_remote = getattr(get_all, "remote", None) if get_all is not None else None
+        if callable(get_all_remote):
+            raw_events = ray.get(get_all_remote(), timeout=30)
+            if isinstance(raw_events, list):
+                events = [event for event in raw_events if isinstance(event, dict)]
+            else:
+                events = []
+
+        fragments: list[dict[str, Any]] = []
+        get_all_fragments = getattr(actor, "get_all_fragments", None)
+        get_fragments_remote = (
+            getattr(get_all_fragments, "remote", None) if get_all_fragments is not None else None
+        )
+        if callable(get_fragments_remote):
+            raw_fragments = ray.get(get_fragments_remote(), timeout=30)
+            if isinstance(raw_fragments, list):
+                fragments = [fragment for fragment in raw_fragments if isinstance(fragment, dict)]
+
+        return events, fragments
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        try:
+            ray.kill(actor)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _collect_events(
+    log_path: Path,
+    actor_events: list[dict[str, Any]] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    if actor_events is not None:
+        return _group_events_by_task(actor_events)
+
     try:
         import ray  # noqa: PLC0415
 
@@ -149,6 +438,16 @@ def _collect_events(log_path: Path) -> dict[str, list[dict[str, Any]]]:
     if not log_path.exists():
         return {}
     return _read_events(log_path)
+
+
+def _consume_filesystem_logs(log_path: Path) -> None:
+    if not log_path.exists():
+        return
+    for log_file in log_path.glob("*.jsonl"):
+        try:
+            log_file.unlink()
+        except OSError:
+            pass
 
 
 def _collect_from_actor() -> list[dict[str, Any]] | None:
