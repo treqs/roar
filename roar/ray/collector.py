@@ -329,6 +329,24 @@ def _aggregate_paths(task_events: dict[str, list[dict[str, Any]]]) -> dict[str, 
 
 
 def _create_ray_job(conn: sqlite3.Connection, now: float) -> int:
+    roar_job_id = os.environ.get("ROAR_JOB_ID")
+    if roar_job_id:
+        existing_by_uid = conn.execute(
+            "SELECT id FROM jobs WHERE job_uid = ? ORDER BY id DESC LIMIT 1",
+            (roar_job_id,),
+        ).fetchone()
+        if existing_by_uid is not None:
+            job_id = int(existing_by_uid["id"])
+            conn.execute(
+                """
+                UPDATE jobs
+                SET timestamp = ?, status = ?
+                WHERE id = ?
+                """,
+                (now, "completed", job_id),
+            )
+            return job_id
+
     existing = conn.execute(
         "SELECT id FROM jobs WHERE job_type = 'ray' ORDER BY id DESC LIMIT 1"
     ).fetchone()

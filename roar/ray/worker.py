@@ -12,6 +12,7 @@ import atexit
 import builtins
 import json
 import os
+import tempfile
 import threading
 import time
 import uuid
@@ -43,9 +44,7 @@ def setup() -> None:
 
     _LOG_DIR = os.environ.get("ROAR_LOG_DIR", "/shared/.roar-logs")
     _BACKEND = _choose_backend()
-    if _BACKEND == "actor":
-        _init_actor()
-    else:
+    if _BACKEND == "filesystem":
         os.makedirs(_LOG_DIR, exist_ok=True)
 
     # Paths we must never recurse into (the log dir itself, /proc, /sys ...)
@@ -57,11 +56,14 @@ def setup() -> None:
     )
 
     builtins.open = _tracking_open
-    _patch_boto3()
-    _patch_pandas()
-    _patch_pyarrow_filesystem()
-    _patch_ray_data()
-    _configure_local_proxy_endpoint()
+    _patch_tempfile()
+    if os.environ.get("ROAR_WORKER_PATCH_SDKS", "0").strip() in {"1", "true", "True"}:
+        _patch_boto3()
+        _patch_pandas()
+        _patch_pyarrow_filesystem()
+        _patch_ray_data()
+    if os.environ.get("ROAR_WORKER_CONFIGURE_PROXY", "0").strip() in {"1", "true", "True"}:
+        _configure_local_proxy_endpoint()
     atexit.register(_flush_worker_buffer)
     setup._roar_worker_ready = True
 
@@ -106,25 +108,6 @@ def _init_actor() -> None:
         _actor = ray.get_actor(actor_name, namespace="roar")
         return
     except Exception:  # noqa: BLE001
-        pass
-
-    try:
-        from roar.ray.actor import RoarLogCollectorActor  # noqa: PLC0415
-
-        _actor = RoarLogCollectorActor.options(
-            name=actor_name,
-            namespace="roar",
-            lifetime="detached",
-            num_cpus=0,
-        ).remote()
-        return
-    except Exception:  # noqa: BLE001
-        pass
-
-    # Named actor creation races are expected. Retry lookup after a failed create.
-    try:
-        _actor = ray.get_actor(actor_name, namespace="roar")
-    except Exception:  # noqa: BLE001
         _actor = None
 
 
@@ -150,6 +133,10 @@ def _tracking_open(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
 def _runtime_context_ids() -> tuple[str | None, str | None]:
     try:
         import ray  # noqa: PLC0415
+
+        is_initialized = getattr(ray, "is_initialized", None)
+        if callable(is_initialized) and not is_initialized():
+            return None, None
 
         ctx = ray.get_runtime_context()
         task_id = _to_text(ctx.get_task_id())
@@ -214,13 +201,16 @@ def _log_access(
     if byte_range:
         payload["byte_range"] = byte_range
 
-    if _BACKEND == "actor" and _actor is not None:
-        with _buffer_lock:
-            _event_buffer.append(payload)
-            should_flush = len(_event_buffer) >= _FLUSH_THRESHOLD
-        if should_flush:
-            _flush_to_actor()
-        return
+    if _BACKEND == "actor":
+        if _actor is None:
+            _init_actor()
+        if _actor is not None:
+            with _buffer_lock:
+                _event_buffer.append(payload)
+                should_flush = len(_event_buffer) >= _FLUSH_THRESHOLD
+            if should_flush or any(flag in mode for flag in ("w", "a", "x", "+")):
+                _flush_to_actor()
+            return
 
     _write_to_file(task_id, payload)
 
@@ -259,6 +249,25 @@ def _write_batch_to_filesystem(batch: list[dict[str, Any]]) -> None:
 
 def _flush_worker_buffer() -> None:
     _flush_to_actor()
+
+
+def _patch_tempfile() -> None:
+    if getattr(tempfile, "_roar_worker_tempfile_patched", False):
+        return
+
+    real_named_temporary_file = tempfile.NamedTemporaryFile
+
+    def _tracked_named_temporary_file(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        handle = real_named_temporary_file(*args, **kwargs)
+        try:
+            path = os.path.abspath(os.fspath(handle.name))
+            _log_access(path, "w", capture_method="python")
+        except Exception:  # noqa: BLE001
+            pass
+        return handle
+
+    tempfile.NamedTemporaryFile = _tracked_named_temporary_file
+    tempfile._roar_worker_tempfile_patched = True
 
 
 def _configure_local_proxy_endpoint() -> None:

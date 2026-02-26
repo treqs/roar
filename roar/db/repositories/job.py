@@ -250,6 +250,26 @@ class SQLAlchemyJobRepository(JobRepository):
             self._session.add(job_output)
             self._session.flush()
 
+    def has_input_path(self, job_id: int, path: str) -> bool:
+        """Check whether an input row already exists for a job/path pair."""
+        existing = self._session.execute(
+            select(JobInput).where(
+                JobInput.job_id == job_id,
+                JobInput.path == path,
+            )
+        ).scalar_one_or_none()
+        return existing is not None
+
+    def has_output_path(self, job_id: int, path: str) -> bool:
+        """Check whether an output row already exists for a job/path pair."""
+        existing = self._session.execute(
+            select(JobOutput).where(
+                JobOutput.job_id == job_id,
+                JobOutput.path == path,
+            )
+        ).scalar_one_or_none()
+        return existing is not None
+
     def get_inputs(self, job_id: int) -> list[dict[str, Any]]:
         """
         Get input artifacts for a job.

@@ -8,6 +8,7 @@ Follows SRP: coordinates, doesn't implement details.
 from __future__ import annotations
 
 import os
+import secrets
 import sys
 import time
 from typing import TYPE_CHECKING, Any
@@ -93,6 +94,7 @@ class RunCoordinator:
             "RunCoordinator.execute started: command=%s, job_type=%s", ctx.command, ctx.job_type
         )
         start_time = time.time()
+        run_job_uid = secrets.token_hex(4)
         is_build = ctx.job_type == "build"
 
         # Create signal handler
@@ -149,6 +151,7 @@ class RunCoordinator:
                 ctx.roar_dir,
                 signal_handler,
                 extra_env=extra_env,
+                job_id=run_job_uid,
                 tracer_mode_override=ctx.tracer_mode,
                 fallback_enabled_override=ctx.tracer_fallback,
             )

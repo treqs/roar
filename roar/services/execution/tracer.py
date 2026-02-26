@@ -199,6 +199,7 @@ class TracerService:
         roar_dir: Path,
         signal_handler: ISignalHandler,
         extra_env: dict[str, str] | None = None,
+        job_id: str | None = None,
         tracer_mode_override: str | None = None,
         fallback_enabled_override: bool | None = None,
     ) -> TracerResult:
@@ -282,6 +283,11 @@ class TracerService:
         inject_dir = str(Path(__file__).parent / "inject")
         env["PYTHONPATH"] = inject_dir + os.pathsep + env.get("PYTHONPATH", "")
         env["ROAR_LOG_FILE"] = inject_log_file
+        env["ROAR_WRAP"] = "1"
+        env["ROAR_PROJECT_DIR"] = str(roar_dir.parent)
+        resolved_job_id = job_id or env.get("ROAR_JOB_ID")
+        if resolved_job_id:
+            env["ROAR_JOB_ID"] = resolved_job_id
 
         # Build tracer command
         # Execute with signal handling

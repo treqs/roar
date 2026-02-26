@@ -10,6 +10,11 @@ import textwrap
 import threading
 import uuid
 
+try:
+    import tomllib
+except ImportError:  # pragma: no cover
+    import tomli as tomllib
+
 # ------------------------------------------------------------------------------
 # Data structures the parent will ingest
 # ------------------------------------------------------------------------------
@@ -263,6 +268,7 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
 
         env_vars["ROAR_WORKER"] = "1"
         env_vars["ROAR_LOG_DIR"] = ray_config["log_dir"]
+        env_vars["ROAR_LOG_BACKEND"] = "actor"
         env_vars["ROAR_JOB_ID"] = job_id
         os.environ.setdefault("ROAR_LOG_DIR", ray_config["log_dir"])
         os.environ.setdefault("ROAR_JOB_ID", job_id)
@@ -282,8 +288,15 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
         runtime_env = _prepare_worker_runtime_env(runtime_env, job_id)
         kwargs["runtime_env"] = runtime_env
         result = _real_ray_init(*args, **kwargs)
-        _spawn_node_agents(ray_module, job_id, str(ray_config["log_dir"]))
-        _start_ray_node_poller(ray_module)
+        _ensure_collector_actor(ray_module, job_id)
+        if _node_agents_enabled():
+            threading.Thread(
+                target=_spawn_node_agents,
+                args=(ray_module, job_id, str(ray_config["log_dir"])),
+                name="roar-ray-node-agent-bootstrap",
+                daemon=True,
+            ).start()
+            _start_ray_node_poller(ray_module)
         return result
 
     ray_module.init = _roar_ray_init
@@ -295,11 +308,44 @@ def _patch_ray_shutdown(ray_module) -> None:  # noqa: ANN001
         return
 
     def _roar_ray_shutdown(*args, **kwargs):
-        proxy_logs = _collect_node_agent_logs(ray_module)
+        proxy_logs = _collect_node_agent_logs(ray_module) if _node_agents_enabled() else {}
         _collect_ray_io(proxy_logs=proxy_logs)
         return real_ray_shutdown(*args, **kwargs)
 
     ray_module.shutdown = _roar_ray_shutdown
+
+
+def _ensure_collector_actor(ray_module, job_id: str) -> None:  # noqa: ANN001
+    actor_name = f"roar-log-collector-{job_id}"
+
+    try:
+        ray_module.get_actor(actor_name, namespace="roar")
+        return
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        from roar.ray.actor import RoarLogCollectorActor  # noqa: PLC0415
+
+        actor = RoarLogCollectorActor.options(
+            name=actor_name,
+            namespace="roar",
+            lifetime="detached",
+            num_cpus=0,
+        ).remote()
+        get_fn = getattr(ray_module, "get", None)
+        if callable(get_fn):
+            get_all = getattr(actor, "get_all", None)
+            remote = getattr(get_all, "remote", None) if get_all is not None else None
+            if callable(remote):
+                get_fn(remote(), timeout=10)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _node_agents_enabled() -> bool:
+    raw = os.environ.get("ROAR_RAY_NODE_AGENTS", "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _prepare_worker_runtime_env(runtime_env, job_id: str):  # noqa: ANN001
@@ -322,7 +368,10 @@ def _prepare_worker_runtime_env(runtime_env, job_id: str):  # noqa: ANN001
         import roar  # noqa: PLC0415
         from roar.services.execution.tracer_backends import find_preload_library  # noqa: PLC0415
 
-        preload_library = find_preload_library(Path(roar.__file__).resolve().parent)
+        roar_package_dir = Path(roar.__file__).resolve().parent
+        shutil.copytree(roar_package_dir, os.path.join(tmp_dir, "roar"), dirs_exist_ok=True)
+
+        preload_library = find_preload_library(roar_package_dir)
         if preload_library:
             shutil.copy2(preload_library, os.path.join(tmp_dir, "libroar_tracer_preload.so"))
     except Exception:
@@ -343,6 +392,27 @@ def _prepare_worker_runtime_env(runtime_env, job_id: str):  # noqa: ANN001
             + "\n"
         )
     os.chmod(wrapper_path, 0o755)
+
+    worker_sitecustomize_path = os.path.join(tmp_dir, "sitecustomize.py")
+    with _real_open(worker_sitecustomize_path, "w", encoding="utf-8") as handle:
+        handle.write(
+            textwrap.dedent(
+                """
+                import os
+                import sys
+
+                is_worker_process = any("default_worker.py" in arg for arg in sys.argv)
+                if os.environ.get("ROAR_WORKER") == "1" and is_worker_process:
+                    try:
+                        from roar.ray.worker import setup as _roar_worker_setup
+
+                        _roar_worker_setup()
+                    except Exception:
+                        pass
+                """
+            ).strip()
+            + "\n"
+        )
 
     runtime_env["working_dir"] = tmp_dir
     runtime_env["py_executable"] = "bash ./roar_worker_wrapper.sh"
@@ -581,7 +651,7 @@ def _node_resource_key(ray_module, node_id: str) -> str | None:  # noqa: ANN001
 
 def _load_ray_config() -> dict[str, object]:
     config_enabled = True
-    config_pip_install = True
+    config_pip_install = False
     config_log_dir = _DEFAULT_RAY_LOG_DIR
 
     try:
@@ -592,10 +662,13 @@ def _load_ray_config() -> dict[str, object]:
         ray_section = config.get("ray", {})
         if isinstance(ray_section, dict):
             config_enabled = bool(ray_section.get("enabled", True))
-            config_pip_install = bool(ray_section.get("pip_install", True))
             maybe_log_dir = ray_section.get("log_dir")
             if isinstance(maybe_log_dir, str) and maybe_log_dir.strip():
                 config_log_dir = maybe_log_dir
+
+        explicit_pip_install = _load_explicit_ray_pip_install(start_dir)
+        if explicit_pip_install is not None:
+            config_pip_install = explicit_pip_install
     except Exception:
         pass
 
@@ -608,6 +681,32 @@ def _load_ray_config() -> dict[str, object]:
         "pip_install": config_pip_install,
         "log_dir": config_log_dir,
     }
+
+
+def _load_explicit_ray_pip_install(start_dir: str) -> bool | None:
+    try:
+        from roar.core.settings import find_config_file  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None
+
+    config_path = find_config_file(start_dir=start_dir)
+    if config_path is None:
+        return None
+
+    try:
+        with _real_open(config_path, "rb") as handle:
+            payload = tomllib.load(handle)
+    except Exception:  # noqa: BLE001
+        return None
+
+    if config_path.name == "pyproject.toml":
+        payload = payload.get("tool", {}).get("roar", {})
+
+    ray_section = payload.get("ray")
+    if not isinstance(ray_section, dict) or "pip_install" not in ray_section:
+        return None
+
+    return bool(ray_section.get("pip_install"))
 
 
 def _merge_roar_runtime_env_pip(existing_pip):  # noqa: ANN001

@@ -215,6 +215,11 @@ class JobRecordingService:
     ) -> None:
         """Register artifacts and link them to the job."""
         for path in file_paths:
+            if is_input and self._job_repo.has_input_path(job_id, path):
+                continue
+            if not is_input and self._job_repo.has_output_path(job_id, path):
+                continue
+
             path_hashes = hashes_by_path.get(path)
             if not path_hashes:
                 continue
