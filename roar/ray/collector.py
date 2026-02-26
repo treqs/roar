@@ -13,6 +13,7 @@ import os
 import sqlite3
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -247,26 +248,99 @@ def _assign_step_numbers(
     fragments: list[TaskFragment],
     base_step: int = 1,
 ) -> dict[str, int]:
-    """Assign ray task step numbers from fragment start times."""
+    """
+    Return {job_uid: step_number} using artifact dependency topology.
+
+    Fragments are assigned step numbers based on their depth in the DAG
+    formed by artifact read/write dependencies. A fragment that reads an
+    artifact written by another fragment is at a strictly higher step.
+
+    base_step: the step number of the parent driver job (default 1).
+    Returns step numbers starting at base_step + 1.
+    """
     if not fragments:
         return {}
 
-    sorted_fragments = sorted(fragments, key=lambda item: float(item.started_at))
-    current_step = base_step + 1
-    current_group_start: float | None = None
-    step_by_job_uid: dict[str, int] = {}
+    # Fragments are emitted as incremental snapshots per task/job_uid.
+    # Collapse snapshots first so they do not create synthetic self-chains.
+    job_index_by_uid: dict[str, int] = {}
+    job_uids: list[str] = []
+    functions_by_job: list[str] = []
+    reads_by_job: list[set[str]] = []
+    writes_by_job: list[set[str]] = []
+    for fragment in fragments:
+        job_index = job_index_by_uid.get(fragment.job_uid)
+        if job_index is None:
+            job_index = len(job_uids)
+            job_index_by_uid[fragment.job_uid] = job_index
+            job_uids.append(fragment.job_uid)
+            functions_by_job.append(_to_text(fragment.function_name) or "")
+            reads_by_job.append(set())
+            writes_by_job.append(set())
+        elif not functions_by_job[job_index]:
+            functions_by_job[job_index] = _to_text(fragment.function_name) or ""
 
-    for fragment in sorted_fragments:
-        started_at = float(fragment.started_at)
-        if current_group_start is None:
-            current_group_start = started_at
-        elif (started_at - current_group_start) > 1.0:
-            current_step += 1
-            current_group_start = started_at
+        for ref in fragment.reads:
+            hash_value = _normalize_hash(_to_text(ref.hash))
+            if hash_value:
+                reads_by_job[job_index].add(hash_value)
 
-        step_by_job_uid[fragment.job_uid] = current_step
+        for ref in fragment.writes:
+            hash_value = _normalize_hash(_to_text(ref.hash))
+            if hash_value:
+                writes_by_job[job_index].add(hash_value)
 
-    return step_by_job_uid
+    # hash -> producer job indices
+    producers_by_hash: dict[str, set[int]] = {}
+    for producer_index, writes in enumerate(writes_by_job):
+        for hash_value in writes:
+            producers_by_hash.setdefault(hash_value, set()).add(producer_index)
+
+    adjacency: list[set[int]] = [set() for _ in job_uids]
+    indegree = [0] * len(job_uids)
+    depth = [1] * len(job_uids)
+
+    for consumer_index, reads in enumerate(reads_by_job):
+        same_function_parents: set[int] = set()
+        cross_function_parents: set[int] = set()
+        for hash_value in reads:
+            for producer_index in producers_by_hash.get(hash_value, set()):
+                if producer_index == consumer_index:
+                    continue
+                producer_function = functions_by_job[producer_index]
+                consumer_function = functions_by_job[consumer_index]
+                if producer_function and producer_function == consumer_function:
+                    same_function_parents.add(producer_index)
+                else:
+                    cross_function_parents.add(producer_index)
+
+        # Keep same-function edges only when they are the only signal.
+        parent_indices = cross_function_parents or same_function_parents
+
+        for producer_index in parent_indices:
+            if consumer_index in adjacency[producer_index]:
+                continue
+            adjacency[producer_index].add(consumer_index)
+            indegree[consumer_index] += 1
+
+    queue = deque(index for index, item_indegree in enumerate(indegree) if item_indegree == 0)
+    processed = 0
+    while queue:
+        producer_index = queue.popleft()
+        processed += 1
+        for consumer_index in adjacency[producer_index]:
+            depth[consumer_index] = max(depth[consumer_index], depth[producer_index] + 1)
+            indegree[consumer_index] -= 1
+            if indegree[consumer_index] == 0:
+                queue.append(consumer_index)
+
+    if processed != len(job_uids):
+        fallback_depth = (max(depth) if depth else 1) + 1
+        for index, item_indegree in enumerate(indegree):
+            if item_indegree > 0:
+                depth[index] = fallback_depth
+
+    return {job_uid: base_step + depth[index] for index, job_uid in enumerate(job_uids)}
 
 
 def _insert_fragment_job(

@@ -20,7 +20,23 @@ def _init_db(project_dir: Path) -> Path:
     return db_path
 
 
-def _make_fragment(job_uid: str, started_at: float, function_name: str = "task") -> TaskFragment:
+def _ref(hash_value: str) -> ArtifactRef:
+    return ArtifactRef(
+        path=f"/tmp/{hash_value}",
+        hash=hash_value,
+        hash_algorithm="blake3",
+        size=0,
+        capture_method="python",
+    )
+
+
+def _make_fragment(
+    job_uid: str,
+    started_at: float,
+    function_name: str = "task",
+    reads: tuple[str, ...] = (),
+    writes: tuple[str, ...] = (),
+) -> TaskFragment:
     return TaskFragment(
         job_uid=job_uid,
         parent_job_uid="abc",
@@ -32,22 +48,24 @@ def _make_fragment(job_uid: str, started_at: float, function_name: str = "task")
         started_at=started_at,
         ended_at=started_at + 0.5,
         exit_code=0,
+        reads=[_ref(hash_value) for hash_value in reads],
+        writes=[_ref(hash_value) for hash_value in writes],
     )
 
 
-def test_assign_step_numbers_groups_fragments_within_one_second_window() -> None:
+def test_assign_step_numbers_uses_dependency_depth_not_time_window() -> None:
     fragments = [
-        _make_fragment("a1111111", 0.0),
-        _make_fragment("b2222222", 0.2),
-        _make_fragment("c3333333", 0.8),
+        _make_fragment("a1111111", 0.0, writes=("h1",)),
+        _make_fragment("b2222222", 0.2, reads=("h1",), writes=("h2",)),
+        _make_fragment("c3333333", 0.8, reads=("h2",)),
     ]
 
     step_map = ray_collector._assign_step_numbers(fragments)
 
-    assert step_map == {"a1111111": 2, "b2222222": 2, "c3333333": 2}
+    assert step_map == {"a1111111": 2, "b2222222": 3, "c3333333": 4}
 
 
-def test_assign_step_numbers_creates_new_group_when_more_than_one_second_apart() -> None:
+def test_assign_step_numbers_ignores_timestamp_gaps_without_dependencies() -> None:
     fragments = [
         _make_fragment("a1111111", 0.0),
         _make_fragment("b2222222", 0.6),
@@ -56,14 +74,14 @@ def test_assign_step_numbers_creates_new_group_when_more_than_one_second_apart()
 
     step_map = ray_collector._assign_step_numbers(fragments)
 
-    assert step_map == {"a1111111": 2, "b2222222": 2, "c3333333": 3}
+    assert step_map == {"a1111111": 2, "b2222222": 2, "c3333333": 2}
 
 
 def test_assign_step_numbers_sequential_pipeline_steps() -> None:
     fragments = [
-        _make_fragment("ingest01", 0.0),
-        _make_fragment("train002", 5.0),
-        _make_fragment("eval0003", 10.0),
+        _make_fragment("ingest01", 5.0, writes=("processed",)),
+        _make_fragment("train002", 5.0, reads=("processed",), writes=("model",)),
+        _make_fragment("eval0003", 5.0, reads=("model",)),
     ]
 
     step_map = ray_collector._assign_step_numbers(fragments)
@@ -263,14 +281,20 @@ def test_collect_fragments_persists_artifact_size_from_fragment_refs(tmp_path: P
     conn.close()
 
 
-def test_collect_fragments_assigns_step_numbers_from_fragment_timestamps(tmp_path: Path) -> None:
+def test_collect_fragments_assigns_step_numbers_from_fragment_dependencies(tmp_path: Path) -> None:
     project_dir = tmp_path / "project"
     db_path = _init_db(project_dir)
 
     fragments = [
-        _make_fragment("ingest01", 0.0, function_name="ingest"),
-        _make_fragment("train002", 5.0, function_name="train"),
-        _make_fragment("eval0003", 10.0, function_name="eval"),
+        _make_fragment("ingest01", 1.0, function_name="ingest", writes=("proc",)),
+        _make_fragment(
+            "train002",
+            1.0,
+            function_name="train",
+            reads=("proc",),
+            writes=("model",),
+        ),
+        _make_fragment("eval0003", 1.0, function_name="eval", reads=("model",)),
     ]
 
     collect_fragments(
