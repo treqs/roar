@@ -148,3 +148,52 @@ def test_collect_fragments_writes_task_jobs_and_deduplicates_artifacts(tmp_path:
     assert len(artifact_rows) == 3
 
     conn.close()
+
+
+def test_collect_fragments_persists_artifact_size_from_fragment_refs(tmp_path: Path) -> None:
+    project_dir = tmp_path / "project"
+    db_path = _init_db(project_dir)
+
+    fragment = TaskFragment(
+        job_uid="33333333",
+        parent_job_uid="abc",
+        ray_task_id="task-3",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="write",
+        started_at=1.0,
+        ended_at=2.0,
+        exit_code=0,
+        writes=[
+            ArtifactRef(
+                path="s3://demo-bucket/path/to/output.bin",
+                hash="etag-123",
+                hash_algorithm="etag",
+                size=123,
+                capture_method="proxy",
+            )
+        ],
+    )
+
+    collect_fragments(
+        fragments=[fragment.to_dict()],
+        project_dir=str(project_dir),
+        driver_job_uid="abc",
+    )
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        """
+        SELECT size
+        FROM artifacts
+        WHERE first_seen_path = ?
+        ORDER BY first_seen_at DESC
+        LIMIT 1
+        """,
+        ("s3://demo-bucket/path/to/output.bin",),
+    ).fetchone()
+    assert row is not None
+    assert int(row["size"]) == 123
+    conn.close()

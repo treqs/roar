@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import io
 
 import pytest
 
@@ -184,7 +185,170 @@ def test_wrap_s3_client_logs_etag_on_put_object(monkeypatch: pytest.MonkeyPatch)
     assert write_ref.path == "s3://demo-bucket/path/to/object.bin"
     assert write_ref.hash_algorithm == "etag"
     assert write_ref.hash == "etag-value-123"
+    assert write_ref.size == len(b"payload")
     assert write_ref.capture_method == "proxy"
+
+
+def test_wrap_s3_client_put_object_uses_size_for_empty_bytes_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.ray.roar_worker as roar_worker
+    from roar.ray.fragment import TaskFragment
+
+    fragment = TaskFragment(
+        job_uid="abcd1234",
+        parent_job_uid="parent123",
+        ray_task_id="task-9",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="train",
+        started_at=1.0,
+        ended_at=1.0,
+        exit_code=0,
+    )
+    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
+    monkeypatch.setattr(roar_worker, "_check_task_boundary", lambda: None)
+
+    class _FakeS3Client:
+        @staticmethod
+        def put_object(*args, **kwargs):  # noqa: ANN002, ANN003
+            del args, kwargs
+            return {"ETag": '"etag-value-123"'}
+
+    wrapped = roar_worker._wrap_s3_client(_FakeS3Client())
+    wrapped.put_object(Bucket="demo-bucket", Key="path/to/object.bin", Body=b"")
+
+    assert len(fragment.writes) == 1
+    assert fragment.writes[0].size == 0
+
+
+def test_wrap_s3_client_put_object_uses_size_for_seekable_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.ray.roar_worker as roar_worker
+    from roar.ray.fragment import TaskFragment
+
+    fragment = TaskFragment(
+        job_uid="abcd1234",
+        parent_job_uid="parent123",
+        ray_task_id="task-9",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="train",
+        started_at=1.0,
+        ended_at=1.0,
+        exit_code=0,
+    )
+    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
+    monkeypatch.setattr(roar_worker, "_check_task_boundary", lambda: None)
+
+    class _FakeS3Client:
+        @staticmethod
+        def put_object(*args, **kwargs):  # noqa: ANN002, ANN003
+            del args, kwargs
+            return {"ETag": '"etag-value-123"'}
+
+    body = io.BytesIO(b"hello world")
+    wrapped = roar_worker._wrap_s3_client(_FakeS3Client())
+    wrapped.put_object(Bucket="demo-bucket", Key="path/to/object.bin", Body=body)
+
+    assert len(fragment.writes) == 1
+    assert fragment.writes[0].size == 11
+    assert body.tell() == 0
+
+
+def test_wrap_s3_client_upload_file_uses_local_file_size(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    import roar.ray.roar_worker as roar_worker
+    from roar.ray.fragment import TaskFragment
+
+    fragment = TaskFragment(
+        job_uid="abcd1234",
+        parent_job_uid="parent123",
+        ray_task_id="task-9",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="train",
+        started_at=1.0,
+        ended_at=1.0,
+        exit_code=0,
+    )
+    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
+    monkeypatch.setattr(roar_worker, "_check_task_boundary", lambda: None)
+
+    payload = b"upload-file-payload"
+    local_file = tmp_path / "upload.bin"
+    local_file.write_bytes(payload)
+
+    class _FakeS3Client:
+        @staticmethod
+        def upload_file(*args, **kwargs):  # noqa: ANN002, ANN003
+            del args, kwargs
+            return None
+
+    wrapped = roar_worker._wrap_s3_client(_FakeS3Client())
+    wrapped.upload_file(str(local_file), "demo-bucket", "path/to/object.bin")
+
+    assert len(fragment.writes) == 1
+    write_ref = fragment.writes[0]
+    assert write_ref.path == "s3://demo-bucket/path/to/object.bin"
+    assert write_ref.size == len(payload)
+    assert write_ref.capture_method == "proxy"
+
+
+def test_wrap_s3_client_logs_etag_on_get_object(monkeypatch: pytest.MonkeyPatch) -> None:
+    import roar.ray.roar_worker as roar_worker
+    from roar.ray.fragment import TaskFragment
+
+    fragment = TaskFragment(
+        job_uid="abcd1234",
+        parent_job_uid="parent123",
+        ray_task_id="task-9",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="train",
+        started_at=1.0,
+        ended_at=1.0,
+        exit_code=0,
+    )
+    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
+    monkeypatch.setattr(roar_worker, "_check_task_boundary", lambda: None)
+
+    class _FakeS3Client:
+        @staticmethod
+        def get_object(*args, **kwargs):  # noqa: ANN002, ANN003
+            del args, kwargs
+            return {
+                "ETag": '"etag-read-123"',
+                "ContentLength": 4,
+                "Body": io.BytesIO(b"data"),
+            }
+
+    wrapped = roar_worker._wrap_s3_client(_FakeS3Client())
+    wrapped.get_object(Bucket="demo-bucket", Key="path/to/object.bin")
+
+    assert len(fragment.reads) == 1
+    read_ref = fragment.reads[0]
+    assert read_ref.path == "s3://demo-bucket/path/to/object.bin"
+    assert read_ref.hash_algorithm == "etag"
+    assert read_ref.hash == "etag-read-123"
+    assert read_ref.capture_method == "proxy"
+
+
+def test_start_fragment_uses_task_function_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    import roar.ray.roar_worker as roar_worker
+
+    monkeypatch.setenv("ROAR_JOB_ID", "job-abc")
+    monkeypatch.setattr(roar_worker, "_get_task_function_name", lambda: "ingest_shard")
+
+    fragment = roar_worker._start_fragment("task-xyz")
+    assert fragment.function_name == "ingest_shard"
 
 
 def test_actor_attribution_per_call_uses_task_boundaries(

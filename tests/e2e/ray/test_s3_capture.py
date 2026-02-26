@@ -94,3 +94,23 @@ class TestS3Capture:
             "Expected S3 artifact to have a hash (ETag) from proxy capture, "
             "but no hashed S3 artifacts were found."
         )
+
+    def test_worker_s3_write_artifact_has_nonzero_size(self, ray_cluster):
+        """S3 write artifacts should persist non-zero size for non-empty object bodies."""
+        submit_job_on_head(
+            COMPOSE_FILE,
+            f"{JOBS_DIR}/s3_io.py",
+            env={"ROAR_WRAP": "1"},
+        )
+
+        rows = _query_roar_db(
+            COMPOSE_FILE,
+            "SELECT size FROM artifacts "
+            "WHERE source_type IN ('s3', 'proxy') AND path LIKE 's3://%' "
+            "ORDER BY first_seen_at DESC",
+        )
+        assert len(rows) >= 1, "Expected at least one captured S3 artifact."
+        assert any(int(row["size"]) > 0 for row in rows), (
+            "Expected at least one captured S3 write artifact with size > 0, "
+            "but all captured S3 artifact sizes were 0."
+        )

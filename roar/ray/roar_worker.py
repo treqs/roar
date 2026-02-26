@@ -87,6 +87,24 @@ def _get_actor_attribution() -> str:
     return default
 
 
+def _get_task_function_name() -> str:
+    try:
+        ray = sys.modules.get("ray")
+        if ray is None:
+            return "unknown"
+        ctx = ray.get_runtime_context()
+        for attr in ("get_task_function_name", "get_task_name"):
+            getter = getattr(ctx, attr, None)
+            if not callable(getter):
+                continue
+            name = _to_text(getter())
+            if name:
+                return name
+    except Exception:  # noqa: BLE001
+        pass
+    return "unknown"
+
+
 def _start_fragment(task_id: str) -> TaskFragment:
     now = time.time()
     roar_job_id = str(os.environ.get("ROAR_JOB_ID", "default"))
@@ -97,7 +115,7 @@ def _start_fragment(task_id: str) -> TaskFragment:
         ray_worker_id="",
         ray_node_id="",
         ray_actor_id=_get_actor_id(),
-        function_name="unknown",
+        function_name=_get_task_function_name(),
         started_at=now,
         ended_at=now,
         exit_code=0,
@@ -159,6 +177,30 @@ def _log_write(
         return
 
     _current_fragment.writes.append(
+        ArtifactRef(
+            path=path,
+            hash=hash_value,
+            hash_algorithm=hash_algorithm,
+            size=size,
+            capture_method=capture_method,
+        )
+    )
+    _current_fragment.ended_at = time.time()
+    _emit_fragment(_current_fragment)
+
+
+def _log_read(
+    *,
+    path: str,
+    hash_value: str | None,
+    hash_algorithm: str,
+    size: int,
+    capture_method: str,
+) -> None:
+    if _current_fragment is None:
+        return
+
+    _current_fragment.reads.append(
         ArtifactRef(
             path=path,
             hash=hash_value,
@@ -275,6 +317,47 @@ def _extract_bucket_key(args, kwargs) -> tuple[str | None, str | None]:  # noqa:
     return None, None
 
 
+def _extract_upload_file_params(
+    args, kwargs
+) -> tuple[str | None, str | None, str | None]:  # noqa: ANN001, ANN002
+    filename = kwargs.get("Filename")
+    bucket = kwargs.get("Bucket")
+    key = kwargs.get("Key")
+
+    if filename is None and len(args) >= 1:
+        filename = args[0]
+    if bucket is None and len(args) >= 2:
+        bucket = args[1]
+    if key is None and len(args) >= 3:
+        key = args[2]
+
+    return _to_text(filename), _to_text(bucket), _to_text(key)
+
+
+def _body_size_bytes(body: Any) -> int:
+    if body is None:
+        return 0
+    if isinstance(body, str):
+        return len(body.encode("utf-8"))
+    if isinstance(body, (bytes, bytearray, memoryview)):
+        return len(body)
+
+    seek = getattr(body, "seek", None)
+    tell = getattr(body, "tell", None)
+    if callable(seek) and callable(tell):
+        try:
+            seek(0, os.SEEK_END)
+            size_value = tell()
+            seek(0)
+            if isinstance(size_value, int):
+                return max(0, size_value)
+            return max(0, int(size_value))
+        except Exception:  # noqa: BLE001
+            return 0
+
+    return 0
+
+
 def _wrap_s3_client(client):  # noqa: ANN001
     if getattr(client, "_roar_s3_wrapped", False):
         return client
@@ -288,24 +371,73 @@ def _wrap_s3_client(client):  # noqa: ANN001
             bucket, key = _extract_bucket_key(args, kwargs)
             if bucket and key and _current_fragment is not None:
                 body = kwargs.get("Body")
-                size = 0
-                if isinstance(body, str):
-                    size = len(body.encode("utf-8"))
-                elif isinstance(body, (bytes, bytearray, memoryview)):
-                    size = len(body)
+                size = _body_size_bytes(body)
 
-                _current_fragment.writes.append(
-                    ArtifactRef(
-                        path=f"s3://{bucket}/{key}",
-                        hash=_normalize_etag(response.get("ETag") if isinstance(response, dict) else None),
-                        hash_algorithm="etag",
-                        size=size,
-                        capture_method="proxy",
-                    )
+                _log_write(
+                    path=f"s3://{bucket}/{key}",
+                    hash_value=_normalize_etag(
+                        response.get("ETag") if isinstance(response, dict) else None
+                    ),
+                    hash_algorithm="etag",
+                    size=size,
+                    capture_method="proxy",
                 )
             return response
 
         client.put_object = _tracked_put_object
+
+    real_upload_file = getattr(client, "upload_file", None)
+    if callable(real_upload_file):
+
+        def _tracked_upload_file(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+            _check_task_boundary()
+            response = real_upload_file(*args, **kwargs)
+            filename, bucket, key = _extract_upload_file_params(args, kwargs)
+            if bucket and key and _current_fragment is not None:
+                size = 0
+                if filename:
+                    try:
+                        size = max(0, int(os.path.getsize(filename)))
+                    except (OSError, ValueError, TypeError):
+                        size = 0
+
+                _log_write(
+                    path=f"s3://{bucket}/{key}",
+                    hash_value=None,
+                    hash_algorithm="etag",
+                    size=size,
+                    capture_method="proxy",
+                )
+            return response
+
+        client.upload_file = _tracked_upload_file
+
+    real_get_object = getattr(client, "get_object", None)
+    if callable(real_get_object):
+
+        def _tracked_get_object(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+            _check_task_boundary()
+            response = real_get_object(*args, **kwargs)
+            bucket, key = _extract_bucket_key(args, kwargs)
+            if bucket and key and _current_fragment is not None:
+                size_value = response.get("ContentLength") if isinstance(response, dict) else None
+                try:
+                    size = int(size_value) if size_value is not None else 0
+                except (TypeError, ValueError):
+                    size = 0
+
+                _log_read(
+                    path=f"s3://{bucket}/{key}",
+                    hash_value=_normalize_etag(
+                        response.get("ETag") if isinstance(response, dict) else None
+                    ),
+                    hash_algorithm="etag",
+                    size=size,
+                    capture_method="proxy",
+                )
+            return response
+
+        client.get_object = _tracked_get_object
 
     client._roar_s3_wrapped = True
     return client

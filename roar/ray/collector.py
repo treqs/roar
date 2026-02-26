@@ -342,6 +342,7 @@ def _upsert_artifact_for_ref(
         source_type=_normalize_source_type(None, ref.path),
         capture_method=_normalize_capture_method(ref.capture_method),
         hash_value=digest,
+        size=ref.size,
         metadata=json.dumps(metadata_payload),
     )
 
@@ -684,10 +685,16 @@ def _insert_artifact(
     source_type: str | None,
     capture_method: str | None,
     hash_value: str | None,
+    size: int = 0,
     metadata: str,
 ) -> None:
+    try:
+        normalized_size = max(0, int(size))
+    except (TypeError, ValueError):
+        normalized_size = 0
+
     insert_fields = ["id", "size", "first_seen_at", "first_seen_path", "kind", "metadata"]
-    values: list[Any] = [artifact_id, 0, now, path, "primitive", metadata]
+    values: list[Any] = [artifact_id, normalized_size, now, path, "primitive", metadata]
 
     if "path" in columns:
         insert_fields.append("path")
