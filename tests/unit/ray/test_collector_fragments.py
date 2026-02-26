@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from roar.db.schema import SCHEMA
+from roar.ray import collector as ray_collector
 from roar.ray.collector import collect_fragments
 from roar.ray.fragment import ArtifactRef, TaskFragment
 
@@ -17,6 +18,69 @@ def _init_db(project_dir: Path) -> Path:
     conn.commit()
     conn.close()
     return db_path
+
+
+def _make_fragment(job_uid: str, started_at: float, function_name: str = "task") -> TaskFragment:
+    return TaskFragment(
+        job_uid=job_uid,
+        parent_job_uid="abc",
+        ray_task_id=f"task-{job_uid}",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name=function_name,
+        started_at=started_at,
+        ended_at=started_at + 0.5,
+        exit_code=0,
+    )
+
+
+def test_assign_step_numbers_groups_fragments_within_one_second_window() -> None:
+    fragments = [
+        _make_fragment("a1111111", 0.0),
+        _make_fragment("b2222222", 0.2),
+        _make_fragment("c3333333", 0.8),
+    ]
+
+    step_map = ray_collector._assign_step_numbers(fragments)
+
+    assert step_map == {"a1111111": 2, "b2222222": 2, "c3333333": 2}
+
+
+def test_assign_step_numbers_creates_new_group_when_more_than_one_second_apart() -> None:
+    fragments = [
+        _make_fragment("a1111111", 0.0),
+        _make_fragment("b2222222", 0.6),
+        _make_fragment("c3333333", 2.5),
+    ]
+
+    step_map = ray_collector._assign_step_numbers(fragments)
+
+    assert step_map == {"a1111111": 2, "b2222222": 2, "c3333333": 3}
+
+
+def test_assign_step_numbers_sequential_pipeline_steps() -> None:
+    fragments = [
+        _make_fragment("ingest01", 0.0),
+        _make_fragment("train002", 5.0),
+        _make_fragment("eval0003", 10.0),
+    ]
+
+    step_map = ray_collector._assign_step_numbers(fragments)
+
+    assert step_map == {"ingest01": 2, "train002": 3, "eval0003": 4}
+
+
+def test_assign_step_numbers_single_fragment() -> None:
+    fragments = [_make_fragment("single01", 7.0)]
+
+    step_map = ray_collector._assign_step_numbers(fragments)
+
+    assert step_map == {"single01": 2}
+
+
+def test_assign_step_numbers_empty_fragments() -> None:
+    assert ray_collector._assign_step_numbers([]) == {}
 
 
 def test_collect_fragments_writes_task_jobs_and_deduplicates_artifacts(tmp_path: Path) -> None:
@@ -197,3 +261,34 @@ def test_collect_fragments_persists_artifact_size_from_fragment_refs(tmp_path: P
     assert row is not None
     assert int(row["size"]) == 123
     conn.close()
+
+
+def test_collect_fragments_assigns_step_numbers_from_fragment_timestamps(tmp_path: Path) -> None:
+    project_dir = tmp_path / "project"
+    db_path = _init_db(project_dir)
+
+    fragments = [
+        _make_fragment("ingest01", 0.0, function_name="ingest"),
+        _make_fragment("train002", 5.0, function_name="train"),
+        _make_fragment("eval0003", 10.0, function_name="eval"),
+    ]
+
+    collect_fragments(
+        fragments=[fragment.to_dict() for fragment in fragments],
+        project_dir=str(project_dir),
+        driver_job_uid="abc",
+    )
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT job_uid, step_number
+        FROM jobs
+        WHERE job_type = 'ray_task'
+        """
+    ).fetchall()
+    conn.close()
+
+    step_map = {row["job_uid"]: row["step_number"] for row in rows}
+    assert step_map == {"ingest01": 2, "train002": 3, "eval0003": 4}

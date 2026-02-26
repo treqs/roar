@@ -172,7 +172,7 @@ def collect_fragments(
         }
         job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
         now = time.time()
-
+        parsed_fragments: list[TaskFragment] = []
         for payload in fragments:
             if not isinstance(payload, dict):
                 continue
@@ -181,6 +181,12 @@ def collect_fragments(
                 fragment = TaskFragment.from_dict(payload)
             except Exception:  # noqa: BLE001
                 continue
+            parsed_fragments.append(fragment)
+
+        step_by_job_uid = _assign_step_numbers(parsed_fragments, base_step=step_number)
+
+        for fragment in parsed_fragments:
+            fragment_step_number = step_by_job_uid.get(fragment.job_uid, step_number + 1)
 
             _insert_fragment_job(
                 conn=conn,
@@ -188,7 +194,7 @@ def collect_fragments(
                 fragment=fragment,
                 driver_job_uid=driver_job_uid,
                 session_id=session_id,
-                step_number=step_number,
+                step_number=fragment_step_number,
                 now=now,
             )
 
@@ -235,6 +241,32 @@ def collect_fragments(
         conn.commit()
     finally:
         conn.close()
+
+
+def _assign_step_numbers(
+    fragments: list[TaskFragment],
+    base_step: int = 1,
+) -> dict[str, int]:
+    """Assign ray task step numbers from fragment start times."""
+    if not fragments:
+        return {}
+
+    sorted_fragments = sorted(fragments, key=lambda item: float(item.started_at))
+    current_step = base_step + 1
+    current_group_start: float | None = None
+    step_by_job_uid: dict[str, int] = {}
+
+    for fragment in sorted_fragments:
+        started_at = float(fragment.started_at)
+        if current_group_start is None:
+            current_group_start = started_at
+        elif (started_at - current_group_start) > 1.0:
+            current_step += 1
+            current_group_start = started_at
+
+        step_by_job_uid[fragment.job_uid] = current_step
+
+    return step_by_job_uid
 
 
 def _insert_fragment_job(
