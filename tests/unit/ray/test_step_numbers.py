@@ -130,34 +130,63 @@ def test_assign_step_numbers_ignores_incremental_snapshots_of_same_job() -> None
     assert _assign_step_numbers(fragments) == {"ingest": 2, "train": 3, "eval": 4}
 
 
-def test_assign_step_numbers_ignores_same_stage_fan_in_edges() -> None:
-    fragments = [
-        _frag("train_0", writes=("model_0",), function_name="s3_pipeline.train_shard"),
-        _frag("train_1", writes=("model_1",), function_name="s3_pipeline.train_shard"),
-        _frag(
-            "eval_0",
-            reads=("model_0",),
-            writes=("metrics_0",),
-            function_name="s3_pipeline.eval_model",
-        ),
-        _frag(
-            "eval_1",
-            reads=("model_1",),
-            writes=("metrics_1",),
-            function_name="s3_pipeline.eval_model",
-        ),
-        _frag(
-            "eval_agg",
-            reads=("model_0", "metrics_0", "metrics_1"),
-            writes=("report",),
-            function_name="s3_pipeline.eval_model",
-        ),
-    ]
+def test_same_function_cross_job_edge_preserved() -> None:
+    """
+    eval_0 depends on eval_1 and eval_2 (same function, different jobs).
+    eval_1 and eval_2 depend on train tasks (cross-function).
+    eval_0 must be one step higher than eval_1 and eval_2.
+    """
+    train_0 = _frag("train_0", writes=("model_0",), function_name="s3_pipeline.train_shard")
+    train_1 = _frag("train_1", writes=("model_1",), function_name="s3_pipeline.train_shard")
+    eval_1 = _frag(
+        "eval_1",
+        reads=("model_1",),
+        writes=("metrics_1",),
+        function_name="s3_pipeline.eval_model",
+    )
+    eval_2 = _frag(
+        "eval_2",
+        reads=("model_0",),
+        writes=("metrics_2",),
+        function_name="s3_pipeline.eval_model",
+    )
+    eval_0 = _frag(
+        "eval_0",
+        reads=("model_0", "metrics_1", "metrics_2"),
+        writes=("report",),
+        function_name="s3_pipeline.eval_model",
+    )
 
-    assert _assign_step_numbers(fragments) == {
-        "train_0": 2,
-        "train_1": 2,
-        "eval_0": 3,
-        "eval_1": 3,
-        "eval_agg": 3,
-    }
+    steps = _assign_step_numbers([train_0, train_1, eval_1, eval_2, eval_0])
+    assert steps["train_0"] == steps["train_1"]
+    assert steps["eval_1"] == steps["eval_2"]
+    assert steps["eval_1"] > steps["train_0"]
+    assert steps["eval_0"] > steps["eval_1"]
+    assert steps["eval_0"] > steps["eval_2"]
+
+
+def test_no_regression_independent_same_function_tasks() -> None:
+    """
+    Three ingest tasks with no shared artifacts must all get the same step.
+    """
+    ingest_0 = _frag(
+        "ingest_0",
+        reads=("raw_0",),
+        writes=("proc_0",),
+        function_name="s3_pipeline.ingest_shard",
+    )
+    ingest_1 = _frag(
+        "ingest_1",
+        reads=("raw_1",),
+        writes=("proc_1",),
+        function_name="s3_pipeline.ingest_shard",
+    )
+    ingest_2 = _frag(
+        "ingest_2",
+        reads=("raw_2",),
+        writes=("proc_2",),
+        function_name="s3_pipeline.ingest_shard",
+    )
+
+    steps = _assign_step_numbers([ingest_0, ingest_1, ingest_2])
+    assert steps["ingest_0"] == steps["ingest_1"] == steps["ingest_2"]

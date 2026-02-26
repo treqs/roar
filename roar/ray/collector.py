@@ -265,7 +265,6 @@ def _assign_step_numbers(
     # Collapse snapshots first so they do not create synthetic self-chains.
     job_index_by_uid: dict[str, int] = {}
     job_uids: list[str] = []
-    functions_by_job: list[str] = []
     reads_by_job: list[set[str]] = []
     writes_by_job: list[set[str]] = []
     for fragment in fragments:
@@ -274,11 +273,8 @@ def _assign_step_numbers(
             job_index = len(job_uids)
             job_index_by_uid[fragment.job_uid] = job_index
             job_uids.append(fragment.job_uid)
-            functions_by_job.append(_to_text(fragment.function_name) or "")
             reads_by_job.append(set())
             writes_by_job.append(set())
-        elif not functions_by_job[job_index]:
-            functions_by_job[job_index] = _to_text(fragment.function_name) or ""
 
         for ref in fragment.reads:
             hash_value = _normalize_hash(_to_text(ref.hash))
@@ -301,27 +297,14 @@ def _assign_step_numbers(
     depth = [1] * len(job_uids)
 
     for consumer_index, reads in enumerate(reads_by_job):
-        same_function_parents: set[int] = set()
-        cross_function_parents: set[int] = set()
         for hash_value in reads:
             for producer_index in producers_by_hash.get(hash_value, set()):
                 if producer_index == consumer_index:
                     continue
-                producer_function = functions_by_job[producer_index]
-                consumer_function = functions_by_job[consumer_index]
-                if producer_function and producer_function == consumer_function:
-                    same_function_parents.add(producer_index)
-                else:
-                    cross_function_parents.add(producer_index)
-
-        # Keep same-function edges only when they are the only signal.
-        parent_indices = cross_function_parents or same_function_parents
-
-        for producer_index in parent_indices:
-            if consumer_index in adjacency[producer_index]:
-                continue
-            adjacency[producer_index].add(consumer_index)
-            indegree[consumer_index] += 1
+                if consumer_index in adjacency[producer_index]:
+                    continue
+                adjacency[producer_index].add(consumer_index)
+                indegree[consumer_index] += 1
 
     queue = deque(index for index, item_indegree in enumerate(indegree) if item_indegree == 0)
     processed = 0
