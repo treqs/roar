@@ -42,10 +42,43 @@ check_cluster() {
   fi
 }
 
+usage() {
+  echo "Usage: $0 [--quick] [--iterations N]"
+}
+
 quick_flags=()
-if [[ "${1:-}" == "--quick" ]]; then
-  quick_flags=("--quick")
-fi
+iterations_flags=()
+while (($# > 0)); do
+  case "$1" in
+    --quick)
+      quick_flags=("--quick")
+      shift
+      ;;
+    --iterations)
+      if (($# < 2)); then
+        echo "ERROR: --iterations requires a numeric value"
+        usage
+        exit 2
+      fi
+      if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: invalid --iterations value: $2"
+        usage
+        exit 2
+      fi
+      iterations_flags=("--iterations" "$2")
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $1"
+      usage
+      exit 2
+      ;;
+  esac
+done
 
 check_cluster
 
@@ -60,9 +93,9 @@ scripts=(
 for script in "${scripts[@]}"; do
   echo ""
   echo "================================================================"
-  echo "Running $script ${quick_flags[*]}"
+  echo "Running $script ${quick_flags[*]} ${iterations_flags[*]}"
   echo "================================================================"
-  "$PYTHON_BIN" "$ROOT_DIR/tests/benchmarks/$script" "${quick_flags[@]}"
+  "$PYTHON_BIN" "$ROOT_DIR/tests/benchmarks/$script" "${quick_flags[@]}" "${iterations_flags[@]}"
 done
 
 echo ""

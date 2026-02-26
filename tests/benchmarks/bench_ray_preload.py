@@ -13,12 +13,12 @@ from tests.benchmarks.ray_bench_utils import (
     RAY_ADDRESS,
     benchmark_metadata,
     cleanup_runtime_env,
-    ensure_ray_docker_cluster_running,
     format_table,
     linear_regression,
     mean,
     resolve_iterations,
     stdev,
+    wait_for_cluster_readiness,
     write_results,
 )
 
@@ -60,10 +60,28 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _run_file_io_once(*, n_files: int, runtime_env: dict | None) -> float:
-    if runtime_env is None:
-        return float(ray.get(_file_io_task.remote(n_files)))
-    return float(ray.get(_file_io_task.options(runtime_env=runtime_env).remote(n_files)))
+def _run_file_io_once(*, n_files: int) -> float:
+    return float(ray.get(_file_io_task.remote(n_files)))
+
+
+def _measure_mode_for_count(
+    *,
+    n_files: int,
+    iterations: int,
+    runtime_env: dict | None,
+) -> list[float]:
+    ray.init(
+        address=RAY_ADDRESS,
+        runtime_env=runtime_env,
+        ignore_reinit_error=False,
+        logging_level="ERROR",
+    )
+    try:
+        for _ in range(WARMUP_RUNS):
+            _run_file_io_once(n_files=n_files)
+        return [_run_file_io_once(n_files=n_files) for _ in range(iterations)]
+    finally:
+        ray.shutdown()
 
 
 def _measure_mode_interleaved(
@@ -72,30 +90,22 @@ def _measure_mode_interleaved(
     iterations: int,
     roar_runtime_env: dict,
 ) -> tuple[dict[int, list[float]], dict[int, list[float]]]:
-    ray.init(address=RAY_ADDRESS, ignore_reinit_error=False, logging_level="ERROR")
-    try:
-        baseline_series: dict[int, list[float]] = {}
-        roar_series: dict[int, list[float]] = {}
+    baseline_series: dict[int, list[float]] = {}
+    roar_series: dict[int, list[float]] = {}
 
-        for count in file_counts:
-            for _ in range(WARMUP_RUNS):
-                _run_file_io_once(n_files=count, runtime_env=None)
-                _run_file_io_once(n_files=count, runtime_env=roar_runtime_env)
+    for count in file_counts:
+        baseline_series[count] = _measure_mode_for_count(
+            n_files=count,
+            iterations=iterations,
+            runtime_env=None,
+        )
+        roar_series[count] = _measure_mode_for_count(
+            n_files=count,
+            iterations=iterations,
+            runtime_env=roar_runtime_env,
+        )
 
-        for count in file_counts:
-            baseline_samples: list[float] = []
-            roar_samples: list[float] = []
-            for _ in range(iterations):
-                baseline_samples.append(_run_file_io_once(n_files=count, runtime_env=None))
-                roar_samples.append(
-                    _run_file_io_once(n_files=count, runtime_env=roar_runtime_env)
-                )
-            baseline_series[count] = baseline_samples
-            roar_series[count] = roar_samples
-
-        return baseline_series, roar_series
-    finally:
-        ray.shutdown()
+    return baseline_series, roar_series
 
 
 def main() -> int:
@@ -109,7 +119,7 @@ def main() -> int:
     file_counts = QUICK_FILE_COUNTS if args.quick else FULL_FILE_COUNTS
 
     try:
-        ensure_ray_docker_cluster_running()
+        wait_for_cluster_readiness()
     except RuntimeError as exc:
         print(f"ERROR: {exc}")
         return 2

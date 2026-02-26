@@ -18,12 +18,12 @@ from tests.benchmarks.ray_bench_utils import (
     benchmark_metadata,
     cleanup_runtime_env,
     ensure_minio_bucket,
-    ensure_ray_docker_cluster_running,
     format_table,
     mean,
     percent_delta,
     resolve_iterations,
     stdev,
+    wait_for_cluster_readiness,
     write_results,
 )
 
@@ -189,7 +189,7 @@ def main() -> int:
     io_levels = QUICK_IO_LEVELS if args.quick else FULL_IO_LEVELS
 
     try:
-        ensure_ray_docker_cluster_running()
+        wait_for_cluster_readiness()
     except RuntimeError as exc:
         print(f"ERROR: {exc}")
         return 2

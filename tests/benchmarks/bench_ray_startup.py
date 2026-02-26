@@ -13,12 +13,12 @@ from tests.benchmarks.ray_bench_utils import (
     RAY_ADDRESS,
     benchmark_metadata,
     cleanup_runtime_env,
-    ensure_ray_docker_cluster_running,
     format_table,
     mean,
     percent_delta,
     resolve_iterations,
     stdev,
+    wait_for_cluster_readiness,
     write_results,
 )
 
@@ -91,7 +91,7 @@ def main() -> int:
     )
 
     try:
-        ensure_ray_docker_cluster_running()
+        wait_for_cluster_readiness()
     except RuntimeError as exc:
         print(f"ERROR: {exc}")
         return 2

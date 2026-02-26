@@ -12,11 +12,11 @@ from roar.ray.actor import RoarLogCollectorActor
 from tests.benchmarks.ray_bench_utils import (
     RAY_ADDRESS,
     benchmark_metadata,
-    ensure_ray_docker_cluster_running,
     format_table,
     mean,
     resolve_iterations,
     stdev,
+    wait_for_cluster_readiness,
     write_results,
 )
 
@@ -163,7 +163,7 @@ def main() -> int:
     worker_counts = QUICK_WORKER_COUNTS if args.quick else FULL_WORKER_COUNTS
 
     try:
-        ensure_ray_docker_cluster_running()
+        wait_for_cluster_readiness()
     except RuntimeError as exc:
         print(f"ERROR: {exc}")
         return 2

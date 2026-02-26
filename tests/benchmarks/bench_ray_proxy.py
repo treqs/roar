@@ -15,13 +15,13 @@ from tests.benchmarks.ray_bench_utils import (
     MINIO_SECRET_KEY,
     benchmark_metadata,
     ensure_minio_bucket,
-    ensure_ray_docker_cluster_running,
     format_table,
     mean,
     minio_client,
     percent_delta,
     resolve_iterations,
     stdev,
+    wait_for_cluster_readiness,
     write_results,
 )
 
@@ -83,7 +83,7 @@ def main() -> int:
     sizes = QUICK_SIZES if args.quick else FULL_SIZES
 
     try:
-        ensure_ray_docker_cluster_running()
+        wait_for_cluster_readiness()
     except RuntimeError as exc:
         print(f"ERROR: {exc}")
         return 2
@@ -115,8 +115,19 @@ def main() -> int:
     try:
         for size_label, size_bytes in sizes.items():
             payload = b"x" * size_bytes
-            seed_key = f"bench/get-seed/{size_label}.bin"
-            direct_client.put_object(Bucket=BUCKET, Key=seed_key, Body=payload)
+            get_warmup_key = f"bench/get-warmup/{size_label}/{uuid.uuid4().hex}.bin"
+            direct_client.put_object(Bucket=BUCKET, Key=get_warmup_key, Body=payload)
+            get_iteration_keys = [
+                f"bench/get/{size_label}/{iteration_idx}-{uuid.uuid4().hex}.bin"
+                for iteration_idx in range(iterations)
+            ]
+            for get_key in get_iteration_keys:
+                direct_client.put_object(Bucket=BUCKET, Key=get_key, Body=payload)
+            if get_iteration_keys:
+                print(
+                    f"Prepared GetObject keys ({size_label}): "
+                    + ", ".join(get_iteration_keys)
+                )
 
             for operation in OPERATIONS:
                 direct_samples: list[float] = []
@@ -128,8 +139,8 @@ def main() -> int:
                         _measure_put(direct_client, bucket=BUCKET, key=warmup_key, payload=payload)
                         _measure_put(proxy_client, bucket=BUCKET, key=warmup_key + "-proxy", payload=payload)
                     else:
-                        _measure_get(direct_client, bucket=BUCKET, key=seed_key)
-                        _measure_get(proxy_client, bucket=BUCKET, key=seed_key)
+                        _measure_get(direct_client, bucket=BUCKET, key=get_warmup_key)
+                        _measure_get(proxy_client, bucket=BUCKET, key=get_warmup_key)
 
                 for iteration_idx in range(iterations):
                     if operation == "PutObject":
@@ -142,8 +153,9 @@ def main() -> int:
                             _measure_put(proxy_client, bucket=BUCKET, key=proxy_key, payload=payload)
                         )
                     else:
-                        direct_samples.append(_measure_get(direct_client, bucket=BUCKET, key=seed_key))
-                        proxy_samples.append(_measure_get(proxy_client, bucket=BUCKET, key=seed_key))
+                        get_key = get_iteration_keys[iteration_idx]
+                        direct_samples.append(_measure_get(direct_client, bucket=BUCKET, key=get_key))
+                        proxy_samples.append(_measure_get(proxy_client, bucket=BUCKET, key=get_key))
 
                 direct_mean_ms = mean(direct_samples) * 1000.0
                 proxy_mean_ms = mean(proxy_samples) * 1000.0
