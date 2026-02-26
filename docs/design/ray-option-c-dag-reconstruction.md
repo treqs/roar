@@ -425,51 +425,287 @@ match → GLaaS deduplicates and the second run's registration is a no-op.
 
 ---
 
-## Open Questions for Trevor
 
-1. **GLaaS server timeline**: `parent_job_uid` in the server DAG response is needed for full
-   visualisation. Is that a near-term GLaaS change or should we design the local side first
-   and treat GLaaS as a flat list of jobs for now?
+## Resolved Decisions (2026-02-26)
 
-2. **Actor task attribution**: Ray actor *methods* (long-lived stateful objects) don't have a
-   clean start/end per method call the way remote functions do. Should actor method calls be
-   grouped into a single long-lived "actor job", or attributed per-call? The per-call model
-   is more granular but harder to detect boundaries for.
+**1. GLaaS `parent_job_uid` — implement now.**
+`~/dev/glaas-api` has a live local server. Prisma migration + schema + service + DAG endpoint
+update will be done alongside the roar changes. Both repos targeted in parallel Codex loops.
 
-3. **task_id stability**: Ray's `task_id` changes between runs even for the same logical
-   task. This means `job_uid` (derived from task_id) will differ between runs. That's fine
-   for lineage recording, but it means `step_identity` (not `job_uid`) is the dedup key for
-   "same logical task, same inputs". Is that acceptable, or do we need stable task IDs?
+**2. Actor task attribution — configurable.**
+New config key: `[ray] actor_attribution = "per_call" | "per_actor"` (default: `"per_call"`).
+- `per_call`: each actor method invocation gets its own fragment / job_uid — most granular
+- `per_actor`: all method calls on one actor instance aggregate into one long-lived job_uid
 
-4. **S3 hash consistency**: Worker S3 events have ETags (MD5). The rest of the lineage uses
-   blake3. Two options:
-   - Keep ETags for S3, document the inconsistency
-   - Route S3 ops through the proxy in workers and compute blake3 there (requires proxy
-     running on each node or routing all S3 through the driver proxy)
-   Which matters more: uniformity or implementation simplicity?
+Detection: actor methods are identifiable via `ray.get_runtime_context().get_actor_id()` —
+non-null actor_id indicates actor context vs plain remote function.
 
-5. **Worker package provenance**: Currently `roar run` captures the full package list of the
-   driver environment. Workers may have a different environment (different `runtime_env.pip`).
-   Should `roar-worker` capture the worker's package list per fragment (first task only) and
-   include it in the job metadata? Or is driver-only sufficient?
+**3. task_id stability — step_identity is the dedup key.**
+Ray `task_id` is not stable across re-runs (it changes every invocation). `job_uid` is
+therefore unique per execution, not per logical task. `step_identity` =
+`blake3("ray_task:{fn_name}:" + ":".join(sorted(input_hashes)))` is the dedup key — same
+logical task + same inputs = same step_identity = GLaaS de-duplicates on second registration.
 
-6. **Intermediate artifacts**: Should checkpoint_0.pt and checkpoint_1.pt be registered with
-   GLaaS? They're intermediate artifacts — useful for debugging but noisy for most searches.
-   Suggest: register them locally always, register to GLaaS only if `roar register --deep` or
-   if they're explicitly referenced by a downstream job outside the current session.
+**4. S3 hash — keep ETags, treat as separate algorithm.**
+ETag stored as `{"algorithm": "etag", "digest": "<md5-or-multipart>"}`. Not interchangeable
+with blake3 for dedup purposes, but valid for identity within a run. Future:
+`roar register --as-blake3` flag streams each S3 artifact and computes blake3 at registration
+time, upgrading ETag lineage entries to content-addressed blake3.
+
+**5. Worker packages — first task per worker process, stored in job metadata.**
+`roar-worker` captures `{package_name: version}` once on startup (using same
+`importlib.metadata` approach as sitecustomize.py). Stored in first task fragment's metadata
+under `{"worker_packages": {...}}`. Included in the task job's `metadata` JSON when written
+to DB and registered with GLaaS.
+
+**6. Intermediate artifact registration — lineage-walk gated.**
+`roar register model.pt` walks the lineage graph backwards. Any artifact reachable in that
+walk (including intermediate task outputs like checkpoint_0.pt) is registered with GLaaS.
+Artifacts NOT in the target's lineage (e.g., debug outputs from a different task) are skipped.
+This is the existing `LineageCollector` behavior — it already only collects what's needed.
 
 ---
 
-## Summary
+## Detailed Implementation Plan
 
-| Concept | Current (non-Ray) | Proposed (Option C) |
-|---|---|---|
-| Jobs per `roar run` | 1 | 1 driver + N task jobs |
-| Task attribution | None | Per-task via `job_uid` |
-| Content hash (local) | blake3 | blake3 (hash-on-close in worker) |
-| Content hash (S3) | ETag | ETag (blake3 via proxy: future) |
-| Parent linkage | N/A | `parent_job_uid` |
-| Dedup key | `step_identity` | `step_identity` (same algorithm) |
-| GLaaS registration | Flat job list | Nested with parent_job_uid |
-| DAG reconstruction | Linear per session | Distributed fan-out/fan-in |
-| Reproduce support | Full | Full (replay driver = replays workers) |
+### Repo 1: `~/dev/glaas-api` (TypeScript / Prisma / PostgreSQL)
+
+#### A. Prisma migration — `parent_job_uid`
+
+New migration file in `prisma/migrations/`:
+
+```sql
+ALTER TABLE jobs ADD COLUMN parent_job_uid VARCHAR(255) REFERENCES jobs(job_uid);
+CREATE INDEX jobs_parent_job_uid_idx ON jobs(parent_job_uid);
+```
+
+Schema change in `prisma/schema.prisma`:
+```prisma
+model Job {
+  ...
+  parentJobUid    String?   @map("parent_job_uid")
+  parent          Job?      @relation("JobChildren", fields: [parentJobUid], references: [jobUid])
+  children        Job[]     @relation("JobChildren")
+  ...
+}
+```
+
+#### B. Schema validation — `job.schemas.ts`
+
+Add `parent_job_uid` as optional to `sessionJobCreateSchema` and `jobCreateSchema`:
+```typescript
+parent_job_uid: z.string().min(1).max(255).regex(/^\S+$/).nullable().optional(),
+```
+
+#### C. Repository + Service — pass through `parentJobUid`
+
+`job.repository.ts`: add `parentJobUid?: string | null` to `create` and `upsertByUid` data.
+`job.service.ts`: thread through from `SessionJobCreateInput` → `JobRepository`.
+
+#### D. DAG endpoint — return children
+
+`GET /api/v1/artifacts/{hash}/dag` currently returns a flat job list. Update to:
+1. For each job in the DAG, include its `children` (jobs where `parentJobUid = job.jobUid`)
+2. Nest children under their parent in the response JSON
+3. Children's artifacts are included in the overall artifact list
+
+Response shape extension:
+```json
+{
+  "jobs": [{
+    "jobUid": "a1b2c3d4",
+    "command": "python train.py",
+    "children": [{
+      "jobUid": "t001xxxx",
+      "command": "ray_task:train_shard",
+      "inputs": [...],
+      "outputs": [...]
+    }]
+  }]
+}
+```
+
+#### E. Tests (TDD — failing first)
+
+- `job.integration.test.ts`: test that `parent_job_uid` is stored and retrievable
+- `job.integration.test.ts`: test that registering a child job links to parent
+- DAG endpoint test: verify children are nested under parent in response
+- DAG endpoint test: verify intermediate artifacts in child lineage are included
+
+---
+
+### Repo 2: `~/dev/roar` (Python)
+
+#### A. `roar/ray/fragment.py` — NEW
+
+```python
+@dataclass
+class ArtifactRef:
+    path: str
+    hash: str | None          # blake3 for local; etag for S3
+    hash_algorithm: str        # "blake3" | "etag"
+    size: int
+    capture_method: str        # "python" | "proxy" | "preload"
+
+@dataclass
+class TaskFragment:
+    job_uid: str               # blake3(job_id + ray_task_id)[:8]
+    parent_job_uid: str        # driver's job_uid
+    ray_task_id: str
+    ray_worker_id: str
+    ray_node_id: str
+    ray_actor_id: str | None   # None for plain remote functions
+    function_name: str         # for step_identity
+    started_at: float
+    ended_at: float
+    exit_code: int
+    reads: list[ArtifactRef]
+    writes: list[ArtifactRef]
+    worker_packages: dict[str, str] | None   # first task per worker only
+```
+
+#### B. `roar/ray/actor.py` — extend
+
+Add alongside existing `append_batch` / `get_all`:
+```python
+def append_fragment(self, fragment: dict) -> None: ...
+def get_all_fragments(self) -> list[dict]: ...
+```
+
+Keep `append_batch` for backwards compat (existing tests use it).
+
+#### C. `roar/ray/roar_worker.py` — NEW entry point
+
+Long-lived process: starts once per Ray worker, handles many tasks.
+
+```
+startup:
+  - read ROAR_JOB_ID, ROAR_DRIVER_JOB_UID from env
+  - capture worker_packages (importlib.metadata)
+  - connect to RoarLogCollectorActor
+  - patch builtins.open (streaming blake3 hash-on-close for writes)
+  - patch boto3 S3 clients (ETag capture)
+  - activate LD_PRELOAD if libroar_tracer_preload.so present
+
+per-task lifecycle (detected via task_id change in get_runtime_context()):
+  - on task START: new TaskFragment(task_uid=derive_uid(), ...)
+  - all open() + S3 calls → current fragment
+  - on task END (next task starts or process exits): finalise + emit fragment
+
+actor attribution:
+  - if actor_id is non-null AND config.actor_attribution == "per_actor":
+      group all method calls on same actor_id into one long-lived fragment
+  - else (default per_call): treat each actor method call as its own fragment
+
+process exit:
+  - flush any pending fragment
+  - disconnect from actor
+```
+
+Entry point: `roar-worker = "roar.ray.roar_worker:main"`
+
+#### D. `roar/ray/collector.py` — rewrite fragment handling
+
+New path: `collect_fragments(fragments)` → writes task jobs to DB with `parent_job_uid`.
+
+```python
+for frag in fragments:
+    # content-addressed artifact upsert
+    for ref in frag.reads + frag.writes:
+        artifact_id = upsert_artifact(path=ref.path, hash=ref.hash,
+                                      algorithm=ref.hash_algorithm, size=ref.size)
+    # task job insert
+    job_db_id = insert_job(
+        job_uid=frag.job_uid,
+        parent_job_uid=frag.parent_job_uid,
+        command=f"ray_task:{frag.function_name}",
+        job_type="ray_task",
+        ...
+    )
+    # lineage edges
+    for ref in frag.reads:
+        insert_job_input(job_db_id, artifact_id(ref.hash, ref.hash_algorithm), ref.path)
+    for ref in frag.writes:
+        insert_job_output(job_db_id, artifact_id(ref.hash, ref.hash_algorithm), ref.path)
+```
+
+#### E. `roar/db/schema.py` — add `parent_job_uid`
+
+```sql
+ALTER TABLE jobs ADD COLUMN parent_job_uid TEXT;
+```
+
+Migration added to `run_migrations()`.
+
+#### F. `roar/services/execution/inject/sitecustomize.py` — update driver patch
+
+```python
+# In _prepare_worker_runtime_env:
+runtime_env["py_executable"] = "roar-worker"
+# Remove: runtime_env["worker_process_setup_hook"]
+
+# In _roar_ray_init:
+env_vars["ROAR_DRIVER_JOB_UID"] = driver_job_uid   # passed from execution service
+```
+
+#### G. `roar/core/models/glaas.py` — add `parent_job_uid`
+
+```python
+class RegisterJobRequest(RoarBaseModel):
+    ...
+    parent_job_uid: str | None = None
+```
+
+#### H. `roar/glaas_client.py` — pass `parent_job_uid`
+
+In `register_job` and `register_jobs_batch`, include `parent_job_uid` if non-null.
+
+#### I. `roar/services/registration/coordinator.py` — send task jobs with parent
+
+`RegistrationCoordinator.register_lineage` already iterates jobs. Task jobs (with
+`parent_job_uid`) are sent via the same batch endpoint with the new field.
+
+#### J. `roar/services/upload/lineage_collector.py` — include `ray_task` jobs
+
+Ensure jobs with `job_type = "ray_task"` are included in lineage walks. Currently only
+`NULL` and `"build"` job_types are handled.
+
+#### K. `roar/config.py` — add `ray.actor_attribution`
+
+```python
+# Default: "per_call"
+# Options: "per_call" | "per_actor"
+```
+
+#### L. `roar/cli/commands/register.py` — add `--as-blake3` flag
+
+When `--as-blake3` is set, for each S3 artifact in the lineage with only an ETag hash,
+stream the object and compute blake3 before registration. Requires AWS credentials.
+
+---
+
+## Test Plan (both repos — TDD throughout)
+
+### glaas-api tests
+1. `parent_job_uid` stored on job creation (integration test)
+2. Child job correctly references parent via foreign key
+3. `GET /dag/{hash}` nests child tasks under parent job
+4. Intermediate task artifact appears in DAG response when in lineage
+5. `parent_job_uid` is optional — existing non-Ray job creation unaffected
+
+### roar tests
+1. `TaskFragment` round-trips through msgpack serialisation (unit)
+2. `derive_task_uid` is deterministic: same inputs → same uid (unit)
+3. `roar-worker` detects task boundary via task_id change (unit, mock runtime context)
+4. `roar-worker` emits correct fragment on task end (unit)
+5. `roar-worker` streaming blake3: file written during task has hash in fragment (unit)
+6. S3 ETag captured with algorithm="etag" in fragment (unit)
+7. Actor attribution: `per_call` gives one fragment per method call (unit)
+8. Actor attribution: `per_actor` groups method calls (unit)
+9. Collector writes task jobs with `parent_job_uid` to DB (unit, in-memory SQLite)
+10. Collector deduplicates artifacts by hash across fragments (unit)
+11. `parent_job_uid` included in GLaaS registration payload (unit, mock client)
+12. `LineageCollector` includes `ray_task` jobs in walk (unit)
+13. E2E: multi-task Ray job via `roar run` → per-task jobs in DB with parent linkage
+14. E2E: `roar register model.pt` after Ray job → GLaaS payload has nested task jobs
+
