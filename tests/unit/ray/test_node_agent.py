@@ -3,9 +3,10 @@ from __future__ import annotations
 import socket
 
 import pytest
-import ray
 
-from roar.ray.node_agent import RoarNodeAgent
+ray = pytest.importorskip("ray")
+
+from roar.ray.node_agent import RoarNodeAgent  # noqa: E402
 
 
 @pytest.fixture

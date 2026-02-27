@@ -3,9 +3,10 @@ from __future__ import annotations
 import uuid
 
 import pytest
-import ray
 
-from roar.ray.actor import RoarLogCollectorActor
+ray = pytest.importorskip("ray")
+
+from roar.ray.actor import RoarLogCollectorActor  # noqa: E402
 
 
 @pytest.fixture
