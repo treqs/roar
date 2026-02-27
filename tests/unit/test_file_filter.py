@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from roar.core.models.provenance import PythonInjectData, TracerData
 from roar.services.execution.provenance import file_filter
 from roar.services.execution.provenance.file_filter import FileFilterService
@@ -83,3 +85,88 @@ def test_filter_files_keeps_regular_tmp_writes_when_tmp_filter_disabled(monkeypa
     )
 
     assert user_tmp_output in filtered.written_files
+
+
+def test_filter_files_excludes_roar_db_reads(monkeypatch) -> None:
+    monkeypatch.setattr(file_filter, "_get_editable_install_dirs", lambda: frozenset())
+
+    roar_db_path = "/workspace/project/.roar/roar.db"
+    tracer_data = TracerData(
+        opened_files=[roar_db_path],
+        read_files=[roar_db_path],
+        written_files=[],
+    )
+    python_data = PythonInjectData(sys_prefix="", sys_base_prefix="", roar_inject_dir="")
+
+    filtered = FileFilterService().filter_files(tracer_data, python_data, _filter_config())
+
+    assert roar_db_path not in filtered.opened_files
+    assert roar_db_path not in filtered.read_files
+
+
+def test_filter_files_excludes_roar_config_reads(monkeypatch) -> None:
+    monkeypatch.setattr(file_filter, "_get_editable_install_dirs", lambda: frozenset())
+
+    roar_config_path = "/workspace/project/.roar/config.toml"
+    tracer_data = TracerData(
+        opened_files=[roar_config_path],
+        read_files=[roar_config_path],
+        written_files=[],
+    )
+    python_data = PythonInjectData(sys_prefix="", sys_base_prefix="", roar_inject_dir="")
+
+    filtered = FileFilterService().filter_files(tracer_data, python_data, _filter_config())
+
+    assert roar_config_path not in filtered.opened_files
+    assert roar_config_path not in filtered.read_files
+
+
+def test_filter_files_excludes_git_head_reads(monkeypatch) -> None:
+    monkeypatch.setattr(file_filter, "_get_editable_install_dirs", lambda: frozenset())
+
+    git_head_path = "/workspace/project/.git/HEAD"
+    tracer_data = TracerData(
+        opened_files=[git_head_path],
+        read_files=[git_head_path],
+        written_files=[],
+    )
+    python_data = PythonInjectData(sys_prefix="", sys_base_prefix="", roar_inject_dir="")
+
+    filtered = FileFilterService().filter_files(tracer_data, python_data, _filter_config())
+
+    assert git_head_path not in filtered.opened_files
+    assert git_head_path not in filtered.read_files
+
+
+def test_filter_files_excludes_expanded_home_gitconfig_reads(monkeypatch) -> None:
+    monkeypatch.setattr(file_filter, "_get_editable_install_dirs", lambda: frozenset())
+
+    gitconfig_path = str(Path("~/.gitconfig").expanduser())
+    tracer_data = TracerData(
+        opened_files=[gitconfig_path],
+        read_files=[gitconfig_path],
+        written_files=[],
+    )
+    python_data = PythonInjectData(sys_prefix="", sys_base_prefix="", roar_inject_dir="")
+
+    filtered = FileFilterService().filter_files(tracer_data, python_data, _filter_config())
+
+    assert gitconfig_path not in filtered.opened_files
+    assert gitconfig_path not in filtered.read_files
+
+
+def test_filter_files_keeps_user_data_reads(monkeypatch) -> None:
+    monkeypatch.setattr(file_filter, "_get_editable_install_dirs", lambda: frozenset())
+
+    user_data_path = "/data/myfile.csv"
+    tracer_data = TracerData(
+        opened_files=[user_data_path],
+        read_files=[user_data_path],
+        written_files=[],
+    )
+    python_data = PythonInjectData(sys_prefix="", sys_base_prefix="", roar_inject_dir="")
+
+    filtered = FileFilterService().filter_files(tracer_data, python_data, _filter_config())
+
+    assert user_data_path in filtered.opened_files
+    assert user_data_path in filtered.read_files

@@ -170,6 +170,12 @@ class FileFilterService:
             # Internal worker runtime_env bundle staging path is always noise.
             if "/roar-worker-env-" in path:
                 return False
+            # roar's own runtime/config/database files are infrastructure, not inputs.
+            if self._is_roar_internal(path):
+                return False
+            # Git metadata reads are used for run context capture, not pipeline data.
+            if self._is_git_metadata(path):
+                return False
             if ignore_system_reads and self._is_system_read(path):
                 return False
             if ignore_torch_cache and self._is_torch_cache(path):
@@ -251,6 +257,25 @@ class FileFilterService:
     def _is_torch_cache(self, path: str) -> bool:
         """Check if path is a torch/triton cache file."""
         return any(path.startswith(pattern) for pattern in self.TORCH_CACHE_PATTERNS)
+
+    @staticmethod
+    def _is_roar_internal(path: str) -> bool:
+        """Check if path is a roar-internal file/directory."""
+        return (
+            "/.roar/" in path
+            or path.endswith("/.roar")
+            or path.startswith(".roar/")
+            or path == ".roar"
+        )
+
+    @staticmethod
+    def _is_git_metadata(path: str) -> bool:
+        """Check if path is git metadata used for roar context capture."""
+        if "/.git/" in path or path.endswith("/.git") or path.startswith(".git/") or path == ".git":
+            return True
+        if path.endswith("/.gitconfig") or path.endswith("/.gitmodules"):
+            return True
+        return path == ".gitconfig" or path == ".gitmodules"
 
     @staticmethod
     def _is_package_file(
