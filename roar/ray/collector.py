@@ -64,14 +64,14 @@ def collect(
     if actor_payload is not None:
         actor_events, actor_fragments = actor_payload
 
-    if actor_fragments and not actor_events:
-        actor_events = _events_from_fragments(actor_fragments)
-
-    if actor_fragments and not actor_events:
+    if actor_fragments:
+        session_id, base_step = _resolve_active_session_context(db_path)
         collect_fragments(
             actor_fragments,
             project_dir=project_dir,
-            driver_job_uid=os.environ.get("ROAR_DRIVER_JOB_UID"),
+            driver_job_uid=os.environ.get("ROAR_JOB_ID"),
+            session_id=session_id,
+            step_number=base_step,
         )
         _consume_filesystem_logs(log_path)
         return
@@ -125,6 +125,16 @@ def collect(
             if row is None:
                 continue
             actual_artifact_id = row["id"]
+
+            if info["hash"] and info["hash_algorithm"]:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO artifact_hashes
+                        (artifact_id, algorithm, digest)
+                    VALUES (?, ?, ?)
+                    """,
+                    (actual_artifact_id, info["hash_algorithm"], info["hash"]),
+                )
 
             if info["saw_write"]:
                 conn.execute(
@@ -276,8 +286,16 @@ def _events_from_fragments(fragments: list[dict[str, Any]]) -> list[dict[str, An
             if node_id:
                 event["node_id"] = node_id
             hash_value = _normalize_hash(_to_text(ref.hash))
+            hash_algorithm = _normalize_hash_algorithm(
+                _to_text(ref.hash_algorithm),
+                hash_value,
+                _normalize_source_type(None, ref.path),
+                ref.path,
+            )
             if hash_value:
                 event["hash"] = hash_value
+            if hash_algorithm:
+                event["hash_algorithm"] = hash_algorithm
             events.append(event)
 
         for ref in fragment.writes:
@@ -291,8 +309,16 @@ def _events_from_fragments(fragments: list[dict[str, Any]]) -> list[dict[str, An
             if node_id:
                 event["node_id"] = node_id
             hash_value = _normalize_hash(_to_text(ref.hash))
+            hash_algorithm = _normalize_hash_algorithm(
+                _to_text(ref.hash_algorithm),
+                hash_value,
+                _normalize_source_type(None, ref.path),
+                ref.path,
+            )
             if hash_value:
                 event["hash"] = hash_value
+            if hash_algorithm:
+                event["hash_algorithm"] = hash_algorithm
             events.append(event)
 
     return events
@@ -590,6 +616,27 @@ def _consume_filesystem_logs(log_path: Path) -> None:
             log_file.unlink()
 
 
+def _resolve_active_session_context(db_path: str) -> tuple[int | None, int]:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            """
+            SELECT id, current_step
+            FROM sessions
+            WHERE is_active = 1
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return None, 1
+        current_step = int(row["current_step"] or 1)
+        return int(row["id"]), max(1, current_step)
+    finally:
+        conn.close()
+
+
 def _collect_from_actor() -> list[dict[str, Any]] | None:
     try:
         import ray
@@ -700,6 +747,7 @@ def _merge_proxy_logs(
                 event["node_id"] = node_id
             if parsed.etag:
                 event["hash"] = parsed.etag
+                event["hash_algorithm"] = "etag"
             if parsed.size_bytes is not None:
                 event["size"] = _normalize_size(parsed.size_bytes)
 
@@ -726,6 +774,12 @@ def _aggregate_paths(task_events: dict[str, list[dict[str, Any]]]) -> dict[str, 
             source_type = _normalize_source_type(_to_text(event.get("source_type")), path)
             capture_method = _normalize_capture_method(_to_text(event.get("capture_method")))
             hash_value = _normalize_hash(_to_text(event.get("hash")))
+            hash_algorithm = _normalize_hash_algorithm(
+                _to_text(event.get("hash_algorithm")),
+                hash_value,
+                source_type,
+                path,
+            )
             event_size = _normalize_size(event.get("size"))
 
             if path not in path_info:
@@ -739,6 +793,7 @@ def _aggregate_paths(task_events: dict[str, list[dict[str, Any]]]) -> dict[str, 
                     "source_type": source_type,
                     "capture_method": capture_method,
                     "hash": hash_value,
+                    "hash_algorithm": hash_algorithm,
                     "size": event_size,
                 }
 
@@ -754,6 +809,10 @@ def _aggregate_paths(task_events: dict[str, list[dict[str, Any]]]) -> dict[str, 
 
             if hash_value and not info["hash"]:
                 info["hash"] = hash_value
+                if hash_algorithm:
+                    info["hash_algorithm"] = hash_algorithm
+            elif hash_value and hash_algorithm and not info["hash_algorithm"]:
+                info["hash_algorithm"] = hash_algorithm
             if event_size > info["size"]:
                 info["size"] = event_size
 
@@ -902,6 +961,23 @@ def _normalize_hash(value: str | None) -> str | None:
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
         text = text[1:-1]
     return text or None
+
+
+def _normalize_hash_algorithm(
+    algorithm: str | None,
+    hash_value: str | None,
+    source_type: str | None,
+    path: str,
+) -> str | None:
+    if not hash_value:
+        return None
+    if algorithm:
+        normalized = algorithm.strip().lower()
+        if normalized:
+            return normalized
+    if source_type == "s3" or path.startswith("s3://"):
+        return "etag"
+    return None
 
 
 def _normalize_size(value: Any) -> int:
