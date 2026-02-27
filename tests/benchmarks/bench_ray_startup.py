@@ -34,7 +34,9 @@ def _noop() -> int:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Benchmark Ray startup overhead with roar runtime_env")
+    parser = argparse.ArgumentParser(
+        description="Benchmark Ray startup overhead with roar runtime_env"
+    )
     parser.add_argument(
         "--iterations",
         type=int,
@@ -47,7 +49,12 @@ def parse_args() -> argparse.Namespace:
 
 def _single_startup_run(runtime_env: dict | None) -> float:
     start = time.perf_counter()
-    ray.init(address=RAY_ADDRESS, runtime_env=runtime_env, ignore_reinit_error=False, logging_level="ERROR")
+    ray.init(
+        address=RAY_ADDRESS,
+        runtime_env=runtime_env,
+        ignore_reinit_error=False,
+        logging_level="ERROR",
+    )
     ray.get(_noop.remote())
     elapsed = time.perf_counter() - start
     ray.shutdown()

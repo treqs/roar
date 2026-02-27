@@ -109,10 +109,7 @@ def test_sqlalchemy_schema_includes_parent_job_uid_column() -> None:
     Base.metadata.create_all(engine)
 
     with engine.connect() as conn:
-        columns = {
-            row[1]
-            for row in conn.execute(text("PRAGMA table_info(jobs)")).fetchall()
-        }
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(jobs)")).fetchall()}
 
     assert "parent_job_uid" in columns
 

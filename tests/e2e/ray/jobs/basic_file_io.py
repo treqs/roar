@@ -16,17 +16,19 @@ def write_file(path: str, data: str) -> str:
 
 @ray.remote
 def read_file(path: str) -> str:
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         return handle.read()
 
 
 @ray.remote
 def transform(input_path: str, output_path: str) -> dict[str, object]:
-    with open(input_path, "r", encoding="utf-8") as handle:
+    with open(input_path, encoding="utf-8") as handle:
         payload = json.load(handle)
 
     transformed = {
-        key: (value * 2 if isinstance(value, (int, float)) and not isinstance(value, bool) else value)
+        key: (
+            value * 2 if isinstance(value, (int, float)) and not isinstance(value, bool) else value
+        )
         for key, value in payload.items()
     }
 

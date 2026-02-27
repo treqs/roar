@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from tests.e2e.ray.conftest import submit_job_on_head
 from tests.e2e.ray.test_file_io_capture import _query_roar_db
 
@@ -32,7 +30,7 @@ class TestS3Capture:
         FAILS until roar propagates AWS_ENDPOINT_URL into Ray workers
         and collects proxy logs from each node.
         """
-        stdout, stderr, returncode = submit_job_on_head(
+        _stdout, stderr, returncode = submit_job_on_head(
             COMPOSE_FILE,
             f"{JOBS_DIR}/s3_io.py",
             env={"ROAR_WRAP": "1"},
@@ -55,7 +53,7 @@ class TestS3Capture:
 
         FAILS until roar's proxy captures worker S3 traffic.
         """
-        stdout, stderr, returncode = submit_job_on_head(
+        _stdout, stderr, returncode = submit_job_on_head(
             COMPOSE_FILE,
             f"{JOBS_DIR}/s3_io.py",
             env={"ROAR_WRAP": "1"},

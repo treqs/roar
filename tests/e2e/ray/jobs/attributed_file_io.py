@@ -41,7 +41,7 @@ def read_and_summarize(paths: list[str]) -> dict:
     ctx = ray.get_runtime_context()
     records = []
     for path in paths:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             records.append(json.load(f))
     return {
         "reader_task_id": ctx.get_task_id(),

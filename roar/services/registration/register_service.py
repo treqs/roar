@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from sqlalchemy import text
@@ -35,10 +36,14 @@ from ..upload.lineage_collector import LineageCollector
 from .coordinator import RegistrationCoordinator
 from .session import SessionRegistrationService
 
+_Blake3Constructor = Callable[[], Any]
+
 try:
-    from blake3 import blake3 as _blake3_constructor
-except Exception:  # noqa: BLE001
-    _blake3_constructor = None
+    from blake3 import blake3 as _blake3_import
+except Exception:
+    _blake3_constructor: _Blake3Constructor | None = None
+else:
+    _blake3_constructor = _blake3_import
 
 boto3 = None
 
@@ -443,7 +448,7 @@ class RegisterService:
 
         try:
             _ensure_boto3()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self._logger.warning("Skipping --as-blake3 upgrade because boto3 is unavailable: %s", e)
             return
 
@@ -557,7 +562,7 @@ class RegisterService:
                 if callable(close):
                     close()
             return hasher.hexdigest()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self._logger.warning("Failed to compute blake3 for s3://%s/%s: %s", bucket, key, e)
             return None
 

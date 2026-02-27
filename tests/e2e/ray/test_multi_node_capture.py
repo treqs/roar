@@ -16,8 +16,6 @@ import json
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from tests.e2e.ray.conftest import submit_job_on_head
 from tests.e2e.ray.test_file_io_capture import _query_roar_db
 
@@ -141,7 +139,7 @@ class TestMultiNodeCapture:
         FAILS until native tracers are running on remote worker nodes.
         """
         # Ray Data job writing parquet (Arrow, not Python open())
-        stdout, stderr, returncode = submit_job_on_head(
+        _stdout, stderr, returncode = submit_job_on_head(
             COMPOSE_FILE,
             f"{JOBS_DIR}/pipeline.py",
             env={"ROAR_WRAP": "1"},

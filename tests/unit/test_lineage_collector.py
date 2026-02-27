@@ -3,12 +3,12 @@
 import sqlite3
 from unittest.mock import Mock
 
+from roar.db.schema import SCHEMA, run_migrations
 from roar.services.upload.lineage_collector import (
     LineageCollector,
     _extract_primary_digest,
     compute_io_signature,
 )
-from roar.db.schema import SCHEMA, run_migrations
 
 
 class TestComputeIoSignature:
@@ -284,8 +284,7 @@ def test_collect_includes_ray_task_jobs_with_parent_links(tmp_path):
     )
 
     job_ids = {
-        row["job_uid"]: row["id"]
-        for row in conn.execute("SELECT id, job_uid FROM jobs").fetchall()
+        row["job_uid"]: row["id"] for row in conn.execute("SELECT id, job_uid FROM jobs").fetchall()
     }
 
     conn.execute(
@@ -383,8 +382,7 @@ def test_collect_includes_parent_linked_ray_tasks_without_driver_input_edges(tmp
     )
 
     job_ids = {
-        row["job_uid"]: row["id"]
-        for row in conn.execute("SELECT id, job_uid FROM jobs").fetchall()
+        row["job_uid"]: row["id"] for row in conn.execute("SELECT id, job_uid FROM jobs").fetchall()
     }
 
     conn.execute(
@@ -479,8 +477,7 @@ def test_collect_task_output_includes_parent_and_sibling_ray_tasks(tmp_path):
     )
 
     job_ids = {
-        row["job_uid"]: row["id"]
-        for row in conn.execute("SELECT id, job_uid FROM jobs").fetchall()
+        row["job_uid"]: row["id"] for row in conn.execute("SELECT id, job_uid FROM jobs").fetchall()
     }
     conn.execute(
         "INSERT INTO job_outputs (job_id, artifact_id, path) VALUES (?, ?, ?)",

@@ -261,9 +261,7 @@ def test_s3_pipeline_session_has_correct_job_count(
     del run_info
 
     session = glaas_http(f"/api/v1/sessions/{session_hash}")
-    assert _jobs_total(session) == 10, (
-        f"Expected 10 jobs, got {_jobs_total(session)}: {session}"
-    )
+    assert _jobs_total(session) == 10, f"Expected 10 jobs, got {_jobs_total(session)}: {session}"
     task_jobs = [job for job in session.get("jobs", []) if job.get("jobType") == "ray_task"]
     assert len(task_jobs) == 9
 

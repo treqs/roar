@@ -3,7 +3,7 @@ from __future__ import annotations
 import ray
 
 
-@ray.remote(num_cpus=0, max_concurrency=500)
+@ray.remote(num_cpus=0, max_concurrency=500)  # type: ignore[call-overload]
 class RoarLogCollectorActor:
     def __init__(self) -> None:
         self._events: list[dict] = []

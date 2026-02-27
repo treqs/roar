@@ -6,6 +6,7 @@ Patches builtins.open to capture per-task file I/O and write events through
 either a Ray actor aggregator (default on real clusters) or filesystem logs
 when a shared volume is available.
 """
+
 from __future__ import annotations
 
 import atexit
@@ -28,6 +29,7 @@ _actor: Any = None
 _event_buffer: list[dict[str, Any]] = []
 _buffer_lock = threading.Lock()
 _FLUSH_THRESHOLD = 50
+_SETUP_COMPLETE = False
 
 
 def setup() -> None:
@@ -37,9 +39,9 @@ def setup() -> None:
     Sets up the file I/O tracking shim. Writes are non-blocking:
     each open() call appends a JSON line to the shared log dir.
     """
-    global _BACKEND, _LOG_DIR, _SKIP_PREFIXES
+    global _BACKEND, _LOG_DIR, _SETUP_COMPLETE, _SKIP_PREFIXES
 
-    if getattr(setup, "_roar_worker_ready", False):
+    if _SETUP_COMPLETE:
         return
 
     _LOG_DIR = os.environ.get("ROAR_LOG_DIR", "/shared/.roar-logs")
@@ -65,7 +67,7 @@ def setup() -> None:
     if os.environ.get("ROAR_WORKER_CONFIGURE_PROXY", "0").strip() in {"1", "true", "True"}:
         _configure_local_proxy_endpoint()
     atexit.register(_flush_worker_buffer)
-    setup._roar_worker_ready = True
+    _SETUP_COMPLETE = True
 
 
 def _choose_backend() -> str:
@@ -96,8 +98,8 @@ def _init_actor() -> None:
     global _actor
 
     try:
-        import ray  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
+        import ray
+    except Exception:
         _actor = None
         return
 
@@ -107,24 +109,24 @@ def _init_actor() -> None:
     try:
         _actor = ray.get_actor(actor_name, namespace="roar")
         return
-    except Exception:  # noqa: BLE001
+    except Exception:
         _actor = None
 
 
-def _tracking_open(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+def _tracking_open(*args, **kwargs):
     """Replacement for builtins.open that logs file access with task context."""
     result = _real_open(*args, **kwargs)
 
     try:
         raw_path = args[0] if args else kwargs.get("file", "")
         if isinstance(raw_path, (str, bytes, os.PathLike)):
-            path = os.path.abspath(os.fspath(raw_path))
+            path = os.path.abspath(_path_to_str(raw_path))
             mode = args[1] if len(args) > 1 else kwargs.get("mode", "r")
 
             # Skip our own log files and pseudo-filesystems.
             if not any(path.startswith(prefix) for prefix in _SKIP_PREFIXES):
                 _log_access(path, str(mode), capture_method="python")
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass  # Never let tracking errors break user code
 
     return result
@@ -132,7 +134,7 @@ def _tracking_open(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
 
 def _runtime_context_ids() -> tuple[str | None, str | None]:
     try:
-        import ray  # noqa: PLC0415
+        import ray
 
         is_initialized = getattr(ray, "is_initialized", None)
         if callable(is_initialized) and not is_initialized():
@@ -142,7 +144,7 @@ def _runtime_context_ids() -> tuple[str | None, str | None]:
         task_id = _to_text(ctx.get_task_id())
         node_id = _to_text(ctx.get_node_id())
         return task_id, node_id
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None, None
 
 
@@ -152,10 +154,17 @@ def _to_text(value: Any) -> str | None:
     if isinstance(value, bytes):
         try:
             return value.hex()
-        except Exception:  # noqa: BLE001
+        except Exception:
             return value.decode("utf-8", errors="ignore")
     text = str(value)
     return text or None
+
+
+def _path_to_str(path: str | bytes | os.PathLike[Any]) -> str:
+    value = os.fspath(path)
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore")
+    return str(value)
 
 
 def _normalize_etag(value: Any) -> str | None:
@@ -236,7 +245,7 @@ def _flush_to_actor() -> None:
 
     try:
         _actor.append_batch.remote(batch)
-    except Exception:  # noqa: BLE001
+    except Exception:
         _write_batch_to_filesystem(batch)
 
 
@@ -257,17 +266,17 @@ def _patch_tempfile() -> None:
 
     real_named_temporary_file = tempfile.NamedTemporaryFile
 
-    def _tracked_named_temporary_file(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    def _tracked_named_temporary_file(*args, **kwargs):
         handle = real_named_temporary_file(*args, **kwargs)
         try:
-            path = os.path.abspath(os.fspath(handle.name))
+            path = os.path.abspath(_path_to_str(handle.name))
             _log_access(path, "w", capture_method="python")
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         return handle
 
     tempfile.NamedTemporaryFile = _tracked_named_temporary_file
-    tempfile._roar_worker_tempfile_patched = True
+    tempfile._roar_worker_tempfile_patched = True  # type: ignore[attr-defined]
 
 
 def _configure_local_proxy_endpoint() -> None:
@@ -279,24 +288,24 @@ def _configure_local_proxy_endpoint() -> None:
         return
 
     try:
-        import ray  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
+        import ray
+    except Exception:
         return
 
     try:
         node_id = _to_text(ray.get_runtime_context().get_node_id())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return
     if not node_id:
         return
 
     try:
-        from roar.ray.node_agent import build_node_agent_name  # noqa: PLC0415
+        from roar.ray.node_agent import build_node_agent_name
 
         actor_name = build_node_agent_name(job_id, node_id)
         agent = ray.get_actor(actor_name, namespace="roar")
         port = ray.get(agent.get_proxy_port.remote(), timeout=5)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return
 
     if isinstance(port, int) and port > 0:
@@ -305,8 +314,8 @@ def _configure_local_proxy_endpoint() -> None:
 
 def _patch_boto3() -> None:
     try:
-        import boto3  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
+        import boto3
+    except Exception:
         return
 
     if getattr(boto3, "_roar_worker_boto3_patched", False):
@@ -314,7 +323,7 @@ def _patch_boto3() -> None:
 
     real_client = boto3.client
 
-    def _tracking_client(service_name, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    def _tracking_client(service_name, *args, **kwargs):
         client = real_client(service_name, *args, **kwargs)
         if str(service_name).lower() != "s3":
             return client
@@ -324,14 +333,14 @@ def _patch_boto3() -> None:
     boto3._roar_worker_boto3_patched = True
 
 
-def _wrap_s3_client(client):  # noqa: ANN001
+def _wrap_s3_client(client):
     if getattr(client, "_roar_worker_s3_wrapped", False):
         return client
 
     real_put_object = getattr(client, "put_object", None)
     if callable(real_put_object):
 
-        def _tracked_put_object(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        def _tracked_put_object(*args, **kwargs):
             response = real_put_object(*args, **kwargs)
             bucket, key = _extract_bucket_key(args, kwargs)
             if bucket and key:
@@ -352,7 +361,7 @@ def _wrap_s3_client(client):  # noqa: ANN001
     real_get_object = getattr(client, "get_object", None)
     if callable(real_get_object):
 
-        def _tracked_get_object(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        def _tracked_get_object(*args, **kwargs):
             response = real_get_object(*args, **kwargs)
             bucket, key = _extract_bucket_key(args, kwargs)
             if bucket and key:
@@ -375,7 +384,7 @@ def _wrap_s3_client(client):  # noqa: ANN001
     return client
 
 
-def _extract_bucket_key(args, kwargs) -> tuple[str | None, str | None]:  # noqa: ANN001, ANN002
+def _extract_bucket_key(args, kwargs) -> tuple[str | None, str | None]:
     bucket = kwargs.get("Bucket")
     key = kwargs.get("Key")
     if bucket and key:
@@ -387,8 +396,8 @@ def _extract_bucket_key(args, kwargs) -> tuple[str | None, str | None]:  # noqa:
 
 def _patch_pandas() -> None:
     try:
-        import pandas as pd  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
+        import pandas as pd
+    except Exception:
         return
 
     original_to_parquet = getattr(pd.DataFrame, "to_parquet", None)
@@ -397,19 +406,19 @@ def _patch_pandas() -> None:
     if getattr(original_to_parquet, "_roar_worker_patched", False):
         return
 
-    def _tracked_to_parquet(self, path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    def _tracked_to_parquet(self, path, *args, **kwargs):
         result = original_to_parquet(self, path, *args, **kwargs)
         try:
             if isinstance(path, (str, bytes, os.PathLike)):
-                resolved = os.path.abspath(os.fspath(path))
+                resolved = os.path.abspath(_path_to_str(path))
                 if not any(resolved.startswith(prefix) for prefix in _SKIP_PREFIXES):
                     # Treat parquet capture as tracer-level for Ray Data/Arrow parity.
                     _log_access(resolved, "w", capture_method="tracer")
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         return result
 
-    _tracked_to_parquet._roar_worker_patched = True
+    _tracked_to_parquet._roar_worker_patched = True  # type: ignore[attr-defined]
     pd.DataFrame.to_parquet = _tracked_to_parquet
 
 
@@ -421,8 +430,8 @@ def _patch_pyarrow_filesystem() -> None:
     builtins.open. Wrapping filesystem stream open methods closes that gap.
     """
     try:
-        import pyarrow.fs as pafs  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
+        import pyarrow.fs as pafs
+    except Exception:
         return
 
     if getattr(pafs, "_roar_worker_fs_patched", False):
@@ -440,8 +449,8 @@ def _patch_pyarrow_filesystem() -> None:
         if not callable(original_method):
             continue
 
-        def _make_wrapper(original, mode_value):  # noqa: ANN001
-            def _wrapped(self, path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        def _make_wrapper(original, mode_value):
+            def _wrapped(self, path, *args, **kwargs):
                 result = original(self, path, *args, **kwargs)
                 _log_arrow_access(path, mode_value)
                 return result
@@ -451,7 +460,7 @@ def _patch_pyarrow_filesystem() -> None:
 
         try:
             setattr(pafs.FileSystem, method_name, _make_wrapper(original_method, mode))
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
 
     pafs._roar_worker_fs_patched = True
@@ -463,8 +472,8 @@ def _patch_ray_data() -> None:
     is unavailable in the worker runtime.
     """
     try:
-        import ray.data as ray_data  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
+        import ray.data as ray_data
+    except Exception:
         return
 
     if getattr(ray_data, "_roar_worker_ray_data_patched", False):
@@ -480,8 +489,8 @@ def _patch_ray_data() -> None:
         if not callable(original_method) or getattr(original_method, "_roar_worker_patched", False):
             continue
 
-        def _make_read_wrapper(original, mode_value):  # noqa: ANN001
-            def _wrapped(paths, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        def _make_read_wrapper(original, mode_value):
+            def _wrapped(paths, *args, **kwargs):
                 result = original(paths, *args, **kwargs)
                 for path in _iter_data_paths(paths):
                     _log_arrow_access(path, mode_value)
@@ -493,9 +502,9 @@ def _patch_ray_data() -> None:
         setattr(ray_data, method_name, _make_read_wrapper(original_method, mode))
 
     try:
-        from ray.data.dataset import Dataset  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
-        ray_data._roar_worker_ray_data_patched = True
+        from ray.data.dataset import Dataset
+    except Exception:
+        ray_data._roar_worker_ray_data_patched = True  # type: ignore[attr-defined]
         return
 
     for method_name, mode in (
@@ -507,8 +516,8 @@ def _patch_ray_data() -> None:
         if not callable(original_method) or getattr(original_method, "_roar_worker_patched", False):
             continue
 
-        def _make_write_wrapper(original, mode_value):  # noqa: ANN001
-            def _wrapped(self, path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        def _make_write_wrapper(original, mode_value):
+            def _wrapped(self, path, *args, **kwargs):
                 result = original(self, path, *args, **kwargs)
                 _log_arrow_access(path, mode_value)
                 return result
@@ -518,14 +527,14 @@ def _patch_ray_data() -> None:
 
         setattr(Dataset, method_name, _make_write_wrapper(original_method, mode))
 
-    ray_data._roar_worker_ray_data_patched = True
+    ray_data._roar_worker_ray_data_patched = True  # type: ignore[attr-defined]
 
 
 def _iter_data_paths(paths: Any) -> list[str]:
     if isinstance(paths, (str, bytes, os.PathLike)):
-        return [os.fspath(paths)]
+        return [_path_to_str(paths)]
     if isinstance(paths, (list, tuple, set)):
-        return [os.fspath(path) for path in paths if isinstance(path, (str, bytes, os.PathLike))]
+        return [_path_to_str(path) for path in paths if isinstance(path, (str, bytes, os.PathLike))]
     return []
 
 
@@ -533,8 +542,8 @@ def _log_arrow_access(path: Any, mode: str) -> None:
     if not isinstance(path, (str, bytes, os.PathLike)):
         return
     try:
-        resolved = os.path.abspath(os.fspath(path))
-    except Exception:  # noqa: BLE001
+        resolved = os.path.abspath(_path_to_str(path))
+    except Exception:
         return
     if any(resolved.startswith(prefix) for prefix in _SKIP_PREFIXES):
         return

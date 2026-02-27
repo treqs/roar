@@ -26,6 +26,7 @@ from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import boto3
+
 import ray
 
 SHARD_COUNT = 3
@@ -72,10 +73,10 @@ def _ensure_roar_worker_startup() -> None:
     Calling this inside remote tasks keeps S3/open capture active for live tests.
     """
     try:
-        import roar.ray.roar_worker as roar_worker  # noqa: PLC0415
+        import roar.ray.roar_worker as roar_worker
 
         roar_worker._startup()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return
 
 
@@ -152,11 +153,9 @@ def eval_model(train_result: dict[str, Any], run_id: str) -> dict[str, Any]:
             for idx in range(SHARD_COUNT):
                 key = f"metrics/{run_id}/metrics_{idx}.json"
                 try:
-                    payload = json.loads(
-                        s3.get_object(Bucket=OUT_BUCKET, Key=key)["Body"].read()
-                    )
+                    payload = json.loads(s3.get_object(Bucket=OUT_BUCKET, Key=key)["Body"].read())
                     all_metrics.append(payload)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     complete = False
                     break
             if complete:

@@ -20,8 +20,7 @@ def test_read_events_skips_corrupt_and_unreadable_jsonl_with_warnings(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "task-good.jsonl").write_text(
-        '{"path": "/shared/in.csv", "mode": "r", "task_id": "task-good"}\n'
-        '{"not": "json"\n'
+        '{"path": "/shared/in.csv", "mode": "r", "task_id": "task-good"}\n{"not": "json"\n'
     )
     (tmp_path / "task-bad.jsonl").mkdir()
 

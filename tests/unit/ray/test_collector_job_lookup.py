@@ -29,6 +29,7 @@ def test_create_ray_job_reuses_existing_job_from_roar_job_id(
 
     assert resolved_id == existing_id
     assert int(conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]) == 1
-    status = conn.execute("SELECT status FROM jobs WHERE id = ?", (existing_id,)).fetchone()["status"]
+    status = conn.execute("SELECT status FROM jobs WHERE id = ?", (existing_id,)).fetchone()[
+        "status"
+    ]
     assert status == "completed"
-

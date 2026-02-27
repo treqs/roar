@@ -1,5 +1,6 @@
 import atexit
 import builtins
+import contextlib
 import importlib.metadata as importlib_metadata
 import inspect
 import json
@@ -64,6 +65,7 @@ def tracking_import(name, globals=None, locals=None, fromlist=(), level=0):
     ):
         try:
             import sys as _sys
+
             _ray_module = _sys.modules.get("ray")
             if _ray_module is not None and hasattr(_ray_module, "init"):
                 _patch_ray_init(_ray_module)
@@ -245,7 +247,7 @@ _ray_node_agents = {}
 _ray_collect_pre_shutdown_registered = False
 
 
-def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
+def _patch_ray_init(ray_module) -> None:
     """
     Monkey-patch ray.init so that roar's worker setup hook is injected
     into every Ray cluster the driver connects to.
@@ -308,7 +310,7 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
     ray_module.init = _roar_ray_init
 
 
-def _patch_ray_shutdown(ray_module) -> None:  # noqa: ANN001
+def _patch_ray_shutdown(ray_module) -> None:
     real_ray_shutdown = getattr(ray_module, "shutdown", None)
     if not callable(real_ray_shutdown):
         return
@@ -321,17 +323,17 @@ def _patch_ray_shutdown(ray_module) -> None:  # noqa: ANN001
     ray_module.shutdown = _roar_ray_shutdown
 
 
-def _ensure_collector_actor(ray_module, job_id: str) -> None:  # noqa: ANN001
+def _ensure_collector_actor(ray_module, job_id: str) -> None:
     actor_name = f"roar-log-collector-{job_id}"
 
     try:
         ray_module.get_actor(actor_name, namespace="roar")
         return
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     try:
-        from roar.ray.actor import RoarLogCollectorActor  # noqa: PLC0415
+        from roar.ray.actor import RoarLogCollectorActor
 
         actor = RoarLogCollectorActor.options(
             name=actor_name,
@@ -345,7 +347,7 @@ def _ensure_collector_actor(ray_module, job_id: str) -> None:  # noqa: ANN001
             remote = getattr(get_all, "remote", None) if get_all is not None else None
             if callable(remote):
                 get_fn(remote(), timeout=10)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -354,7 +356,7 @@ def _node_agents_enabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def _prepare_worker_runtime_env(runtime_env, job_id: str):  # noqa: ANN001
+def _prepare_worker_runtime_env(runtime_env, job_id: str):
     runtime_env = dict(runtime_env or {})
     tmp_dir = tempfile.mkdtemp(prefix=f"roar-worker-env-{job_id[:8]}-")
 
@@ -369,10 +371,10 @@ def _prepare_worker_runtime_env(runtime_env, job_id: str):  # noqa: ANN001
             )
 
     try:
-        from pathlib import Path  # noqa: PLC0415
+        from pathlib import Path
 
-        import roar  # noqa: PLC0415
-        from roar.services.execution.tracer_backends import find_preload_library  # noqa: PLC0415
+        import roar
+        from roar.services.execution.tracer_backends import find_preload_library
 
         roar_package_dir = Path(roar.__file__).resolve().parent
         shutil.copytree(roar_package_dir, os.path.join(tmp_dir, "roar"), dirs_exist_ok=True)
@@ -392,7 +394,7 @@ def _prepare_worker_runtime_env(runtime_env, job_id: str):  # noqa: ANN001
     return runtime_env
 
 
-def _ray_rejects_manual_worker_setup_hook_env(ray_module) -> bool:  # noqa: ANN001
+def _ray_rejects_manual_worker_setup_hook_env(ray_module) -> bool:
     try:
         setup_hook_module = ray_module._private.runtime_env.setup_hook
         export_setup_func_module = getattr(setup_hook_module, "export_setup_func_module", None)
@@ -405,7 +407,7 @@ def _ray_rejects_manual_worker_setup_hook_env(ray_module) -> bool:  # noqa: ANN0
     return "is not permitted because it is reserved for the internal use" in source
 
 
-def _sanitize_worker_runtime_env_for_ray(ray_module, runtime_env):  # noqa: ANN001
+def _sanitize_worker_runtime_env_for_ray(ray_module, runtime_env):
     runtime_env = dict(runtime_env or {})
     if not runtime_env.get("worker_process_setup_hook"):
         return runtime_env
@@ -427,10 +429,10 @@ def _write_worker_wrapper(tmp_dir: str) -> None:
         with _real_open(wrapper_path, "w", encoding="utf-8") as handle:
             handle.write(
                 "#!/usr/bin/env bash\n"
-                "if [ -f \"./libroar_tracer_preload.so\" ]; then\n"
-                "    export LD_PRELOAD=\"$(pwd)/libroar_tracer_preload.so\"\n"
+                'if [ -f "./libroar_tracer_preload.so" ]; then\n'
+                '    export LD_PRELOAD="$(pwd)/libroar_tracer_preload.so"\n'
                 "fi\n"
-                "exec python3 \"$@\"\n"
+                'exec python3 "$@"\n'
             )
         os.chmod(wrapper_path, 0o755)
     except Exception:
@@ -453,22 +455,20 @@ def _merge_working_dir(source_dir: str, target_dir: str) -> None:
 def _warn_roar(message: str, *args) -> None:
     text = message % args if args else message
     try:
-        from roar.core.logging import get_logger  # noqa: PLC0415
+        from roar.core.logging import get_logger
 
         get_logger().warning(text)
         return
     except Exception:
         pass
 
-    try:
+    with contextlib.suppress(Exception):
         sys.stderr.write(text + "\n")
-    except Exception:
-        pass
 
 
-def _spawn_node_agents(ray_module, job_id: str, log_dir: str) -> None:  # noqa: ANN001
+def _spawn_node_agents(ray_module, job_id: str, log_dir: str) -> None:
     try:
-        from roar.ray.node_agent import RoarNodeAgent, build_node_agent_name  # noqa: PLC0415
+        from roar.ray.node_agent import RoarNodeAgent, build_node_agent_name
     except Exception:
         return
 
@@ -520,7 +520,7 @@ def _spawn_node_agents(ray_module, job_id: str, log_dir: str) -> None:  # noqa: 
                 _ray_node_agents[node_id] = {"name": actor_name, "actor": agent}
 
 
-def _collect_node_agent_logs(ray_module) -> dict[str, dict]:  # noqa: ANN001
+def _collect_node_agent_logs(ray_module) -> dict[str, dict]:
     with _ray_node_agents_lock:
         node_agents = dict(_ray_node_agents)
         _ray_node_agents.clear()
@@ -541,19 +541,15 @@ def _collect_node_agent_logs(ray_module) -> dict[str, dict]:  # noqa: ANN001
         except Exception:
             pass
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 ray_module.get(agent.shutdown.remote(), timeout=5)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 ray_module.kill(agent)
-            except Exception:
-                pass
 
     return proxy_logs
 
 
-def _start_ray_node_poller(ray_module) -> None:  # noqa: ANN001
+def _start_ray_node_poller(ray_module) -> None:
     global _ray_node_poller_thread
 
     if os.environ.get("ROAR_RAY_AUTOSCALING", "1").strip() in {"0", "false", "False"}:
@@ -578,7 +574,7 @@ def _start_ray_node_poller(ray_module) -> None:  # noqa: ANN001
         _ray_node_poller_thread.start()
 
 
-def _ray_node_poller_loop(ray_module, seen_node_ids, poll_interval):  # noqa: ANN001
+def _ray_node_poller_loop(ray_module, seen_node_ids, poll_interval):
     while not _ray_node_poller_stop.wait(poll_interval):
         _prime_new_ray_nodes(ray_module, seen_node_ids)
 
@@ -593,7 +589,7 @@ def _ray_node_poll_interval_seconds() -> float:
         return _DEFAULT_RAY_NODE_POLL_INTERVAL_SECONDS
 
 
-def _active_ray_node_ids(ray_module) -> set[str]:  # noqa: ANN001
+def _active_ray_node_ids(ray_module) -> set[str]:
     node_ids: set[str] = set()
     try:
         nodes = ray_module.nodes()
@@ -609,7 +605,7 @@ def _active_ray_node_ids(ray_module) -> set[str]:  # noqa: ANN001
     return node_ids
 
 
-def _prime_new_ray_nodes(ray_module, seen_node_ids):  # noqa: ANN001
+def _prime_new_ray_nodes(ray_module, seen_node_ids):
     current_node_ids = _active_ray_node_ids(ray_module)
     if not current_node_ids:
         return
@@ -628,7 +624,7 @@ def _prime_new_ray_nodes(ray_module, seen_node_ids):  # noqa: ANN001
     seen_node_ids.update(current_node_ids)
 
 
-def _prime_ray_node(ray_module, node_id: str) -> None:  # noqa: ANN001
+def _prime_ray_node(ray_module, node_id: str) -> None:
     try:
         node_resource = _node_resource_key(ray_module, node_id)
         remote_options = {"num_cpus": 0}
@@ -636,7 +632,7 @@ def _prime_ray_node(ray_module, node_id: str) -> None:  # noqa: ANN001
             remote_options["resources"] = {node_resource: 0.001}
 
         @ray_module.remote(**remote_options)
-        def _roar_prime_task():  # noqa: ANN202
+        def _roar_prime_task():
             return 1
 
         ray_module.get(_roar_prime_task.remote(), timeout=10)
@@ -644,7 +640,7 @@ def _prime_ray_node(ray_module, node_id: str) -> None:  # noqa: ANN001
         pass
 
 
-def _node_resource_key(ray_module, node_id: str) -> str | None:  # noqa: ANN001
+def _node_resource_key(ray_module, node_id: str) -> str | None:
     try:
         nodes = ray_module.nodes()
     except Exception:
@@ -673,7 +669,7 @@ def _load_ray_config() -> dict[str, object]:
     config_log_dir = _DEFAULT_RAY_LOG_DIR
 
     try:
-        from roar.config import load_config  # noqa: PLC0415
+        from roar.config import load_config
 
         start_dir = os.environ.get("ROAR_PROJECT_DIR") or os.getcwd()
         config = load_config(start_dir=start_dir)
@@ -703,8 +699,8 @@ def _load_ray_config() -> dict[str, object]:
 
 def _load_explicit_ray_pip_install(start_dir: str) -> bool | None:
     try:
-        from roar.core.settings import find_config_file  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
+        from roar.core.settings import find_config_file
+    except Exception:
         return None
 
     config_path = find_config_file(start_dir=start_dir)
@@ -714,7 +710,7 @@ def _load_explicit_ray_pip_install(start_dir: str) -> bool | None:
     try:
         with _real_open(config_path, "rb") as handle:
             payload = tomllib.load(handle)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
     if config_path.name == "pyproject.toml":
@@ -727,18 +723,16 @@ def _load_explicit_ray_pip_install(start_dir: str) -> bool | None:
     return bool(ray_section.get("pip_install"))
 
 
-def _merge_roar_runtime_env_pip(existing_pip):  # noqa: ANN001
+def _merge_roar_runtime_env_pip(existing_pip):
     pip_dependencies = _coerce_runtime_env_pip(existing_pip)
     pip_dependencies = [
-        dep
-        for dep in pip_dependencies
-        if _requirement_name(dep) not in {"roar-cli", "roar"}
+        dep for dep in pip_dependencies if _requirement_name(dep) not in {"roar-cli", "roar"}
     ]
     pip_dependencies.append(_resolve_roar_requirement())
     return pip_dependencies
 
 
-def _coerce_runtime_env_pip(value):  # noqa: ANN001
+def _coerce_runtime_env_pip(value):
     if value is None:
         return []
     if isinstance(value, str):
@@ -768,7 +762,7 @@ def _resolve_roar_requirement() -> str:
             return f"{package_name}=={importlib_metadata.version(package_name)}"
         except importlib_metadata.PackageNotFoundError:
             continue
-        except Exception:  # noqa: BLE001
+        except Exception:
             break
 
     return "roar-cli"
@@ -797,13 +791,14 @@ def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
     try:
         ray_config = _load_ray_config()
         log_dir = os.environ.get("ROAR_LOG_DIR", str(ray_config["log_dir"]))
-        from roar.ray.collector import collect  # noqa: PLC0415
+        from roar.ray.collector import collect
+
         collect(
             project_dir=os.environ.get("ROAR_PROJECT_DIR"),
             log_dir=log_dir,
             proxy_logs=proxy_logs or {},
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 

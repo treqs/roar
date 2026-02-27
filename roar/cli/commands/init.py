@@ -9,9 +9,10 @@ from pathlib import Path
 
 import click
 
-from ..context import RoarContext
 from roar.db.engine import create_roar_engine, init_database
 from roar.db.schema import run_migrations
+
+from ..context import RoarContext
 
 # Default config template with comments
 DEFAULT_CONFIG_TEMPLATE = """\
@@ -260,6 +261,7 @@ def init(ctx: RoarContext, yes: bool, no: bool, init_path: Path | None) -> None:
         click.echo("Skipped .gitignore update.")
     else:
         import sys as _sys
+
         if not _sys.stdin.isatty():
             # Non-interactive: skip to avoid blocking
             click.echo("Skipped .gitignore update (non-interactive).")

@@ -124,10 +124,7 @@ def main() -> int:
             for get_key in get_iteration_keys:
                 direct_client.put_object(Bucket=BUCKET, Key=get_key, Body=payload)
             if get_iteration_keys:
-                print(
-                    f"Prepared GetObject keys ({size_label}): "
-                    + ", ".join(get_iteration_keys)
-                )
+                print(f"Prepared GetObject keys ({size_label}): " + ", ".join(get_iteration_keys))
 
             for operation in OPERATIONS:
                 direct_samples: list[float] = []
@@ -137,24 +134,36 @@ def main() -> int:
                     warmup_key = f"bench/warmup/{operation}/{size_label}/{uuid.uuid4().hex}"
                     if operation == "PutObject":
                         _measure_put(direct_client, bucket=BUCKET, key=warmup_key, payload=payload)
-                        _measure_put(proxy_client, bucket=BUCKET, key=warmup_key + "-proxy", payload=payload)
+                        _measure_put(
+                            proxy_client, bucket=BUCKET, key=warmup_key + "-proxy", payload=payload
+                        )
                     else:
                         _measure_get(direct_client, bucket=BUCKET, key=get_warmup_key)
                         _measure_get(proxy_client, bucket=BUCKET, key=get_warmup_key)
 
                 for iteration_idx in range(iterations):
                     if operation == "PutObject":
-                        direct_key = f"bench/put/direct/{size_label}/{iteration_idx}-{uuid.uuid4().hex}"
-                        proxy_key = f"bench/put/proxy/{size_label}/{iteration_idx}-{uuid.uuid4().hex}"
+                        direct_key = (
+                            f"bench/put/direct/{size_label}/{iteration_idx}-{uuid.uuid4().hex}"
+                        )
+                        proxy_key = (
+                            f"bench/put/proxy/{size_label}/{iteration_idx}-{uuid.uuid4().hex}"
+                        )
                         direct_samples.append(
-                            _measure_put(direct_client, bucket=BUCKET, key=direct_key, payload=payload)
+                            _measure_put(
+                                direct_client, bucket=BUCKET, key=direct_key, payload=payload
+                            )
                         )
                         proxy_samples.append(
-                            _measure_put(proxy_client, bucket=BUCKET, key=proxy_key, payload=payload)
+                            _measure_put(
+                                proxy_client, bucket=BUCKET, key=proxy_key, payload=payload
+                            )
                         )
                     else:
                         get_key = get_iteration_keys[iteration_idx]
-                        direct_samples.append(_measure_get(direct_client, bucket=BUCKET, key=get_key))
+                        direct_samples.append(
+                            _measure_get(direct_client, bucket=BUCKET, key=get_key)
+                        )
                         proxy_samples.append(_measure_get(proxy_client, bucket=BUCKET, key=get_key))
 
                 direct_mean_ms = mean(direct_samples) * 1000.0

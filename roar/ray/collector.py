@@ -6,6 +6,7 @@ Collects worker events from a Ray actor aggregator when available, with
 filesystem JSONL logs as a fallback. De-duplicates paths and inserts
 artifact + job_input/output rows into ROAR_PROJECT_DIR/.roar/roar.db.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,6 +15,7 @@ import sqlite3
 import time
 import uuid
 from collections import deque
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +28,7 @@ _CAPTURE_PRIORITY = {"python": 0, "proxy": 1, "tracer": 2}
 
 
 def _get_logger():
-    from roar.core.logging import get_logger  # noqa: PLC0415
+    from roar.core.logging import get_logger
 
     return get_logger()
 
@@ -184,7 +186,7 @@ def collect_fragments(
 
             try:
                 fragment = TaskFragment.from_dict(payload)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
             parsed_fragments.append(fragment)
 
@@ -257,7 +259,7 @@ def _events_from_fragments(fragments: list[dict[str, Any]]) -> list[dict[str, An
 
         try:
             fragment = TaskFragment.from_dict(payload)
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
 
         task_id = _to_text(fragment.ray_task_id) or _to_text(fragment.job_uid) or "unknown"
@@ -513,8 +515,8 @@ def _upsert_artifact_for_ref(
 
 def _collect_actor_payload() -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]]] | None:
     try:
-        import ray  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
+        import ray
+    except Exception:
         return None
 
     is_initialized = getattr(ray, "is_initialized", None)
@@ -526,7 +528,7 @@ def _collect_actor_payload() -> tuple[list[dict[str, Any]] | None, list[dict[str
 
     try:
         actor = ray.get_actor(actor_name, namespace="roar")
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
     try:
@@ -551,13 +553,11 @@ def _collect_actor_payload() -> tuple[list[dict[str, Any]] | None, list[dict[str
                 fragments = [fragment for fragment in raw_fragments if isinstance(fragment, dict)]
 
         return events, fragments
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
     finally:
-        try:
+        with suppress(Exception):
             ray.kill(actor)
-        except Exception:  # noqa: BLE001
-            pass
 
 
 def _collect_events(
@@ -568,13 +568,13 @@ def _collect_events(
         return _group_events_by_task(actor_events)
 
     try:
-        import ray  # noqa: PLC0415
+        import ray
 
         if ray.is_initialized():
             actor_events = _collect_from_actor()
             if actor_events is not None:
                 return _group_events_by_task(actor_events)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     if not log_path.exists():
@@ -586,16 +586,14 @@ def _consume_filesystem_logs(log_path: Path) -> None:
     if not log_path.exists():
         return
     for log_file in log_path.glob("*.jsonl"):
-        try:
+        with suppress(OSError):
             log_file.unlink()
-        except OSError:
-            pass
 
 
 def _collect_from_actor() -> list[dict[str, Any]] | None:
     try:
-        import ray  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
+        import ray
+    except Exception:
         return None
 
     job_id = os.environ.get("ROAR_JOB_ID", "default")
@@ -603,7 +601,7 @@ def _collect_from_actor() -> list[dict[str, Any]] | None:
 
     try:
         actor = ray.get_actor(actor_name, namespace="roar")
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
     try:
@@ -611,13 +609,11 @@ def _collect_from_actor() -> list[dict[str, Any]] | None:
         if not isinstance(events, list):
             return []
         return [event for event in events if isinstance(event, dict)]
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
     finally:
-        try:
+        with suppress(Exception):
             ray.kill(actor)
-        except Exception:  # noqa: BLE001
-            pass
 
 
 def _group_events_by_task(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -754,9 +750,7 @@ def _aggregate_paths(task_events: dict[str, list[dict[str, Any]]]) -> dict[str, 
             if source_type and not info["source_type"]:
                 info["source_type"] = source_type
 
-            info["capture_method"] = _choose_capture_method(
-                info["capture_method"], capture_method
-            )
+            info["capture_method"] = _choose_capture_method(info["capture_method"], capture_method)
 
             if hash_value and not info["hash"]:
                 info["hash"] = hash_value
@@ -923,7 +917,7 @@ def _to_text(value: Any) -> str | None:
     if isinstance(value, bytes):
         try:
             return value.hex()
-        except Exception:  # noqa: BLE001
+        except Exception:
             return value.decode("utf-8", errors="ignore")
     text = str(value)
     return text or None

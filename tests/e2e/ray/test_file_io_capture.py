@@ -1,7 +1,7 @@
 """
 TDD: roar captures file I/O from Ray workers.
 
-These tests define the target behaviour for the roar–Ray integration.
+These tests define the target behaviour for the roar-Ray integration.
 They FAIL until roar's sitecustomize / tracer injection reaches workers.
 
 Run against a live cluster:
@@ -10,7 +10,6 @@ Run against a live cluster:
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 
@@ -40,7 +39,7 @@ def _query_roar_db(compose_file, sql: str, params: tuple = ()) -> list[dict]:
             "-f",
             str(compose_file),
             "cp",
-            f"ray-head:/app/.roar/roar.db",
+            "ray-head:/app/.roar/roar.db",
             tmp_path,
         ],
         check=True,
@@ -94,7 +93,7 @@ class TestFileIOCapture:
 
         FAILS until roar instruments Ray workers.
         """
-        stdout, stderr, returncode = submit_job_on_head(
+        _stdout, stderr, returncode = submit_job_on_head(
             COMPOSE_FILE,
             f"{JOBS_DIR}/basic_file_io.py",
             env={"ROAR_WRAP": "1"},
@@ -119,7 +118,7 @@ class TestFileIOCapture:
 
         FAILS until roar instruments Ray workers.
         """
-        stdout, stderr, returncode = submit_job_on_head(
+        _stdout, stderr, returncode = submit_job_on_head(
             COMPOSE_FILE,
             f"{JOBS_DIR}/basic_file_io.py",
             env={"ROAR_WRAP": "1"},
@@ -143,7 +142,7 @@ class TestFileIOCapture:
 
         FAILS until roar instruments Ray workers.
         """
-        stdout, stderr, returncode = submit_job_on_head(
+        _stdout, stderr, returncode = submit_job_on_head(
             COMPOSE_FILE,
             f"{JOBS_DIR}/pipeline.py",
             env={"ROAR_WRAP": "1"},
@@ -159,6 +158,4 @@ class TestFileIOCapture:
         assert any("pipeline_input.csv" in p for p in captured_paths), (
             "pipeline_input.csv not captured"
         )
-        assert any(".parquet" in p for p in captured_paths), (
-            "parquet output not captured"
-        )
+        assert any(".parquet" in p for p in captured_paths), "parquet output not captured"

@@ -34,7 +34,9 @@ def test_recording_skips_duplicate_output_for_existing_job_path(tmp_path: Path) 
         )
         db_ctx.jobs.add_output(job_id, ray_artifact_id, str(output_path))
 
-        before_artifacts = db_ctx.session.execute(text("SELECT COUNT(*) FROM artifacts")).scalar_one()
+        before_artifacts = db_ctx.session.execute(
+            text("SELECT COUNT(*) FROM artifacts")
+        ).scalar_one()
 
         db_ctx.job_recording._register_artifacts(
             job_id=job_id,
@@ -48,7 +50,9 @@ def test_recording_skips_duplicate_output_for_existing_job_path(tmp_path: Path) 
             text("SELECT COUNT(*) FROM job_outputs WHERE job_id = :job_id AND path = :path"),
             {"job_id": job_id, "path": str(output_path)},
         ).scalar_one()
-        after_artifacts = db_ctx.session.execute(text("SELECT COUNT(*) FROM artifacts")).scalar_one()
+        after_artifacts = db_ctx.session.execute(
+            text("SELECT COUNT(*) FROM artifacts")
+        ).scalar_one()
         status = db_ctx.session.execute(
             text("SELECT status FROM jobs WHERE id = :job_id"),
             {"job_id": job_id},

@@ -76,6 +76,7 @@ def test_tracking_open_hashes_written_bytes_on_close(
     )
     monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
     monkeypatch.setattr(roar_worker, "_check_task_boundary", lambda: None)
+    monkeypatch.setattr(roar_worker, "_should_track_local_path", lambda _path: True)
 
     handle = roar_worker._tracking_open(output_path, "wb")
     handle.write(payload[:100])
@@ -141,7 +142,7 @@ def test_get_task_and_actor_id_do_not_import_ray_during_startup(
 
     real_import = builtins.__import__
 
-    def _guard_import(name, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    def _guard_import(name, *args, **kwargs):
         if name == "ray":
             raise AssertionError("ray import should not be attempted")
         return real_import(name, *args, **kwargs)
@@ -173,7 +174,7 @@ def test_wrap_s3_client_logs_etag_on_put_object(monkeypatch: pytest.MonkeyPatch)
 
     class _FakeS3Client:
         @staticmethod
-        def put_object(*args, **kwargs):  # noqa: ANN002, ANN003
+        def put_object(*args, **kwargs):
             del args, kwargs
             return {"ETag": '"etag-value-123"'}
 
@@ -212,7 +213,7 @@ def test_wrap_s3_client_put_object_uses_size_for_empty_bytes_body(
 
     class _FakeS3Client:
         @staticmethod
-        def put_object(*args, **kwargs):  # noqa: ANN002, ANN003
+        def put_object(*args, **kwargs):
             del args, kwargs
             return {"ETag": '"etag-value-123"'}
 
@@ -246,7 +247,7 @@ def test_wrap_s3_client_put_object_uses_size_for_seekable_body(
 
     class _FakeS3Client:
         @staticmethod
-        def put_object(*args, **kwargs):  # noqa: ANN002, ANN003
+        def put_object(*args, **kwargs):
             del args, kwargs
             return {"ETag": '"etag-value-123"'}
 
@@ -287,7 +288,7 @@ def test_wrap_s3_client_upload_file_uses_local_file_size(
 
     class _FakeS3Client:
         @staticmethod
-        def upload_file(*args, **kwargs):  # noqa: ANN002, ANN003
+        def upload_file(*args, **kwargs):
             del args, kwargs
             return None
 
@@ -322,7 +323,7 @@ def test_wrap_s3_client_logs_etag_on_get_object(monkeypatch: pytest.MonkeyPatch)
 
     class _FakeS3Client:
         @staticmethod
-        def get_object(*args, **kwargs):  # noqa: ANN002, ANN003
+        def get_object(*args, **kwargs):
             del args, kwargs
             return {
                 "ETag": '"etag-read-123"',

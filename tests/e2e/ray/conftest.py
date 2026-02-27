@@ -7,8 +7,8 @@ import json
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 import pytest
 
@@ -35,9 +35,7 @@ def _import_real_ray():
     }
     original_sys_path = sys.path[:]
     ray_keys = [
-        key
-        for key in sys.modules
-        if (key == "ray" or key.startswith("ray.")) and key != __name__
+        key for key in sys.modules if (key == "ray" or key.startswith("ray.")) and key != __name__
     ]
     for key in ray_keys:
         sys.modules.pop(key, None)

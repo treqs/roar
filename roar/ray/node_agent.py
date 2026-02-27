@@ -11,7 +11,6 @@ import ray
 
 from roar.services.execution import tracer_backends
 
-
 _READY_SENTINEL = "ROAR_PROXY_READY"
 _DEFAULT_PROXY_START_TIMEOUT_SECONDS = 10.0
 
@@ -43,7 +42,7 @@ class RoarNodeAgent:
         try:
             ctx = ray.get_runtime_context()
             value = ctx.get_node_id()
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
         if value is None:
@@ -55,7 +54,7 @@ class RoarNodeAgent:
         if callable(to_hex):
             try:
                 return str(to_hex())
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
         return str(value)

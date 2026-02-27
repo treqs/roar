@@ -54,6 +54,12 @@ def glaas_configured(temp_git_repo: Path, glaas_url: str) -> Path:
         check=True,
         capture_output=True,
     )
+    subprocess.run(
+        [sys.executable, "-m", "roar", "config", "set", "ray.pip_install", "false"],
+        cwd=temp_git_repo,
+        check=True,
+        capture_output=True,
+    )
     return temp_git_repo
 
 
@@ -88,6 +94,11 @@ import ray
 
 @ray.remote
 def process_shard(shard_id: int, data: str) -> dict:
+    try:
+        import roar.ray.roar_worker as _roar_worker
+        _roar_worker._startup()
+    except Exception:
+        pass
     out = f"ckpt_{shard_id}.json"
     payload = {"shard": shard_id, "processed": data.upper()}
     with open(out, "w", encoding="utf-8") as handle:

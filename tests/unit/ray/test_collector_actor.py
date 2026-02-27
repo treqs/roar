@@ -61,9 +61,7 @@ def test_collect_events_prefers_actor_when_ray_is_initialized(
     fallback_log = tmp_path / "task-fallback.jsonl"
     fallback_log.write_text('{"task_id":"task-fallback","path":"/tmp/fs.txt","mode":"w"}\n')
 
-    fake_ray = _FakeRayWithActor(
-        [{"task_id": "task-actor", "path": "/tmp/actor.txt", "mode": "w"}]
-    )
+    fake_ray = _FakeRayWithActor([{"task_id": "task-actor", "path": "/tmp/actor.txt", "mode": "w"}])
     monkeypatch.setitem(sys.modules, "ray", fake_ray)
     monkeypatch.setenv("ROAR_JOB_ID", "job1234")
 
@@ -81,7 +79,9 @@ def test_collect_events_falls_back_to_filesystem_when_actor_unavailable(
     tmp_path: Path,
 ) -> None:
     log_file = tmp_path / "task-fs.jsonl"
-    log_file.write_text(json.dumps({"task_id": "task-fs", "path": "/tmp/fs.txt", "mode": "r"}) + "\n")
+    log_file.write_text(
+        json.dumps({"task_id": "task-fs", "path": "/tmp/fs.txt", "mode": "r"}) + "\n"
+    )
 
     monkeypatch.setitem(sys.modules, "ray", _FakeRayNoActor())
 

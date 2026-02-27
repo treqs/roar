@@ -48,7 +48,9 @@ QUICK_IO_LEVELS = {
 
 
 @ray.remote
-def _reference_task(task_index: int, n_files: int, n_s3_ops: int, bucket: str, key_prefix: str) -> int:
+def _reference_task(
+    task_index: int, n_files: int, n_s3_ops: int, bucket: str, key_prefix: str
+) -> int:
     import boto3
 
     endpoint = os.getenv("AWS_ENDPOINT_URL", "http://minio:9000")
@@ -96,10 +98,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _run_job_once(*, task_count: int, n_files: int, n_s3_ops: int, runtime_env: dict | None) -> float:
+def _run_job_once(
+    *, task_count: int, n_files: int, n_s3_ops: int, runtime_env: dict | None
+) -> float:
     key_prefix = f"bench-e2e/{uuid.uuid4().hex[:12]}"
     start = time.perf_counter()
-    ray.init(address=RAY_ADDRESS, runtime_env=runtime_env, ignore_reinit_error=False, logging_level="ERROR")
+    ray.init(
+        address=RAY_ADDRESS,
+        runtime_env=runtime_env,
+        ignore_reinit_error=False,
+        logging_level="ERROR",
+    )
     try:
         refs = [
             _reference_task.remote(task_index, n_files, n_s3_ops, BUCKET, key_prefix)

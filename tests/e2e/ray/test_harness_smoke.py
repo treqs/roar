@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import boto3
+
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
@@ -64,7 +65,7 @@ def test_shared_volume_accessible(ray_connection) -> None:
 
     @ray.remote
     def read_shared(path: str) -> str:
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             return handle.read()
 
     shared_path = ray.get(write_shared.remote("/shared/smoke_test.txt", "shared-data-ok"))

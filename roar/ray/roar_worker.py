@@ -6,16 +6,21 @@ import hashlib
 import os
 import sys
 import time
+from collections.abc import Callable
 from typing import Any
 
 from roar.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
 
 _real_open = builtins.open
 
+_Blake3Constructor = Callable[[], Any]
+
 try:
-    from blake3 import blake3 as _blake3_constructor
-except Exception:  # noqa: BLE001
-    _blake3_constructor = None
+    from blake3 import blake3 as _blake3_import
+except Exception:
+    _blake3_constructor: _Blake3Constructor | None = None
+else:
+    _blake3_constructor = _blake3_import
 
 _current_task_id: str | None = None
 _current_fragment: TaskFragment | None = None
@@ -40,7 +45,7 @@ def _to_text(value: Any) -> str | None:
     if isinstance(value, bytes):
         try:
             return value.hex()
-        except Exception:  # noqa: BLE001
+        except Exception:
             return value.decode("utf-8", errors="ignore")
     text = str(value)
     return text or None
@@ -54,7 +59,7 @@ def _get_task_id() -> str | None:
         ctx = ray.get_runtime_context()
         task_id = ctx.get_task_id()
         return _to_text(task_id)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -66,7 +71,7 @@ def _get_actor_id() -> str | None:
         ctx = ray.get_runtime_context()
         actor_id = ctx.get_actor_id()
         return _to_text(actor_id)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -78,7 +83,7 @@ def _get_node_id() -> str | None:
         ctx = ray.get_runtime_context()
         node_id = ctx.get_node_id()
         return _to_text(node_id)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -92,14 +97,14 @@ def _get_worker_id() -> str | None:
         global_worker = getattr(worker, "global_worker", None)
         worker_id = getattr(global_worker, "worker_id", None)
         return _to_text(worker_id)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
 def _get_actor_attribution() -> str:
     default = "per_call"
     try:
-        from roar.config import load_config  # noqa: PLC0415
+        from roar.config import load_config
 
         start_dir = os.environ.get("ROAR_PROJECT_DIR") or os.getcwd()
         config = load_config(start_dir=start_dir)
@@ -108,7 +113,7 @@ def _get_actor_attribution() -> str:
             configured = str(ray_config.get("actor_attribution", default)).strip().lower()
             if configured in {"per_call", "per_actor"}:
                 return configured
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return default
 
@@ -126,7 +131,7 @@ def _get_task_function_name() -> str:
             name = _to_text(getter())
             if name:
                 return name
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return "unknown"
 
@@ -244,7 +249,7 @@ def _log_read(
 
 
 class _TrackedWriteFile:
-    def __init__(self, handle, path: str, capture_method: str = "python") -> None:  # noqa: ANN001
+    def __init__(self, handle, path: str, capture_method: str = "python") -> None:
         self._handle = handle
         self._path = path
         self._capture_method = capture_method
@@ -264,12 +269,12 @@ class _TrackedWriteFile:
         if self._hasher is not None:
             self._hasher.update(payload)
 
-    def write(self, data):  # noqa: ANN001
+    def write(self, data):
         result = self._handle.write(data)
         self._update_hasher(data)
         return result
 
-    def writelines(self, lines):  # noqa: ANN001
+    def writelines(self, lines):
         for line in lines:
             self._update_hasher(line)
         return self._handle.writelines(lines)
@@ -282,7 +287,7 @@ class _TrackedWriteFile:
         if self._hasher is not None:
             try:
                 hash_value = self._hasher.hexdigest()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 hash_value = None
 
         self._handle.close()
@@ -302,7 +307,7 @@ class _TrackedWriteFile:
         self._handle.__enter__()
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+    def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
         return self._handle.__exit__(exc_type, exc, tb)
 
@@ -314,7 +319,7 @@ class _TrackedWriteFile:
         return getattr(self._handle, name)
 
 
-def _tracking_open(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+def _tracking_open(*args, **kwargs):
     _check_task_boundary()
     handle = _real_open(*args, **kwargs)
 
@@ -348,7 +353,7 @@ def _normalize_etag(value: Any) -> str | None:
     return text or None
 
 
-def _extract_bucket_key(args, kwargs) -> tuple[str | None, str | None]:  # noqa: ANN001, ANN002
+def _extract_bucket_key(args, kwargs) -> tuple[str | None, str | None]:
     bucket = kwargs.get("Bucket")
     key = kwargs.get("Key")
     if bucket and key:
@@ -358,9 +363,7 @@ def _extract_bucket_key(args, kwargs) -> tuple[str | None, str | None]:  # noqa:
     return None, None
 
 
-def _extract_upload_file_params(
-    args, kwargs
-) -> tuple[str | None, str | None, str | None]:  # noqa: ANN001, ANN002
+def _extract_upload_file_params(args, kwargs) -> tuple[str | None, str | None, str | None]:
     filename = kwargs.get("Filename")
     bucket = kwargs.get("Bucket")
     key = kwargs.get("Key")
@@ -393,20 +396,20 @@ def _body_size_bytes(body: Any) -> int:
             if isinstance(size_value, int):
                 return max(0, size_value)
             return max(0, int(size_value))
-        except Exception:  # noqa: BLE001
+        except Exception:
             return 0
 
     return 0
 
 
-def _wrap_s3_client(client):  # noqa: ANN001
+def _wrap_s3_client(client):
     if getattr(client, "_roar_s3_wrapped", False):
         return client
 
     real_put_object = getattr(client, "put_object", None)
     if callable(real_put_object):
 
-        def _tracked_put_object(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        def _tracked_put_object(*args, **kwargs):
             _check_task_boundary()
             response = real_put_object(*args, **kwargs)
             bucket, key = _extract_bucket_key(args, kwargs)
@@ -430,7 +433,7 @@ def _wrap_s3_client(client):  # noqa: ANN001
     real_upload_file = getattr(client, "upload_file", None)
     if callable(real_upload_file):
 
-        def _tracked_upload_file(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        def _tracked_upload_file(*args, **kwargs):
             _check_task_boundary()
             response = real_upload_file(*args, **kwargs)
             filename, bucket, key = _extract_upload_file_params(args, kwargs)
@@ -456,7 +459,7 @@ def _wrap_s3_client(client):  # noqa: ANN001
     real_get_object = getattr(client, "get_object", None)
     if callable(real_get_object):
 
-        def _tracked_get_object(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        def _tracked_get_object(*args, **kwargs):
             _check_task_boundary()
             response = real_get_object(*args, **kwargs)
             bucket, key = _extract_bucket_key(args, kwargs)
@@ -491,15 +494,15 @@ def _get_collector_actor():
         return _collector_actor
 
     try:
-        import ray  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
+        import ray
+    except Exception:
         _collector_actor = None
         return None
 
     actor_name = f"roar-log-collector-{os.environ.get('ROAR_JOB_ID', 'default')}"
     try:
         _collector_actor = ray.get_actor(actor_name, namespace="roar")
-    except Exception:  # noqa: BLE001
+    except Exception:
         _collector_actor = None
 
     return _collector_actor
@@ -515,14 +518,14 @@ def _emit_fragment(fragment: TaskFragment) -> None:
         remote = getattr(append_fragment, "remote", None) if append_fragment is not None else None
         if callable(remote):
             remote(fragment.to_dict())
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
 def _patch_boto3() -> None:
     try:
-        import boto3  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
+        import boto3
+    except Exception:
         return
 
     if getattr(boto3, "_roar_worker_boto3_patched", False):
@@ -530,7 +533,7 @@ def _patch_boto3() -> None:
 
     real_client = boto3.client
 
-    def _tracking_client(service_name, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    def _tracking_client(service_name, *args, **kwargs):
         client = real_client(service_name, *args, **kwargs)
         if str(service_name).lower() != "s3":
             return client
@@ -542,8 +545,8 @@ def _patch_boto3() -> None:
 
 def _patch_pandas_parquet() -> None:
     try:
-        import pandas as pd  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
+        import pandas as pd
+    except Exception:
         return
 
     original_to_parquet = getattr(pd.DataFrame, "to_parquet", None)
@@ -552,7 +555,7 @@ def _patch_pandas_parquet() -> None:
     if getattr(original_to_parquet, "_roar_worker_patched", False):
         return
 
-    def _tracked_to_parquet(self, path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    def _tracked_to_parquet(self, path, *args, **kwargs):
         result = original_to_parquet(self, path, *args, **kwargs)
         try:
             _check_task_boundary()
@@ -565,11 +568,11 @@ def _patch_pandas_parquet() -> None:
                     size=0,
                     capture_method="tracer",
                 )
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         return result
 
-    _tracked_to_parquet._roar_worker_patched = True
+    _tracked_to_parquet._roar_worker_patched = True  # type: ignore[attr-defined]
     pd.DataFrame.to_parquet = _tracked_to_parquet
 
 
@@ -591,7 +594,7 @@ def _run_worker_entrypoint(argv: list[str]) -> None:
     if not argv:
         return
 
-    os.execvp("python3", ["python3"] + argv)
+    os.execvp("python3", ["python3", *argv])
 
 
 def main() -> None:

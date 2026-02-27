@@ -49,7 +49,9 @@ def _file_io_task(n_files: int, payload_bytes: int = PAYLOAD_BYTES) -> float:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Benchmark Ray worker open() overhead with LD_PRELOAD")
+    parser = argparse.ArgumentParser(
+        description="Benchmark Ray worker open() overhead with LD_PRELOAD"
+    )
     parser.add_argument(
         "--iterations",
         type=int,

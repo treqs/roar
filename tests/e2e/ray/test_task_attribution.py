@@ -16,8 +16,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from tests.e2e.ray.conftest import submit_job_on_head
 from tests.e2e.ray.test_file_io_capture import _query_roar_db
 
@@ -35,7 +33,7 @@ class TestTaskAttribution:
 
         FAILS until roar captures task context alongside file I/O.
         """
-        stdout, stderr, returncode = submit_job_on_head(
+        _stdout, stderr, returncode = submit_job_on_head(
             COMPOSE_FILE,
             f"{JOBS_DIR}/attributed_file_io.py",
             env={"ROAR_WRAP": "1"},
@@ -50,8 +48,7 @@ class TestTaskAttribution:
             "WHERE a.first_seen_path LIKE '%attributed%'",
         )
         assert len(rows) >= 6, (
-            f"Expected 6 attributed output files, got {len(rows)}. "
-            "Workers may not be instrumented."
+            f"Expected 6 attributed output files, got {len(rows)}. Workers may not be instrumented."
         )
 
         missing_task_id = []
