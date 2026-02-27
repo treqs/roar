@@ -61,15 +61,20 @@ def test_record_registers_proxy_outputs_before_get_outputs(tmp_path: Path) -> No
     ]
 
     with patch("roar.db.context.create_database_context", instrumented_create_database_context):
-        _job_id, _job_uid, _read_file_info, written_file_info, _stale_upstream, _stale_downstream = (
-            recorder.record(
-                ctx=ctx,
-                prov=prov,
-                tracer_result=tracer_result,
-                start_time=1700000000.0,
-                is_build=False,
-                s3_entries=s3_entries,
-            )
+        (
+            _job_id,
+            _job_uid,
+            _read_file_info,
+            written_file_info,
+            _stale_upstream,
+            _stale_downstream,
+        ) = recorder.record(
+            ctx=ctx,
+            prov=prov,
+            tracer_result=tracer_result,
+            start_time=1700000000.0,
+            is_build=False,
+            s3_entries=s3_entries,
         )
 
     assert "add_output" in call_order
