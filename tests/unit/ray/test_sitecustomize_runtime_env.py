@@ -22,6 +22,19 @@ def _restore_builtins():
         builtins.__import__ = real_import
 
 
+def test_tracking_open_skips_recording_when_suppressed(tmp_path: Path) -> None:
+    file_path = tmp_path / "suppressed-read.txt"
+    file_path.write_text("hello", encoding="utf-8")
+    abs_path = str(file_path.resolve())
+    sitecustomize.opened_files.discard(abs_path)
+
+    with sitecustomize._SuppressTracking():
+        with sitecustomize.tracking_open(str(file_path), "r", encoding="utf-8") as handle:
+            assert handle.read() == "hello"
+
+    assert abs_path not in sitecustomize.opened_files
+
+
 def test_patch_ray_init_skips_pip_dependency_by_default(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -284,6 +297,48 @@ def test_prepare_worker_runtime_env_sets_roar_worker_and_preload(
     assert (working_dir / "user-file.txt").read_text(encoding="utf-8") == "hello"
     assert (working_dir / "libroar_tracer_preload.so").read_text(encoding="utf-8") == "preload"
     assert not (working_dir / "sitecustomize.py").exists()
+
+
+def test_prepare_worker_runtime_env_suppresses_internal_copy_operations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_working_dir = tmp_path / "user-working-dir"
+    source_working_dir.mkdir()
+
+    preload_path = tmp_path / "libroar_tracer_preload.so"
+    preload_path.write_text("preload", encoding="utf-8")
+    monkeypatch.setattr(
+        "roar.services.execution.tracer_backends.find_preload_library",
+        lambda _package_path: str(preload_path),
+    )
+
+    suppressed_state: dict[str, bool] = {}
+
+    def fake_merge_working_dir(_source: str, _target: str) -> None:
+        suppressed_state["merge"] = sitecustomize._is_suppressed()
+
+    def fake_copytree(_src, dst, dirs_exist_ok=False):
+        suppressed_state["copytree"] = sitecustomize._is_suppressed()
+        Path(dst).mkdir(parents=True, exist_ok=True)
+        return dst
+
+    def fake_copy2(_src, dst):
+        suppressed_state["copy2"] = sitecustomize._is_suppressed()
+        Path(dst).write_text("preload", encoding="utf-8")
+        return str(dst)
+
+    monkeypatch.setattr(sitecustomize, "_merge_working_dir", fake_merge_working_dir)
+    monkeypatch.setattr(sitecustomize.shutil, "copytree", fake_copytree)
+    monkeypatch.setattr(sitecustomize.shutil, "copy2", fake_copy2)
+
+    prepared = sitecustomize._prepare_worker_runtime_env(
+        {"working_dir": str(source_working_dir)},
+        "jobtrace",
+    )
+
+    assert prepared["py_executable"] == "roar-worker"
+    assert suppressed_state == {"merge": True, "copytree": True, "copy2": True}
 
 
 def test_prepare_worker_runtime_env_warns_when_working_dir_is_not_local(

@@ -36,7 +36,27 @@ _ROAR_INJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 _real_open = builtins.open
 
 
+_roar_suppress = threading.local()
+
+
+def _is_suppressed() -> bool:
+    return bool(getattr(_roar_suppress, "active", False))
+
+
+class _SuppressTracking:
+    """Context manager: open() calls inside are not tracked."""
+
+    def __enter__(self):
+        _roar_suppress.active = True
+        return self
+
+    def __exit__(self, *_):
+        _roar_suppress.active = False
+
+
 def tracking_open(*args, **kwargs):
+    if _is_suppressed():
+        return _real_open(*args, **kwargs)
     try:
         path = args[0]
         opened_files.add(os.path.abspath(path))
@@ -363,7 +383,8 @@ def _prepare_worker_runtime_env(runtime_env, job_id: str):
     existing_working_dir = runtime_env.get("working_dir")
     if isinstance(existing_working_dir, str) and existing_working_dir.strip():
         if os.path.isdir(existing_working_dir):
-            _merge_working_dir(existing_working_dir, tmp_dir)
+            with _SuppressTracking():
+                _merge_working_dir(existing_working_dir, tmp_dir)
         else:
             _warn_roar(
                 "Skipping working_dir merge for non-local path %s while preparing Ray worker wrapper",
@@ -377,11 +398,12 @@ def _prepare_worker_runtime_env(runtime_env, job_id: str):
         from roar.services.execution.tracer_backends import find_preload_library
 
         roar_package_dir = Path(roar.__file__).resolve().parent
-        shutil.copytree(roar_package_dir, os.path.join(tmp_dir, "roar"), dirs_exist_ok=True)
+        with _SuppressTracking():
+            shutil.copytree(roar_package_dir, os.path.join(tmp_dir, "roar"), dirs_exist_ok=True)
 
-        preload_library = find_preload_library(roar_package_dir)
-        if preload_library:
-            shutil.copy2(preload_library, os.path.join(tmp_dir, "libroar_tracer_preload.so"))
+            preload_library = find_preload_library(roar_package_dir)
+            if preload_library:
+                shutil.copy2(preload_library, os.path.join(tmp_dir, "libroar_tracer_preload.so"))
     except Exception:
         pass
 
