@@ -42,7 +42,7 @@ runs:
         # zigbuild outputs to x86_64-unknown-linux-gnu/release/ regardless of the .2.17 suffix
         RELEASE_DIR="rust/target/x86_64-unknown-linux-gnu/release"
 
-        for bin in roar-tracer roar-proxy roar-tracer-ebpf roard; do
+        for bin in roar-tracer roar-proxy roar-tracer-ebpf roard roar-tracer-preload; do
           [ -f "$RELEASE_DIR/$bin" ] && cp "$RELEASE_DIR/$bin" "${{ inputs.output-dir }}/"
         done
 
