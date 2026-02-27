@@ -277,3 +277,15 @@ class TestDaemonMethods:
             result = svc.get_daemon_status(tmp_path)
         assert result is None
         assert not (tmp_path / "proxy.json").exists()
+
+
+def test_parse_log_line_get_object_with_size():
+    from roar.services.execution.proxy import parse_log_line
+
+    line = "[S3:GetObject] s3://my-bucket/data.csv  (8192 bytes)  etag=abc123"
+    entry = parse_log_line(line)
+
+    assert entry is not None
+    assert entry.operation == "GetObject"
+    assert entry.size_bytes == 8192
+    assert entry.etag == "abc123"

@@ -41,6 +41,14 @@ impl S3Response {
     pub fn into_body_stream(self) -> Body {
         Body::from_stream(self.inner.bytes_stream())
     }
+
+    /// Buffer the full response body in memory.
+    pub async fn collect_body(self) -> Result<Bytes> {
+        self.inner
+            .bytes()
+            .await
+            .context("failed to collect upstream response body")
+    }
 }
 
 /// Forward a request to real S3 (or an upstream endpoint), re-signing it with SigV4.

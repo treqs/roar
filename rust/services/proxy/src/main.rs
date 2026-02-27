@@ -15,7 +15,7 @@ use bytes::Bytes;
 use clap::Parser;
 
 use forward::ForwardState;
-use s3::{LogMeta, S3Operation};
+use s3::{LogMeta, S3OpType, S3Operation};
 
 #[derive(Parser)]
 #[command(
@@ -139,14 +139,22 @@ async fn handle_request_inner(state: &AppState, request: Request<Body>) -> Resul
     let status = s3_response.status;
     let headers = s3_response.headers.clone();
 
+    let (response_body_bytes, response_body) = if matches!(
+        op.as_ref().map(|o| &o.operation),
+        Some(S3OpType::CompleteMultipartUpload)
+    ) {
+        let bytes = s3_response.collect_body().await?;
+        (Some(bytes.clone()), Body::from(bytes))
+    } else {
+        (None, s3_response.into_body_stream())
+    };
+
     // Log the operation with metadata from request + response headers
     if let Some(ref op) = op {
-        let meta = LogMeta::build(&parts.headers, &headers)
+        let meta = LogMeta::build(&parts.headers, &headers, response_body_bytes.as_deref())
             .with_defaults(&state.default_session_id, &state.default_job_id);
         println!("{}", op.log_line(&meta));
     }
-
-    let response_body = s3_response.into_body_stream();
 
     let mut response = Response::builder().status(status);
     for (name, value) in headers.iter() {
