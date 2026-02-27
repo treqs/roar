@@ -28,9 +28,8 @@ def test_tracking_open_skips_recording_when_suppressed(tmp_path: Path) -> None:
     abs_path = str(file_path.resolve())
     sitecustomize.opened_files.discard(abs_path)
 
-    with sitecustomize._SuppressTracking():
-        with sitecustomize.tracking_open(str(file_path), "r", encoding="utf-8") as handle:
-            assert handle.read() == "hello"
+    with sitecustomize._SuppressTracking(), sitecustomize.tracking_open(str(file_path), "r", encoding="utf-8") as handle:
+        assert handle.read() == "hello"
 
     assert abs_path not in sitecustomize.opened_files
 
