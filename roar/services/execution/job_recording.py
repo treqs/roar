@@ -480,6 +480,9 @@ class ExecutionJobRecorder:
                 hash_algorithms=list(ctx.hash_algorithms),
             )
 
+            # Register proxy artifacts first so downstream output/input queries include them.
+            self._proxy_artifact_registrar.register(db_ctx, job_id, s3_entries)
+
             written_file_info = db_ctx.jobs.get_outputs(job_id)
             read_file_info = db_ctx.jobs.get_inputs(job_id)
             dataset_identifiers = self._extract_dataset_identifiers_from_metadata(metadata_json)
@@ -505,8 +508,6 @@ class ExecutionJobRecorder:
                 stale_upstream, stale_downstream = self._staleness_analyzer.analyze(
                     db_ctx, session["id"], job_id
                 )
-
-            self._proxy_artifact_registrar.register(db_ctx, job_id, s3_entries)
 
         return job_id, job_uid, read_file_info, written_file_info, stale_upstream, stale_downstream
 

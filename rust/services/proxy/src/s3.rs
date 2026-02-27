@@ -93,6 +93,11 @@ impl S3Operation {
                     line.push_str(&format!("  ({} bytes)", len));
                 }
             }
+            S3OpType::GetObject => {
+                if let Some(len) = meta.response_content_length {
+                    line.push_str(&format!("  ({} bytes)", len));
+                }
+            }
             _ => {}
         }
 
@@ -127,6 +132,8 @@ pub struct LogMeta {
     pub etag: Option<String>,
     /// Parsed byte ranges from Content-Range header. Each tuple is (start, end) inclusive.
     pub byte_ranges: Option<Vec<(u64, u64)>>,
+    /// Response body size from the Content-Length response header.
+    pub response_content_length: Option<u64>,
     /// Roar session ID from the Roar-Session-Id request header.
     pub session_id: Option<String>,
     /// Roar job ID from the Roar-Job-Id request header.
@@ -149,11 +156,13 @@ impl LogMeta {
     pub fn build(
         request_headers: &axum::http::HeaderMap,
         response_headers: &axum::http::HeaderMap,
+        response_body: Option<&[u8]>,
     ) -> Self {
         let etag = response_headers
             .get("etag")
             .and_then(|v| v.to_str().ok())
-            .map(|v| v.trim_matches('"').to_string());
+            .map(|v| v.trim_matches('"').to_string())
+            .or_else(|| response_body.and_then(extract_multipart_etag));
 
         let byte_ranges = response_headers
             .get("content-range")
@@ -177,12 +186,32 @@ impl LogMeta {
             .and_then(|v| v.to_str().ok())
             .map(|v| v.to_string());
 
+        let response_content_length = response_headers
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+
         LogMeta {
             etag,
             byte_ranges,
+            response_content_length,
             session_id,
             job_id,
         }
+    }
+}
+
+/// Extract ETag from CompleteMultipartUpload XML response body.
+/// Supports <ETag>"abc-N"</ETag> or <ETag>abc-N</ETag>.
+fn extract_multipart_etag(body: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(body).ok()?;
+    let start = text.find("<ETag>")? + "<ETag>".len();
+    let end = text[start..].find("</ETag>").map(|i| start + i)?;
+    let etag = text[start..end].trim().trim_matches('"');
+    if etag.is_empty() {
+        None
+    } else {
+        Some(etag.to_string())
     }
 }
 
@@ -393,5 +422,51 @@ mod tests {
             op.log_line(&meta),
             "[S3:GetObject] s3://bucket/key  etag=abc123  session=sess-001  job=job-042"
         );
+    }
+
+    #[test]
+    fn log_line_get_object_with_response_size() {
+        let op = S3Operation::parse(&Method::GET, &uri("/bucket/data.csv"), None)
+            .expect("should parse");
+        let meta = LogMeta {
+            etag: Some("abc".to_string()),
+            response_content_length: Some(8192),
+            ..Default::default()
+        };
+        let line = op.log_line(&meta);
+        assert!(line.contains("(8192 bytes)"), "got: {}", line);
+    }
+
+    #[test]
+    fn log_meta_build_extracts_response_content_length() {
+        let mut resp = axum::http::HeaderMap::new();
+        resp.insert("content-length", "65536".parse().unwrap());
+        let meta = LogMeta::build(&axum::http::HeaderMap::new(), &resp, None);
+        assert_eq!(meta.response_content_length, Some(65536));
+    }
+
+    #[test]
+    fn extract_multipart_etag_from_xml_body() {
+        let xml = b"<?xml version=\"1.0\"?><CompleteMultipartUploadResult>\
+            <ETag>\"abc123-5\"</ETag></CompleteMultipartUploadResult>";
+        assert_eq!(extract_multipart_etag(xml), Some("abc123-5".to_string()));
+    }
+
+    #[test]
+    fn log_meta_build_gets_etag_from_multipart_body() {
+        let req_headers = axum::http::HeaderMap::new();
+        let resp_headers = axum::http::HeaderMap::new();
+        let body = b"<CompleteMultipartUploadResult><ETag>\"deadbeef-3\"</ETag></CompleteMultipartUploadResult>";
+        let meta = LogMeta::build(&req_headers, &resp_headers, Some(body));
+        assert_eq!(meta.etag, Some("deadbeef-3".to_string()));
+    }
+
+    #[test]
+    fn log_meta_build_header_etag_takes_precedence_over_body() {
+        let mut resp_headers = axum::http::HeaderMap::new();
+        resp_headers.insert("etag", "\"from-header\"".parse().unwrap());
+        let body = b"<ETag>\"from-body\"</ETag>";
+        let meta = LogMeta::build(&axum::http::HeaderMap::new(), &resp_headers, Some(body));
+        assert_eq!(meta.etag, Some("from-header".to_string()));
     }
 }
