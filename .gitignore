@@ -223,3 +223,8 @@ roar/bin/*
 .roar/
 
 .ralph
+# Ray benchmark results
+tests/benchmarks/results/
+
+# Design docs — internal only, not for version control
+docs/design/

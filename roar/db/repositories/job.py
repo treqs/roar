@@ -66,6 +66,7 @@ class SQLAlchemyJobRepository(JobRepository):
         self,
         command: str,
         timestamp: float,
+        job_uid: str | None = None,
         step_identity: str | None = None,
         session_id: int | None = None,
         step_number: int | None = None,
@@ -102,10 +103,10 @@ class SQLAlchemyJobRepository(JobRepository):
             (job_id, job_uid) tuple.
         """
         script = self._extract_script(command)
-        job_uid = secrets.token_hex(4)
+        resolved_job_uid = job_uid or secrets.token_hex(4)
 
         job = Job(
-            job_uid=job_uid,
+            job_uid=resolved_job_uid,
             timestamp=timestamp,
             command=command,
             script=script,
@@ -124,7 +125,7 @@ class SQLAlchemyJobRepository(JobRepository):
         )
         self._session.add(job)
         self._session.flush()
-        return job.id, job_uid
+        return job.id, resolved_job_uid
 
     def get(self, job_id: int) -> dict[str, Any] | None:
         """
@@ -165,6 +166,29 @@ class SQLAlchemyJobRepository(JobRepository):
                 return self._job_to_dict(jobs[0])
 
         return None
+
+    def get_by_parent_uids(
+        self, parent_job_uids: list[str], job_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        """
+        Get jobs whose parent_job_uid matches any of the provided UIDs.
+
+        Args:
+            parent_job_uids: Parent job UID values to match
+            job_type: Optional job type filter (e.g. ``ray_task``)
+
+        Returns:
+            Matching job dicts sorted by timestamp ascending.
+        """
+        if not parent_job_uids:
+            return []
+
+        query = select(Job).where(Job.parent_job_uid.in_(parent_job_uids))
+        if job_type is not None:
+            query = query.where(Job.job_type == job_type)
+
+        rows = self._session.execute(query.order_by(Job.timestamp.asc())).scalars().all()
+        return [self._job_to_dict(row) for row in rows]
 
     def update_metadata(self, job_id: int, metadata: str | None) -> None:
         """Update metadata JSON for a job."""
@@ -249,6 +273,26 @@ class SQLAlchemyJobRepository(JobRepository):
             )
             self._session.add(job_output)
             self._session.flush()
+
+    def has_input_path(self, job_id: int, path: str) -> bool:
+        """Check whether an input row already exists for a job/path pair."""
+        existing = self._session.execute(
+            select(JobInput).where(
+                JobInput.job_id == job_id,
+                JobInput.path == path,
+            )
+        ).scalar_one_or_none()
+        return existing is not None
+
+    def has_output_path(self, job_id: int, path: str) -> bool:
+        """Check whether an output row already exists for a job/path pair."""
+        existing = self._session.execute(
+            select(JobOutput).where(
+                JobOutput.job_id == job_id,
+                JobOutput.path == path,
+            )
+        ).scalar_one_or_none()
+        return existing is not None
 
     def get_inputs(self, job_id: int) -> list[dict[str, Any]]:
         """
@@ -622,6 +666,7 @@ class SQLAlchemyJobRepository(JobRepository):
         return {
             "id": job.id,
             "job_uid": job.job_uid,
+            "parent_job_uid": job.parent_job_uid,
             "timestamp": job.timestamp,
             "command": job.command,
             "script": job.script,

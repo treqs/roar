@@ -123,6 +123,29 @@ class TestProxyLifecycle:
         call_kwargs = mock_tracer.execute.call_args.kwargs
         assert call_kwargs.get("extra_env") is None
 
+    def test_run_job_uid_is_forwarded_to_record_job(self):
+        mock_tracer = MagicMock()
+        mock_tracer.execute.return_value = _make_tracer_result()
+
+        coord = RunCoordinator(tracer_service=mock_tracer, proxy_service=None)
+        mock_prov = MagicMock()
+        mock_prov.collect.return_value = {"data": {"read_files": [], "written_files": []}}
+
+        with (
+            patch("secrets.token_hex", return_value="runuid12"),
+            patch("os.path.exists", return_value=True),
+            patch("roar.config.load_config", return_value={}),
+            patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
+            patch.object(
+                coord, "_record_job", return_value=(1, "abc123", [], [], [], [])
+            ) as mock_record,
+            patch.object(coord, "_backup_previous_outputs"),
+            patch.object(coord, "_cleanup_logs"),
+        ):
+            coord.execute(_make_ctx())
+
+        assert mock_record.call_args.kwargs["run_job_uid"] == "runuid12"
+
     def test_tracer_overrides_are_forwarded(self):
         mock_proxy = MagicMock()
         mock_proxy.start_for_run.return_value = ProxyHandle(process=MagicMock(), port=9090)

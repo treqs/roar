@@ -271,6 +271,29 @@ class TestCreateJobsBatch:
         sent_jobs = call_args[1]["jobs"] if "jobs" in call_args[1] else call_args[0][1]
         assert sent_jobs[0]["metadata"] == '{"env": "prod"}'
 
+    def test_parent_job_uid_included_for_child_jobs(self, service, mock_client):
+        """parent_job_uid is forwarded for nested/distributed child jobs."""
+        mock_client.register_jobs_batch.return_value = (["id-1"], [], None)
+
+        jobs = [
+            self._make_job(
+                "job-001",
+                command="ray_task:train",
+                job_type="ray_task",
+                parent_job_uid="driver001",
+            )
+        ]
+        results = service.create_jobs_batch(
+            jobs=jobs,
+            session_hash="session123",
+            git_context=GitContext(repo="repo", commit="abc", branch="main"),
+        )
+
+        assert results[0].success is True
+        call_args = mock_client.register_jobs_batch.call_args
+        sent_jobs = call_args[1]["jobs"] if "jobs" in call_args[1] else call_args[0][1]
+        assert sent_jobs[0]["parent_job_uid"] == "driver001"
+
     def test_mixed_valid_and_invalid_preserves_order(self, service, mock_client):
         """Mix of valid and invalid jobs preserves original ordering."""
         mock_client.register_jobs_batch.return_value = (["id-2"], [], None)

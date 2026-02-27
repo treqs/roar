@@ -25,7 +25,7 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
 
 
 @click.command("register")
-@click.argument("artifact_path", type=click.Path(exists=True))
+@click.argument("artifact_path", type=click.STRING)
 @click.option(
     "--dry-run",
     is_flag=True,
@@ -37,9 +37,16 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     is_flag=True,
     help="Skip confirmation prompt and proceed with secret filtering",
 )
+@click.option(
+    "--as-blake3",
+    is_flag=True,
+    help="Upgrade tracked S3 artifacts from ETag-only hashes to BLAKE3 before registration",
+)
 @click.pass_obj
 @require_init
-def register(ctx: RoarContext, artifact_path: str, dry_run: bool, yes: bool) -> None:
+def register(
+    ctx: RoarContext, artifact_path: str, dry_run: bool, yes: bool, as_blake3: bool
+) -> None:
     """Register artifact lineage with GLaaS.
 
     Submits the complete lineage of an artifact to the GLaaS server,
@@ -60,6 +67,8 @@ def register(ctx: RoarContext, artifact_path: str, dry_run: bool, yes: bool) -> 
 
         roar register -y model.pt           # Skip confirmation prompt
 
+        roar register --as-blake3 model.pt  # Upgrade S3 etag hashes
+
         roar register outputs/metrics.json  # Register from subdirectory
     """
     # Create service
@@ -71,6 +80,7 @@ def register(ctx: RoarContext, artifact_path: str, dry_run: bool, yes: bool) -> 
         roar_dir=ctx.roar_dir,
         cwd=ctx.cwd,
         dry_run=dry_run,
+        as_blake3=as_blake3,
         skip_confirmation=yes,
         confirm_callback=_confirm_secrets if not yes else None,
     )

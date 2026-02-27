@@ -4,9 +4,13 @@ Native Click implementation of the init command.
 Usage: roar init
 """
 
+import sqlite3 as _sqlite3
 from pathlib import Path
 
 import click
+
+from roar.db.engine import create_roar_engine, init_database
+from roar.db.schema import run_migrations
 
 from ..context import RoarContext
 
@@ -110,6 +114,16 @@ default = "auto"
 # Allow runtime fallback to another tracer backend
 fallback_enabled = true
 
+[ray]
+# Enable automatic Ray worker instrumentation
+enabled = true
+# Inject roar-cli into runtime_env.pip for remote workers
+pip_install = true
+# Shared log directory for Ray worker I/O capture
+log_dir = "/shared/.roar-logs"
+# Actor attribution mode for Ray actor methods (per_call | per_actor)
+actor_attribution = "per_call"
+
 [reversible]
 # Enable file preservation before overwrites during roar run
 enabled = false
@@ -157,8 +171,15 @@ def _add_to_gitignore(gitignore_path: Path, gitignore_content: str) -> None:
     default=False,
     help="Skip adding .roar/ to .gitignore without prompting.",
 )
+@click.option(
+    "--path",
+    "init_path",
+    default=None,
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    help="Initialize roar in the given directory instead of the current directory.",
+)
 @click.pass_obj
-def init(ctx: RoarContext, yes: bool, no: bool) -> None:
+def init(ctx: RoarContext, yes: bool, no: bool, init_path: Path | None) -> None:
     """Initialize roar in current directory.
 
     Creates a .roar directory for storing tracking data, a config.toml
@@ -172,8 +193,10 @@ def init(ctx: RoarContext, yes: bool, no: bool) -> None:
         roar init -y    # Initialize and auto-add to gitignore
 
         roar init -n    # Initialize without modifying gitignore
+
+        roar init --path /some/dir  # Initialize in a specific directory
     """
-    cwd = ctx.cwd
+    cwd = init_path if init_path is not None else ctx.cwd
 
     # Check if .roar already exists
     roar_dir = cwd / ".roar"
@@ -184,6 +207,20 @@ def init(ctx: RoarContext, yes: bool, no: bool) -> None:
     # Create .roar directory
     roar_dir.mkdir()
     click.echo(f"Created {roar_dir}")
+
+    # Initialize the SQLite database and schema
+    db_path = roar_dir / "roar.db"
+    engine = create_roar_engine(db_path)
+    init_database(engine)
+    engine.dispose()
+    raw_conn = _sqlite3.connect(str(db_path))
+    raw_conn.row_factory = _sqlite3.Row
+    try:
+        run_migrations(raw_conn)
+        raw_conn.commit()
+    finally:
+        raw_conn.close()
+    click.echo(f"Initialized database at {db_path}")
 
     # Add privacy/data collection notice
     click.echo("")
@@ -222,10 +259,16 @@ def init(ctx: RoarContext, yes: bool, no: bool) -> None:
     elif no:
         # Skip with --no flag
         click.echo("Skipped .gitignore update.")
-    elif click.confirm("Add .roar/ to .gitignore?", default=True):
-        _add_to_gitignore(gitignore_path, gitignore_content)
-        click.echo("Added .roar/ to .gitignore")
     else:
-        click.echo("Skipped .gitignore update.")
+        import sys as _sys
+
+        if not _sys.stdin.isatty():
+            # Non-interactive: skip to avoid blocking
+            click.echo("Skipped .gitignore update (non-interactive).")
+        elif click.confirm("Add .roar/ to .gitignore?", default=True):
+            _add_to_gitignore(gitignore_path, gitignore_content)
+            click.echo("Added .roar/ to .gitignore")
+        else:
+            click.echo("Skipped .gitignore update.")
 
     click.echo("Done.")

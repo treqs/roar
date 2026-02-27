@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+import socket
+import subprocess
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+import ray
+
+from roar.ray._agent_names import build_node_agent_name
+from roar.services.execution import tracer_backends
+
+_READY_SENTINEL = "ROAR_PROXY_READY"
+_DEFAULT_PROXY_START_TIMEOUT_SECONDS = 10.0
+__all__ = ["RoarNodeAgent", "build_node_agent_name"]
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+@ray.remote(num_cpus=0)
+class RoarNodeAgent:
+    def __init__(self, job_id: str, log_dir: str) -> None:
+        self._job_id = str(job_id)
+        self._log_dir = str(log_dir)
+        self._proxy_process: subprocess.Popen | None = None
+        self._proxy_port: int | None = None
+        self._proxy_log_lines: list[str] = []
+        self._log_lock = threading.Lock()
+        self._reader_thread: threading.Thread | None = None
+        self._node_id = self._runtime_node_id()
+        self._start_proxy()
+
+    def _runtime_node_id(self) -> str | None:
+        try:
+            ctx = ray.get_runtime_context()
+            value = ctx.get_node_id()
+        except Exception:
+            return None
+
+        if value is None:
+            return None
+        if isinstance(value, bytes):
+            return value.hex()
+
+        to_hex = getattr(value, "hex", None)
+        if callable(to_hex):
+            try:
+                return str(to_hex())
+            except Exception:
+                pass
+
+        return str(value)
+
+    def _start_proxy(self) -> None:
+        package_path = Path(__file__).resolve().parents[1]
+        proxy_binary = tracer_backends.find_proxy_binary(package_path)
+        if not proxy_binary:
+            return
+
+        port = _find_free_port()
+        cmd = [proxy_binary, "--port", str(port), "--job-id", self._job_id]
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        self._proxy_process = process
+
+        def _reader() -> None:
+            stdout = process.stdout
+            if stdout is None:
+                return
+            for line in stdout:
+                with self._log_lock:
+                    self._proxy_log_lines.append(line.rstrip("\n"))
+
+        self._reader_thread = threading.Thread(
+            target=_reader,
+            name="roar-node-agent-proxy-reader",
+            daemon=True,
+        )
+        self._reader_thread.start()
+
+        deadline = time.monotonic() + _DEFAULT_PROXY_START_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            with self._log_lock:
+                ready = any(line.startswith(_READY_SENTINEL) for line in self._proxy_log_lines)
+            if ready:
+                self._proxy_port = port
+                return
+
+            if process.poll() is not None:
+                return
+
+            time.sleep(0.05)
+
+        self._terminate_proxy()
+
+    def _terminate_proxy(self) -> None:
+        process = self._proxy_process
+        if process is None:
+            return
+
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+
+        if self._reader_thread is not None and self._reader_thread.is_alive():
+            self._reader_thread.join(timeout=2)
+
+    def get_proxy_port(self) -> int | None:
+        return self._proxy_port
+
+    def collect_logs(self) -> dict[str, Any]:
+        with self._log_lock:
+            log_lines = list(self._proxy_log_lines)
+
+        return {
+            "job_id": self._job_id,
+            "node_id": self._node_id,
+            "proxy_port": self._proxy_port,
+            "proxy_log_lines": log_lines,
+        }
+
+    def shutdown(self) -> None:
+        self._terminate_proxy()

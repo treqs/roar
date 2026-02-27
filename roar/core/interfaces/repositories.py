@@ -67,6 +67,7 @@ class JobRepository(Protocol):
         self,
         command: str,
         timestamp: float,
+        job_uid: str | None = None,
         step_identity: str | None = None,
         session_id: int | None = None,
         step_number: int | None = None,
@@ -89,6 +90,12 @@ class JobRepository(Protocol):
 
     def get_by_uid(self, job_uid: str) -> dict[str, Any] | None:
         """Get job by UID."""
+        ...
+
+    def get_by_parent_uids(
+        self, parent_job_uids: list[str], job_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Get jobs whose parent_job_uid is in the provided list."""
         ...
 
     def get_inputs(self, job_id: int) -> list[dict[str, Any]]:

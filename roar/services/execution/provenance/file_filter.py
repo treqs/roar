@@ -4,12 +4,44 @@ File filter service for provenance collection.
 Applies various filters to file lists based on configuration.
 """
 
+import json
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from ....core.interfaces.logger import ILogger
 from ....core.interfaces.provenance import FilteredFiles, PythonInjectData, TracerData
+
+
+def _get_editable_install_dirs() -> frozenset[str]:
+    """Return source dirs of all editable-installed packages."""
+    dirs: set[str] = set()
+    try:
+        import importlib.metadata as importlib_metadata
+
+        for dist in importlib_metadata.distributions():
+            try:
+                raw = dist.read_text("direct_url.json")
+                if not raw:
+                    continue
+                data = json.loads(raw)
+                if not data.get("dir_info", {}).get("editable"):
+                    continue
+                url = data.get("url", "")
+                if not isinstance(url, str) or not url.startswith("file://"):
+                    continue
+                parsed = urlparse(url)
+                source_dir = unquote(parsed.path)
+                if not source_dir:
+                    continue
+                dirs.add(str(Path(source_dir).resolve()).rstrip("/") + "/")
+            except Exception:
+                continue
+    except Exception:
+        return frozenset()
+
+    return frozenset(dirs)
 
 
 class FileFilterService:
@@ -48,6 +80,7 @@ class FileFilterService:
         "/proc/",
         "/sys/",
         "/dev/shm/",
+        "/tmp/roar-worker-env-",
         "/usr/local/",  # System-managed tools (e.g., aws-cli writes cacert.pem here)
         "/usr/lib/",
         "/usr/share/",
@@ -128,16 +161,31 @@ class FileFilterService:
         sys_prefix = python_data.sys_prefix
         sys_base_prefix = python_data.sys_base_prefix
         roar_inject_dir = python_data.roar_inject_dir
+        editable_dirs = _get_editable_install_dirs()
 
         def should_include_read(path: str) -> bool:
             # Always filter roar's inject directory (sitecustomize.py, etc.)
             if roar_inject_dir and path.startswith(roar_inject_dir):
                 return False
+            # Internal worker runtime_env bundle staging path is always noise.
+            if "/roar-worker-env-" in path:
+                return False
+            # roar's own runtime/config/database files are infrastructure, not inputs.
+            if self._is_roar_internal(path):
+                return False
+            # Git metadata reads are used for run context capture, not pipeline data.
+            if self._is_git_metadata(path):
+                return False
             if ignore_system_reads and self._is_system_read(path):
                 return False
             if ignore_torch_cache and self._is_torch_cache(path):
                 return False
-            if ignore_package_reads and self._is_package_file(path, sys_prefix, sys_base_prefix):
+            if ignore_package_reads and self._is_package_file(
+                path,
+                sys_prefix,
+                sys_base_prefix,
+                editable_dirs=editable_dirs,
+            ):
                 return False
             return not (ignore_tmp_files and self._is_tmp_path(path))
 
@@ -210,7 +258,32 @@ class FileFilterService:
         """Check if path is a torch/triton cache file."""
         return any(path.startswith(pattern) for pattern in self.TORCH_CACHE_PATTERNS)
 
-    def _is_package_file(self, path: str, sys_prefix: str, sys_base_prefix: str) -> bool:
+    @staticmethod
+    def _is_roar_internal(path: str) -> bool:
+        """Check if path is a roar-internal file/directory."""
+        return (
+            "/.roar/" in path
+            or path.endswith("/.roar")
+            or path.startswith(".roar/")
+            or path == ".roar"
+        )
+
+    @staticmethod
+    def _is_git_metadata(path: str) -> bool:
+        """Check if path is git metadata used for roar context capture."""
+        if "/.git/" in path or path.endswith("/.git") or path.startswith(".git/") or path == ".git":
+            return True
+        if path.endswith("/.gitconfig") or path.endswith("/.gitmodules"):
+            return True
+        return path == ".gitconfig" or path == ".gitmodules"
+
+    @staticmethod
+    def _is_package_file(
+        path: str,
+        sys_prefix: str,
+        sys_base_prefix: str,
+        editable_dirs: frozenset[str] | None = None,
+    ) -> bool:
         """Check if path is from an installed package."""
         # Check site-packages
         if "site-packages" in path:
@@ -223,6 +296,11 @@ class FileFilterService:
             base = str(Path(sys_base_prefix).resolve())
             if path.startswith(base) and "site-packages" not in path:
                 return True
+        # Check editable installs (source roots from direct_url metadata)
+        if editable_dirs:
+            for editable_dir in editable_dirs:
+                if path.startswith(editable_dir):
+                    return True
         return False
 
     def _is_write_noise(self, path: str) -> bool:

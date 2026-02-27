@@ -20,10 +20,13 @@ CREATE TABLE IF NOT EXISTS artifacts (
     size INTEGER NOT NULL,
     first_seen_at REAL NOT NULL,        -- When first registered locally
     first_seen_path TEXT,               -- Original path when first seen
+    path TEXT,                          -- Canonical path (compat alias of first_seen_path)
+    hash TEXT,                          -- Compatibility hash field (e.g., S3 ETag)
     source_type TEXT,                   -- 'https', NULL=local
     source_url TEXT,                    -- Original download URL
     uploaded_to TEXT,                   -- Where artifact was uploaded (JSON list)
     synced_at REAL,                     -- When synced to GLaaS (NULL = local only)
+    capture_method TEXT,                -- 'python' | 'tracer' | 'proxy'
     kind TEXT NOT NULL DEFAULT 'primitive', -- 'primitive' | 'composite'
     component_count INTEGER,            -- Stored/declared component count for composite artifacts
     metadata TEXT                       -- JSON: mime type, description, etc.
@@ -89,6 +92,7 @@ CREATE TABLE IF NOT EXISTS composite_membership_indexes (
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_uid TEXT UNIQUE,                -- Random unique ID (like git short hash)
+    parent_job_uid TEXT,                -- Parent job UID for nested/distributed jobs
     timestamp REAL NOT NULL,            -- Start time
     command TEXT NOT NULL,              -- Full command string
     script TEXT,                        -- Primary script (e.g., "train.py")
@@ -255,6 +259,8 @@ def run_migrations(conn) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN status TEXT")
     if "job_type" not in columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN job_type TEXT")
+    if "parent_job_uid" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN parent_job_uid TEXT")
 
     # Add byte_ranges to job_inputs and job_outputs
     cursor = conn.execute("PRAGMA table_info(job_inputs)")
@@ -274,10 +280,24 @@ def run_migrations(conn) -> None:
         # Add composite-aware columns to artifacts table.
         cursor = conn.execute("PRAGMA table_info(artifacts)")
         artifact_columns = {row["name"] for row in cursor.fetchall()}
+        if "path" not in artifact_columns:
+            conn.execute("ALTER TABLE artifacts ADD COLUMN path TEXT")
+        if "hash" not in artifact_columns:
+            conn.execute("ALTER TABLE artifacts ADD COLUMN hash TEXT")
+        if "capture_method" not in artifact_columns:
+            conn.execute("ALTER TABLE artifacts ADD COLUMN capture_method TEXT")
         if "kind" not in artifact_columns:
             conn.execute("ALTER TABLE artifacts ADD COLUMN kind TEXT NOT NULL DEFAULT 'primitive'")
         if "component_count" not in artifact_columns:
             conn.execute("ALTER TABLE artifacts ADD COLUMN component_count INTEGER")
+        conn.execute(
+            """
+            UPDATE artifacts
+            SET path = first_seen_path
+            WHERE (path IS NULL OR path = '')
+              AND first_seen_path IS NOT NULL
+            """
+        )
 
         # Create additive composite tables for local offline workflows.
         conn.executescript(

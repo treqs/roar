@@ -131,6 +131,7 @@ class Job(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_uid: Mapped[str | None] = mapped_column(String, unique=True)
+    parent_job_uid: Mapped[str | None] = mapped_column(String)
     timestamp: Mapped[float] = mapped_column(Float, nullable=False)
     command: Mapped[str] = mapped_column(Text, nullable=False)
     script: Mapped[str | None] = mapped_column(String)

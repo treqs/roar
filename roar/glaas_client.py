@@ -277,6 +277,7 @@ class GlaasClient:
         job_type: str | None,
         step_number: int,
         metadata: str | None = None,
+        parent_job_uid: str | None = None,
     ) -> tuple[int | None, str | None]:
         """
         Register a completed job with GLaaS using session-scoped endpoint.
@@ -309,6 +310,8 @@ class GlaasClient:
         }
         if metadata:
             body["metadata"] = metadata
+        if parent_job_uid is not None:
+            body["parent_job_uid"] = parent_job_uid
 
         result, error = self._request("POST", f"/api/v1/sessions/{session_hash}/jobs", body)
         if error:
@@ -349,7 +352,16 @@ class GlaasClient:
         if not jobs:
             return [], [], None
 
-        body = {"jobs": jobs}
+        body_jobs: list[dict[str, Any]] = []
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            payload = dict(job)
+            if payload.get("parent_job_uid") is None:
+                payload.pop("parent_job_uid", None)
+            body_jobs.append(payload)
+
+        body = {"jobs": body_jobs}
         result, error = self._request("POST", f"/api/v1/sessions/{session_hash}/jobs/batch", body)
         if error:
             return [], [error] * len(jobs), error

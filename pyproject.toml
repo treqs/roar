@@ -69,6 +69,7 @@ dev = [
 [project.scripts]
 # This registers `roar` on PATH after pip install
 roar = "roar.__main__:main"
+roar-worker = "roar.ray.roar_worker:main"
 
 [tool.maturin]
 manifest-path = "rust/crates/artifact-hash-py/Cargo.toml"
@@ -93,8 +94,9 @@ markers = [
     "ebpf: Tests requiring eBPF daemon/root privileges",
     "cloud: Tests for cloud storage operations",
     "happy_path: Happy path tests for core functionality",
+    "ray_e2e: Ray end-to-end tests requiring a running Docker cluster",
 ]
-addopts = "-v --strict-markers -n auto --dist loadfile --ignore=tests/ebpf --ignore=tests/live_glaas"
+addopts = "-v --strict-markers -n auto --dist loadfile --ignore=tests/ebpf --ignore=tests/live_glaas --ignore=tests/e2e/ray"
 timeout = 60
 filterwarnings = [
     "ignore::DeprecationWarning",
