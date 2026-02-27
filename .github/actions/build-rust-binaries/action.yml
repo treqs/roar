@@ -12,51 +12,44 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Install musl target and cargo-zigbuild
+    - name: Install cargo-zigbuild and zig
       shell: bash
       run: |
-        rustup target add x86_64-unknown-linux-musl
         cargo install cargo-zigbuild
-        # zigbuild uses zig as linker
         pip install ziglang
 
-    - name: Build proxy (musl static)
+    - name: Build proxy (glibc 2.17 minimum)
       shell: bash
-      run: cargo build --release --manifest-path "${{ inputs.manifest-path }}" -p roar-proxy --target x86_64-unknown-linux-musl
+      run: cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-proxy --target x86_64-unknown-linux-gnu.2.17
 
-    - name: Build ptrace tracer (musl static)
+    - name: Build ptrace tracer (glibc 2.17 minimum)
       shell: bash
-      run: cargo build --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer --target x86_64-unknown-linux-musl
+      run: cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer --target x86_64-unknown-linux-gnu.2.17
+
+    - name: Build eBPF tracer (glibc 2.17 minimum)
+      shell: bash
+      run: cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer-ebpf --target x86_64-unknown-linux-gnu.2.17
 
     - name: Build preload tracer (glibc 2.17 minimum)
       shell: bash
       run: cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer-preload --target x86_64-unknown-linux-gnu.2.17
 
-    - name: Build eBPF tracer (musl static, fallback to glibc 2.17)
-      shell: bash
-      run: |
-        cargo build --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer-ebpf --target x86_64-unknown-linux-musl \
-          || cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer-ebpf --target x86_64-unknown-linux-gnu.2.17
-
     - name: Stage Rust binaries
       shell: bash
       run: |
         mkdir -p "${{ inputs.output-dir }}"
-        # musl binaries with glibc fallback targets where needed.
-        for bin in roar-tracer roar-proxy roar-tracer-ebpf roard roar-tracer-preload; do
-          src="rust/target/x86_64-unknown-linux-musl/release/$bin"
-          [ -f "$src" ] || src="rust/target/x86_64-unknown-linux-gnu.2.17/release/$bin"
-          [ -f "$src" ] || src="rust/target/x86_64-unknown-linux-gnu/release/$bin"
-          [ -f "$src" ] && cp "$src" "${{ inputs.output-dir }}/"
+
+        # zigbuild outputs to x86_64-unknown-linux-gnu/release/ regardless of the .2.17 suffix
+        RELEASE_DIR="rust/target/x86_64-unknown-linux-gnu/release"
+
+        for bin in roar-tracer roar-proxy roar-tracer-ebpf roard; do
+          [ -f "$RELEASE_DIR/$bin" ] && cp "$RELEASE_DIR/$bin" "${{ inputs.output-dir }}/"
         done
 
-        # preload .so from zigbuild output.
         shopt -s nullglob
         for lib in \
-          rust/target/x86_64-unknown-linux-gnu.2.17/release/libroar_tracer_preload*.so \
-          rust/target/x86_64-unknown-linux-gnu.2.17/release/libroar-tracer-preload*.so \
-          rust/target/x86_64-unknown-linux-gnu/release/libroar_tracer_preload*.so \
-          rust/target/x86_64-unknown-linux-gnu/release/libroar-tracer-preload*.so; do
+          "$RELEASE_DIR"/libroar_tracer_preload*.so \
+          "$RELEASE_DIR"/libroar-tracer-preload*.so; do
           cp "$lib" "${{ inputs.output-dir }}/"
         done
 
@@ -71,6 +64,7 @@ runs:
             objdump -p "$f" | grep NEEDED || true
             objdump -p "$f" | grep GLIBC | sort -V | tail -1 || echo "(no glibc symbols)"
           else
-            ldd "$f" || echo "(static binary)"
+            objdump -p "$f" | grep NEEDED || true
+            objdump -p "$f" | grep GLIBC | sort -V | tail -1 || echo "(no glibc symbols)"
           fi
         done
