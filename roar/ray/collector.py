@@ -62,7 +62,10 @@ def collect(
     if actor_payload is not None:
         actor_events, actor_fragments = actor_payload
 
-    if actor_fragments:
+    if actor_fragments and not actor_events:
+        actor_events = _events_from_fragments(actor_fragments)
+
+    if actor_fragments and not actor_events:
         collect_fragments(
             actor_fragments,
             project_dir=project_dir,
@@ -109,6 +112,7 @@ def collect(
                 source_type=info["source_type"],
                 capture_method=info["capture_method"],
                 hash_value=info["hash"],
+                size=info["size"],
                 metadata=metadata,
             )
 
@@ -242,6 +246,54 @@ def collect_fragments(
         conn.commit()
     finally:
         conn.close()
+
+
+def _events_from_fragments(fragments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+
+    for payload in fragments:
+        if not isinstance(payload, dict):
+            continue
+
+        try:
+            fragment = TaskFragment.from_dict(payload)
+        except Exception:  # noqa: BLE001
+            continue
+
+        task_id = _to_text(fragment.ray_task_id) or _to_text(fragment.job_uid) or "unknown"
+        node_id = _to_text(fragment.ray_node_id)
+
+        for ref in fragment.reads:
+            event: dict[str, Any] = {
+                "path": ref.path,
+                "mode": "r",
+                "task_id": task_id,
+                "capture_method": _normalize_capture_method(_to_text(ref.capture_method)),
+                "size": _normalize_size(ref.size),
+            }
+            if node_id:
+                event["node_id"] = node_id
+            hash_value = _normalize_hash(_to_text(ref.hash))
+            if hash_value:
+                event["hash"] = hash_value
+            events.append(event)
+
+        for ref in fragment.writes:
+            event = {
+                "path": ref.path,
+                "mode": "w",
+                "task_id": task_id,
+                "capture_method": _normalize_capture_method(_to_text(ref.capture_method)),
+                "size": _normalize_size(ref.size),
+            }
+            if node_id:
+                event["node_id"] = node_id
+            hash_value = _normalize_hash(_to_text(ref.hash))
+            if hash_value:
+                event["hash"] = hash_value
+            events.append(event)
+
+    return events
 
 
 def _assign_step_numbers(
@@ -652,6 +704,8 @@ def _merge_proxy_logs(
                 event["node_id"] = node_id
             if parsed.etag:
                 event["hash"] = parsed.etag
+            if parsed.size_bytes is not None:
+                event["size"] = _normalize_size(parsed.size_bytes)
 
             events.append(event)
 
@@ -676,6 +730,7 @@ def _aggregate_paths(task_events: dict[str, list[dict[str, Any]]]) -> dict[str, 
             source_type = _normalize_source_type(_to_text(event.get("source_type")), path)
             capture_method = _normalize_capture_method(_to_text(event.get("capture_method")))
             hash_value = _normalize_hash(_to_text(event.get("hash")))
+            event_size = _normalize_size(event.get("size"))
 
             if path not in path_info:
                 path_info[path] = {
@@ -688,6 +743,7 @@ def _aggregate_paths(task_events: dict[str, list[dict[str, Any]]]) -> dict[str, 
                     "source_type": source_type,
                     "capture_method": capture_method,
                     "hash": hash_value,
+                    "size": event_size,
                 }
 
             info = path_info[path]
@@ -704,6 +760,8 @@ def _aggregate_paths(task_events: dict[str, list[dict[str, Any]]]) -> dict[str, 
 
             if hash_value and not info["hash"]:
                 info["hash"] = hash_value
+            if event_size > info["size"]:
+                info["size"] = event_size
 
             if is_write:
                 info["saw_write"] = True
@@ -850,6 +908,13 @@ def _normalize_hash(value: str | None) -> str | None:
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
         text = text[1:-1]
     return text or None
+
+
+def _normalize_size(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _to_text(value: Any) -> str | None:

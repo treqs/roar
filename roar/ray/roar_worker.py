@@ -70,6 +70,32 @@ def _get_actor_id() -> str | None:
         return None
 
 
+def _get_node_id() -> str | None:
+    try:
+        ray = sys.modules.get("ray")
+        if ray is None:
+            return None
+        ctx = ray.get_runtime_context()
+        node_id = ctx.get_node_id()
+        return _to_text(node_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _get_worker_id() -> str | None:
+    try:
+        ray = sys.modules.get("ray")
+        if ray is None:
+            return None
+        worker = getattr(ray, "_private", None)
+        worker = getattr(worker, "worker", None)
+        global_worker = getattr(worker, "global_worker", None)
+        worker_id = getattr(global_worker, "worker_id", None)
+        return _to_text(worker_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _get_actor_attribution() -> str:
     default = "per_call"
     try:
@@ -112,8 +138,8 @@ def _start_fragment(task_id: str) -> TaskFragment:
         job_uid=derive_task_uid(roar_job_id, task_id),
         parent_job_uid=str(os.environ.get("ROAR_DRIVER_JOB_UID", "")),
         ray_task_id=task_id,
-        ray_worker_id="",
-        ray_node_id="",
+        ray_worker_id=_get_worker_id() or "",
+        ray_node_id=_get_node_id() or "",
         ray_actor_id=_get_actor_id(),
         function_name=_get_task_function_name(),
         started_at=now,
@@ -163,6 +189,10 @@ def _check_task_boundary() -> None:
 
 def _is_write_mode(mode: str) -> bool:
     return any(flag in mode for flag in ("w", "a", "x", "+"))
+
+
+def _should_track_local_path(path: str) -> bool:
+    return path.startswith("/shared/")
 
 
 def _log_write(
@@ -291,9 +321,20 @@ def _tracking_open(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003
     raw_path = args[0] if args else kwargs.get("file")
     mode = args[1] if len(args) > 1 else kwargs.get("mode", "r")
 
-    if _is_write_mode(str(mode)) and isinstance(raw_path, (str, bytes, os.PathLike)):
+    if isinstance(raw_path, (str, bytes, os.PathLike)):
         path = os.path.abspath(os.fspath(raw_path))
-        return _TrackedWriteFile(handle, path=path, capture_method="python")
+        if not _should_track_local_path(path):
+            return handle
+        if _is_write_mode(str(mode)):
+            return _TrackedWriteFile(handle, path=path, capture_method="python")
+
+        _log_read(
+            path=path,
+            hash_value=None,
+            hash_algorithm=_active_hash_algorithm(),
+            size=0,
+            capture_method="python",
+        )
 
     return handle
 
@@ -499,6 +540,39 @@ def _patch_boto3() -> None:
     boto3._roar_worker_boto3_patched = True
 
 
+def _patch_pandas_parquet() -> None:
+    try:
+        import pandas as pd  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return
+
+    original_to_parquet = getattr(pd.DataFrame, "to_parquet", None)
+    if not callable(original_to_parquet):
+        return
+    if getattr(original_to_parquet, "_roar_worker_patched", False):
+        return
+
+    def _tracked_to_parquet(self, path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        result = original_to_parquet(self, path, *args, **kwargs)
+        try:
+            _check_task_boundary()
+            if isinstance(path, (str, bytes, os.PathLike)):
+                resolved = os.path.abspath(os.fspath(path))
+                _log_write(
+                    path=resolved,
+                    hash_value=None,
+                    hash_algorithm=_active_hash_algorithm(),
+                    size=0,
+                    capture_method="tracer",
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        return result
+
+    _tracked_to_parquet._roar_worker_patched = True
+    pd.DataFrame.to_parquet = _tracked_to_parquet
+
+
 def _startup() -> None:
     global _startup_complete, _actor_attribution_mode
 
@@ -508,6 +582,7 @@ def _startup() -> None:
     _actor_attribution_mode = _get_actor_attribution()
     builtins.open = _tracking_open
     _patch_boto3()
+    _patch_pandas_parquet()
     atexit.register(_flush_current_fragment)
     _startup_complete = True
 

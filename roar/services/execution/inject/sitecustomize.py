@@ -1,6 +1,7 @@
 import atexit
 import builtins
 import importlib.metadata as importlib_metadata
+import inspect
 import json
 import os
 import shutil
@@ -241,6 +242,7 @@ _ray_node_poller_stop = threading.Event()
 _ray_node_poller_thread = None
 _ray_node_agents_lock = threading.Lock()
 _ray_node_agents = {}
+_ray_collect_pre_shutdown_registered = False
 
 
 def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
@@ -288,8 +290,10 @@ def _patch_ray_init(ray_module) -> None:  # noqa: ANN001
                 env_vars.setdefault(key, value)
         runtime_env["env_vars"] = env_vars
         runtime_env = _prepare_worker_runtime_env(runtime_env, job_id)
+        runtime_env = _sanitize_worker_runtime_env_for_ray(ray_module, runtime_env)
         kwargs["runtime_env"] = runtime_env
         result = _real_ray_init(*args, **kwargs)
+        _register_pre_shutdown_ray_collection()
         _ensure_collector_actor(ray_module, job_id)
         if _node_agents_enabled():
             threading.Thread(
@@ -379,13 +383,41 @@ def _prepare_worker_runtime_env(runtime_env, job_id: str):  # noqa: ANN001
     except Exception:
         pass
 
-    _write_worker_wrapper(tmp_dir)
     env_vars = dict(runtime_env.get("env_vars", {}) or {})
     env_vars[_WORKER_SETUP_HOOK_ENV_VAR] = _WORKER_SETUP_HOOK
     runtime_env["working_dir"] = tmp_dir
-    runtime_env["py_executable"] = "bash ./roar_worker_wrapper.sh"
+    runtime_env["py_executable"] = "roar-worker"
     runtime_env["worker_process_setup_hook"] = _WORKER_SETUP_HOOK
     runtime_env["env_vars"] = env_vars
+    return runtime_env
+
+
+def _ray_rejects_manual_worker_setup_hook_env(ray_module) -> bool:  # noqa: ANN001
+    try:
+        setup_hook_module = ray_module._private.runtime_env.setup_hook
+        export_setup_func_module = getattr(setup_hook_module, "export_setup_func_module", None)
+        if not callable(export_setup_func_module):
+            return False
+        source = inspect.getsource(export_setup_func_module)
+    except Exception:
+        return False
+
+    return "is not permitted because it is reserved for the internal use" in source
+
+
+def _sanitize_worker_runtime_env_for_ray(ray_module, runtime_env):  # noqa: ANN001
+    runtime_env = dict(runtime_env or {})
+    if not runtime_env.get("worker_process_setup_hook"):
+        return runtime_env
+
+    env_vars = dict(runtime_env.get("env_vars", {}) or {})
+    if _WORKER_SETUP_HOOK_ENV_VAR not in env_vars:
+        return runtime_env
+
+    if _ray_rejects_manual_worker_setup_hook_env(ray_module):
+        env_vars.pop(_WORKER_SETUP_HOOK_ENV_VAR, None)
+        runtime_env["env_vars"] = env_vars
+
     return runtime_env
 
 
@@ -740,6 +772,22 @@ def _resolve_roar_requirement() -> str:
             break
 
     return "roar-cli"
+
+
+def _register_pre_shutdown_ray_collection() -> None:
+    """
+    Register a collection hook after ray.init().
+
+    Ray registers its own shutdown hook during init. Registering this hook
+    afterwards ensures worker logs are collected before Ray tears down.
+    """
+    global _ray_collect_pre_shutdown_registered
+
+    if _ray_collect_pre_shutdown_registered:
+        return
+
+    atexit.register(_collect_ray_io)
+    _ray_collect_pre_shutdown_registered = True
 
 
 def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:

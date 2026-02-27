@@ -18,28 +18,55 @@ WORKERS_TIMEOUT_SECONDS = 60
 POLL_INTERVAL_SECONDS = 3
 
 
+def _is_compiled_extension(module: object) -> bool:
+    module_file = getattr(module, "__file__", "")
+    return isinstance(module_file, str) and module_file.endswith((".so", ".pyd", ".dll"))
+
+
 def _import_real_ray():
     blocked_paths = {
         COMPOSE_FILE.parent.resolve(),
         COMPOSE_FILE.parent.parent.resolve(),
     }
+    preserved = {
+        key: value
+        for key, value in sys.modules.items()
+        if key.startswith("ray.") and _is_compiled_extension(value)
+    }
     original_sys_path = sys.path[:]
-    sys.modules.pop("ray", None)
+    ray_keys = [
+        key
+        for key in sys.modules
+        if (key == "ray" or key.startswith("ray.")) and key != __name__
+    ]
+    for key in ray_keys:
+        sys.modules.pop(key, None)
     try:
         sys.path = [p for p in original_sys_path if Path(p).resolve() not in blocked_paths]
         module = importlib.import_module("ray")
+        importlib.import_module("ray._raylet")
     finally:
         sys.path = original_sys_path
 
+    for key, value in preserved.items():
+        sys.modules.setdefault(key, value)
     sys.modules["ray"] = module
     return module
 
 
-ray = _import_real_ray()
+ray = None
+
+
+def _get_ray():
+    global ray
+    if ray is None:
+        ray = _import_real_ray()
+    return ray
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.option.importmode = "importlib"
+    _get_ray()
     config.addinivalue_line("markers", "ray_e2e: Ray end-to-end tests requiring Docker")
 
 
@@ -155,11 +182,12 @@ def ray_cluster() -> dict[str, str]:
 @pytest.fixture(scope="function")
 def ray_connection(ray_cluster: dict[str, str]) -> None:
     del ray_cluster
-    ray.init(address="ray://localhost:10001", ignore_reinit_error=True)
+    ray_module = _get_ray()
+    ray_module.init(address="ray://localhost:10001", ignore_reinit_error=True)
     try:
         yield
     finally:
-        ray.shutdown()
+        ray_module.shutdown()
 
 
 def submit_job_on_head(
