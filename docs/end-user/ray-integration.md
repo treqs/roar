@@ -2,115 +2,103 @@
 
 ## 1. High-level summary
 
-roar can trace Ray workloads without changing your Ray code. When you run your script through `roar`, it instruments Ray workers, captures what each task reads and writes (local files and S3), and stores the lineage in `.roar/roar.db`.
+`roar` can trace Ray workloads without changing your Ray code. Run your script through `roar`, and it captures what Ray tasks read and write across workers, then stores that lineage in `.roar/roar.db` so you can inspect it later.
 
-The result is task-aware lineage instead of driver-only lineage: you can see which Ray task produced an artifact, which task consumed it, and the execution order implied by those dependencies.
+In practice, this turns Ray execution into queryable lineage: which task produced an artifact, which task read it, and the task order implied by those dependencies.
 
 ## 2. Prerequisites
 
-- `roar` installed and initialized in your project (`roar init`).
-- `ray` installed in the environment where your driver runs.
-- A Ray setup that supports `runtime_env` worker customization (local clusters and standard remote clusters, including `ray://` client mode).
-- For best local file capture, workers should read/write a shared worker-visible path (default examples use `/shared`).
+- `roar` is installed and your project is initialized (`roar init`).
+- `ray` is installed in the environment where your script runs.
+- Supported cluster setups include:
+  - local Ray
+  - Docker-based Ray deployments
+  - remote Ray clusters (including client-style connections)
 
 ## 3. Usage
 
-Run your existing Ray script with one command:
+Run your Ray script with this command:
 
 ```bash
-roar run python your_ray_script.py
+roar run python your_script.py
 ```
 
-Before:
-- Your Ray script runs normally, but lineage is mostly at driver level.
+Before (running plain `python`):
+- `.roar/roar.db` mainly reflects driver-level lineage, with limited visibility into worker task I/O.
 
-After:
-- The same script runs normally, plus roar records worker task I/O (file and S3), task attribution, and dependency-aware ordering in `.roar/roar.db`.
+After (running through `roar run`):
+- `.roar/roar.db` includes Ray worker task lineage, artifact reads/writes, task attribution, and dependency-aware ordering.
 
 ## 4. What gets captured
 
-- Worker file I/O (reads/writes seen by worker instrumentation).
-- S3 `PutObject`/`GetObject` activity, including ETag when available.
-- Per-task attribution (`ray_task_id`, and node metadata when available).
-- Task ordering inferred from read/write dependencies (step numbers for Ray task jobs).
+- File I/O on Ray workers (reads and writes, with hashes when available).
+- S3 `PutObject` and `GetObject` operations (including ETags and byte sizes when available).
+- Per-task attribution (which `@ray.remote` task touched which artifacts).
+- Step ordering (tasks ordered by artifact dependency topology).
 
 ## 5. Mental model
 
 ```mermaid
 flowchart LR
-    A[Your script] --> B[Ray tasks run on workers]
+    A[Your script] --> B[Ray tasks on workers]
     B --> C[roar captures file and S3 I/O]
-    C --> D[Lineage stored in .roar/roar.db]
+    C --> D[Lineage written to .roar/roar.db]
+    D --> E[Inspect with roar show]
 ```
 
 ## 6. Configuration
 
-The Ray settings most users care about are in `[ray]`:
+User-facing Ray options in `[ray]`:
 
-- `ray.enabled`:
-  - Turn Ray instrumentation on/off.
-- `ray.log_dir`:
-  - Worker log directory used by fallback collection.
-- `ray.pip_install`:
-  - Controls whether `roar` is injected into `runtime_env.pip` for workers.
-- `ray.actor_attribution`:
-  - `per_call` (default): each actor method call is tracked separately.
-  - `per_actor`: group events at actor granularity.
+- `ray.enabled`
+  - Turn Ray tracing on or off.
+- `ray.log_dir`
+  - Set the worker log directory used for fallback collection.
+- `ray.actor_attribution`
+  - `per_call` (default): attribute by actor method call.
+  - `per_actor`: group attribution by actor.
 
-Useful environment variables:
+Helpful environment variables:
 
-- `ROAR_WRAP=1`: enables runtime patching path (normally set automatically by `roar run`).
-- `ROAR_PROJECT_DIR`: where `.roar/roar.db` is written/read.
-- `ROAR_LOG_DIR`: worker fallback log directory.
+- `ROAR_WRAP=1`
+  - Enables Ray wrapping (normally set automatically by `roar run`).
+- `ROAR_PROJECT_DIR`
+  - Controls where `.roar/roar.db` is created/read.
+- `ROAR_LOG_DIR`
+  - Overrides worker log directory.
 
 ## 7. Viewing results
 
-CLI inspection:
+Use `roar show` to inspect runs:
 
 ```bash
-roar dag --expanded
-roar show @1
-roar lineage /path/to/output/artifact
+roar show
 ```
 
-Direct DB inspection examples:
-
-```bash
-sqlite3 .roar/roar.db "
-SELECT job_uid, command, step_number, parent_job_uid
-FROM jobs
-WHERE job_type = 'ray_task'
-ORDER BY step_number, timestamp;
-"
-```
+Example query: artifacts captured per Ray task.
 
 ```bash
 sqlite3 .roar/roar.db "
 SELECT
-  first_seen_path,
-  capture_method,
-  json_extract(metadata, '$.ray_task_id') AS ray_task_id,
-  json_extract(metadata, '$.ray_node_id') AS ray_node_id
-FROM artifacts
-WHERE first_seen_path LIKE '/shared/%' OR first_seen_path LIKE 's3://%'
-ORDER BY first_seen_at DESC;
-"
-```
-
-```bash
-sqlite3 .roar/roar.db "
-SELECT j.job_uid, ji.path AS input_path, jo.path AS output_path
+  j.job_uid,
+  j.script AS ray_task,
+  a.first_seen_path AS artifact_path,
+  io.kind AS io_kind
 FROM jobs j
-LEFT JOIN job_inputs ji ON ji.job_id = j.id
-LEFT JOIN job_outputs jo ON jo.job_id = j.id
-WHERE j.job_type = 'ray_task';
+JOIN (
+  SELECT job_id, artifact_id, 'input' AS kind FROM job_inputs
+  UNION ALL
+  SELECT job_id, artifact_id, 'output' AS kind FROM job_outputs
+) io ON io.job_id = j.id
+JOIN artifacts a ON a.id = io.artifact_id
+WHERE j.job_type = 'ray_task'
+ORDER BY j.step_number, j.timestamp, io.kind;
 "
 ```
 
 ## 8. Known limitations
 
-- Local file capture in the current worker entrypoint focuses on `/shared/...` paths.
-- S3 hashing is ETag-based; ETag is not always a full content hash.
-- Multi-node proxy collection relies on optional node-agent/proxy setup.
-- Some Ray client paths may require explicit worker startup fallback in task code.
-- If a cluster policy blocks required `runtime_env` changes, instrumentation will be partial or unavailable.
+- Local file capture is strongest for worker-visible shared paths (commonly `/shared`).
+- Some read events may not include full content hashes.
+- S3 identity is ETag-based, which is not always a full-content digest.
+- If cluster/runtime policies block required `runtime_env` behavior, tracing may be partial.
