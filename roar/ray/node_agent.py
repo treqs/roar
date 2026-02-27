@@ -9,15 +9,12 @@ from typing import Any
 
 import ray
 
+from roar.ray._agent_names import build_node_agent_name
 from roar.services.execution import tracer_backends
 
 _READY_SENTINEL = "ROAR_PROXY_READY"
 _DEFAULT_PROXY_START_TIMEOUT_SECONDS = 10.0
-
-
-def build_node_agent_name(job_id: str, node_id: str) -> str:
-    return f"roar-node-agent-{job_id}-{str(node_id)[:8]}"
-
+__all__ = ["RoarNodeAgent", "build_node_agent_name"]
 
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

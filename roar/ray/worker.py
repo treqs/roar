@@ -300,7 +300,7 @@ def _configure_local_proxy_endpoint() -> None:
         return
 
     try:
-        from roar.ray.node_agent import build_node_agent_name
+        from roar.ray._agent_names import build_node_agent_name
 
         actor_name = build_node_agent_name(job_id, node_id)
         agent = ray.get_actor(actor_name, namespace="roar")
