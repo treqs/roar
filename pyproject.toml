@@ -77,6 +77,8 @@ python-source = "."
 module-name = "roar._hash_native"
 bindings = "pyo3"
 include = [
+    { path = "LICENSE", format = "sdist" },
+    { path = "LICENSE", format = "wheel" },
     { path = "roar/bin/*", format = "sdist" },
     { path = "roar/bin/*", format = "wheel" },
 ]
