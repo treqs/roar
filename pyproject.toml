@@ -96,7 +96,7 @@ markers = [
     "happy_path: Happy path tests for core functionality",
     "ray_e2e: Ray end-to-end tests requiring a running Docker cluster",
 ]
-addopts = "-v --strict-markers -n auto --dist loadfile --ignore=tests/ebpf --ignore=tests/live_glaas --ignore=tests/e2e/ray"
+addopts = "-v --strict-markers -n auto --dist loadfile --ignore=tests/ebpf --ignore=tests/live_glaas --ignore=tests/benchmarks --ignore=tests/integration"
 timeout = 60
 filterwarnings = [
     "ignore::DeprecationWarning",
