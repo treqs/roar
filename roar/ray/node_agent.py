@@ -16,6 +16,7 @@ _READY_SENTINEL = "ROAR_PROXY_READY"
 _DEFAULT_PROXY_START_TIMEOUT_SECONDS = 10.0
 __all__ = ["RoarNodeAgent", "build_node_agent_name"]
 
+
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
