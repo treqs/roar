@@ -64,19 +64,29 @@ def collect(
     if actor_payload is not None:
         actor_events, actor_fragments = actor_payload
 
+    task_events: dict[str, list[dict[str, Any]]] | None = None
     if actor_fragments:
         session_id, base_step = _resolve_active_session_context(db_path)
-        collect_fragments(
-            actor_fragments,
-            project_dir=project_dir,
-            driver_job_uid=os.environ.get("ROAR_JOB_ID"),
-            session_id=session_id,
-            step_number=base_step,
-        )
-        _consume_filesystem_logs(log_path)
-        return
+        if session_id is not None:
+            collect_fragments(
+                actor_fragments,
+                project_dir=project_dir,
+                driver_job_uid=os.environ.get("ROAR_JOB_ID"),
+                session_id=session_id,
+                step_number=base_step,
+            )
+            _consume_filesystem_logs(log_path)
+            return
 
-    task_events = _collect_events(log_path, actor_events=actor_events)
+        # Outside an active roar session (e.g. direct ROAR_WRAP jobs), flatten
+        # fragments back into task events so artifacts merge into one ray job.
+        task_events = _group_events_by_task(_events_from_fragments(actor_fragments))
+        if actor_events:
+            for task_id, events in _group_events_by_task(actor_events).items():
+                task_events.setdefault(task_id, []).extend(events)
+
+    if task_events is None:
+        task_events = _collect_events(log_path, actor_events=actor_events)
     _merge_proxy_logs(task_events, proxy_logs or {})
     if not task_events:
         return

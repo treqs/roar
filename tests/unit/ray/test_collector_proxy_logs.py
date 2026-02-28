@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -86,6 +87,7 @@ def test_collect_records_hash_rows_from_fragment_events(tmp_path: Path, monkeypa
     collector.collect(project_dir=str(project_dir), log_dir=str(log_dir))
 
     conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
     hash_row = conn.execute(
         """
         SELECT ah.algorithm, ah.digest
@@ -104,7 +106,31 @@ def test_collect_records_hash_rows_from_fragment_events(tmp_path: Path, monkeypa
         """,
         ("s3://output-bucket/results/run-1/final_report.json",),
     ).fetchone()
+    job_row = conn.execute(
+        """
+        SELECT job_type
+        FROM jobs
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    metadata_row = conn.execute(
+        """
+        SELECT metadata
+        FROM artifacts
+        WHERE first_seen_path = ?
+        ORDER BY first_seen_at DESC
+        LIMIT 1
+        """,
+        ("s3://output-bucket/results/run-1/final_report.json",),
+    ).fetchone()
     conn.close()
 
-    assert hash_row == ("etag", "etag-final-123")
-    assert output_row == ("s3://output-bucket/results/run-1/final_report.json",)
+    assert hash_row is not None
+    assert (hash_row["algorithm"], hash_row["digest"]) == ("etag", "etag-final-123")
+    assert output_row is not None
+    assert output_row["path"] == "s3://output-bucket/results/run-1/final_report.json"
+    assert job_row is not None
+    assert job_row["job_type"] == "ray"
+    assert metadata_row is not None
+    assert json.loads(str(metadata_row["metadata"])).get("ray_node_id") == "node-1"
