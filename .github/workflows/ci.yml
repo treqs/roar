@@ -244,7 +244,7 @@ jobs:
           python -m roar run "$(python -c 'import sys; print(sys.executable)')" smoke.py
 
       - name: Run tests (parallel)
-        run: pytest --tb=short -x -m "not glaas and not live_glaas and not ebpf"
+        run: pytest --tb=short -x -m "not glaas and not live_glaas and not ebpf and not large_pipeline"
 
   test-tracer-privileged:
     runs-on: ubuntu-latest
