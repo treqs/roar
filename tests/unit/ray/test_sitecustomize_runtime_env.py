@@ -53,7 +53,9 @@ def test_patch_ray_init_skips_pip_dependency_by_default(
 
     monkeypatch.setenv("ROAR_LOG_DIR", "/tmp/roar-ray")
     monkeypatch.delenv("ROAR_JOB_ID", raising=False)
-    monkeypatch.setattr(sitecustomize.importlib_metadata, "version", lambda _: "9.8.7")
+    import importlib.metadata as importlib_metadata
+
+    monkeypatch.setattr(importlib_metadata, "version", lambda _: "9.8.7")
 
     sitecustomize._patch_ray_init(fake_ray)
     result = fake_ray.init(runtime_env={"env_vars": {"USER_KEY": "value"}})
@@ -305,6 +307,8 @@ def test_prepare_worker_runtime_env_suppresses_internal_copy_operations(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    import shutil
+
     source_working_dir = tmp_path / "user-working-dir"
     source_working_dir.mkdir()
 
@@ -331,8 +335,8 @@ def test_prepare_worker_runtime_env_suppresses_internal_copy_operations(
         return str(dst)
 
     monkeypatch.setattr(sitecustomize, "_merge_working_dir", fake_merge_working_dir)
-    monkeypatch.setattr(sitecustomize.shutil, "copytree", fake_copytree)
-    monkeypatch.setattr(sitecustomize.shutil, "copy2", fake_copy2)
+    monkeypatch.setattr(shutil, "copytree", fake_copytree)
+    monkeypatch.setattr(shutil, "copy2", fake_copy2)
 
     prepared = sitecustomize._prepare_worker_runtime_env(
         {"working_dir": str(source_working_dir)},
