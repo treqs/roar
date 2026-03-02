@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use aws_credential_types::provider::ProvideCredentials;
@@ -27,6 +27,7 @@ pub struct ForwardState {
     pub client: Client,
     pub credentials_provider: aws_credential_types::provider::SharedCredentialsProvider,
     pub region: String,
+    pub timing_enabled: bool,
 }
 
 /// S3 response with deferred body consumption.
@@ -60,6 +61,8 @@ pub async fn forward_to_s3(
     body: Bytes,
     upstream_url: Option<&str>,
 ) -> Result<S3Response> {
+    let t0 = Instant::now();
+
     let path = uri.path();
     let query = uri.query().unwrap_or("");
 
@@ -91,6 +94,14 @@ pub async fn forward_to_s3(
         .provide_credentials()
         .await
         .context("failed to resolve AWS credentials")?;
+    if state.timing_enabled {
+        eprintln!(
+            "[proxy-timing] cred_resolve={:.2}ms",
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+
+    let t1 = Instant::now();
     let identity = creds.into();
 
     // Build signing settings — use UNSIGNED-PAYLOAD to avoid buffering/hashing body
@@ -170,6 +181,12 @@ pub async fn forward_to_s3(
     }
 
     signing_instructions.apply_to_request_http1x(&mut temp_request);
+    if state.timing_enabled {
+        eprintln!(
+            "[proxy-timing] signing={:.2}ms",
+            t1.elapsed().as_secs_f64() * 1000.0
+        );
+    }
 
     // Build the final reqwest request with all signed headers
     let mut final_builder = state.client.request(
@@ -185,10 +202,21 @@ pub async fn forward_to_s3(
 
     final_builder = final_builder.body(body);
 
+    let t2 = Instant::now();
     let response = final_builder
         .send()
         .await
         .context("failed to forward request to S3")?;
+    if state.timing_enabled {
+        eprintln!(
+            "[proxy-timing] send_recv_headers={:.2}ms",
+            t2.elapsed().as_secs_f64() * 1000.0
+        );
+        eprintln!(
+            "[proxy-timing] total_forward={:.2}ms",
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+    }
 
     // Map the S3 response status + headers
     let status = StatusCode::from_u16(response.status().as_u16())

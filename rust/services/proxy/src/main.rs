@@ -2,6 +2,7 @@ mod forward;
 mod s3;
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use aws_credential_types::provider::SharedCredentialsProvider;
@@ -51,6 +52,7 @@ struct AppState {
     default_session_id: Option<String>,
     default_job_id: Option<String>,
     upstream: Option<String>,
+    timing_enabled: bool,
 }
 
 #[tokio::main]
@@ -70,15 +72,24 @@ async fn main() -> Result<()> {
         .expect("no AWS credentials provider found")
         .clone();
 
+    let timing_enabled = std::env::var_os("ROAR_PROXY_TIMING").is_some();
+
     let state = Arc::new(AppState {
         forward: ForwardState {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .pool_max_idle_per_host(32)
+                .tcp_keepalive(std::time::Duration::from_secs(90))
+                .tcp_nodelay(true)
+                .build()
+                .context("failed to build reqwest client")?,
             credentials_provider: SharedCredentialsProvider::new(credentials_provider),
             region,
+            timing_enabled,
         },
         default_session_id: args.session_id,
         default_job_id: args.job_id,
         upstream: args.upstream,
+        timing_enabled,
     });
 
     let app = Router::new()
@@ -110,6 +121,7 @@ async fn handle_request(State(state): State<Arc<AppState>>, request: Request<Bod
 }
 
 async fn handle_request_inner(state: &AppState, request: Request<Body>) -> Result<Response> {
+    let t_start = Instant::now();
     let (parts, body) = request.into_parts();
 
     let content_length = parts
@@ -161,7 +173,16 @@ async fn handle_request_inner(state: &AppState, request: Request<Body>) -> Resul
         response = response.header(name, value);
     }
 
-    response
+    let response = response
         .body(response_body)
-        .context("failed to build response")
+        .context("failed to build response")?;
+
+    if state.timing_enabled {
+        eprintln!(
+            "[proxy-timing] handle_total={:.2}ms",
+            t_start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+
+    Ok(response)
 }
