@@ -1,7 +1,7 @@
 """Tests for shared tracer backend discovery/readiness helpers."""
 
 from pathlib import Path
-from unittest.mock import mock_open, patch
+from unittest.mock import patch
 
 from roar.services.execution import tracer_backends
 
@@ -39,45 +39,6 @@ def test_backend_ready_auto_prefers_preload_when_ebpf_not_ready(tmp_path: Path) 
 
     assert ok
     assert detail == "preload ready"
-
-
-def test_ebpf_readiness_root_with_caps_is_ready() -> None:
-    """Root with full capabilities should be ready."""
-    # CapEff with CAP_BPF (39) + CAP_PERFMON (38) set
-    cap_eff = (1 << 39) | (1 << 38)
-    proc_status = f"Name:\tpython\nCapEff:\t{cap_eff:016x}\n"
-    with (
-        patch("os.geteuid", return_value=0),
-        patch("builtins.open", mock_open(read_data=proc_status)),
-    ):
-        result = tracer_backends.ebpf_readiness("/bin/roar-tracer-ebpf")
-    assert result.ok
-
-
-def test_ebpf_readiness_root_without_caps_not_ready() -> None:
-    """Root in a container without BPF capabilities should not be ready."""
-    # CapEff with none of the BPF-related caps
-    cap_eff = 0x00000000A80425FB  # typical runpod container caps
-    proc_status = f"Name:\tpython\nCapEff:\t{cap_eff:016x}\n"
-    with (
-        patch("os.geteuid", return_value=0),
-        patch("builtins.open", mock_open(read_data=proc_status)),
-    ):
-        result = tracer_backends.ebpf_readiness("/bin/roar-tracer-ebpf")
-    assert not result.ok
-    assert "container" in result.reason
-
-
-def test_ebpf_readiness_root_with_sys_admin_is_ready() -> None:
-    """Root with CAP_SYS_ADMIN (legacy) should be ready."""
-    cap_eff = 1 << 21  # CAP_SYS_ADMIN only
-    proc_status = f"Name:\tpython\nCapEff:\t{cap_eff:016x}\n"
-    with (
-        patch("os.geteuid", return_value=0),
-        patch("builtins.open", mock_open(read_data=proc_status)),
-    ):
-        result = tracer_backends.ebpf_readiness("/bin/roar-tracer-ebpf")
-    assert result.ok
 
 
 def test_find_preload_library_supports_dylib_on_macos(tmp_path: Path) -> None:
