@@ -3,7 +3,6 @@ mod s3;
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use aws_credential_types::provider::SharedCredentialsProvider;
@@ -53,7 +52,6 @@ struct AppState {
     default_session_id: Option<String>,
     default_job_id: Option<String>,
     upstream: Option<String>,
-    timing_enabled: bool,
 }
 
 #[tokio::main]
@@ -80,8 +78,6 @@ async fn main() -> Result<()> {
         .build()
         .context("failed to build HTTP client")?;
 
-    let timing_enabled = std::env::var_os("ROAR_PROXY_TIMING").is_some();
-
     let state = Arc::new(AppState {
         forward: ForwardState {
             client: reqwest::Client::builder()
@@ -93,12 +89,10 @@ async fn main() -> Result<()> {
             credentials_provider: SharedCredentialsProvider::new(credentials_provider),
             region,
             bucket_regions: Arc::new(RwLock::new(HashMap::new())),
-            timing_enabled,
         },
         default_session_id: args.session_id,
         default_job_id: args.job_id,
         upstream: args.upstream,
-        timing_enabled,
     });
 
     let app = Router::new()
@@ -130,7 +124,8 @@ async fn handle_request(State(state): State<Arc<AppState>>, request: Request<Bod
 }
 
 async fn handle_request_inner(state: &AppState, request: Request<Body>) -> Result<Response> {
-    let t_start = Instant::now();
+    #[cfg(debug_assertions)]
+    let t_start = std::time::Instant::now();
     let (parts, body) = request.into_parts();
 
     let content_length = parts
@@ -186,12 +181,11 @@ async fn handle_request_inner(state: &AppState, request: Request<Body>) -> Resul
         .body(response_body)
         .context("failed to build response")?;
 
-    if state.timing_enabled {
-        eprintln!(
-            "[proxy-timing] handle_total={:.2}ms",
-            t_start.elapsed().as_secs_f64() * 1000.0
-        );
-    }
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[proxy-timing] handle_total={:.2}ms",
+        t_start.elapsed().as_secs_f64() * 1000.0
+    );
 
     Ok(response)
 }

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+#[cfg(debug_assertions)]
+use std::time::Instant;
 use std::time::SystemTime;
-use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use aws_credential_types::provider::ProvideCredentials;
@@ -32,7 +33,6 @@ pub struct ForwardState {
     pub region: String,
     /// Cache of bucket name → region, learned from S3 PermanentRedirect responses.
     pub bucket_regions: Arc<RwLock<HashMap<String, String>>>,
-    pub timing_enabled: bool,
 }
 
 /// S3 response with deferred body consumption.
@@ -70,6 +70,7 @@ pub async fn forward_to_s3(
     body: Bytes,
     upstream_url: Option<&str>,
 ) -> Result<S3Response> {
+    #[cfg(debug_assertions)]
     let t0 = Instant::now();
 
     let path = uri.path();
@@ -193,13 +194,13 @@ async fn forward_to_s3_inner(
         .provide_credentials()
         .await
         .context("failed to resolve AWS credentials")?;
-    if state.timing_enabled {
-        eprintln!(
-            "[proxy-timing] cred_resolve={:.2}ms",
-            t0.elapsed().as_secs_f64() * 1000.0
-        );
-    }
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[proxy-timing] cred_resolve={:.2}ms",
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
 
+    #[cfg(debug_assertions)]
     let t1 = Instant::now();
     let identity = creds.into();
 
@@ -280,12 +281,11 @@ async fn forward_to_s3_inner(
     }
 
     signing_instructions.apply_to_request_http1x(&mut temp_request);
-    if state.timing_enabled {
-        eprintln!(
-            "[proxy-timing] signing={:.2}ms",
-            t1.elapsed().as_secs_f64() * 1000.0
-        );
-    }
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[proxy-timing] signing={:.2}ms",
+        t1.elapsed().as_secs_f64() * 1000.0
+    );
 
     // Build the final reqwest request with all signed headers
     let mut final_builder = state.client.request(
@@ -301,12 +301,14 @@ async fn forward_to_s3_inner(
 
     final_builder = final_builder.body(body);
 
+    #[cfg(debug_assertions)]
     let t2 = Instant::now();
     let response = final_builder
         .send()
         .await
         .context("failed to forward request to S3")?;
-    if state.timing_enabled {
+    #[cfg(debug_assertions)]
+    {
         eprintln!(
             "[proxy-timing] send_recv_headers={:.2}ms",
             t2.elapsed().as_secs_f64() * 1000.0
