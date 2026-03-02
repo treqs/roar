@@ -158,6 +158,42 @@ def get_binary_caps(path: str) -> set[str] | None:
         return None
 
 
+def _get_effective_cap_bitfield() -> int | None:
+    """Read the effective capability bitmask from /proc/self/status.
+
+    Returns the CapEff value as an integer, or None on non-Linux / parse failure.
+    """
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("CapEff:"):
+                    return int(line.split(":")[1].strip(), 16)
+    except Exception:
+        return None
+    return None
+
+
+# Bit positions for capabilities required by the eBPF tracer.
+_CAP_SYS_ADMIN = 21  # legacy fallback (kernels < 5.8)
+_CAP_PERFMON = 38
+_CAP_BPF = 39
+
+
+def _process_has_ebpf_caps() -> bool | None:
+    """Check whether the current process has effective caps for eBPF.
+
+    Returns True/False, or None if the check is not available (non-Linux).
+    """
+    cap_eff = _get_effective_cap_bitfield()
+    if cap_eff is None:
+        return None  # cannot determine; let runtime decide
+    has_bpf = bool(cap_eff & (1 << _CAP_BPF))
+    has_perfmon = bool(cap_eff & (1 << _CAP_PERFMON))
+    has_sys_admin = bool(cap_eff & (1 << _CAP_SYS_ADMIN))
+    # Modern kernels need CAP_BPF + CAP_PERFMON; older kernels accept CAP_SYS_ADMIN.
+    return (has_bpf and has_perfmon) or has_sys_admin
+
+
 def ebpf_readiness(path: str) -> TracerReadiness:
     """
     Check whether eBPF tracer is likely to start.
@@ -166,6 +202,16 @@ def ebpf_readiness(path: str) -> TracerReadiness:
         Typed readiness result for eBPF backend.
     """
     if os.geteuid() == 0:
+        # Root inside a container may lack BPF capabilities.
+        has_caps = _process_has_ebpf_caps()
+        if has_caps is None:
+            # Non-Linux or unreadable /proc; assume ready.
+            return TracerReadiness(ok=True, reason=None)
+        if not has_caps:
+            return TracerReadiness(
+                ok=False,
+                reason="root lacks effective eBPF capabilities (container?)",
+            )
         return TracerReadiness(ok=True, reason=None)
 
     paranoid = get_perf_event_paranoid()
