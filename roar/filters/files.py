@@ -45,26 +45,39 @@ class FileClassifier:
         return dirs
 
     def _build_package_file_map(self) -> tuple[dict, dict]:
-        """Build a map of file paths to package names using importlib.metadata."""
-        from importlib.metadata import distributions
+        """Build package version map and a fast module-name index.
 
-        file_to_pkg = {}
-        pkg_versions = {}
+        Previously this iterated dist.files for every installed package, calling
+        Path.resolve() on each entry -- O(packages x files_per_package) disk I/O
+        that took ~9 seconds with 155 packages in a Ray+torch environment.
 
+        Now we use two fast operations instead:
+        - dist.metadata reads only the lightweight METADATA file (not RECORD).
+        - packages_distributions() returns a pre-built {top_level_module: [pkg]} index
+          that lets classify() extract the package name from the path without any RECORD
+          file scanning.
+        """
+        from importlib.metadata import distributions, packages_distributions
+
+        pkg_versions: dict[str, str] = {}
         for dist in distributions():
-            name = dist.metadata["Name"]
-            version = dist.metadata["Version"]
-            pkg_versions[name] = version
+            try:
+                name = dist.metadata["Name"]
+                version = dist.metadata["Version"]
+            except (KeyError, TypeError):
+                continue
+            if name and version:
+                pkg_versions[name] = version
 
-            if dist.files:
-                for f in dist.files:
-                    try:
-                        full_path = str(Path(str(dist.locate_file(f))).resolve())
-                        file_to_pkg[full_path] = name
-                    except Exception:
-                        pass
+        # packages_distributions() is a pre-built index — O(1) module lookups.
+        # Store it on self so classify() can use it without re-importing.
+        try:
+            self._pkg_dist_map: dict[str, list[str]] = dict(packages_distributions())
+        except Exception:
+            self._pkg_dist_map = {}
 
-        return file_to_pkg, pkg_versions
+        # file_to_pkg is intentionally empty; classify() now uses path extraction.
+        return {}, pkg_versions
 
     def classify(self, path: str) -> tuple[str, str | None]:
         """
@@ -115,12 +128,22 @@ class FileClassifier:
         except ValueError:
             pass
 
-        # Check if it's a package file (from importlib.metadata)
-        if path_str in self._file_to_pkg:
-            return ("package", self._file_to_pkg[path_str])
-
-        # Check if it's in site-packages (even if not in metadata, it's a package)
+        # Check if it's a package file via fast path-based lookup.
+        # _file_to_pkg is always empty now; we extract the top-level module name
+        # directly from the path and look it up in packages_distributions() index.
         if "site-packages" in path_str:
+            for sp_dir in self._site_packages_dirs:
+                if path_str.startswith(sp_dir + os.sep) or path_str == sp_dir:
+                    sp_rel = path_str[len(sp_dir):].lstrip(os.sep)
+                    top = sp_rel.split(os.sep)[0]
+                    if top.endswith(".py"):
+                        top = top[:-3]
+                    if top and not top.endswith(".dist-info") and not top.endswith(".egg-info"):
+                        pkg_names = getattr(self, "_pkg_dist_map", {}).get(top, [])
+                        if pkg_names:
+                            return ("package", pkg_names[0])
+                    return ("package", "unknown")
+            # site-packages in path but not under a tracked site-packages dir
             return ("package", "unknown")
 
         # Check for system shared libraries BEFORE sys.prefix check
