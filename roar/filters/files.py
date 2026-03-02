@@ -117,14 +117,14 @@ class FileClassifier:
             "pkg_dist_map": pkg_dist_map,
         }
         tmp = cache_path.with_suffix(".tmp")
+        from contextlib import suppress
+
         try:
             tmp.write_text(json.dumps(data, separators=(",", ":")))
             tmp.replace(cache_path)
         except OSError:
-            try:
+            with suppress(OSError):
                 tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
 
     def _build_package_file_map(self) -> tuple[dict, dict]:
         """Build package version map and a fast module-name index.
@@ -132,7 +132,7 @@ class FileClassifier:
         Single-pass over distributions() reading only METADATA + top_level.txt.
         Never reads RECORD / dist.files() — those are large and slow.
 
-        Previously (v1): iterated dist.files() for every package — O(packages ×
+        Previously (v1): iterated dist.files() for every package — O(packages x
         files_per_package) disk I/O, ~9 seconds with 312 packages.
 
         Previously (v2): called packages_distributions() which internally calls
@@ -146,6 +146,8 @@ class FileClassifier:
         # Try disk cache first.
         cache_path = self._pkg_map_cache_path()
         cache_key = self._pkg_map_cache_key()
+        pkg_versions: dict[str, str]
+        pkg_dist_map: dict[str, list[str]]
         if cache_path is not None:
             cached = self._load_pkg_map_cache(cache_path, cache_key)
             if cached is not None:
@@ -156,8 +158,8 @@ class FileClassifier:
         # Cache miss — full scan.
         from importlib.metadata import distributions
 
-        pkg_versions: dict[str, str] = {}
-        pkg_dist_map: dict[str, list[str]] = {}
+        pkg_versions = {}
+        pkg_dist_map = {}
 
         for dist in distributions():
             try:
