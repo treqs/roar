@@ -77,9 +77,7 @@ class FileClassifier:
         mtimes.append(sys.version)
         return "|".join(mtimes)
 
-    def _load_pkg_map_cache(
-        self, cache_path: "Path", cache_key: str
-    ) -> "tuple[dict, dict] | None":
+    def _load_pkg_map_cache(self, cache_path: "Path", cache_key: str) -> "tuple[dict, dict] | None":
         """Load cached (pkg_versions, pkg_dist_map) if cache is valid, else None."""
         import json
 
@@ -244,7 +242,7 @@ class FileClassifier:
         if "site-packages" in path_str:
             for sp_dir in self._site_packages_dirs:
                 if path_str.startswith(sp_dir + os.sep) or path_str == sp_dir:
-                    sp_rel = path_str[len(sp_dir):].lstrip(os.sep)
+                    sp_rel = path_str[len(sp_dir) :].lstrip(os.sep)
                     top = sp_rel.split(os.sep)[0]
                     if top.endswith(".py"):
                         top = top[:-3]

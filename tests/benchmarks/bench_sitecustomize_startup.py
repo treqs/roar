@@ -14,18 +14,14 @@ import sys
 import time
 from pathlib import Path
 
-INJECT_DIR = (
-    Path(__file__).resolve().parents[2] / "roar" / "services" / "execution" / "inject"
-)
+INJECT_DIR = Path(__file__).resolve().parents[2] / "roar" / "services" / "execution" / "inject"
 N = 10
 
 
 def _roar_env(log_file=None):
     env = {**os.environ, "ROAR_WRAP": "1"}
     existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (
-        str(INJECT_DIR) if not existing else str(INJECT_DIR) + os.pathsep + existing
-    )
+    env["PYTHONPATH"] = str(INJECT_DIR) if not existing else str(INJECT_DIR) + os.pathsep + existing
     if log_file:
         env["ROAR_LOG_FILE"] = log_file
     else:
@@ -62,17 +58,13 @@ def main():
     print(f"  baseline:                    {baseline:.1f}ms")
 
     roar_no_log = timed(env_roar)
-    print(
-        f"  ROAR_WRAP=1 (no LOG_FILE):   {roar_no_log:.1f}ms  "
-        f"(+{roar_no_log - baseline:.1f}ms)"
-    )
+    print(f"  ROAR_WRAP=1 (no LOG_FILE):   {roar_no_log:.1f}ms  (+{roar_no_log - baseline:.1f}ms)")
 
-    with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as handle:
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
         log_path = handle.name
     roar_with_log = timed(env_roar, log_file=log_path)
     print(
-        f"  ROAR_WRAP=1 + LOG_FILE:      {roar_with_log:.1f}ms  "
-        f"(+{roar_with_log - baseline:.1f}ms)"
+        f"  ROAR_WRAP=1 + LOG_FILE:      {roar_with_log:.1f}ms  (+{roar_with_log - baseline:.1f}ms)"
     )
     os.unlink(log_path)
 

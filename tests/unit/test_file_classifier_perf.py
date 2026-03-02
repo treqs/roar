@@ -109,6 +109,7 @@ class TestClassifySitePackages:
 
     def _make_classifier(self, tmp_path):
         from roar.filters.files import FileClassifier
+
         return FileClassifier(
             repo_root=str(tmp_path),
             sys_prefix=sys.prefix,
@@ -121,12 +122,11 @@ class TestClassifySitePackages:
 
         # Find an actual site-packages file from pytest (always installed)
         import pytest as _pytest
+
         pytest_file = _pytest.__file__
         if pytest_file and os.path.exists(pytest_file):
             kind, _pkg = fc.classify(pytest_file)
-            assert kind == "package", (
-                f"Expected 'package' for {pytest_file}, got {kind!r}"
-            )
+            assert kind == "package", f"Expected 'package' for {pytest_file}, got {kind!r}"
             # Package name should be identified (not None)
             # It may be 'pytest' or normalized form
 
@@ -134,6 +134,7 @@ class TestClassifySitePackages:
         """A stdlib file should NOT be classified as 'package'."""
         fc = self._make_classifier(tmp_path)
         import json
+
         json_file = json.__file__
         if json_file and os.path.exists(json_file) and "site-packages" not in json_file:
             kind, _pkg = fc.classify(json_file)
