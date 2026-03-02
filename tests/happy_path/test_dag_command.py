@@ -762,6 +762,7 @@ print(f"Success: wrote {output_file}")
     # Edge Case Tests
     # =========================================================================
 
+    @pytest.mark.large_pipeline
     def test_dag_large_pipeline(
         self,
         temp_git_repo,

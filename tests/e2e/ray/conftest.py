@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import json
 import subprocess
@@ -64,7 +65,10 @@ def _get_ray():
 
 def pytest_configure(config: pytest.Config) -> None:
     config.option.importmode = "importlib"
-    _get_ray()
+    with contextlib.suppress(
+        ModuleNotFoundError
+    ):  # Ray not installed; e2e tests require a live Docker cluster
+        _get_ray()
     config.addinivalue_line("markers", "ray_e2e: Ray end-to-end tests requiring Docker")
 
 
