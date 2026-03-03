@@ -1,7 +1,8 @@
 mod forward;
 mod s3;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Context as _, Result};
 use aws_credential_types::provider::SharedCredentialsProvider;
@@ -70,11 +71,19 @@ async fn main() -> Result<()> {
         .expect("no AWS credentials provider found")
         .clone();
 
+    // Disable automatic redirect following — S3 redirects (301/307) require
+    // re-signing for the correct region, which we handle in forward_to_s3.
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .context("failed to build HTTP client")?;
+
     let state = Arc::new(AppState {
         forward: ForwardState {
-            client: reqwest::Client::new(),
+            client,
             credentials_provider: SharedCredentialsProvider::new(credentials_provider),
             region,
+            bucket_regions: Arc::new(RwLock::new(HashMap::new())),
         },
         default_session_id: args.session_id,
         default_job_id: args.job_id,
