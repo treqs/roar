@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
@@ -27,6 +29,8 @@ pub struct ForwardState {
     pub client: Client,
     pub credentials_provider: aws_credential_types::provider::SharedCredentialsProvider,
     pub region: String,
+    /// Cache of bucket name → region, learned from S3 PermanentRedirect responses.
+    pub bucket_regions: Arc<RwLock<HashMap<String, String>>>,
 }
 
 /// S3 response with deferred body consumption.
@@ -52,6 +56,10 @@ impl S3Response {
 }
 
 /// Forward a request to real S3 (or an upstream endpoint), re-signing it with SigV4.
+///
+/// When no upstream is configured and S3 returns a `PermanentRedirect` (301),
+/// the correct region is extracted from the `x-amz-bucket-region` response header,
+/// cached for future requests, and the request is retried against the right endpoint.
 pub async fn forward_to_s3(
     state: &ForwardState,
     method: Method,
@@ -63,6 +71,96 @@ pub async fn forward_to_s3(
     let path = uri.path();
     let query = uri.query().unwrap_or("");
 
+    // Look up cached region for this bucket (if any)
+    let bucket = extract_bucket(path);
+    let cached_region = bucket.and_then(|b| {
+        state
+            .bucket_regions
+            .read()
+            .expect("lock poisoned")
+            .get(b)
+            .cloned()
+    });
+    let effective_region = cached_region.as_deref().unwrap_or(&state.region);
+
+    let response = forward_to_s3_inner(
+        state,
+        &method,
+        path,
+        query,
+        headers,
+        body.clone(),
+        upstream_url,
+        effective_region,
+    )
+    .await?;
+
+    // Handle S3 PermanentRedirect (301) or TemporaryRedirect (307):
+    // extract the correct region and retry with a properly-signed request.
+    if (response.status == StatusCode::MOVED_PERMANENTLY
+        || response.status == StatusCode::TEMPORARY_REDIRECT)
+        && upstream_url.is_none()
+    {
+        if let Some(correct_region) = response
+            .headers
+            .get("x-amz-bucket-region")
+            .and_then(|v| v.to_str().ok())
+        {
+            let correct_region = correct_region.to_string();
+            eprintln!(
+                "roar-proxy: bucket {:?} is in {}, retrying (was {})",
+                bucket.unwrap_or("?"),
+                correct_region,
+                effective_region,
+            );
+            // Cache for future requests
+            if let Some(b) = bucket {
+                state
+                    .bucket_regions
+                    .write()
+                    .expect("lock poisoned")
+                    .insert(b.to_string(), correct_region.clone());
+            }
+            return forward_to_s3_inner(
+                state,
+                &method,
+                path,
+                query,
+                headers,
+                body,
+                upstream_url,
+                &correct_region,
+            )
+            .await;
+        }
+    }
+
+    Ok(response)
+}
+
+/// Extract bucket name from path-style S3 URL path (`/{bucket}/...`).
+fn extract_bucket(path: &str) -> Option<&str> {
+    let trimmed = path.strip_prefix('/')?;
+    if trimmed.is_empty() {
+        return None;
+    }
+    match trimmed.find('/') {
+        Some(idx) => Some(&trimmed[..idx]),
+        None => Some(trimmed),
+    }
+}
+
+/// Inner forwarding logic: builds the target URL for the given region, signs, and sends.
+async fn forward_to_s3_inner(
+    state: &ForwardState,
+    method: &Method,
+    path: &str,
+    query: &str,
+    headers: &HeaderMap,
+    body: Bytes,
+    upstream_url: Option<&str>,
+    effective_region: &str,
+) -> Result<S3Response> {
     // Build the target URL — use upstream if provided, otherwise default S3 endpoint
     let target_url = match upstream_url {
         Some(base) => {
@@ -75,11 +173,11 @@ pub async fn forward_to_s3(
         }
         None => {
             if query.is_empty() {
-                format!("https://s3.{}.amazonaws.com{}", state.region, path)
+                format!("https://s3.{}.amazonaws.com{}", effective_region, path)
             } else {
                 format!(
                     "https://s3.{}.amazonaws.com{}?{}",
-                    state.region, path, query
+                    effective_region, path, query
                 )
             }
         }
@@ -100,7 +198,7 @@ pub async fn forward_to_s3(
 
     let signing_params = aws_sigv4::sign::v4::SigningParams::builder()
         .identity(&identity)
-        .region(&state.region)
+        .region(effective_region)
         .name("s3")
         .time(SystemTime::now())
         .settings(signing_settings)
@@ -122,9 +220,9 @@ pub async fn forward_to_s3(
                         None => Some(host),
                     }
                 })
-                .unwrap_or_else(|| format!("s3.{}.amazonaws.com", state.region))
+                .unwrap_or_else(|| format!("s3.{}.amazonaws.com", effective_region))
         }
-        None => format!("s3.{}.amazonaws.com", state.region),
+        None => format!("s3.{}.amazonaws.com", effective_region),
     };
     signable_headers.push(("host".to_string(), s3_host.clone()));
 
