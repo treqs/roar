@@ -144,6 +144,10 @@ def _requirement_name(requirement: str) -> str:
 
 
 def _resolve_roar_requirement() -> str:
+    wheel_path = Path("vendor/roar-cli.whl").resolve()
+    if wheel_path.exists():
+        return f"roar-cli @ {wheel_path.as_uri()}"
+
     import importlib.metadata as importlib_metadata
 
     for package_name in ("roar-cli", "roar"):
