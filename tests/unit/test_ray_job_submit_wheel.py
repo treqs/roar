@@ -43,7 +43,7 @@ def test_resolve_roar_requirement_prefers_vendor_wheel(tmp_path, monkeypatch) ->
 
     requirement = module._resolve_roar_requirement()
 
-    assert requirement == f"roar-cli @ file://{wheel_path.resolve()}"
+    assert requirement == "./vendor/roar-cli.whl"
 
 
 def test_resolve_roar_requirement_falls_back_to_pypi_when_no_wheel(tmp_path, monkeypatch) -> None:
@@ -76,4 +76,4 @@ def test_maybe_rewrite_ray_job_submit_uses_vendor_wheel_requirement(tmp_path, mo
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
     runtime_env = _runtime_env_json(rewritten)
-    assert runtime_env["pip"] == [f"roar-cli @ file://{wheel_path.resolve()}"]
+    assert runtime_env["pip"] == ["./vendor/roar-cli.whl"]
