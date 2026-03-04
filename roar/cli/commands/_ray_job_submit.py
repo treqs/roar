@@ -144,7 +144,8 @@ def _requirement_name(requirement: str) -> str:
 
 
 def _resolve_roar_requirement() -> str:
-    wheel_path = Path("vendor/roar-cli.whl")
+    import os
+    wheel_path = Path(os.getcwd()) / "vendor" / "roar-cli.whl"
     if wheel_path.exists():
         return "./vendor/roar-cli.whl"
 
