@@ -185,6 +185,7 @@ def _requirement_name(requirement: str) -> str:
 
 def _resolve_roar_requirement() -> str | None:
     import os
+
     wheel_path = Path(os.getcwd()) / "vendor" / "roar-cli.whl"
     if wheel_path.exists():
         # Local dev mode: vendor wheel exists, cluster has roar pre-installed.
@@ -225,6 +226,4 @@ def _register_fragment_session(
         ttl_seconds=ttl,
     )
     if error:
-        raise RuntimeError(
-            f"failed to pre-register fragment session {session_id}: {error}"
-        )
+        raise RuntimeError(f"failed to pre-register fragment session {session_id}: {error}")

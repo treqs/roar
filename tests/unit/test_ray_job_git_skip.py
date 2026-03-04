@@ -46,7 +46,9 @@ def test_run_non_git_without_ray_job_id_exits_with_git_error(tmp_path, monkeypat
     assert "roar requires the working directory to be inside a git repository." in result.output
 
 
-def test_run_non_git_with_ray_job_id_set_does_not_fail_with_git_error(tmp_path, monkeypatch) -> None:
+def test_run_non_git_with_ray_job_id_set_does_not_fail_with_git_error(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     # Empty string still means the env var is set in the Ray runtime.

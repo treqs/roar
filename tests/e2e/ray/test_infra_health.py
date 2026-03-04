@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import socket
 import subprocess
 import urllib.error
 import urllib.request
@@ -23,7 +22,7 @@ def _http_get(url: str, service_name: str) -> tuple[int, str]:
             return status, body
     except urllib.error.URLError as exc:
         _skip_service_unreachable(service_name, url, exc)
-    except (TimeoutError, socket.timeout, ConnectionError, OSError) as exc:
+    except (TimeoutError, ConnectionError, OSError) as exc:
         _skip_service_unreachable(service_name, url, exc)
 
 

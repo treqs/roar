@@ -47,10 +47,7 @@ class GlaasFragmentStreamer:
             encrypted_batch = base64.b64encode(nonce + ciphertext).decode("ascii")
 
             request = urllib.request.Request(
-                url=(
-                    f"{self._glaas_url}/api/v1/fragments/sessions/"
-                    f"{self._session_id}/fragments"
-                ),
+                url=(f"{self._glaas_url}/api/v1/fragments/sessions/{self._session_id}/fragments"),
                 data=json.dumps(
                     {
                         "encrypted_batch": encrypted_batch,

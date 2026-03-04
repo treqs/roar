@@ -30,7 +30,7 @@ def _has_roar_dir(ctx: Any) -> bool:
     return isinstance(roar_dir, Path) and roar_dir.exists()
 
 
-def _auto_init_for_ray_job(ctx: "RoarContext") -> None:
+def _auto_init_for_ray_job(ctx: RoarContext) -> None:
     """Create a minimal .roar project for Ray job drivers."""
     from .commands.init import init_project
 
@@ -41,10 +41,10 @@ def _auto_init_for_ray_job(ctx: "RoarContext") -> None:
     roar_dir = init_project(cwd)
 
     # Keep context path in sync for this process invocation.
-    try:
+    import contextlib
+
+    with contextlib.suppress(Exception):
         ctx.roar_dir = roar_dir
-    except Exception:
-        pass
 
 
 def require_init(f: F) -> F:

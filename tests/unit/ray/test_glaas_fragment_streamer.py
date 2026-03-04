@@ -31,7 +31,9 @@ def token() -> str:
     return "ab" * 32
 
 
-def test_enqueue_buffers_fragment_until_threshold(monkeypatch: pytest.MonkeyPatch, token: str) -> None:
+def test_enqueue_buffers_fragment_until_threshold(
+    monkeypatch: pytest.MonkeyPatch, token: str
+) -> None:
     streamer = GlaasFragmentStreamer(
         session_id="session-123",
         token=token,

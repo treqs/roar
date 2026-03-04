@@ -59,7 +59,9 @@ def _init_clean_repo(repo_dir: Path) -> None:
     _run_checked(["git", "config", "user.name", "E2E"], cwd=repo_dir)
     _run_checked(["git", "add", "README.md"], cwd=repo_dir)
     _run_checked(["git", "commit", "-m", "init"], cwd=repo_dir)
-    _run_checked([sys.executable, "-m", "roar", "init", "--path", str(repo_dir), "-n"], cwd=repo_dir)
+    _run_checked(
+        [sys.executable, "-m", "roar", "init", "--path", str(repo_dir), "-n"], cwd=repo_dir
+    )
 
 
 def _run_submit(repo_dir: Path) -> tuple[subprocess.CompletedProcess[str], dict[str, str], Path]:
@@ -128,8 +130,7 @@ ray.shutdown()
         pytest.skip("Ray or GLaaS became unreachable during submit")
     if result.returncode != 0:
         pytest.fail(
-            "roar run ray job submit failed.\n"
-            f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+            f"roar run ray job submit failed.\nstdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
         )
 
     fragment_dir = repo_dir / ".roar" / "fragment-sessions"
@@ -148,7 +149,9 @@ def _fetch_counts(db_path: Path) -> dict[str, int]:
                 conn.execute("SELECT COUNT(*) FROM jobs WHERE job_type = 'ray_task'").fetchone()[0]
             ),
             "artifacts": int(conn.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0]),
-            "artifact_hashes": int(conn.execute("SELECT COUNT(*) FROM artifact_hashes").fetchone()[0]),
+            "artifact_hashes": int(
+                conn.execute("SELECT COUNT(*) FROM artifact_hashes").fetchone()[0]
+            ),
             "job_inputs": int(conn.execute("SELECT COUNT(*) FROM job_inputs").fetchone()[0]),
             "job_outputs": int(conn.execute("SELECT COUNT(*) FROM job_outputs").fetchone()[0]),
         }

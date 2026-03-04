@@ -339,6 +339,7 @@ def _ensure_collector_actor(ray_module, job_id: str) -> None:
 
     try:
         from roar.ray.actor import RoarLogCollectorActor
+
         session_id = os.environ.get("ROAR_SESSION_ID")
         fragment_token = os.environ.get("ROAR_FRAGMENT_TOKEN")
         glaas_url = os.environ.get("GLAAS_URL") or os.environ.get("GLAAS_API_URL")

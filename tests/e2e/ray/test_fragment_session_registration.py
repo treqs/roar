@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import socket
 import subprocess
 import sys
 import urllib.error
@@ -36,7 +35,7 @@ def _skip_if_services_unreachable() -> None:
             status, _body = _http_get(url)
         except urllib.error.URLError as exc:
             pytest.skip(f"{service_name} not reachable at {url}: {exc}")
-        except (TimeoutError, socket.timeout, ConnectionError, OSError) as exc:
+        except (TimeoutError, ConnectionError, OSError) as exc:
             pytest.skip(f"{service_name} not reachable at {url}: {exc}")
         if status != 200:
             pytest.skip(f"{service_name} not healthy at {url}: HTTP {status}")
@@ -60,10 +59,14 @@ def _init_clean_repo(repo_dir: Path) -> None:
     _run_checked(["git", "config", "user.name", "E2E"], cwd=repo_dir)
     _run_checked(["git", "add", "README.md"], cwd=repo_dir)
     _run_checked(["git", "commit", "-m", "init"], cwd=repo_dir)
-    _run_checked([sys.executable, "-m", "roar", "init", "--path", str(repo_dir), "-n"], cwd=repo_dir)
+    _run_checked(
+        [sys.executable, "-m", "roar", "init", "--path", str(repo_dir), "-n"], cwd=repo_dir
+    )
 
 
-def _run_roar_ray_submit(repo_dir: Path) -> tuple[subprocess.CompletedProcess[str], dict[str, str], Path]:
+def _run_roar_ray_submit(
+    repo_dir: Path,
+) -> tuple[subprocess.CompletedProcess[str], dict[str, str], Path]:
     probe = (
         "import os; "
         "print('ROAR_SESSION_ID=' + (os.getenv('ROAR_SESSION_ID') or '')); "
@@ -116,8 +119,7 @@ def _run_roar_ray_submit(repo_dir: Path) -> tuple[subprocess.CompletedProcess[st
         pytest.skip("Ray or GLaaS became unreachable during submit")
     if result.returncode != 0:
         pytest.fail(
-            "roar run ray job submit failed.\n"
-            f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+            f"roar run ray job submit failed.\nstdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
         )
 
     fragment_dir = repo_dir / ".roar" / "fragment-sessions"

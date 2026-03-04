@@ -32,7 +32,9 @@ def _runtime_env_json(command: list[str]) -> dict:
     raise AssertionError("expected --runtime-env-json in rewritten command")
 
 
-def test_resolve_roar_requirement_returns_none_when_vendor_wheel_exists(tmp_path, monkeypatch) -> None:
+def test_resolve_roar_requirement_returns_none_when_vendor_wheel_exists(
+    tmp_path, monkeypatch
+) -> None:
     """Vendor wheel = local dev mode: cluster has roar pre-installed, skip pip injection."""
     module = _module()
 

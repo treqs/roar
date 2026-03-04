@@ -58,7 +58,9 @@ def _init_clean_repo(repo_dir: Path) -> None:
     _run_checked(["git", "config", "user.name", "E2E"], cwd=repo_dir)
     _run_checked(["git", "add", "README.md"], cwd=repo_dir)
     _run_checked(["git", "commit", "-m", "init"], cwd=repo_dir)
-    _run_checked([sys.executable, "-m", "roar", "init", "--path", str(repo_dir), "-n"], cwd=repo_dir)
+    _run_checked(
+        [sys.executable, "-m", "roar", "init", "--path", str(repo_dir), "-n"], cwd=repo_dir
+    )
 
 
 def _run_file_io_ray_submit(repo_dir: Path) -> dict[str, str]:
@@ -127,8 +129,7 @@ ray.shutdown()
         pytest.skip("Ray or GLaaS became unreachable during submit")
     if result.returncode != 0:
         pytest.fail(
-            "roar run ray job submit failed.\n"
-            f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+            f"roar run ray job submit failed.\nstdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
         )
 
     fragment_dir = repo_dir / ".roar" / "fragment-sessions"

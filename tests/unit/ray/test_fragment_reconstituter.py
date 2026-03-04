@@ -212,7 +212,9 @@ def test_fragment_key_file_is_retained_after_reconstitution(
         [
             {
                 "sequence": 0,
-                "encrypted_batch": _encrypt_batch(str(loaded_key["token"]), [{"job_uid": "job-a"}], 4),
+                "encrypted_batch": _encrypt_batch(
+                    str(loaded_key["token"]), [{"job_uid": "job-a"}], 4
+                ),
             }
         ]
     )
