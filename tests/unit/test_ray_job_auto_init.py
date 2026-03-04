@@ -13,9 +13,9 @@ run_module = importlib.import_module("roar.cli.commands.run")
 
 def _invoke_run(ctx: RoarContext, monkeypatch, ray_job_id: str | None):
     if ray_job_id is None:
-        monkeypatch.delenv("RAY_JOB_ID", raising=False)
+        monkeypatch.delenv("RAY_JOB_CONFIG_JSON_ENV_VAR", raising=False)
     else:
-        monkeypatch.setenv("RAY_JOB_ID", ray_job_id)
+        monkeypatch.setenv("RAY_JOB_CONFIG_JSON_ENV_VAR", ray_job_id)
 
     runner = CliRunner()
     with (
@@ -33,7 +33,7 @@ def test_run_in_uninitialized_tmpdir_without_ray_job_id_exits_with_not_initializ
     tmp_path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("RAY_JOB_ID", raising=False)
+    monkeypatch.delenv("RAY_JOB_CONFIG_JSON_ENV_VAR", raising=False)
     ctx = RoarContext.create(cwd=tmp_path)
 
     runner = CliRunner()
