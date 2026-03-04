@@ -4,39 +4,45 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from ...glaas_client import GlaasClient
 from ...ray.fragment_key import generate_fragment_key, save_key
 
 
-def maybe_rewrite_ray_job_submit(command: list[str]) -> list[str]:
+@dataclass(frozen=True)
+class RayJobSubmitRewrite:
+    command: list[str]
+    session_id: str | None = None
+
+
+def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
     """Rewrite ray jobs submit commands for roar instrumentation."""
     if not _is_ray_job_submit(command):
-        return command
+        return RayJobSubmitRewrite(command=command)
 
     if "--" not in command:
-        return command
+        return RayJobSubmitRewrite(command=command)
 
     separator_index = command.index("--")
     before_separator = list(command[:separator_index])
     entrypoint = list(command[separator_index + 1 :])
     if not entrypoint:
-        return command
+        return RayJobSubmitRewrite(command=command)
 
     runtime_env_json_arg = _find_runtime_env_json(before_separator)
     runtime_env = _load_runtime_env(before_separator, runtime_env_json_arg)
     if runtime_env is None:
         # Invalid user-provided JSON - leave command untouched.
-        return command
+        return RayJobSubmitRewrite(command=command)
 
     merged_pip = _merge_roar_runtime_env_pip(runtime_env.get("pip"))
-    if merged_pip:
-        runtime_env["pip"] = merged_pip
-    elif "pip" in runtime_env and merged_pip is not None:
+    if merged_pip or ("pip" in runtime_env and merged_pip is not None):
         runtime_env["pip"] = merged_pip
 
     env_vars = dict(runtime_env.get("env_vars", {}) or {})
+    fragment_session_id: str | None = None
 
     glaas_url = _resolve_glaas_url()
     if glaas_url:
@@ -53,6 +59,7 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> list[str]:
             save_key(Path(os.getcwd()) / ".roar", key)
             env_vars["ROAR_SESSION_ID"] = key["session_id"]
             env_vars["ROAR_FRAGMENT_TOKEN"] = key["token"]
+            fragment_session_id = str(key["session_id"])
 
     if env_vars:
         runtime_env["env_vars"] = env_vars
@@ -61,7 +68,10 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> list[str]:
 
     before_separator = _store_runtime_env(before_separator, runtime_env, runtime_env_json_arg)
     entrypoint = _wrap_entrypoint(entrypoint)
-    return [*before_separator, "--", *entrypoint]
+    return RayJobSubmitRewrite(
+        command=[*before_separator, "--", *entrypoint],
+        session_id=fragment_session_id,
+    )
 
 
 def _is_ray_job_submit(command: list[str]) -> bool:

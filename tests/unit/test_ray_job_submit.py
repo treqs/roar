@@ -39,7 +39,8 @@ def _entrypoint(command: list[str]) -> list[str]:
 def test_non_ray_command_is_unchanged() -> None:
     command = ["python", "main.py"]
     rewritten = _module().maybe_rewrite_ray_job_submit(command)
-    assert rewritten == command
+    assert rewritten.command == command
+    assert rewritten.session_id is None
 
 
 def test_ray_job_submit_injects_pip_with_installed_roar_cli_version(monkeypatch) -> None:
@@ -49,8 +50,9 @@ def test_ray_job_submit_injects_pip_with_installed_roar_cli_version(monkeypatch)
 
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
-    runtime_env = _runtime_env_json(rewritten)
+    runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["pip"] == ["roar-cli==9.9.9"]
+    assert rewritten.session_id is None
 
 
 def test_ray_jobs_submit_plural_also_works(monkeypatch) -> None:
@@ -60,8 +62,9 @@ def test_ray_jobs_submit_plural_also_works(monkeypatch) -> None:
 
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command(plural=True))
 
-    runtime_env = _runtime_env_json(rewritten)
+    runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["pip"] == ["roar-cli==3.2.1"]
+    assert rewritten.session_id is None
 
 
 def test_entrypoint_is_wrapped_with_roar_run(monkeypatch) -> None:
@@ -71,7 +74,8 @@ def test_entrypoint_is_wrapped_with_roar_run(monkeypatch) -> None:
 
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
-    assert _entrypoint(rewritten) == ["roar", "run", "python", "main.py"]
+    assert _entrypoint(rewritten.command) == ["roar", "run", "python", "main.py"]
+    assert rewritten.session_id is None
 
 
 def test_existing_runtime_env_json_pip_list_is_merged(monkeypatch) -> None:
@@ -88,8 +92,9 @@ def test_existing_runtime_env_json_pip_list_is_merged(monkeypatch) -> None:
 
     rewritten = module.maybe_rewrite_ray_job_submit(command)
 
-    runtime_env = _runtime_env_json(rewritten)
+    runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["pip"] == ["numpy==1.26.0", "roar-cli==7.8.9"]
+    assert rewritten.session_id is None
 
 
 def test_existing_runtime_env_json_env_vars_are_preserved_and_glaas_added(monkeypatch) -> None:
@@ -106,7 +111,7 @@ def test_existing_runtime_env_json_env_vars_are_preserved_and_glaas_added(monkey
 
     rewritten = module.maybe_rewrite_ray_job_submit(command)
 
-    runtime_env = _runtime_env_json(rewritten)
+    runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["env_vars"]["USER_KEY"] == "value"
     assert runtime_env["env_vars"]["GLAAS_URL"] == "https://glaas.example.com"
     assert runtime_env["env_vars"]["GLAAS_API_URL"] == "https://glaas.example.com"
@@ -134,7 +139,8 @@ def test_already_wrapped_entrypoint_is_not_double_wrapped(monkeypatch) -> None:
 
     rewritten = module.maybe_rewrite_ray_job_submit(command)
 
-    assert _entrypoint(rewritten) == ["roar", "run", "python", "main.py"]
+    assert _entrypoint(rewritten.command) == ["roar", "run", "python", "main.py"]
+    assert rewritten.session_id is None
 
 
 def test_glaas_url_from_config_is_injected_as_both_env_vars(monkeypatch) -> None:
@@ -144,7 +150,7 @@ def test_glaas_url_from_config_is_injected_as_both_env_vars(monkeypatch) -> None
 
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
-    runtime_env = _runtime_env_json(rewritten)
+    runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["env_vars"]["GLAAS_URL"] == "http://localhost:3001"
     assert runtime_env["env_vars"]["GLAAS_API_URL"] == "http://localhost:3001"
 
@@ -156,8 +162,9 @@ def test_no_glaas_url_configured_env_vars_not_injected(monkeypatch) -> None:
 
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
-    runtime_env = _runtime_env_json(rewritten)
+    runtime_env = _runtime_env_json(rewritten.command)
     assert "env_vars" not in runtime_env
+    assert rewritten.session_id is None
 
 
 def test_ray_job_submit_without_separator_is_unchanged() -> None:
@@ -171,4 +178,5 @@ def test_ray_job_submit_without_separator_is_unchanged() -> None:
         ".",
     ]
     rewritten = _module().maybe_rewrite_ray_job_submit(command)
-    assert rewritten == command
+    assert rewritten.command == command
+    assert rewritten.session_id is None

@@ -78,14 +78,15 @@ def test_maybe_rewrite_skips_pip_injection_when_vendor_wheel_exists(tmp_path, mo
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
     # Entrypoint still wrapped with roar run
-    assert "roar" in rewritten and "run" in rewritten
+    assert "roar" in rewritten.command and "run" in rewritten.command
     # pip must NOT be in runtime_env (cluster has roar pre-installed)
-    for i, arg in enumerate(rewritten):
-        if arg == "--runtime-env-json" and i + 1 < len(rewritten):
-            env = json.loads(rewritten[i + 1])
+    for i, arg in enumerate(rewritten.command):
+        if arg == "--runtime-env-json" and i + 1 < len(rewritten.command):
+            env = json.loads(rewritten.command[i + 1])
             assert "pip" not in env
             break
         if arg.startswith("--runtime-env-json="):
             env = json.loads(arg.split("=", 1)[1])
             assert "pip" not in env
             break
+    assert rewritten.session_id is None
