@@ -80,7 +80,12 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(AppState {
         forward: ForwardState {
-            client,
+            client: reqwest::Client::builder()
+                .pool_max_idle_per_host(32)
+                .tcp_keepalive(std::time::Duration::from_secs(90))
+                .tcp_nodelay(true)
+                .build()
+                .context("failed to build reqwest client")?,
             credentials_provider: SharedCredentialsProvider::new(credentials_provider),
             region,
             bucket_regions: Arc::new(RwLock::new(HashMap::new())),
@@ -119,6 +124,8 @@ async fn handle_request(State(state): State<Arc<AppState>>, request: Request<Bod
 }
 
 async fn handle_request_inner(state: &AppState, request: Request<Body>) -> Result<Response> {
+    #[cfg(debug_assertions)]
+    let t_start = std::time::Instant::now();
     let (parts, body) = request.into_parts();
 
     let content_length = parts
@@ -170,7 +177,15 @@ async fn handle_request_inner(state: &AppState, request: Request<Body>) -> Resul
         response = response.header(name, value);
     }
 
-    response
+    let response = response
         .body(response_body)
-        .context("failed to build response")
+        .context("failed to build response")?;
+
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[proxy-timing] handle_total={:.2}ms",
+        t_start.elapsed().as_secs_f64() * 1000.0
+    );
+
+    Ok(response)
 }

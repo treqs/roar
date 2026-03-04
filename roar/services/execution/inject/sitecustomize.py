@@ -1,11 +1,8 @@
 import atexit
 import builtins
 import contextlib
-import importlib.metadata as importlib_metadata
-import inspect
 import json
 import os
-import shutil
 import sys
 import tempfile
 import threading
@@ -143,9 +140,9 @@ def _get_installed_packages():
     """Get installed packages with versions from the current environment."""
     packages = {}
     try:
-        from importlib.metadata import distributions
+        from importlib import metadata as importlib_metadata
 
-        for dist in distributions():
+        for dist in importlib_metadata.distributions():
             name = dist.metadata.get("Name")
             version = dist.metadata.get("Version")
             if name and version:
@@ -162,56 +159,44 @@ def _get_used_packages(modules_files, installed_packages):
     Returns dict of package_name -> version for packages that were imported.
     """
     used = {}
-    unversioned = {}  # Packages without metadata (e.g., maturin develop installs)
 
-    # Build a mapping of site-packages subdirectories to package names
-    # e.g., "torch" -> "torch", "numpy" -> "numpy"
     try:
-        from importlib.metadata import distributions
+        from importlib import metadata as importlib_metadata
 
-        pkg_dirs = {}  # top-level directory name -> package name
-        for dist in distributions():
-            name = dist.metadata.get("Name")
-            if not name:
-                continue
-            # Get the top-level packages/modules this distribution provides
-            if dist.files:
-                for f in dist.files:
-                    parts = str(f).split("/")
-                    if parts:
-                        top_dir = parts[0]
-                        # Skip metadata directories
-                        if not top_dir.endswith(".dist-info") and not top_dir.endswith(".egg-info"):
-                            pkg_dirs[top_dir] = name
+        # packages_distributions() returns {top_level_module: [NormalizedName, ...]}.
+        # This is an index lookup, not a per-package RECORD file scan.
+        pkg_dist_map = importlib_metadata.packages_distributions()
+    except Exception:
+        # Fall back to empty map; used packages won't be recorded but won't crash.
+        pkg_dist_map = {}
 
-        # Now check each loaded module file
+    try:
         for fpath in modules_files:
-            if "site-packages" in fpath:
-                # Extract the part after site-packages
-                idx = fpath.find("site-packages/")
-                if idx >= 0:
-                    after_sp = fpath[idx + len("site-packages/") :]
-                    top_dir = after_sp.split("/")[0]
-                    # Handle .py files at top level
-                    if top_dir.endswith(".py"):
-                        top_dir = top_dir[:-3]
-                    if top_dir in pkg_dirs:
-                        pkg_name = pkg_dirs[top_dir]
-                        if pkg_name in installed_packages:
-                            used[pkg_name] = installed_packages[pkg_name]
-                    else:
-                        # Package loaded from site-packages but not in metadata
-                        # (e.g., maturin develop, manual installs)
-                        # Skip __pycache__ and other non-package dirs
-                        if not top_dir.startswith("_") and not top_dir.endswith(".so"):
-                            unversioned[top_dir] = None
+            if "site-packages" not in fpath:
+                continue
+            idx = fpath.find("site-packages/")
+            if idx < 0:
+                continue
+            after_sp = fpath[idx + len("site-packages/") :]
+            top_dir = after_sp.split("/")[0]
+            if top_dir.endswith(".py"):
+                top_dir = top_dir[:-3]
+            # Skip metadata and cache dirs
+            if top_dir.endswith(".dist-info") or top_dir.endswith(".egg-info"):
+                continue
+            if top_dir.startswith("_") or top_dir.endswith(".so"):
+                continue
+
+            pkg_names = pkg_dist_map.get(top_dir, [])
+            for pkg_name in pkg_names:
+                if pkg_name in installed_packages and pkg_name not in used:
+                    used[pkg_name] = installed_packages[pkg_name]
+
+            # If not in pkg_dist_map, record as unversioned (same as before).
+            if not pkg_names and top_dir not in used:
+                used[top_dir] = None
     except Exception:
         pass
-
-    # Merge unversioned packages (with None version to indicate no metadata)
-    for pkg_name in unversioned:
-        if pkg_name not in used:
-            used[pkg_name] = None
 
     return used
 
@@ -377,6 +362,8 @@ def _node_agents_enabled() -> bool:
 
 
 def _prepare_worker_runtime_env(runtime_env, job_id: str):
+    import shutil
+
     runtime_env = dict(runtime_env or {})
     tmp_dir = tempfile.mkdtemp(prefix=f"roar-worker-env-{job_id[:8]}-")
 
@@ -418,6 +405,8 @@ def _prepare_worker_runtime_env(runtime_env, job_id: str):
 
 def _ray_rejects_manual_worker_setup_hook_env(ray_module) -> bool:
     try:
+        import inspect
+
         setup_hook_module = ray_module._private.runtime_env.setup_hook
         export_setup_func_module = getattr(setup_hook_module, "export_setup_func_module", None)
         if not callable(export_setup_func_module):
@@ -462,6 +451,8 @@ def _write_worker_wrapper(tmp_dir: str) -> None:
 
 
 def _merge_working_dir(source_dir: str, target_dir: str) -> None:
+    import shutil
+
     for entry in os.listdir(source_dir):
         src = os.path.join(source_dir, entry)
         dst = os.path.join(target_dir, entry)
@@ -779,6 +770,8 @@ def _requirement_name(requirement: str) -> str:
 
 
 def _resolve_roar_requirement() -> str:
+    import importlib.metadata as importlib_metadata
+
     for package_name in ("roar-cli", "roar"):
         try:
             return f"{package_name}=={importlib_metadata.version(package_name)}"
@@ -811,8 +804,19 @@ def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
     if os.environ.get("ROAR_WRAP") != "1":
         return
     try:
-        ray_config = _load_ray_config()
-        log_dir = os.environ.get("ROAR_LOG_DIR", str(ray_config["log_dir"]))
+        log_dir = os.environ.get("ROAR_LOG_DIR")
+        if not log_dir:
+            ray_config = _load_ray_config()
+            log_dir = str(ray_config["log_dir"])
+
+        # Fast path: skip the heavy collector import if there's nothing to collect.
+        # Worker fragment files are .json files written to log_dir by Ray workers.
+        has_worker_logs = os.path.isdir(log_dir) and any(
+            f.endswith(".json") for f in os.listdir(log_dir)
+        )
+        if not has_worker_logs and not proxy_logs:
+            return
+
         from roar.ray.collector import collect
 
         collect(

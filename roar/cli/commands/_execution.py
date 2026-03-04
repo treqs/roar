@@ -79,6 +79,10 @@ def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
     The CLI flag takes precedence. If not provided, checks the config
     for `output.quiet` setting.
 
+    Fast path: reads TOML directly — avoids loading Pydantic/settings for
+    this single key.  Falls back to the full settings stack only if the
+    direct read fails.
+
     Args:
         quiet_flag: Explicit quiet flag from command line (None if not specified)
         repo_root: Repository root for config lookup
@@ -89,6 +93,26 @@ def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
     if quiet_flag is not None:
         return quiet_flag
 
+    # Fast path: read config TOML directly without loading Pydantic.
+    # This is the hot path — called before the child process starts.
+    from pathlib import Path as _Path
+
+    try:
+        try:
+            import tomllib as _tomllib
+        except ImportError:
+            import tomli as _tomllib  # type: ignore[no-redef]
+
+        config_toml = _Path(repo_root) / ".roar" / "config.toml" if repo_root else None
+        if config_toml is not None and config_toml.exists():
+            data = _tomllib.loads(config_toml.read_text())
+            return bool(data.get("output", {}).get("quiet", False))
+        # No config file found — use default.
+        return False
+    except Exception:
+        pass
+
+    # Fallback: full settings stack (covers edge cases like custom config paths).
     from ...config import load_config
 
     config = load_config(start_dir=str(repo_root) if repo_root else None)

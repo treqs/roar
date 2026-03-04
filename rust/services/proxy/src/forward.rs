@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+#[cfg(debug_assertions)]
+use std::time::Instant;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
@@ -68,6 +70,9 @@ pub async fn forward_to_s3(
     body: Bytes,
     upstream_url: Option<&str>,
 ) -> Result<S3Response> {
+    #[cfg(debug_assertions)]
+    let t0 = Instant::now();
+
     let path = uri.path();
     let query = uri.query().unwrap_or("");
 
@@ -189,6 +194,14 @@ async fn forward_to_s3_inner(
         .provide_credentials()
         .await
         .context("failed to resolve AWS credentials")?;
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[proxy-timing] cred_resolve={:.2}ms",
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
+
+    #[cfg(debug_assertions)]
+    let t1 = Instant::now();
     let identity = creds.into();
 
     // Build signing settings — use UNSIGNED-PAYLOAD to avoid buffering/hashing body
@@ -268,6 +281,11 @@ async fn forward_to_s3_inner(
     }
 
     signing_instructions.apply_to_request_http1x(&mut temp_request);
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[proxy-timing] signing={:.2}ms",
+        t1.elapsed().as_secs_f64() * 1000.0
+    );
 
     // Build the final reqwest request with all signed headers
     let mut final_builder = state.client.request(
@@ -283,10 +301,23 @@ async fn forward_to_s3_inner(
 
     final_builder = final_builder.body(body);
 
+    #[cfg(debug_assertions)]
+    let t2 = Instant::now();
     let response = final_builder
         .send()
         .await
         .context("failed to forward request to S3")?;
+    #[cfg(debug_assertions)]
+    {
+        eprintln!(
+            "[proxy-timing] send_recv_headers={:.2}ms",
+            t2.elapsed().as_secs_f64() * 1000.0
+        );
+        eprintln!(
+            "[proxy-timing] total_forward={:.2}ms",
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+    }
 
     // Map the S3 response status + headers
     let status = StatusCode::from_u16(response.status().as_u16())

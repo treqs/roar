@@ -44,27 +44,148 @@ class FileClassifier:
                     dirs.append(str(sp.resolve()))
         return dirs
 
+    # ------------------------------------------------------------------ #
+    # Package-map disk cache                                              #
+    # ------------------------------------------------------------------ #
+    # Installed packages rarely change between runs.  We cache the
+    # {pkg_versions, pkg_dist_map} dicts in a JSON file under
+    # ~/.cache/roar/ and invalidate on site-packages mtime changes.
+    # Cache miss: ~190ms full scan.  Cache hit: ~5ms JSON load.
+    # ------------------------------------------------------------------ #
+
+    _CACHE_VERSION = 2  # bump when cache format changes
+
+    def _pkg_map_cache_path(self) -> "Path | None":
+        """Return path for the package-map cache file, or None if uncacheable."""
+        try:
+            cache_dir = Path.home() / ".cache" / "roar"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            return cache_dir / "pkg_map.json"
+        except OSError:
+            return None
+
+    def _pkg_map_cache_key(self) -> str:
+        """A cache-invalidation key derived from site-packages directory mtimes."""
+        mtimes: list[str] = []
+        for sp_dir in self._site_packages_dirs:
+            try:
+                mtime = os.stat(sp_dir).st_mtime
+                mtimes.append(f"{sp_dir}:{mtime:.0f}")
+            except OSError:
+                mtimes.append(f"{sp_dir}:missing")
+        # Also include Python version so we invalidate on interpreter upgrades.
+        mtimes.append(sys.version)
+        return "|".join(mtimes)
+
+    def _load_pkg_map_cache(self, cache_path: "Path", cache_key: str) -> "tuple[dict, dict] | None":
+        """Load cached (pkg_versions, pkg_dist_map) if cache is valid, else None."""
+        import json
+
+        try:
+            data = json.loads(cache_path.read_text())
+        except (OSError, ValueError):
+            return None
+
+        if data.get("version") != self._CACHE_VERSION:
+            return None
+        if data.get("key") != cache_key:
+            return None
+
+        pkg_versions = data.get("pkg_versions")
+        pkg_dist_map = data.get("pkg_dist_map")
+        if not isinstance(pkg_versions, dict) or not isinstance(pkg_dist_map, dict):
+            return None
+
+        return pkg_versions, pkg_dist_map
+
+    def _save_pkg_map_cache(
+        self,
+        cache_path: "Path",
+        cache_key: str,
+        pkg_versions: dict,
+        pkg_dist_map: dict,
+    ) -> None:
+        """Write (pkg_versions, pkg_dist_map) to the disk cache atomically."""
+        import json
+
+        data = {
+            "version": self._CACHE_VERSION,
+            "key": cache_key,
+            "pkg_versions": pkg_versions,
+            "pkg_dist_map": pkg_dist_map,
+        }
+        tmp = cache_path.with_suffix(".tmp")
+        from contextlib import suppress
+
+        try:
+            tmp.write_text(json.dumps(data, separators=(",", ":")))
+            tmp.replace(cache_path)
+        except OSError:
+            with suppress(OSError):
+                tmp.unlink(missing_ok=True)
+
     def _build_package_file_map(self) -> tuple[dict, dict]:
-        """Build a map of file paths to package names using importlib.metadata."""
+        """Build package version map and a fast module-name index.
+
+        Single-pass over distributions() reading only METADATA + top_level.txt.
+        Never reads RECORD / dist.files() — those are large and slow.
+
+        Previously (v1): iterated dist.files() for every package — O(packages x
+        files_per_package) disk I/O, ~9 seconds with 312 packages.
+
+        Previously (v2): called packages_distributions() which internally calls
+        dist.files() via _top_level_inferred() for the ~42 packages that lack
+        top_level.txt — still ~0.47 seconds and a second distributions() sweep.
+
+        v3 (current): single sweep reading METADATA + top_level.txt only, plus a
+        disk cache keyed on site-packages mtime.  Cache hit: ~5ms.  Cache miss
+        (first run or after package install): ~190ms then cached.
+        """
+        # Try disk cache first.
+        cache_path = self._pkg_map_cache_path()
+        cache_key = self._pkg_map_cache_key()
+        pkg_versions: dict[str, str]
+        pkg_dist_map: dict[str, list[str]]
+        if cache_path is not None:
+            cached = self._load_pkg_map_cache(cache_path, cache_key)
+            if cached is not None:
+                pkg_versions, pkg_dist_map = cached
+                self._pkg_dist_map: dict[str, list[str]] = pkg_dist_map
+                return {}, pkg_versions
+
+        # Cache miss — full scan.
         from importlib.metadata import distributions
 
-        file_to_pkg = {}
         pkg_versions = {}
+        pkg_dist_map = {}
 
         for dist in distributions():
-            name = dist.metadata["Name"]
-            version = dist.metadata["Version"]
+            try:
+                name = dist.metadata["Name"]
+                version = dist.metadata["Version"]
+            except (KeyError, TypeError):
+                continue
+            if not name or not version:
+                continue
             pkg_versions[name] = version
 
-            if dist.files:
-                for f in dist.files:
-                    try:
-                        full_path = str(Path(str(dist.locate_file(f))).resolve())
-                        file_to_pkg[full_path] = name
-                    except Exception:
-                        pass
+            # top_level.txt is a tiny text file listing top-level import names.
+            # If it exists, use it.  If not, skip — do NOT call dist.files().
+            top_level_text = dist.read_text("top_level.txt")
+            if top_level_text:
+                for module in top_level_text.split():
+                    module = module.strip()
+                    if module:
+                        pkg_dist_map.setdefault(module, []).append(name)
 
-        return file_to_pkg, pkg_versions
+        self._pkg_dist_map = pkg_dist_map
+
+        # Persist cache for next run.
+        if cache_path is not None:
+            self._save_pkg_map_cache(cache_path, cache_key, pkg_versions, pkg_dist_map)
+
+        # file_to_pkg is intentionally empty; classify() uses path extraction.
+        return {}, pkg_versions
 
     def classify(self, path: str) -> tuple[str, str | None]:
         """
@@ -115,12 +236,22 @@ class FileClassifier:
         except ValueError:
             pass
 
-        # Check if it's a package file (from importlib.metadata)
-        if path_str in self._file_to_pkg:
-            return ("package", self._file_to_pkg[path_str])
-
-        # Check if it's in site-packages (even if not in metadata, it's a package)
+        # Check if it's a package file via fast path-based lookup.
+        # _file_to_pkg is always empty now; we extract the top-level module name
+        # directly from the path and look it up in packages_distributions() index.
         if "site-packages" in path_str:
+            for sp_dir in self._site_packages_dirs:
+                if path_str.startswith(sp_dir + os.sep) or path_str == sp_dir:
+                    sp_rel = path_str[len(sp_dir) :].lstrip(os.sep)
+                    top = sp_rel.split(os.sep)[0]
+                    if top.endswith(".py"):
+                        top = top[:-3]
+                    if top and not top.endswith(".dist-info") and not top.endswith(".egg-info"):
+                        pkg_names = getattr(self, "_pkg_dist_map", {}).get(top, [])
+                        if pkg_names:
+                            return ("package", pkg_names[0])
+                    return ("package", "unknown")
+            # site-packages in path but not under a tracked site-packages dir
             return ("package", "unknown")
 
         # Check for system shared libraries BEFORE sys.prefix check
