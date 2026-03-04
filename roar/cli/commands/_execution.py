@@ -48,7 +48,7 @@ def validate_git_clean() -> str:
     except (subprocess.CalledProcessError, FileNotFoundError):
         # Ray jobs run from extracted working dirs that are not git repos.
         # Allow execution there while preserving git checks everywhere else.
-        if os.environ.get("RAY_JOB_ID"):
+        if "RAY_JOB_ID" in os.environ:
             return cwd
         raise click.ClickException(
             "roar requires the working directory to be inside a git repository."
