@@ -32,12 +32,16 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> list[str]:
     elif "pip" in runtime_env and merged_pip is not None:
         runtime_env["pip"] = merged_pip
 
+    # Allow roar's ray.init() injection to merge with the job's runtime_env.
+    env_vars = dict(runtime_env.get("env_vars", {}) or {})
+    env_vars["RAY_OVERRIDE_JOB_RUNTIME_ENV"] = "1"
+
     glaas_url = _resolve_glaas_url()
     if glaas_url:
-        env_vars = dict(runtime_env.get("env_vars", {}) or {})
         env_vars["GLAAS_URL"] = glaas_url
         env_vars["GLAAS_API_URL"] = glaas_url
-        runtime_env["env_vars"] = env_vars
+
+    runtime_env["env_vars"] = env_vars
 
     before_separator = _store_runtime_env(before_separator, runtime_env, runtime_env_json_arg)
     entrypoint = _wrap_entrypoint(entrypoint)
