@@ -146,6 +146,8 @@ class FragmentReconstituter:
     @staticmethod
     def _sequence_key(batch: dict[str, Any]) -> int:
         sequence = batch.get("sequence")
+        if sequence is None:
+            return 2**31 - 1
         try:
             return int(sequence)
         except (TypeError, ValueError):

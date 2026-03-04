@@ -4,7 +4,7 @@ import hashlib
 import json
 import secrets
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,7 @@ def generate_fragment_key() -> dict[str, str]:
         "session_id": str(uuid.uuid4()),
         "token": token,
         "token_hash": hashlib.sha256(token.encode("utf-8")).hexdigest(),
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
