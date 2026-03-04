@@ -6,6 +6,7 @@ Usage: roar run [options] <command>
 """
 
 import shlex
+from pathlib import Path
 
 import click
 
@@ -127,7 +128,13 @@ def run(
             raise click.ClickException("No command specified")
         job_type = None
 
-    command = maybe_rewrite_ray_job_submit(command)
+    if (
+        len(command) >= 3
+        and Path(command[0]).name.lower() == "ray"
+        and command[1].lower() in {"job", "jobs"}
+        and command[2].lower() == "submit"
+    ):
+        command = maybe_rewrite_ray_job_submit(command)
 
     # Execute and report
     exit_code = execute_and_report(
