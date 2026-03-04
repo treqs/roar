@@ -389,6 +389,20 @@ class GlaasClient:
     # Session Methods
     # -------------------------------------------------------------------------
 
+    def register_fragment_session(
+        self,
+        session_id: str,
+        token_hash: str,
+        ttl_seconds: int = 86400,
+    ) -> tuple[dict | None, str | None]:
+        """Register a temporary fragment-store session."""
+        body = {
+            "session_id": session_id,
+            "token_hash": token_hash,
+            "ttl_seconds": ttl_seconds,
+        }
+        return self._request("POST", "/api/v1/fragments/sessions", body)
+
     def register_session(
         self,
         session_hash: str,

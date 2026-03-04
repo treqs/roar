@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+
+from ...glaas_client import GlaasClient
+from ...ray.fragment_key import generate_fragment_key, save_key
 
 
 def maybe_rewrite_ray_job_submit(command: list[str]) -> list[str]:
@@ -32,16 +36,28 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> list[str]:
     elif "pip" in runtime_env and merged_pip is not None:
         runtime_env["pip"] = merged_pip
 
-    # Allow roar's ray.init() injection to merge with the job's runtime_env.
     env_vars = dict(runtime_env.get("env_vars", {}) or {})
-    env_vars["RAY_OVERRIDE_JOB_RUNTIME_ENV"] = "1"
 
     glaas_url = _resolve_glaas_url()
     if glaas_url:
         env_vars["GLAAS_URL"] = glaas_url
         env_vars["GLAAS_API_URL"] = glaas_url
 
-    runtime_env["env_vars"] = env_vars
+        key = generate_fragment_key()
+        try:
+            _register_fragment_session(glaas_url, key["session_id"], key["token_hash"])
+        except Exception:
+            # Keep existing behavior when fragment preregistration is unavailable.
+            pass
+        else:
+            save_key(Path(os.getcwd()) / ".roar", key)
+            env_vars["ROAR_SESSION_ID"] = key["session_id"]
+            env_vars["ROAR_FRAGMENT_TOKEN"] = key["token"]
+
+    if env_vars:
+        runtime_env["env_vars"] = env_vars
+    else:
+        runtime_env.pop("env_vars", None)
 
     before_separator = _store_runtime_env(before_separator, runtime_env, runtime_env_json_arg)
     entrypoint = _wrap_entrypoint(entrypoint)
@@ -184,3 +200,21 @@ def _resolve_glaas_url() -> str | None:
     if not url:
         return None
     return str(url)
+
+
+def _register_fragment_session(
+    glaas_url: str,
+    session_id: str,
+    token_hash: str,
+    ttl: int = 86400,
+) -> None:
+    client = GlaasClient(base_url=glaas_url)
+    _result, error = client.register_fragment_session(
+        session_id=session_id,
+        token_hash=token_hash,
+        ttl_seconds=ttl,
+    )
+    if error:
+        raise RuntimeError(
+            f"failed to pre-register fragment session {session_id}: {error}"
+        )
