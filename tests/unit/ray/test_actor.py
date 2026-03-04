@@ -107,3 +107,22 @@ def test_actor_fragment_and_event_apis_coexist(ray_runtime) -> None:
 
     assert events == [{"task_id": "task-1", "path": "/tmp/in.csv", "mode": "r"}]
     assert fragments == [{"job_uid": "feedcafe", "ray_task_id": "task-1"}]
+
+
+def test_actor_flush_to_glaas_is_true_without_streamer(ray_runtime) -> None:
+    actor = RoarLogCollectorActor.remote()
+
+    assert ray.get(actor.flush_to_glaas.remote()) is True
+
+
+def test_actor_streamer_config_keeps_in_memory_fragments(ray_runtime) -> None:
+    actor = RoarLogCollectorActor.remote(
+        session_id="session-123",
+        token="ab" * 32,
+        glaas_url="http://localhost:3001",
+    )
+
+    ray.get(actor.append_fragment.remote({"job_uid": "feedcafe", "ray_task_id": "task-1"}))
+
+    fragments = ray.get(actor.get_all_fragments.remote())
+    assert fragments == [{"job_uid": "feedcafe", "ray_task_id": "task-1"}]

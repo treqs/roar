@@ -582,6 +582,7 @@ def _collect_actor_payload() -> tuple[list[dict[str, Any]] | None, list[dict[str
     except Exception:
         return None
     finally:
+        _flush_actor_stream(ray, actor)
         with suppress(Exception):
             ray.kill(actor)
 
@@ -659,8 +660,23 @@ def _collect_from_actor() -> list[dict[str, Any]] | None:
     except Exception:
         return None
     finally:
+        _flush_actor_stream(ray, actor)
         with suppress(Exception):
             ray.kill(actor)
+
+
+def _flush_actor_stream(ray_module: Any, actor: Any) -> None:
+    get_fn = getattr(ray_module, "get", None)
+    if not callable(get_fn):
+        return
+
+    flush_to_glaas = getattr(actor, "flush_to_glaas", None)
+    flush_remote = getattr(flush_to_glaas, "remote", None) if flush_to_glaas is not None else None
+    if not callable(flush_remote):
+        return
+
+    with suppress(Exception):
+        get_fn(flush_remote(), timeout=5)
 
 
 def _group_events_by_task(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:

@@ -1,0 +1,197 @@
+from __future__ import annotations
+
+import base64
+import json
+import urllib.error
+import urllib.request
+
+import pytest
+
+from roar.ray.glaas_fragment_streamer import GlaasFragmentStreamer
+
+
+class _FakeHttpResponse:
+    def __init__(self, status: int = 202, body: bytes = b"{}") -> None:
+        self.status = status
+        self._body = body
+
+    def __enter__(self) -> _FakeHttpResponse:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        del exc_type, exc, tb
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+
+@pytest.fixture
+def token() -> str:
+    return "ab" * 32
+
+
+def test_enqueue_buffers_fragment_until_threshold(monkeypatch: pytest.MonkeyPatch, token: str) -> None:
+    streamer = GlaasFragmentStreamer(
+        session_id="session-123",
+        token=token,
+        glaas_url="http://localhost:3001",
+        flush_threshold=2,
+    )
+
+    flush_calls: list[str] = []
+    monkeypatch.setattr(streamer, "flush", lambda: flush_calls.append("flush") or True)
+
+    streamer.append_fragment({"job_uid": "job-1"})
+    assert streamer._buffer == [{"job_uid": "job-1"}]
+    assert flush_calls == []
+
+    streamer.append_fragment({"job_uid": "job-2"})
+    assert flush_calls == ["flush"]
+
+
+def test_flush_posts_encrypted_batch_to_glaas(
+    monkeypatch: pytest.MonkeyPatch,
+    token: str,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return _FakeHttpResponse(status=202)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr("os.urandom", lambda n: b"\\x01" * n)
+
+    streamer = GlaasFragmentStreamer(
+        session_id="session-abc",
+        token=token,
+        glaas_url="http://localhost:3001",
+        flush_threshold=10,
+    )
+
+    fragment = {"job_uid": "job-1", "ray_task_id": "task-1"}
+    streamer.append_fragment(fragment)
+
+    assert streamer.flush() is True
+
+    request = captured["request"]
+    assert isinstance(request, urllib.request.Request)
+    assert request.full_url == (
+        "http://localhost:3001/api/v1/fragments/sessions/session-abc/fragments"
+    )
+    assert request.get_method() == "POST"
+
+    headers = {name.lower(): value for name, value in request.header_items()}
+    assert headers["x-roar-fragment-token"] == token
+
+    body = json.loads(request.data.decode("utf-8"))
+    assert body["sequence"] == 0
+    assert isinstance(body["encrypted_batch"], str)
+    assert body["encrypted_batch"]
+
+    assert streamer._buffer == []
+    assert streamer._next_sequence == 1
+
+
+def test_flush_sequence_numbers_are_monotonically_increasing(
+    monkeypatch: pytest.MonkeyPatch,
+    token: str,
+) -> None:
+    posted_sequences: list[int] = []
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del timeout
+        payload = json.loads(request.data.decode("utf-8"))
+        posted_sequences.append(int(payload["sequence"]))
+        return _FakeHttpResponse(status=202)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    streamer = GlaasFragmentStreamer(
+        session_id="session-seq",
+        token=token,
+        glaas_url="http://localhost:3001",
+    )
+
+    streamer.append_fragment({"job_uid": "job-1"})
+    assert streamer.flush() is True
+
+    streamer.append_fragment({"job_uid": "job-2"})
+    assert streamer.flush() is True
+
+    assert posted_sequences == [0, 1]
+
+
+def test_ciphertext_differs_from_plaintext_fragment_json(
+    monkeypatch: pytest.MonkeyPatch,
+    token: str,
+) -> None:
+    posted_batch: dict[str, str] = {}
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del timeout
+        payload = json.loads(request.data.decode("utf-8"))
+        posted_batch["encrypted_batch"] = payload["encrypted_batch"]
+        return _FakeHttpResponse(status=202)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr("os.urandom", lambda n: b"\\x0f" * n)
+
+    fragment = {
+        "job_uid": "job-opaque",
+        "ray_task_id": "task-opaque",
+        "marker": "KNOWN_PLAINTEXT_MARKER",
+    }
+    streamer = GlaasFragmentStreamer(
+        session_id="session-cipher",
+        token=token,
+        glaas_url="http://localhost:3001",
+    )
+
+    streamer.append_fragment(fragment)
+    assert streamer.flush() is True
+
+    plaintext = json.dumps([fragment], separators=(",", ":")).encode("utf-8")
+    ciphertext_bytes = base64.b64decode(posted_batch["encrypted_batch"])
+
+    assert ciphertext_bytes != plaintext
+    assert plaintext not in ciphertext_bytes
+
+
+def test_flush_keeps_buffer_when_post_fails(monkeypatch: pytest.MonkeyPatch, token: str) -> None:
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del request, timeout
+        raise urllib.error.URLError("network down")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    streamer = GlaasFragmentStreamer(
+        session_id="session-fail",
+        token=token,
+        glaas_url="http://localhost:3001",
+    )
+    fragment = {"job_uid": "job-lost"}
+    streamer.append_fragment(fragment)
+
+    assert streamer.flush() is False
+    assert streamer._buffer == [fragment]
+    assert streamer._next_sequence == 0
+
+
+def test_close_flushes_remaining_fragments(monkeypatch: pytest.MonkeyPatch, token: str) -> None:
+    streamer = GlaasFragmentStreamer(
+        session_id="session-close",
+        token=token,
+        glaas_url="http://localhost:3001",
+        flush_threshold=100,
+    )
+    streamer.append_fragment({"job_uid": "job-close"})
+
+    flush_calls: list[str] = []
+    monkeypatch.setattr(streamer, "flush", lambda: flush_calls.append("flush") or True)
+
+    streamer.close()
+
+    assert flush_calls == ["flush"]
