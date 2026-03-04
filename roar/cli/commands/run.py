@@ -18,6 +18,7 @@ from ._execution import (
     get_quiet_setting,
     validate_git_clean,
 )
+from ._ray_job_submit import maybe_rewrite_ray_job_submit
 
 
 @click.command(
@@ -125,6 +126,8 @@ def run(
             click.echo(_get_help_text())
             raise click.ClickException("No command specified")
         job_type = None
+
+    command = maybe_rewrite_ray_job_submit(command)
 
     # Execute and report
     exit_code = execute_and_report(
