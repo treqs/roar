@@ -11,7 +11,9 @@ command execution:
 from __future__ import annotations
 
 import functools
+import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
 import click
@@ -20,6 +22,29 @@ if TYPE_CHECKING:
     from .context import RoarContext
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _has_roar_dir(ctx: Any) -> bool:
+    """Return True when context has a concrete existing .roar directory."""
+    roar_dir = getattr(ctx, "roar_dir", None)
+    return isinstance(roar_dir, Path) and roar_dir.exists()
+
+
+def _auto_init_for_ray_job(ctx: "RoarContext") -> None:
+    """Create a minimal .roar project for Ray job drivers."""
+    from .commands.init import init_project
+
+    cwd = getattr(ctx, "cwd", None)
+    if not isinstance(cwd, Path):
+        cwd = Path.cwd()
+
+    roar_dir = init_project(cwd)
+
+    # Keep context path in sync for this process invocation.
+    try:
+        ctx.roar_dir = roar_dir
+    except Exception:
+        pass
 
 
 def require_init(f: F) -> F:
@@ -52,7 +77,18 @@ def require_init(f: F) -> F:
             )
         ctx: RoarContext = ctx_maybe
 
-        if not ctx.is_initialized:
+        initialized = bool(ctx.is_initialized) or _has_roar_dir(ctx)
+
+        if not initialized and "RAY_JOB_ID" in os.environ:
+            try:
+                _auto_init_for_ray_job(ctx)
+            except Exception as e:
+                raise click.ClickException(
+                    f"Failed to auto-initialize roar project in Ray job: {e}"
+                ) from e
+            initialized = bool(ctx.is_initialized) or _has_roar_dir(ctx)
+
+        if not initialized:
             # Output to stdout to match legacy command behavior
             click.echo("Error: roar is not initialized in this directory.")
             click.echo("")
