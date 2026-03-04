@@ -26,7 +26,11 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> list[str]:
         # Invalid user-provided JSON - leave command untouched.
         return command
 
-    runtime_env["pip"] = _merge_roar_runtime_env_pip(runtime_env.get("pip"))
+    merged_pip = _merge_roar_runtime_env_pip(runtime_env.get("pip"))
+    if merged_pip:
+        runtime_env["pip"] = merged_pip
+    elif "pip" in runtime_env and merged_pip is not None:
+        runtime_env["pip"] = merged_pip
 
     glaas_url = _resolve_glaas_url()
     if glaas_url:
@@ -109,14 +113,20 @@ def _wrap_entrypoint(entrypoint: list[str]) -> list[str]:
     return ["roar", "run", *entrypoint]
 
 
-def _merge_roar_runtime_env_pip(existing_pip: object) -> list[str]:
+def _merge_roar_runtime_env_pip(existing_pip: object) -> list[str] | None:
+    roar_req = _resolve_roar_requirement()
+    if roar_req is None:
+        # Local dev mode: vendor wheel present means cluster has roar pre-installed.
+        # Skip pip injection — preserve existing pip list unchanged.
+        existing = _coerce_runtime_env_pip(existing_pip)
+        return existing if existing else None
     dependencies = _coerce_runtime_env_pip(existing_pip)
     dependencies = [
         dependency
         for dependency in dependencies
         if _requirement_name(dependency) not in {"roar-cli", "roar"}
     ]
-    dependencies.append(_resolve_roar_requirement())
+    dependencies.append(roar_req)
     return dependencies
 
 
@@ -143,11 +153,13 @@ def _requirement_name(requirement: str) -> str:
     return text.strip().lower()
 
 
-def _resolve_roar_requirement() -> str:
+def _resolve_roar_requirement() -> str | None:
     import os
     wheel_path = Path(os.getcwd()) / "vendor" / "roar-cli.whl"
     if wheel_path.exists():
-        return "./vendor/roar-cli.whl"
+        # Local dev mode: vendor wheel exists, cluster has roar pre-installed.
+        # Signal to skip pip injection entirely.
+        return None
 
     import importlib.metadata as importlib_metadata
 

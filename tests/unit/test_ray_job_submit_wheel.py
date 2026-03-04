@@ -32,7 +32,8 @@ def _runtime_env_json(command: list[str]) -> dict:
     raise AssertionError("expected --runtime-env-json in rewritten command")
 
 
-def test_resolve_roar_requirement_prefers_vendor_wheel(tmp_path, monkeypatch) -> None:
+def test_resolve_roar_requirement_returns_none_when_vendor_wheel_exists(tmp_path, monkeypatch) -> None:
+    """Vendor wheel = local dev mode: cluster has roar pre-installed, skip pip injection."""
     module = _module()
 
     wheel_path = tmp_path / "vendor" / "roar-cli.whl"
@@ -43,7 +44,7 @@ def test_resolve_roar_requirement_prefers_vendor_wheel(tmp_path, monkeypatch) ->
 
     requirement = module._resolve_roar_requirement()
 
-    assert requirement == "./vendor/roar-cli.whl"
+    assert requirement is None
 
 
 def test_resolve_roar_requirement_falls_back_to_pypi_when_no_wheel(tmp_path, monkeypatch) -> None:
@@ -63,7 +64,8 @@ def test_resolve_roar_requirement_falls_back_to_pypi_when_no_wheel(tmp_path, mon
     assert requirement == "roar-cli==9.9.9"
 
 
-def test_maybe_rewrite_ray_job_submit_uses_vendor_wheel_requirement(tmp_path, monkeypatch) -> None:
+def test_maybe_rewrite_skips_pip_injection_when_vendor_wheel_exists(tmp_path, monkeypatch) -> None:
+    """When vendor wheel is present, no pip key should appear in runtime_env."""
     module = _module()
 
     wheel_path = tmp_path / "vendor" / "roar-cli.whl"
@@ -75,5 +77,15 @@ def test_maybe_rewrite_ray_job_submit_uses_vendor_wheel_requirement(tmp_path, mo
 
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
-    runtime_env = _runtime_env_json(rewritten)
-    assert runtime_env["pip"] == ["./vendor/roar-cli.whl"]
+    # Entrypoint still wrapped with roar run
+    assert "roar" in rewritten and "run" in rewritten
+    # pip must NOT be in runtime_env (cluster has roar pre-installed)
+    for i, arg in enumerate(rewritten):
+        if arg == "--runtime-env-json" and i + 1 < len(rewritten):
+            env = json.loads(rewritten[i + 1])
+            assert "pip" not in env
+            break
+        if arg.startswith("--runtime-env-json="):
+            env = json.loads(arg.split("=", 1)[1])
+            assert "pip" not in env
+            break
