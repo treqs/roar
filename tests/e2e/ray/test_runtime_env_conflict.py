@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -43,6 +45,8 @@ def _set_project_config(project_dir: Path) -> None:
 
     if "pip_install = true" not in config_text:
         config_text = config_text.replace("pip_install = false", "pip_install = true")
+    if 'default = "ptrace"' not in config_text:
+        config_text = config_text.replace('default = "auto"', 'default = "ptrace"')
     config_text = config_text.replace('url = "https://api.glaas.ai"', 'url = ""')
 
     config_path.write_text(config_text, encoding="utf-8")
@@ -70,16 +74,25 @@ def _maybe_skip_for_environment_errors(result: subprocess.CompletedProcess[str])
 
 
 def _run_submit(project_dir: Path, *, override_job_runtime_env: bool) -> subprocess.CompletedProcess[str]:
+    candidate = Path(sys.executable).with_name("ray")
+    ray_binary = str(candidate) if candidate.exists() else shutil.which("ray")
+    if not ray_binary:
+        pytest.skip("ray CLI is not available in PATH")
+
     probe = (
         "import ray; "
         "ray.init(); "
         f"print('{_SUCCESS_MARKER}'); "
         "ray.shutdown()"
     )
+    runtime_env: dict[str, object] = {
+        "pip": ["pydantic==2.12.5", "pydantic-settings==2.12.0"],
+    }
 
     env = dict(os.environ)
     if override_job_runtime_env:
         env["RAY_OVERRIDE_JOB_RUNTIME_ENV"] = "1"
+        runtime_env["env_vars"] = {"RAY_OVERRIDE_JOB_RUNTIME_ENV": "1"}
     else:
         env.pop("RAY_OVERRIDE_JOB_RUNTIME_ENV", None)
 
@@ -89,13 +102,17 @@ def _run_submit(project_dir: Path, *, override_job_runtime_env: bool) -> subproc
             "-m",
             "roar",
             "run",
-            "ray",
+            "--tracer",
+            "ptrace",
+            ray_binary,
             "job",
             "submit",
             "--address",
             _RAY_ADDRESS,
             "--working-dir",
             ".",
+            "--runtime-env-json",
+            json.dumps(runtime_env),
             "--",
             "python3",
             "-c",
