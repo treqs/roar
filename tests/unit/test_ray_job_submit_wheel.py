@@ -31,6 +31,11 @@ def _runtime_env_json(command: list[str]) -> dict:
     raise AssertionError("expected --runtime-env-json in rewritten command")
 
 
+def _entrypoint(command: list[str]) -> list[str]:
+    separator_index = command.index("--")
+    return command[separator_index + 1 :]
+
+
 def test_resolve_roar_requirement_ignores_vendor_wheel_and_uses_installed_version(
     tmp_path, monkeypatch
 ) -> None:
@@ -78,7 +83,7 @@ def test_maybe_rewrite_injects_pip_even_when_vendor_wheel_exists(tmp_path, monke
 
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
-    assert "roar" in rewritten.command and "run" in rewritten.command
+    assert _entrypoint(rewritten.command) == ["python", "main.py"]
     env = _runtime_env_json(rewritten.command)
     assert env["pip"] == ["roar-cli==1.2.3"]
     assert env["env_vars"]["ROAR_JOB_INSTRUMENTED"] == "1"

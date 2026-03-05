@@ -70,14 +70,14 @@ def test_ray_jobs_submit_plural_also_works(monkeypatch) -> None:
     assert rewritten.session_id is None
 
 
-def test_entrypoint_is_wrapped_with_roar_run(monkeypatch) -> None:
+def test_entrypoint_is_unchanged(monkeypatch) -> None:
     module = _module()
     monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==1.2.3")
     monkeypatch.setattr(module, "_resolve_glaas_url", lambda: None)
 
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
-    assert _entrypoint(rewritten.command) == ["roar", "run", "python", "main.py"]
+    assert _entrypoint(rewritten.command) == ["python", "main.py"]
     assert rewritten.session_id is None
 
 
@@ -120,7 +120,7 @@ def test_existing_runtime_env_json_env_vars_are_preserved_and_glaas_added(monkey
     assert runtime_env["env_vars"]["GLAAS_API_URL"] == "https://glaas.example.com"
 
 
-def test_already_wrapped_entrypoint_is_not_double_wrapped(monkeypatch) -> None:
+def test_existing_roar_run_entrypoint_is_unchanged(monkeypatch) -> None:
     module = _module()
     monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==4.5.6")
     monkeypatch.setattr(module, "_resolve_glaas_url", lambda: None)

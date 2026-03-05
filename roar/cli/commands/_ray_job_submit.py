@@ -78,7 +78,6 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
         runtime_env.pop("env_vars", None)
 
     before_separator = _store_runtime_env(before_separator, runtime_env, runtime_env_json_arg)
-    entrypoint = _wrap_entrypoint(entrypoint)
     return RayJobSubmitRewrite(
         command=[*before_separator, "--", *entrypoint],
         session_id=fragment_session_id,
@@ -146,12 +145,6 @@ def _store_runtime_env(
     else:
         command_out[flag_index] = f"--runtime-env-json={serialized}"
     return command_out
-
-
-def _wrap_entrypoint(entrypoint: list[str]) -> list[str]:
-    if len(entrypoint) >= 2 and Path(entrypoint[0]).name == "roar" and entrypoint[1] == "run":
-        return entrypoint
-    return ["roar", "run", *entrypoint]
 
 
 def _merge_roar_runtime_env_pip(existing_pip: object) -> list[str] | None:
