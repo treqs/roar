@@ -79,7 +79,7 @@ def require_init(f: F) -> F:
 
         initialized = bool(ctx.is_initialized) or _has_roar_dir(ctx)
 
-        if not initialized and "RAY_JOB_CONFIG_JSON_ENV_VAR" in os.environ:
+        if not initialized and "RAY_JOB_ID" in os.environ:
             try:
                 _auto_init_for_ray_job(ctx)
             except Exception as e:

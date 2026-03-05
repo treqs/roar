@@ -52,6 +52,9 @@ def test_ray_job_submit_injects_pip_with_installed_roar_cli_version(monkeypatch)
 
     runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["pip"] == ["roar-cli==9.9.9"]
+    assert runtime_env["py_executable"] == "roar-worker"
+    assert runtime_env["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
+    assert runtime_env["env_vars"]["ROAR_JOB_INSTRUMENTED"] == "1"
     assert rewritten.session_id is None
 
 
@@ -155,7 +158,7 @@ def test_glaas_url_from_config_is_injected_as_both_env_vars(monkeypatch) -> None
     assert runtime_env["env_vars"]["GLAAS_API_URL"] == "http://localhost:3001"
 
 
-def test_no_glaas_url_configured_env_vars_not_injected(monkeypatch) -> None:
+def test_no_glaas_url_configured_only_instrumentation_env_var_is_injected(monkeypatch) -> None:
     module = _module()
     monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==8.0.0")
     monkeypatch.setattr(module, "_resolve_glaas_url", lambda: None)
@@ -163,7 +166,7 @@ def test_no_glaas_url_configured_env_vars_not_injected(monkeypatch) -> None:
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
     runtime_env = _runtime_env_json(rewritten.command)
-    assert "env_vars" not in runtime_env
+    assert runtime_env["env_vars"] == {"ROAR_JOB_INSTRUMENTED": "1"}
     assert rewritten.session_id is None
 
 

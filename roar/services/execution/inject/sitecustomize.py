@@ -264,6 +264,23 @@ def _patch_ray_init(ray_module) -> None:
         if not ray_config["enabled"]:
             return _real_ray_init(*args, **kwargs)
 
+        if os.environ.get("ROAR_JOB_INSTRUMENTED") == "1":
+            submitted_runtime_env = kwargs.get("runtime_env")
+            submitted_env_vars = {}
+            if isinstance(submitted_runtime_env, dict):
+                submitted_env_vars = dict(submitted_runtime_env.get("env_vars", {}) or {})
+            submitted_job_id = (
+                os.environ.get("ROAR_JOB_ID")
+                or submitted_env_vars.get("ROAR_JOB_ID")
+                or os.environ.get("RAY_JOB_ID")
+            )
+            if not submitted_job_id:
+                submitted_job_id = uuid.uuid4().hex[:8]
+
+            result = _real_ray_init(*args, **kwargs)
+            _ensure_collector_actor(ray_module, str(submitted_job_id))
+            return result
+
         runtime_env = dict(kwargs.pop("runtime_env", None) or {})
         env_vars = dict(runtime_env.get("env_vars", {}) or {})
         if ray_config["pip_install"]:
@@ -271,7 +288,9 @@ def _patch_ray_init(ray_module) -> None:
         else:
             runtime_env.pop("pip", None)
 
-        job_id = os.environ.get("ROAR_JOB_ID") or env_vars.get("ROAR_JOB_ID")
+        job_id = os.environ.get("ROAR_JOB_ID") or env_vars.get("ROAR_JOB_ID") or os.environ.get(
+            "RAY_JOB_ID"
+        )
         if not job_id:
             job_id = uuid.uuid4().hex[:8]
         job_id = str(job_id)
@@ -379,38 +398,51 @@ def _prepare_worker_runtime_env(runtime_env, job_id: str):
     import shutil
 
     runtime_env = dict(runtime_env or {})
-    tmp_dir = tempfile.mkdtemp(prefix=f"roar-worker-env-{job_id[:8]}-")
+    prepared_working_dir: str | None = None
 
     existing_working_dir = runtime_env.get("working_dir")
     if isinstance(existing_working_dir, str) and existing_working_dir.strip():
         if os.path.isdir(existing_working_dir):
+            prepared_working_dir = tempfile.mkdtemp(prefix=f"roar-worker-env-{job_id[:8]}-")
             with _SuppressTracking():
-                _merge_working_dir(existing_working_dir, tmp_dir)
+                _merge_working_dir(existing_working_dir, prepared_working_dir)
         else:
             _warn_roar(
                 "Skipping working_dir merge for non-local path %s while preparing Ray worker wrapper",
                 existing_working_dir,
             )
+            prepared_working_dir = existing_working_dir
 
-    try:
-        from pathlib import Path
+    if not prepared_working_dir:
+        prepared_working_dir = tempfile.mkdtemp(prefix=f"roar-worker-env-{job_id[:8]}-")
 
-        import roar
-        from roar.services.execution.tracer_backends import find_preload_library
+    if os.path.isdir(prepared_working_dir):
+        try:
+            from pathlib import Path
 
-        roar_package_dir = Path(roar.__file__).resolve().parent
-        with _SuppressTracking():
-            shutil.copytree(roar_package_dir, os.path.join(tmp_dir, "roar"), dirs_exist_ok=True)
+            import roar
+            from roar.services.execution.tracer_backends import find_preload_library
 
-            preload_library = find_preload_library(roar_package_dir)
-            if preload_library:
-                shutil.copy2(preload_library, os.path.join(tmp_dir, "libroar_tracer_preload.so"))
-    except Exception:
-        pass
+            roar_package_dir = Path(roar.__file__).resolve().parent
+            with _SuppressTracking():
+                shutil.copytree(
+                    roar_package_dir,
+                    os.path.join(prepared_working_dir, "roar"),
+                    dirs_exist_ok=True,
+                )
+
+                preload_library = find_preload_library(roar_package_dir)
+                if preload_library:
+                    shutil.copy2(
+                        preload_library,
+                        os.path.join(prepared_working_dir, "libroar_tracer_preload.so"),
+                    )
+        except Exception:
+            pass
 
     env_vars = dict(runtime_env.get("env_vars", {}) or {})
     env_vars[_WORKER_SETUP_HOOK_ENV_VAR] = _WORKER_SETUP_HOOK
-    runtime_env["working_dir"] = tmp_dir
+    runtime_env["working_dir"] = prepared_working_dir
     runtime_env["py_executable"] = "roar-worker"
     runtime_env["worker_process_setup_hook"] = _WORKER_SETUP_HOOK
     runtime_env["env_vars"] = env_vars

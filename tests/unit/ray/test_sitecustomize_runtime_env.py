@@ -414,6 +414,7 @@ def test_prepare_worker_runtime_env_suppresses_internal_copy_operations(
 def test_prepare_worker_runtime_env_warns_when_working_dir_is_not_local(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    non_local_working_dir = "s3://bucket/path"
     warnings: list[str] = []
     monkeypatch.setattr(
         sitecustomize,
@@ -426,14 +427,34 @@ def test_prepare_worker_runtime_env_warns_when_working_dir_is_not_local(
     )
 
     prepared = sitecustomize._prepare_worker_runtime_env(
-        {"working_dir": "s3://bucket/path"},
+        {"working_dir": non_local_working_dir},
         "job5678",
     )
 
     assert warnings
     assert prepared["py_executable"] == "roar-worker"
     assert prepared["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
-    assert Path(str(prepared["working_dir"])).exists()
+    assert prepared["working_dir"] == non_local_working_dir
+
+
+def test_prepare_worker_runtime_env_preserves_non_local_job_working_dir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_working_dir = "s3://bucket/cloud-demo"
+    monkeypatch.setattr(
+        "roar.services.execution.tracer_backends.find_preload_library",
+        lambda _package_path: None,
+    )
+
+    prepared = sitecustomize._prepare_worker_runtime_env(
+        {"working_dir": job_working_dir},
+        "jobraywd",
+    )
+
+    assert prepared["working_dir"] == job_working_dir, (
+        "Expected _prepare_worker_runtime_env() to preserve the job-provided non-local "
+        "working_dir so Ray workers keep access to modules from ray job submit packaging."
+    )
 
 
 def test_prepare_worker_runtime_env_bundles_roar_worker_hook(

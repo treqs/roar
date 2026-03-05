@@ -10,6 +10,10 @@ from pathlib import Path
 from ...glaas_client import GlaasClient
 from ...ray.fragment_key import generate_fragment_key, save_key
 
+_ROAR_WORKER_PY_EXECUTABLE = "roar-worker"
+_ROAR_WORKER_SETUP_HOOK = "roar.ray.roar_worker._startup"
+_ROAR_JOB_INSTRUMENTED_ENV_VAR = "ROAR_JOB_INSTRUMENTED"
+
 
 @dataclass(frozen=True)
 class RayJobSubmitRewrite:
@@ -41,7 +45,11 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
     if merged_pip or ("pip" in runtime_env and merged_pip is not None):
         runtime_env["pip"] = merged_pip
 
+    runtime_env["py_executable"] = _ROAR_WORKER_PY_EXECUTABLE
+    runtime_env["worker_process_setup_hook"] = _ROAR_WORKER_SETUP_HOOK
+
     env_vars = dict(runtime_env.get("env_vars", {}) or {})
+    env_vars[_ROAR_JOB_INSTRUMENTED_ENV_VAR] = "1"
     fragment_session_id: str | None = None
 
     glaas_url = _resolve_glaas_url()
@@ -145,11 +153,6 @@ def _wrap_entrypoint(entrypoint: list[str]) -> list[str]:
 
 def _merge_roar_runtime_env_pip(existing_pip: object) -> list[str] | None:
     roar_req = _resolve_roar_requirement()
-    if roar_req is None:
-        # Local dev mode: vendor wheel present means cluster has roar pre-installed.
-        # Skip pip injection — preserve existing pip list unchanged.
-        existing = _coerce_runtime_env_pip(existing_pip)
-        return existing if existing else None
     dependencies = _coerce_runtime_env_pip(existing_pip)
     dependencies = [
         dependency
@@ -183,24 +186,17 @@ def _requirement_name(requirement: str) -> str:
     return text.strip().lower()
 
 
-def _resolve_roar_requirement() -> str | None:
-    import os
-
-    wheel_path = Path(os.getcwd()) / "vendor" / "roar-cli.whl"
-    if wheel_path.exists():
-        # Local dev mode: vendor wheel exists, cluster has roar pre-installed.
-        # Signal to skip pip injection entirely.
-        return None
-
+def _resolve_roar_requirement() -> str:
     import importlib.metadata as importlib_metadata
 
-    for package_name in ("roar-cli", "roar"):
-        try:
-            return f"{package_name}=={importlib_metadata.version(package_name)}"
-        except importlib_metadata.PackageNotFoundError:
-            continue
-        except Exception:
-            break
+    try:
+        version = importlib_metadata.version("roar-cli")
+        return f"roar-cli=={version}"
+    except importlib_metadata.PackageNotFoundError:
+        pass
+    except Exception:
+        pass
+
     return "roar-cli"
 
 
@@ -209,7 +205,7 @@ def _resolve_glaas_url() -> str | None:
 
     url = get_glaas_url()
     if not url:
-        return None
+        return "https://api.glaas.ai"
     return str(url)
 
 

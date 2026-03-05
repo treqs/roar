@@ -7,12 +7,6 @@ import pytest
 from roar.services.execution.inject import sitecustomize
 
 
-@pytest.mark.xfail(
-    reason=(
-        "known issue: double runtime_env injection when pip_install=true; "
-        "fix via ROAR_JOB_INSTRUMENTED sentinel"
-    )
-)
 def test_patch_ray_init_conflicts_inside_preinstrumented_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -22,11 +16,8 @@ def test_patch_ray_init_conflicts_inside_preinstrumented_job(
         "env_vars": {"ROAR_WORKER": "1"},
     }
 
-    def fake_prepare_worker_runtime_env(runtime_env: dict, _job_id: str) -> dict:
-        prepared = dict(runtime_env)
-        prepared["working_dir"] = "/tmp/roar-worker-wrapper"
-        prepared["env_vars"] = dict(runtime_env.get("env_vars", {}) or {})
-        return prepared
+    def fake_prepare_worker_runtime_env(_runtime_env: dict, _job_id: str) -> dict:
+        raise AssertionError("_prepare_worker_runtime_env should be skipped in instrumented jobs")
 
     def fake_ray_init(*_args, **kwargs):
         runtime_env = dict(kwargs.get("runtime_env", {}) or {})
@@ -63,6 +54,7 @@ def test_patch_ray_init_conflicts_inside_preinstrumented_job(
     )
     monkeypatch.setattr(sitecustomize, "_register_pre_shutdown_ray_collection", lambda: None)
     monkeypatch.setattr(sitecustomize, "_ensure_collector_actor", lambda *_args, **_kwargs: None)
+    monkeypatch.setenv("ROAR_JOB_INSTRUMENTED", "1")
 
     sitecustomize._patch_ray_init(fake_ray)
 
