@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -44,6 +47,8 @@ def _looks_like_connection_error(output: str) -> bool:
         "unable to connect",
         "cannot connect",
         "could not connect",
+        "connection reset by peer",
+        "connection aborted",
         "max retries exceeded",
         "connection error",
         "timed out",
@@ -69,8 +74,16 @@ def test_ray_head_dashboard_is_reachable() -> None:
 
 @pytest.mark.e2e
 def test_ray_job_submission_works() -> None:
+    ray_cli = shutil.which("ray")
+    if ray_cli is None:
+        fallback_ray = Path(sys.executable).parent / "ray"
+        if fallback_ray.exists():
+            ray_cli = str(fallback_ray)
+        else:
+            pytest.fail("ray CLI is not available in PATH or next to the active Python interpreter")
+
     command = [
-        "ray",
+        ray_cli,
         "job",
         "submit",
         "--address",
@@ -82,7 +95,7 @@ def test_ray_job_submission_works() -> None:
         "import ray; ray.init(); print('HEALTH_OK'); ray.shutdown()",
     ]
     fallback_command = [
-        "ray",
+        ray_cli,
         "job",
         "submit",
         "--address",
@@ -142,7 +155,9 @@ def test_glaas_health_endpoint_responds() -> None:
 
     assert status == 200, f"Expected 200 from {url}, got {status}. Body: {body}"
     payload = _parse_json_or_fail(body, "GLaaS health endpoint")
-    assert payload.get("success") is True, f"Expected success=true in response. Body: {body}"
+    assert payload.get("success") is True or str(payload.get("status", "")).lower() == "healthy", (
+        f"Expected success=true or status=healthy in response. Body: {body}"
+    )
 
 
 @pytest.mark.e2e

@@ -239,7 +239,6 @@ def _write_log():
 # Ray integration (active only when ROAR_WRAP=1)
 # ------------------------------------------------------------------------------
 
-_DEFAULT_RAY_LOG_DIR = "/shared/.roar-logs"
 _DEFAULT_RAY_NODE_POLL_INTERVAL_SECONDS = 5.0
 _NODE_AGENT_RESOURCE_FRACTION = 0.0001
 _WORKER_SETUP_HOOK_ENV_VAR = "__RAY_WORKER_PROCESS_SETUP_HOOK_ENV_VAR"
@@ -297,11 +296,8 @@ def _patch_ray_init(ray_module) -> None:
         driver_job_uid = str(os.environ.get("ROAR_JOB_ID", ""))
 
         env_vars["ROAR_WORKER"] = "1"
-        env_vars["ROAR_LOG_DIR"] = ray_config["log_dir"]
-        env_vars["ROAR_LOG_BACKEND"] = "actor"
         env_vars["ROAR_JOB_ID"] = job_id
         env_vars["ROAR_DRIVER_JOB_UID"] = driver_job_uid
-        os.environ.setdefault("ROAR_LOG_DIR", ray_config["log_dir"])
         os.environ.setdefault("ROAR_JOB_ID", job_id)
         for key in (
             "AWS_ENDPOINT_URL",
@@ -324,7 +320,7 @@ def _patch_ray_init(ray_module) -> None:
         if _node_agents_enabled():
             threading.Thread(
                 target=_spawn_node_agents,
-                args=(ray_module, job_id, str(ray_config["log_dir"])),
+                args=(ray_module, job_id),
                 name="roar-ray-node-agent-bootstrap",
                 daemon=True,
             ).start()
@@ -361,7 +357,11 @@ def _ensure_collector_actor(ray_module, job_id: str) -> None:
 
         session_id = os.environ.get("ROAR_SESSION_ID")
         fragment_token = os.environ.get("ROAR_FRAGMENT_TOKEN")
-        glaas_url = os.environ.get("GLAAS_URL") or os.environ.get("GLAAS_API_URL")
+        glaas_url = (
+            os.environ.get("GLAAS_URL")
+            or os.environ.get("GLAAS_API_URL")
+            or "https://api.glaas.ai"
+        )
 
         actor_options = RoarLogCollectorActor.options(
             name=actor_name,
@@ -381,8 +381,8 @@ def _ensure_collector_actor(ray_module, job_id: str) -> None:
 
         get_fn = getattr(ray_module, "get", None)
         if callable(get_fn):
-            get_all = getattr(actor, "get_all", None)
-            remote = getattr(get_all, "remote", None) if get_all is not None else None
+            ping = getattr(actor, "ping", None)
+            remote = getattr(ping, "remote", None) if ping is not None else None
             if callable(remote):
                 get_fn(remote(), timeout=10)
     except Exception:
@@ -525,7 +525,7 @@ def _warn_roar(message: str, *args) -> None:
         sys.stderr.write(text + "\n")
 
 
-def _spawn_node_agents(ray_module, job_id: str, log_dir: str) -> None:
+def _spawn_node_agents(ray_module, job_id: str) -> None:
     try:
         from roar.ray.node_agent import RoarNodeAgent, build_node_agent_name
     except Exception:
@@ -569,7 +569,6 @@ def _spawn_node_agents(ray_module, job_id: str, log_dir: str) -> None:
             try:
                 agent = RoarNodeAgent.options(**remote_options).remote(
                     job_id=job_id,
-                    log_dir=log_dir,
                 )
             except Exception:
                 agent = None
@@ -677,7 +676,6 @@ def _prime_new_ray_nodes(ray_module, seen_node_ids):
         _spawn_node_agents(
             ray_module,
             job_id=str(os.environ.get("ROAR_JOB_ID", "default")),
-            log_dir=str(os.environ.get("ROAR_LOG_DIR", _DEFAULT_RAY_LOG_DIR)),
         )
 
     seen_node_ids.update(current_node_ids)
@@ -725,7 +723,6 @@ def _node_resource_key(ray_module, node_id: str) -> str | None:
 def _load_ray_config() -> dict[str, object]:
     config_enabled = True
     config_pip_install = False
-    config_log_dir = _DEFAULT_RAY_LOG_DIR
 
     try:
         from roar.config import load_config
@@ -735,9 +732,6 @@ def _load_ray_config() -> dict[str, object]:
         ray_section = config.get("ray", {})
         if isinstance(ray_section, dict):
             config_enabled = bool(ray_section.get("enabled", True))
-            maybe_log_dir = ray_section.get("log_dir")
-            if isinstance(maybe_log_dir, str) and maybe_log_dir.strip():
-                config_log_dir = maybe_log_dir
 
         explicit_pip_install = _load_explicit_ray_pip_install(start_dir)
         if explicit_pip_install is not None:
@@ -745,14 +739,9 @@ def _load_ray_config() -> dict[str, object]:
     except Exception:
         pass
 
-    env_log_dir = os.environ.get("ROAR_LOG_DIR")
-    if env_log_dir:
-        config_log_dir = env_log_dir
-
     return {
         "enabled": config_enabled,
         "pip_install": config_pip_install,
-        "log_dir": config_log_dir,
     }
 
 
@@ -846,32 +835,42 @@ def _register_pre_shutdown_ray_collection() -> None:
 
 
 def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
-    """Atexit hook: collect worker I/O logs and write to the roar DB."""
+    """Atexit hook: flush final buffered fragments from the collector actor."""
+    del proxy_logs
+
     if os.environ.get("ROAR_WRAP") != "1":
         return
-    try:
-        log_dir = os.environ.get("ROAR_LOG_DIR")
-        if not log_dir:
-            ray_config = _load_ray_config()
-            log_dir = str(ray_config["log_dir"])
 
-        # Fast path: skip the heavy collector import if there's nothing to collect.
-        # Worker fragment files are .json files written to log_dir by Ray workers.
-        has_worker_logs = os.path.isdir(log_dir) and any(
-            f.endswith(".json") for f in os.listdir(log_dir)
-        )
-        if not has_worker_logs and not proxy_logs:
+    try:
+        import ray
+    except Exception:
+        return
+
+    try:
+        is_initialized = getattr(ray, "is_initialized", None)
+        if callable(is_initialized) and not is_initialized():
             return
 
-        from roar.ray.collector import collect
+        job_id = os.environ.get("ROAR_JOB_ID", "default")
+        actor_name = f"roar-log-collector-{job_id}"
+        actor = ray.get_actor(actor_name, namespace="roar")
 
-        collect(
-            project_dir=os.environ.get("ROAR_PROJECT_DIR"),
-            log_dir=log_dir,
-            proxy_logs=proxy_logs or {},
-        )
     except Exception:
-        pass
+        return
+
+    try:
+        flush_to_glaas = getattr(actor, "flush_to_glaas", None)
+        flush_remote = (
+            getattr(flush_to_glaas, "remote", None) if flush_to_glaas is not None else None
+        )
+        get_fn = getattr(ray, "get", None)
+        if callable(flush_remote) and callable(get_fn):
+            get_fn(flush_remote(), timeout=15)
+    except Exception:
+        return
+    finally:
+        with contextlib.suppress(Exception):
+            ray.kill(actor)
 
 
 def _stop_ray_node_poller() -> None:

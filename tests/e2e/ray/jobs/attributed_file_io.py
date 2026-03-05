@@ -43,6 +43,12 @@ def read_and_summarize(paths: list[str]) -> dict:
     for path in paths:
         with open(path, encoding="utf-8") as f:
             records.append(json.load(f))
+
+    # Trigger an explicit write so actor-backed buffering flushes prior read
+    # events before the worker idles.
+    with open("/tmp/roar_reader_flush.txt", "w", encoding="utf-8") as flush_file:
+        flush_file.write(str(len(records)))
+
     return {
         "reader_task_id": ctx.get_task_id(),
         "reader_node_id": ctx.get_node_id(),
@@ -52,7 +58,7 @@ def read_and_summarize(paths: list[str]) -> dict:
 
 
 if __name__ == "__main__":
-    output_dir = sys.argv[1] if len(sys.argv) > 1 else "/shared/attributed"
+    output_dir = sys.argv[1] if len(sys.argv) > 1 else "/tmp/attributed"
     os.makedirs(output_dir, exist_ok=True)
 
     ray.init(address="auto")

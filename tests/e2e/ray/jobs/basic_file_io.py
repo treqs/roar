@@ -40,8 +40,8 @@ def transform(input_path: str, output_path: str) -> dict[str, object]:
 
 def main() -> None:
     ray.init(address="auto")
-    input_path = "/shared/input.json"
-    output_path = "/shared/output.json"
+    input_path = "/tmp/input.json"
+    output_path = "/tmp/output.json"
 
     seed_payload = {"a": 1, "b": 2, "label": "sample"}
     ray.get(write_file.remote(input_path, json.dumps(seed_payload)))

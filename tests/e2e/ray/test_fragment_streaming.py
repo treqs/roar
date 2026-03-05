@@ -52,21 +52,32 @@ def _run_checked(command: list[str], cwd: Path) -> None:
 def _init_clean_repo(repo_dir: Path) -> None:
     repo_dir.mkdir(parents=True, exist_ok=True)
     (repo_dir / "README.md").write_text("fragment streaming e2e\n", encoding="utf-8")
+    (repo_dir / ".gitignore").write_text(".roar/\n", encoding="utf-8")
 
     _run_checked(["git", "init"], cwd=repo_dir)
     _run_checked(["git", "config", "user.email", "e2e@example.com"], cwd=repo_dir)
     _run_checked(["git", "config", "user.name", "E2E"], cwd=repo_dir)
-    _run_checked(["git", "add", "README.md"], cwd=repo_dir)
+    _run_checked(["git", "add", "README.md", ".gitignore"], cwd=repo_dir)
     _run_checked(["git", "commit", "-m", "init"], cwd=repo_dir)
     _run_checked(
         [sys.executable, "-m", "roar", "init", "--path", str(repo_dir), "-n"], cwd=repo_dir
     )
+    config_path = repo_dir / ".roar" / "config.toml"
+    config_text = config_path.read_text(encoding="utf-8")
+    config_text = config_text.replace(
+        'url = "https://api.glaas.ai"',
+        f'url = "{GLAAS_BASE_URL}"',
+    )
+    config_path.write_text(config_text, encoding="utf-8")
 
 
 def _run_file_io_ray_submit(repo_dir: Path) -> dict[str, str]:
     file_io_probe = f"""
+import os
 import ray
+from pathlib import Path
 
+os.environ["RAY_OVERRIDE_JOB_RUNTIME_ENV"] = "1"
 ray.init()
 
 @ray.remote
@@ -85,6 +96,7 @@ ray.shutdown()
     env = dict(os.environ)
     env["GLAAS_URL"] = GLAAS_BASE_URL
     env["GLAAS_API_URL"] = GLAAS_BASE_URL
+    env["RAY_OVERRIDE_JOB_RUNTIME_ENV"] = "1"
 
     result = subprocess.run(
         [
@@ -92,11 +104,15 @@ ray.shutdown()
             "-m",
             "roar",
             "run",
-            "ray",
-            "job",
-            "submit",
-            "--address",
-            "http://localhost:8265",
+            "--tracer",
+            "ptrace",
+                "ray",
+                "job",
+                "submit",
+                "--runtime-env-json",
+                '{"env_vars":{"AWS_SESSION_TOKEN":"roar-fragment-mode"}}',
+                "--address",
+                "http://localhost:8265",
             "--working-dir",
             ".",
             "--",
@@ -146,6 +162,8 @@ def _fetch_fragments(session_id: str, token: str) -> list[dict[str, object]]:
 
     payload = json.loads(body)
     fragments = payload.get("fragments")
+    if fragments is None and isinstance(payload.get("data"), dict):
+        fragments = payload["data"].get("fragments")
     assert isinstance(fragments, list), f"Expected list payload from {url}. Body: {body}"
     return [item for item in fragments if isinstance(item, dict)]
 

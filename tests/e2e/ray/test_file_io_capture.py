@@ -70,9 +70,7 @@ def reset_roar_state(ray_cluster):
             "ray-head",
             "bash",
             "-c",
-            # Reset the roar DB and clear stale worker logs so previous
-            # tests don't pollute the next one.
-            "rm -rf /app/.roar /shared/.roar-logs && roar init --path /app -n",
+            "rm -rf /app/.roar && roar init --path /app -n",
         ],
         check=False,
         capture_output=True,
@@ -97,14 +95,14 @@ class TestFileIOCapture:
         )
         assert returncode == 0, f"Job failed:\n{stderr}"
 
-        # The job writes /shared/output.json from a remote task.
+        # The job writes /tmp/output.json from a remote task.
         # roar should have captured this as an output artifact.
         rows = _query_roar_db(
             COMPOSE_FILE,
             "SELECT first_seen_path FROM artifacts WHERE first_seen_path LIKE '%output.json'",
         )
         assert len(rows) >= 1, (
-            "Expected /shared/output.json to appear in roar artifacts, "
+            "Expected /tmp/output.json to appear in roar artifacts, "
             "but it was not captured. "
             "roar is not yet instrumenting Ray worker processes."
         )
@@ -128,7 +126,7 @@ class TestFileIOCapture:
             "WHERE ji.path LIKE '%input.json'",
         )
         assert len(rows) >= 1, (
-            "Expected /shared/input.json to appear as a job input, "
+            "Expected /tmp/input.json to appear as a job input, "
             "but it was not captured from the Ray worker."
         )
 
@@ -148,7 +146,7 @@ class TestFileIOCapture:
 
         rows = _query_roar_db(
             COMPOSE_FILE,
-            "SELECT first_seen_path FROM artifacts WHERE first_seen_path LIKE '/shared/%'",
+            "SELECT first_seen_path FROM artifacts WHERE first_seen_path LIKE '/tmp/%'",
         )
         captured_paths = {r["first_seen_path"] for r in rows}
 

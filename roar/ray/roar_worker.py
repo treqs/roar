@@ -197,7 +197,8 @@ def _is_write_mode(mode: str) -> bool:
 
 
 def _should_track_local_path(path: str) -> bool:
-    return path.startswith("/shared/")
+    normalized = os.path.abspath(path)
+    return not normalized.startswith(("/proc/", "/sys/", "/dev/"))
 
 
 def _log_write(

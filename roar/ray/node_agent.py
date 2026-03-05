@@ -25,9 +25,8 @@ def _find_free_port() -> int:
 
 @ray.remote(num_cpus=0)
 class RoarNodeAgent:
-    def __init__(self, job_id: str, log_dir: str) -> None:
+    def __init__(self, job_id: str) -> None:
         self._job_id = str(job_id)
-        self._log_dir = str(log_dir)
         self._proxy_process: subprocess.Popen | None = None
         self._proxy_port: int | None = None
         self._proxy_log_lines: list[str] = []

@@ -52,8 +52,6 @@ User-facing Ray options in `[ray]`:
 
 - `ray.enabled`
   - Turn Ray tracing on or off.
-- `ray.log_dir`
-  - Set the worker log directory used for fallback collection.
 - `ray.actor_attribution`
   - `per_call` (default): attribute by actor method call.
   - `per_actor`: group attribution by actor.
@@ -64,8 +62,6 @@ Helpful environment variables:
   - Enables Ray wrapping (normally set automatically by `roar run`).
 - `ROAR_PROJECT_DIR`
   - Controls where `.roar/roar.db` is created/read.
-- `ROAR_LOG_DIR`
-  - Overrides worker log directory.
 
 ## 7. Viewing results
 
@@ -98,7 +94,6 @@ ORDER BY j.step_number, j.timestamp, io.kind;
 
 ## 8. Known limitations
 
-- Local file capture is strongest for worker-visible shared paths (commonly `/shared`).
 - Some read events may not include full content hashes.
 - S3 identity is ETag-based, which is not always a full-content digest.
 - If cluster/runtime policies block required `runtime_env` behavior, tracing may be partial.

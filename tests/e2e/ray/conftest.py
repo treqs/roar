@@ -367,25 +367,12 @@ def submit_job_on_head(
         existing_pp = merged_env.get("PYTHONPATH", "")
         merged_env["PYTHONPATH"] = f"{inject_dir}:{existing_pp}" if existing_pp else inject_dir
         merged_env.setdefault("ROAR_PROJECT_DIR", "/app")
-        merged_env.setdefault("ROAR_LOG_DIR", "/shared/.roar-logs")
         merged_env.setdefault("ROAR_RAY_NODE_AGENTS", "1")
 
     command = ["docker", "compose", "-f", str(compose_path), "exec", "-T"]
     for key, value in merged_env.items():
         command.extend(["-e", f"{key}={value}"])
-    if merged_env.get("ROAR_WRAP") == "1":
-        log_dir = merged_env.get("ROAR_LOG_DIR", "/shared/.roar-logs")
-        # sitecustomize currently checks for a *.json sentinel before collecting.
-        # Create one so actor-backed fragments are always flushed into roar.db.
-        trigger_path = f"{str(log_dir).rstrip('/')}/collector-trigger.json"
-        shell_command = (
-            f"mkdir -p {shlex.quote(str(log_dir))} "
-            f"&& : > {shlex.quote(trigger_path)} "
-            f"&& python {shlex.quote(str(script_path))}"
-        )
-        command.extend(["ray-head", "bash", "-lc", shell_command])
-    else:
-        command.extend(["ray-head", "python", script_path])
+    command.extend(["ray-head", "python", script_path])
 
     result = run_docker(command, capture_output=True, text=True, check=False)
     return result.stdout, result.stderr, result.returncode

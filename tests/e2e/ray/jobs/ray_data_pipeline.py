@@ -22,8 +22,8 @@ def run_pipeline(input_path: str, output_dir: str) -> str:
 def main() -> None:
     ray.init(address="auto")
 
-    input_path = "/shared/ray_data_input.csv"
-    output_dir = "/shared/ray_data_output"
+    input_path = "/tmp/ray_data_input.csv"
+    output_dir = "/tmp/ray_data_output"
     os.makedirs(output_dir, exist_ok=True)
 
     with open(input_path, "w", encoding="utf-8") as handle:

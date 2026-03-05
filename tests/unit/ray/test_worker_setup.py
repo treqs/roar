@@ -3,7 +3,6 @@ from __future__ import annotations
 import builtins
 import sys
 import tempfile
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -12,12 +11,17 @@ import pytest
 from roar.ray import worker
 
 
+@pytest.fixture(autouse=True)
+def _reset_worker_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(worker, "_actor", None)
+    monkeypatch.setattr(worker, "_event_buffer", [])
+    monkeypatch.setattr(worker, "_SKIP_PREFIXES", ())
+    monkeypatch.setattr(worker, "_SETUP_COMPLETE", False)
+
+
 def test_setup_defers_actor_initialization_until_event_logging(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("ROAR_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(worker, "_choose_backend", lambda: "actor")
     init_actor = MagicMock()
     monkeypatch.setattr(worker, "_init_actor", init_actor)
     monkeypatch.setattr(worker, "_patch_boto3", lambda: None)
@@ -27,54 +31,18 @@ def test_setup_defers_actor_initialization_until_event_logging(
     monkeypatch.setattr(worker, "_configure_local_proxy_endpoint", lambda: None)
     monkeypatch.setattr(worker.atexit, "register", lambda *_args, **_kwargs: None)
 
-    if hasattr(worker.setup, "_roar_worker_ready"):
-        delattr(worker.setup, "_roar_worker_ready")
-
     original_open = builtins.open
     try:
         worker.setup()
     finally:
         builtins.open = original_open
-        if hasattr(worker.setup, "_roar_worker_ready"):
-            delattr(worker.setup, "_roar_worker_ready")
 
     init_actor.assert_not_called()
 
 
-def test_setup_skips_proxy_endpoint_configuration_by_default(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("ROAR_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(worker, "_choose_backend", lambda: "filesystem")
-    monkeypatch.setattr(worker, "_patch_boto3", lambda: None)
-    monkeypatch.setattr(worker, "_patch_pandas", lambda: None)
-    monkeypatch.setattr(worker, "_patch_pyarrow_filesystem", lambda: None)
-    monkeypatch.setattr(worker, "_patch_ray_data", lambda: None)
-    configure_proxy = MagicMock()
-    monkeypatch.setattr(worker, "_configure_local_proxy_endpoint", configure_proxy)
-    monkeypatch.setattr(worker.atexit, "register", lambda *_args, **_kwargs: None)
-
-    if hasattr(worker.setup, "_roar_worker_ready"):
-        delattr(worker.setup, "_roar_worker_ready")
-
-    original_open = builtins.open
-    try:
-        worker.setup()
-    finally:
-        builtins.open = original_open
-        if hasattr(worker.setup, "_roar_worker_ready"):
-            delattr(worker.setup, "_roar_worker_ready")
-
-    configure_proxy.assert_not_called()
-
-
 def test_setup_skips_optional_sdk_patches_by_default(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("ROAR_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(worker, "_choose_backend", lambda: "filesystem")
     patch_boto3 = MagicMock()
     patch_pandas = MagicMock()
     patch_pyarrow = MagicMock()
@@ -86,16 +54,11 @@ def test_setup_skips_optional_sdk_patches_by_default(
     monkeypatch.setattr(worker, "_configure_local_proxy_endpoint", lambda: None)
     monkeypatch.setattr(worker.atexit, "register", lambda *_args, **_kwargs: None)
 
-    if hasattr(worker.setup, "_roar_worker_ready"):
-        delattr(worker.setup, "_roar_worker_ready")
-
     original_open = builtins.open
     try:
         worker.setup()
     finally:
         builtins.open = original_open
-        if hasattr(worker.setup, "_roar_worker_ready"):
-            delattr(worker.setup, "_roar_worker_ready")
 
     patch_boto3.assert_not_called()
     patch_pandas.assert_not_called()
@@ -161,18 +124,13 @@ def test_runtime_context_ids_short_circuit_when_ray_not_initialized(
 
 def test_patch_tempfile_logs_named_temporary_file_writes(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path,
 ) -> None:
-    monkeypatch.setattr(worker, "_runtime_context_ids", lambda: ("task-123", None))
-    monkeypatch.setattr(worker, "_BACKEND", "filesystem")
-    monkeypatch.setattr(worker, "_actor", None)
-    monkeypatch.setattr(worker, "_LOG_DIR", str(tmp_path))
-
-    captured: list[tuple[str, dict[str, object]]] = []
+    captured: list[tuple[str, str]] = []
     monkeypatch.setattr(
         worker,
-        "_write_to_file",
-        lambda task_id, payload: captured.append((task_id, payload)),
+        "_log_access",
+        lambda path, mode, **_kwargs: captured.append((path, mode)),
     )
 
     original_named_tempfile = tempfile.NamedTemporaryFile
@@ -186,10 +144,9 @@ def test_patch_tempfile_logs_named_temporary_file_writes(
             delattr(tempfile, "_roar_worker_tempfile_patched")
 
     assert captured
-    task_id, payload = captured[0]
-    assert task_id == "task-123"
-    assert payload["mode"] == "w"
-    assert str(payload["path"]).startswith(str(tmp_path))
+    path, mode = captured[0]
+    assert mode == "w"
+    assert str(path).startswith(str(tmp_path))
 
 
 def test_log_access_flushes_actor_buffer_for_small_batches(
@@ -205,7 +162,6 @@ def test_log_access_flushes_actor_buffer_for_small_batches(
     class _FakeActor:
         append_batch = _FakeAppendBatch()
 
-    monkeypatch.setattr(worker, "_BACKEND", "actor")
     monkeypatch.setattr(worker, "_actor", _FakeActor())
     monkeypatch.setattr(worker, "_event_buffer", [])
     monkeypatch.setattr(worker, "_runtime_context_ids", lambda: ("task-abc", None))

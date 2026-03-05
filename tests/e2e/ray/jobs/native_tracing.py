@@ -21,7 +21,7 @@ def write_and_report(path: str) -> dict[str, str]:
 
 def main() -> None:
     ray.init(address="auto")
-    payload = ray.get(write_and_report.remote("/shared/native_tracing_output.txt"))
+    payload = ray.get(write_and_report.remote("/tmp/native_tracing_output.txt"))
     print(json.dumps(payload))
 
 

@@ -35,8 +35,8 @@ def load(records: list[dict[str, object]], output_path: str) -> str:
 def main() -> None:
     ray.init(address="auto")
 
-    input_path = "/shared/pipeline_input.csv"
-    output_path = "/shared/pipeline_output.parquet"
+    input_path = "/tmp/pipeline_input.csv"
+    output_path = "/tmp/pipeline_output.parquet"
 
     pd.DataFrame(
         [

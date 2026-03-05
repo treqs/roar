@@ -39,7 +39,7 @@ def test_patch_ray_init_conflicts_inside_preinstrumented_job(
     monkeypatch.setattr(
         sitecustomize,
         "_load_ray_config",
-        lambda: {"enabled": True, "pip_install": True, "log_dir": "/tmp/roar-ray"},
+        lambda: {"enabled": True, "pip_install": True},
     )
     monkeypatch.setattr(
         sitecustomize,

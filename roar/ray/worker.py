@@ -2,29 +2,24 @@
 roar Ray worker setup hook.
 
 Installed via runtime_env.worker_process_setup_hook when ROAR_WRAP=1.
-Patches builtins.open to capture per-task file I/O and write events through
-either a Ray actor aggregator (default on real clusters) or filesystem logs
-when a shared volume is available.
+Patches builtins.open to capture per-task file I/O and forward events to the
+detached collector actor.
 """
 
 from __future__ import annotations
 
 import atexit
 import builtins
-import json
 import os
 import tempfile
 import threading
 import time
-import uuid
 from typing import Any
 
 # Captured at module import time so the hook doesn't recursively call itself.
 _real_open = builtins.open
 
-_LOG_DIR: str = ""
 _SKIP_PREFIXES: tuple[str, ...] = ()
-_BACKEND: str = "filesystem"
 _actor: Any = None
 _event_buffer: list[dict[str, Any]] = []
 _buffer_lock = threading.Lock()
@@ -36,22 +31,15 @@ def setup() -> None:
     """
     Called once by Ray when a new worker process starts.
 
-    Sets up the file I/O tracking shim. Writes are non-blocking:
-    each open() call appends a JSON line to the shared log dir.
+    Sets up the file I/O tracking shim.
     """
-    global _BACKEND, _LOG_DIR, _SETUP_COMPLETE, _SKIP_PREFIXES
+    global _SETUP_COMPLETE, _SKIP_PREFIXES
 
     if _SETUP_COMPLETE:
         return
 
-    _LOG_DIR = os.environ.get("ROAR_LOG_DIR", "/shared/.roar-logs")
-    _BACKEND = _choose_backend()
-    if _BACKEND == "filesystem":
-        os.makedirs(_LOG_DIR, exist_ok=True)
-
-    # Paths we must never recurse into (the log dir itself, /proc, /sys ...)
+    # Paths we must never recurse into.
     _SKIP_PREFIXES = (
-        _LOG_DIR,
         "/proc/",
         "/sys/",
         "/dev/",
@@ -68,30 +56,6 @@ def setup() -> None:
         _configure_local_proxy_endpoint()
     atexit.register(_flush_worker_buffer)
     _SETUP_COMPLETE = True
-
-
-def _choose_backend() -> str:
-    configured = os.environ.get("ROAR_LOG_BACKEND")
-    if configured:
-        selected = configured.strip().lower()
-        if selected in {"actor", "filesystem"}:
-            return selected
-
-    if _shared_fs_available(_LOG_DIR):
-        return "filesystem"
-    return "actor"
-
-
-def _shared_fs_available(log_dir: str) -> bool:
-    sentinel_path = os.path.join(log_dir, f".roar-sentinel-{uuid.uuid4().hex}")
-    try:
-        os.makedirs(log_dir, exist_ok=True)
-        with _real_open(sentinel_path, "w", encoding="utf-8") as handle:
-            handle.write("ok")
-        os.unlink(sentinel_path)
-        return True
-    except OSError:
-        return False
 
 
 def _init_actor() -> None:
@@ -210,31 +174,21 @@ def _log_access(
     if byte_range:
         payload["byte_range"] = byte_range
 
-    if _BACKEND == "actor":
-        if _actor is None:
-            _init_actor()
-        if _actor is not None:
-            with _buffer_lock:
-                _event_buffer.append(payload)
-                should_flush = len(_event_buffer) >= _FLUSH_THRESHOLD
-            if should_flush or any(flag in mode for flag in ("w", "a", "x", "+")):
-                _flush_to_actor()
-            return
+    if _actor is None:
+        _init_actor()
+    if _actor is None:
+        return
 
-    _write_to_file(task_id, payload)
+    with _buffer_lock:
+        _event_buffer.append(payload)
+        should_flush = len(_event_buffer) >= _FLUSH_THRESHOLD
 
-
-def _write_to_file(task_id: str, payload: dict[str, Any]) -> None:
-    log_file = os.path.join(_LOG_DIR, f"{task_id}.jsonl")
-    entry = json.dumps(payload)
-    os.makedirs(_LOG_DIR, exist_ok=True)
-    # Use _real_open so we don't recurse through our own hook.
-    with _real_open(log_file, "a", encoding="utf-8") as fh:
-        fh.write(entry + "\n")
+    if should_flush or any(flag in mode for flag in ("w", "a", "x", "+")):
+        _flush_to_actor()
 
 
 def _flush_to_actor() -> None:
-    if _BACKEND != "actor" or _actor is None:
+    if _actor is None:
         return
 
     with _buffer_lock:
@@ -246,14 +200,9 @@ def _flush_to_actor() -> None:
     try:
         _actor.append_batch.remote(batch)
     except Exception:
-        _write_batch_to_filesystem(batch)
-
-
-def _write_batch_to_filesystem(batch: list[dict[str, Any]]) -> None:
-    for payload in batch:
-        task_id = _to_text(payload.get("task_id"))
-        if task_id:
-            _write_to_file(task_id, payload)
+        # Keep buffered data for another flush attempt.
+        with _buffer_lock:
+            _event_buffer[0:0] = batch
 
 
 def _flush_worker_buffer() -> None:

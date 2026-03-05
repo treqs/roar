@@ -172,8 +172,6 @@ def _make_roar_runtime_env() -> dict:
         {
             "ROAR_WORKER": "1",
             "ROAR_JOB_ID": f"bench-{uuid.uuid4().hex[:8]}",
-            "ROAR_LOG_DIR": "/shared/.roar-logs",
-            "ROAR_LOG_BACKEND": "actor",
             "AWS_ENDPOINT_URL": MINIO_INTERNAL_ENDPOINT,
             "AWS_ACCESS_KEY_ID": MINIO_ACCESS_KEY,
             "AWS_SECRET_ACCESS_KEY": MINIO_SECRET_KEY,
@@ -181,7 +179,6 @@ def _make_roar_runtime_env() -> dict:
         }
     )
     runtime_env["env_vars"] = env_vars
-    runtime_env["worker_process_setup_hook"] = "roar.ray.worker.setup"
     return runtime_env
 
 

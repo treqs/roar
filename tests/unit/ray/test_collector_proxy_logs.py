@@ -19,44 +19,9 @@ def _init_db(project_dir: Path) -> Path:
     return db_path
 
 
-def test_merge_proxy_logs_parses_s3_lines_into_events() -> None:
-    task_events: dict[str, list[dict[str, object]]] = {}
-    proxy_logs = {
-        "node-abc": {
-            "node_id": "node-abc",
-            "proxy_log_lines": [
-                "ROAR_PROXY_READY port=12345",
-                "[S3:GetObject] s3://bucket/input.csv  etag=etag-in",
-                "[S3:PutObject] s3://bucket/output.csv  etag=etag-out",
-            ],
-        }
-    }
-
-    collector._merge_proxy_logs(task_events, proxy_logs)
-
-    assert set(task_events) == {"proxy-node-abc"}
-    events = task_events["proxy-node-abc"]
-    assert len(events) == 2
-
-    read_event, write_event = events
-    assert read_event["path"] == "s3://bucket/input.csv"
-    assert read_event["mode"] == "r"
-    assert read_event["capture_method"] == "proxy"
-    assert read_event["hash"] == "etag-in"
-    assert read_event["hash_algorithm"] == "etag"
-
-    assert write_event["path"] == "s3://bucket/output.csv"
-    assert write_event["mode"] == "w"
-    assert write_event["capture_method"] == "proxy"
-    assert write_event["hash"] == "etag-out"
-    assert write_event["hash_algorithm"] == "etag"
-
-
-def test_collect_records_hash_rows_from_fragment_events(tmp_path: Path, monkeypatch) -> None:
+def test_collect_records_hash_rows_from_fragments(tmp_path: Path) -> None:
     project_dir = tmp_path / "project"
     db_path = _init_db(project_dir)
-    log_dir = tmp_path / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
 
     fragment = TaskFragment(
         job_uid="abcd1234",
@@ -81,9 +46,7 @@ def test_collect_records_hash_rows_from_fragment_events(tmp_path: Path, monkeypa
         ],
     )
 
-    monkeypatch.setattr(collector, "_collect_actor_payload", lambda: ([], [fragment.to_dict()]))
-
-    collector.collect(project_dir=str(project_dir), log_dir=str(log_dir))
+    collector.collect(project_dir=str(project_dir), fragments=[fragment.to_dict()])
 
     conn = sqlite3.connect(db_path)
     hash_row = conn.execute(
@@ -108,3 +71,10 @@ def test_collect_records_hash_rows_from_fragment_events(tmp_path: Path, monkeypa
 
     assert hash_row == ("etag", "etag-final-123")
     assert output_row == ("s3://output-bucket/results/run-1/final_report.json",)
+
+
+def test_collect_noops_without_explicit_fragments(tmp_path: Path) -> None:
+    project_dir = tmp_path / "project"
+    _init_db(project_dir)
+
+    collector.collect(project_dir=str(project_dir), fragments=[])

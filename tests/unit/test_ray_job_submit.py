@@ -52,7 +52,7 @@ def test_ray_job_submit_injects_pip_with_installed_roar_cli_version(monkeypatch)
 
     runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["pip"] == ["roar-cli==9.9.9"]
-    assert runtime_env["py_executable"] == "roar-worker"
+    assert "py_executable" not in runtime_env
     assert runtime_env["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
     assert runtime_env["env_vars"]["ROAR_JOB_INSTRUMENTED"] == "1"
     assert rewritten.session_id is None

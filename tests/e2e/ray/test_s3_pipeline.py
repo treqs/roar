@@ -53,7 +53,7 @@ def reset_roar_state(ray_cluster):
             "ray-head",
             "bash",
             "-c",
-            "rm -rf /app/.roar /shared/.roar-logs && roar init --path /app -n",
+            "rm -rf /app/.roar && roar init --path /app -n",
         ],
         check=False,
         capture_output=True,
