@@ -45,7 +45,10 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
     if merged_pip or ("pip" in runtime_env and merged_pip is not None):
         runtime_env["pip"] = merged_pip
 
-    runtime_env["py_executable"] = _ROAR_WORKER_PY_EXECUTABLE
+    # py_executable is intentionally NOT set at job level — it would apply to the
+    # JobSupervisor/driver process which doesn't have roar installed yet (pip runs after
+    # the supervisor starts). worker_process_setup_hook is sufficient: it runs inside
+    # each worker process after the runtime env (and pip) is ready.
     runtime_env["worker_process_setup_hook"] = _ROAR_WORKER_SETUP_HOOK
 
     env_vars = dict(runtime_env.get("env_vars", {}) or {})
