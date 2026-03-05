@@ -27,6 +27,7 @@ def reset(ctx: RoarContext, yes: bool) -> None:
 
     Deactivates the current active session and creates a new one.
     The previous session data is preserved in the database.
+    Cached remote sessions (fetched from GLaaS) are cleared.
 
     \b
     Examples:
@@ -59,3 +60,8 @@ def reset(ctx: RoarContext, yes: bool) -> None:
 
             new_session_id = db_ctx.sessions.create(make_active=True)
             click.echo(f"Created new session {new_session_id}.")
+
+        # Clean up cached remote sessions
+        remote_deleted = db_ctx.sessions.delete_by_origin("remote")
+        if remote_deleted:
+            click.echo(f"Cleared {remote_deleted} cached remote session(s).")

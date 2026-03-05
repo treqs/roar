@@ -112,6 +112,10 @@ class Session(Base):
     git_commit_start: Mapped[str | None] = mapped_column(String)
     git_commit_end: Mapped[str | None] = mapped_column(String)
     synced_at: Mapped[float | None] = mapped_column(Float)
+    origin: Mapped[str] = mapped_column(
+        String, nullable=False, default="local", server_default=text("'local'")
+    )
+    fetched_at: Mapped[float | None] = mapped_column(Float)
     metadata_: Mapped[str | None] = mapped_column("metadata", Text)  # YAML content
 
     # Relationships
@@ -121,6 +125,7 @@ class Session(Base):
         Index("idx_sessions_hash", "hash"),
         Index("idx_sessions_source", "source_artifact_hash"),
         Index("idx_sessions_active", "is_active"),
+        Index("idx_sessions_origin", "origin"),
     )
 
 

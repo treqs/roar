@@ -217,12 +217,15 @@ CREATE TABLE IF NOT EXISTS sessions (
     git_commit_start TEXT,              -- First commit in session
     git_commit_end TEXT,                -- Last commit in session
     synced_at REAL,
+    origin TEXT NOT NULL DEFAULT 'local', -- 'local' | 'remote'
+    fetched_at REAL,                     -- When fetched from GLaaS (for GC)
     metadata TEXT                       -- YAML content for export/edit
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_hash ON sessions(hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source_artifact_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(is_active);
+CREATE INDEX IF NOT EXISTS idx_sessions_origin ON sessions(origin);
 
 -- =============================================================================
 -- HASH CACHE
@@ -272,6 +275,18 @@ def run_migrations(conn) -> None:
     output_columns = {row["name"] for row in cursor.fetchall()}
     if "byte_ranges" not in output_columns:
         conn.execute("ALTER TABLE job_outputs ADD COLUMN byte_ranges TEXT")
+
+    # Add origin and fetched_at columns to sessions table
+    sessions_table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'"
+    ).fetchone()
+    if sessions_table_exists:
+        cursor = conn.execute("PRAGMA table_info(sessions)")
+        session_columns = {row["name"] for row in cursor.fetchall()}
+        if "origin" not in session_columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
+        if "fetched_at" not in session_columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN fetched_at REAL")
 
     artifact_table_exists = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='artifacts'"

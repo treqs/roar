@@ -331,6 +331,12 @@ class ShowRenderer:
                     kind_name = component.get("leaf_kind", "file")
                     lines.append(f"    {rel} [{kind_name}] {digest}")
 
+        # Source annotation
+        if artifact.get("source_type"):
+            lines.append(f"\nSource: {artifact['source_type']}")
+            if artifact.get("source_url"):
+                lines.append(f"Source URL: {artifact['source_url']}")
+
         # Dataset label (from artifact metadata)
         raw_meta = artifact.get("metadata")
         if isinstance(raw_meta, str):
@@ -354,5 +360,94 @@ class ShowRenderer:
                     lines.append(f"  Split: {ds['split']}")
                 if ds.get("version_hint"):
                     lines.append(f"  Version: {ds['version_hint']}")
+
+        return "\n".join(lines)
+
+    def render_remote_artifact(self, artifact: dict) -> str:
+        """Render an artifact from a GLaaS API response.
+
+        The GLaaS API returns a different shape than the local DB.
+        Fields may include: hash, size, sourceType, sourceUrl, hashes,
+        createdAt, sessionHash, etc.
+
+        Args:
+            artifact: Artifact dict from GLaaS API.
+
+        Returns:
+            Formatted string for display.
+        """
+        lines: list[str] = []
+
+        lines.append("\n[remote] Artifact from GLaaS")
+
+        artifact_hash = artifact.get("hash", "?")
+        lines.append(f"Hash: {artifact_hash}")
+
+        size = artifact.get("size")
+        if size is not None:
+            lines.append(f"Size: {format_size(size)}")
+
+        source_type = artifact.get("sourceType") or artifact.get("source_type")
+        if source_type:
+            lines.append(f"Source: {source_type}")
+
+        source_url = artifact.get("sourceUrl") or artifact.get("source_url")
+        if source_url:
+            lines.append(f"Source URL: {source_url}")
+
+        session_hash = artifact.get("sessionHash") or artifact.get("session_hash")
+        if session_hash:
+            lines.append(f"Session: {session_hash}")
+
+        created_at = artifact.get("createdAt") or artifact.get("created_at")
+        if created_at:
+            if isinstance(created_at, (int, float)):
+                lines.append(f"Created: {format_timestamp(created_at)}")
+            else:
+                lines.append(f"Created: {created_at}")
+
+        hashes = artifact.get("hashes", [])
+        if hashes:
+            lines.append("\nHashes:")
+            for h in hashes:
+                algo = h.get("algorithm", "?")
+                digest = h.get("digest", "?")
+                lines.append(f"  {algo}: {digest}")
+
+        return "\n".join(lines)
+
+    def render_remote_dag(self, dag: dict) -> str:
+        """Render a DAG from a GLaaS API response.
+
+        Args:
+            dag: DAG dict from GLaaS get_artifact_dag endpoint.
+
+        Returns:
+            Formatted string for display.
+        """
+        lines: list[str] = []
+
+        git_repo = dag.get("gitRepo") or dag.get("git_repo")
+        git_commit = dag.get("gitCommit") or dag.get("git_commit")
+        jobs = dag.get("jobs", [])
+
+        lines.append(f"\n[remote] Pipeline ({len(jobs)} step(s))")
+        if git_repo:
+            lines.append(f"Git: {git_repo}")
+        if git_commit:
+            lines.append(f"Commit: {git_commit}")
+
+        if jobs:
+            lines.append("")
+            lines.append(f"{'STEP':<6}  {'TYPE':<6}  {'COMMAND'}")
+            lines.append("-" * 60)
+            for job in jobs:
+                step = job.get("stepNumber") or job.get("step_number", "?")
+                job_type = job.get("jobType") or job.get("job_type") or "run"
+                prefix = "@B" if job_type == "build" else "@"
+                command = job.get("command", "")
+                if len(command) > 50:
+                    command = command[:47] + "..."
+                lines.append(f"{prefix}{step:<5}  {job_type:<6}  {command}")
 
         return "\n".join(lines)

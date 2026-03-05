@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -192,11 +193,115 @@ def _show_artifact(db_ctx, artifact: dict) -> None:
     click.echo(renderer.render_artifact(artifact, locations, jobs, composite_summary, components))
 
 
+def _lookup_artifact_glaas(hash_prefix: str) -> dict | None:
+    """Fetch an artifact from GLaaS. Returns the raw API response dict or None."""
+    logger = _logger()
+    try:
+        from ...glaas_client import GlaasClient
+
+        glaas = GlaasClient()
+        if not glaas.is_configured():
+            return None
+        result = glaas.get_artifact(hash_prefix)
+        return result
+    except Exception as e:
+        if logger:
+            logger.debug("show: GLaaS artifact lookup failed for %s: %s", hash_prefix, e)
+        return None
+
+
+def _lookup_dag_glaas(hash_prefix: str) -> dict | None:
+    """Fetch a DAG from GLaaS for an artifact. Returns the raw API response dict or None."""
+    logger = _logger()
+    try:
+        from ...glaas_client import GlaasClient
+
+        glaas = GlaasClient()
+        if not glaas.is_configured():
+            return None
+        result, error = glaas.get_artifact_dag(hash_prefix)
+        if error:
+            if logger:
+                logger.debug("show: GLaaS DAG lookup failed for %s: %s", hash_prefix, error)
+            return None
+        return result
+    except Exception as e:
+        if logger:
+            logger.debug("show: GLaaS DAG lookup failed for %s: %s", hash_prefix, e)
+        return None
+
+
+def _show_remote_artifact(artifact: dict) -> None:
+    """Display a remote artifact from GLaaS API response."""
+    renderer = ShowRenderer()
+    click.echo(renderer.render_remote_artifact(artifact))
+
+
+def _show_remote_dag(dag: dict) -> None:
+    """Display a remote DAG from GLaaS API response."""
+    renderer = ShowRenderer()
+    click.echo(renderer.render_remote_dag(dag))
+
+
+def _cache_remote_session(db_ctx, dag: dict, artifact_hash: str) -> None:
+    """Cache a remote DAG as a session with origin='remote'."""
+    logger = _logger()
+    try:
+        from ...db.models import Job, Session
+
+        git_repo = dag.get("gitRepo")
+        git_commit = dag.get("gitCommit")
+        jobs = dag.get("jobs", [])
+
+        session_id = db_ctx.sessions.create(
+            source_artifact_hash=artifact_hash,
+            git_repo=git_repo,
+            git_commit=git_commit,
+            make_active=False,
+        )
+
+        # Mark the session as remote
+        sa_session = db_ctx.sessions._session
+        sess = sa_session.get(Session, session_id)
+        if sess:
+            sess.origin = "remote"
+            sess.fetched_at = time.time()
+            sa_session.flush()
+
+        for job_data in jobs:
+            step_num = job_data.get("stepNumber") or job_data.get("step_number", 1)
+            command = job_data.get("command", "")
+            job_type = job_data.get("jobType") or job_data.get("job_type")
+
+            job = Job(
+                timestamp=time.time(),
+                command=command,
+                session_id=session_id,
+                step_number=step_num,
+                git_repo=job_data.get("gitRepo") or job_data.get("git_repo") or git_repo,
+                git_commit=job_data.get("gitCommit") or job_data.get("git_commit") or git_commit,
+                status="pending",
+                job_type=job_type,
+            )
+            sa_session.add(job)
+
+        sa_session.flush()
+        if logger:
+            logger.debug("show: cached remote session %d with %d jobs", session_id, len(jobs))
+    except Exception as e:
+        if logger:
+            logger.debug("show: failed to cache remote session: %s", e)
+
+
 @click.command("show")
 @click.argument("ref", required=False)
+@click.option("-l", "--local", "source_filter", flag_value="local", help="Only show local results.")
+@click.option(
+    "-r", "--remote", "source_filter", flag_value="remote", help="Only show remote (GLaaS) results."
+)
 @click.pass_obj
 @require_init
-def show(ctx: RoarContext, ref: str | None) -> None:
+def show(ctx: RoarContext, ref: str | None, source_filter: str | None) -> None:
     """Show session, job, or artifact details.
 
     Without arguments, displays the active session and its jobs.
@@ -210,6 +315,11 @@ def show(ctx: RoarContext, ref: str | None) -> None:
       - File path: Artifact at that path (e.g., ./output/model.pkl)
 
     \b
+    Options:
+      -l, --local   Only show local results (skip GLaaS lookup)
+      -r, --remote  Only show remote (GLaaS) results
+
+    \b
     Examples:
         roar show                          # Show active session overview
         roar show @1                       # Show details for step 1
@@ -217,11 +327,12 @@ def show(ctx: RoarContext, ref: str | None) -> None:
         roar show a1b2c3d4                 # Show job by UID
         roar show a1b2c3d4e5f67890...      # Show artifact by hash
         roar show ./output/model.pkl       # Show artifact by path
+        roar show -r a1b2c3d4e5f67890...   # Show artifact from GLaaS only
     """
     bootstrap(ctx.roar_dir)
     logger = _logger()
     if logger:
-        logger.debug("show: entry with ref=%r", ref)
+        logger.debug("show: entry with ref=%r, source_filter=%r", ref, source_filter)
 
     with create_database_context(ctx.roar_dir) as db_ctx:
         if ref is None:
@@ -241,6 +352,22 @@ def show(ctx: RoarContext, ref: str | None) -> None:
         ref_type = _classify_ref(ref, ctx.cwd)
         if logger:
             logger.debug("show: ref_type=%r for ref=%r", ref_type, ref)
+
+        # For -r (remote only), skip local lookups entirely for hash-based refs
+        if source_filter == "remote":
+            if ref_type in ("artifact_hash", "job_uid"):
+                remote_artifact = _lookup_artifact_glaas(ref)
+                if remote_artifact:
+                    _show_remote_artifact(remote_artifact)
+                    dag = _lookup_dag_glaas(ref)
+                    if dag:
+                        _show_remote_dag(dag)
+                        _cache_remote_session(db_ctx, dag, ref)
+                    return
+                click.echo(f"Not found on GLaaS: {ref}")
+                return
+            click.echo(f"Remote lookup only supports hash references, got: {ref_type}")
+            return
 
         if ref_type == "job_step":
             if logger:
@@ -292,6 +419,12 @@ def show(ctx: RoarContext, ref: str | None) -> None:
             if logger:
                 logger.debug("show: job lookup by uid=%s", "found" if job else "not found")
             if not job:
+                # Fall through to GLaaS if not local-only
+                if source_filter != "local":
+                    remote_artifact = _lookup_artifact_glaas(ref)
+                    if remote_artifact:
+                        _show_remote_artifact(remote_artifact)
+                        return
                 click.echo(f"Job not found: {ref}")
                 return
             if logger:
@@ -307,9 +440,13 @@ def show(ctx: RoarContext, ref: str | None) -> None:
             job = db_ctx.jobs.get_by_uid(ref)
             if logger:
                 logger.debug("show: job lookup by uid=%s", "found" if job else "not found")
-            if job:
+            if job and source_filter != "local":
+                # With no filter, show job if found
                 if logger:
                     logger.debug("show: calling _show_job for job_uid=%s", job.get("job_uid"))
+                _show_job(db_ctx, job)
+                return
+            if job and source_filter == "local":
                 _show_job(db_ctx, job)
                 return
             if logger:
@@ -326,6 +463,19 @@ def show(ctx: RoarContext, ref: str | None) -> None:
                     )
                 _show_artifact(db_ctx, artifact)
                 return
+
+            # Fall through to GLaaS if not local-only
+            if source_filter != "local":
+                if logger:
+                    logger.debug("show: trying GLaaS lookup for ref=%r", ref)
+                remote_artifact = _lookup_artifact_glaas(ref)
+                if remote_artifact:
+                    _show_remote_artifact(remote_artifact)
+                    dag = _lookup_dag_glaas(ref)
+                    if dag:
+                        _show_remote_dag(dag)
+                        _cache_remote_session(db_ctx, dag, ref)
+                    return
             click.echo(f"Not found: {ref}")
 
         else:

@@ -584,6 +584,29 @@ class SQLAlchemySessionRepository(SessionRepository):
             "steps": [unique_steps[n] for n in sorted(unique_steps.keys())],
         }
 
+    def delete_by_origin(self, origin: str) -> int:
+        """
+        Delete all sessions with a given origin and their associated jobs.
+
+        Args:
+            origin: Origin value to match (e.g. 'remote')
+
+        Returns:
+            Number of sessions deleted.
+        """
+        sessions = (
+            self._session.execute(select(Session).where(Session.origin == origin)).scalars().all()
+        )
+        count = len(sessions)
+        for sess in sessions:
+            # Disassociate and delete jobs
+            self._session.execute(
+                delete(Job).where(Job.session_id == sess.id)
+            )
+            self._session.execute(delete(Session).where(Session.id == sess.id))
+        self._session.flush()
+        return count
+
     def _session_to_dict(self, session: Session) -> dict[str, Any]:
         """Convert Session model to dict."""
         return {
@@ -597,6 +620,8 @@ class SQLAlchemySessionRepository(SessionRepository):
             "git_commit_start": session.git_commit_start,
             "git_commit_end": session.git_commit_end,
             "synced_at": session.synced_at,
+            "origin": session.origin,
+            "fetched_at": session.fetched_at,
             "metadata": session.metadata_,
         }
 

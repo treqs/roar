@@ -6,6 +6,7 @@ Tests the CLI behavior with mocked dependencies:
 - Show artifact by file path
 - Reference type disambiguation
 - Edge cases
+- Remote (GLaaS) lookups with -l and -r flags
 """
 
 import sys
@@ -777,3 +778,186 @@ class TestShowEdgeCases:
         assert result.exit_code == 0
         assert "Kind: composite" in result.output
         assert "Composite details:" in result.output
+
+
+class TestShowRemoteLookup:
+    """Tests for -l (local only) and -r (remote only) flags and GLaaS fallback."""
+
+    @pytest.fixture
+    def runner(self):
+        return CliRunner()
+
+    @pytest.fixture
+    def mock_ctx(self, tmp_path):
+        ctx = MagicMock()
+        ctx.roar_dir = tmp_path / ".roar"
+        ctx.roar_dir.mkdir()
+        ctx.cwd = tmp_path
+        ctx.is_initialized = True
+        return ctx
+
+    def test_local_flag_skips_glaas_on_not_found(self, runner, mock_ctx):
+        """With -l, don't fall through to GLaaS when local lookup fails."""
+        long_hash = "a1b2c3d4e5f67890"
+
+        with patch.object(show_module, "create_database_context") as mock_db:
+            db_ctx = MagicMock()
+            mock_db.return_value.__enter__.return_value = db_ctx
+            db_ctx.jobs.get_by_uid.return_value = None
+            db_ctx.artifacts.get_by_hash.return_value = None
+
+            with patch.object(show_module, "_lookup_artifact_glaas") as mock_glaas:
+                result = runner.invoke(show, ["-l", long_hash], obj=mock_ctx)
+                mock_glaas.assert_not_called()
+
+        assert result.exit_code == 0
+        assert "Not found" in result.output
+
+    def test_remote_flag_fetches_from_glaas(self, runner, mock_ctx):
+        """With -r, skip local and go straight to GLaaS."""
+        long_hash = "a1b2c3d4e5f67890"
+
+        with patch.object(show_module, "create_database_context") as mock_db:
+            db_ctx = MagicMock()
+            mock_db.return_value.__enter__.return_value = db_ctx
+
+            with patch.object(show_module, "_lookup_artifact_glaas") as mock_glaas, \
+                 patch.object(show_module, "_lookup_dag_glaas") as mock_dag:
+                mock_glaas.return_value = {
+                    "hash": long_hash + "0" * 48,
+                    "size": 1024,
+                    "sourceType": "output",
+                    "hashes": [{"algorithm": "blake3", "digest": long_hash + "0" * 48}],
+                }
+                mock_dag.return_value = None
+
+                result = runner.invoke(show, ["-r", long_hash], obj=mock_ctx)
+
+                mock_glaas.assert_called_once_with(long_hash)
+                # Should NOT have queried local DB for artifact
+                db_ctx.artifacts.get_by_hash.assert_not_called()
+
+        assert result.exit_code == 0
+        assert "[remote]" in result.output
+        assert "GLaaS" in result.output
+
+    def test_remote_flag_not_found_on_glaas(self, runner, mock_ctx):
+        """With -r, shows not found if GLaaS has no result."""
+        long_hash = "deadbeef12345678"
+
+        with patch.object(show_module, "create_database_context") as mock_db:
+            db_ctx = MagicMock()
+            mock_db.return_value.__enter__.return_value = db_ctx
+
+            with patch.object(show_module, "_lookup_artifact_glaas") as mock_glaas:
+                mock_glaas.return_value = None
+                result = runner.invoke(show, ["-r", long_hash], obj=mock_ctx)
+
+        assert result.exit_code == 0
+        assert "Not found on GLaaS" in result.output
+
+    def test_remote_flag_rejects_non_hash_refs(self, runner, mock_ctx):
+        """With -r, step references and file paths are rejected."""
+        with patch.object(show_module, "create_database_context") as mock_db:
+            db_ctx = MagicMock()
+            mock_db.return_value.__enter__.return_value = db_ctx
+
+            result = runner.invoke(show, ["-r", "@1"], obj=mock_ctx)
+
+        assert result.exit_code == 0
+        assert "Remote lookup only supports hash references" in result.output
+
+    def test_default_falls_through_to_glaas(self, runner, mock_ctx):
+        """Without flags, falls through to GLaaS when local lookup fails."""
+        long_hash = "a1b2c3d4e5f67890"
+
+        with patch.object(show_module, "create_database_context") as mock_db:
+            db_ctx = MagicMock()
+            mock_db.return_value.__enter__.return_value = db_ctx
+            db_ctx.jobs.get_by_uid.return_value = None
+            db_ctx.artifacts.get_by_hash.return_value = None
+
+            with patch.object(show_module, "_lookup_artifact_glaas") as mock_glaas, \
+                 patch.object(show_module, "_lookup_dag_glaas") as mock_dag:
+                mock_glaas.return_value = {
+                    "hash": long_hash + "0" * 48,
+                    "size": 2048,
+                    "sourceType": "s3",
+                    "sessionHash": "sess123",
+                    "hashes": [{"algorithm": "blake3", "digest": long_hash + "0" * 48}],
+                }
+                mock_dag.return_value = {
+                    "gitRepo": "https://github.com/test/repo",
+                    "gitCommit": "abc123",
+                    "jobs": [
+                        {"stepNumber": 1, "command": "python train.py", "jobType": "run"},
+                    ],
+                }
+
+                result = runner.invoke(show, [long_hash], obj=mock_ctx)
+
+                mock_glaas.assert_called_once_with(long_hash)
+                mock_dag.assert_called_once_with(long_hash)
+
+        assert result.exit_code == 0
+        assert "[remote]" in result.output
+        assert "Pipeline" in result.output
+        assert "python train.py" in result.output
+
+    def test_remote_dag_display(self, runner, mock_ctx):
+        """Remote DAG display shows steps and git info."""
+        long_hash = "a1b2c3d4e5f67890"
+
+        with patch.object(show_module, "create_database_context") as mock_db:
+            db_ctx = MagicMock()
+            mock_db.return_value.__enter__.return_value = db_ctx
+
+            with patch.object(show_module, "_lookup_artifact_glaas") as mock_glaas, \
+                 patch.object(show_module, "_lookup_dag_glaas") as mock_dag:
+                mock_glaas.return_value = {
+                    "hash": long_hash + "0" * 48,
+                    "size": 512,
+                    "hashes": [],
+                }
+                mock_dag.return_value = {
+                    "gitRepo": "https://github.com/org/ml-project",
+                    "gitCommit": "deadbeef",
+                    "jobs": [
+                        {"stepNumber": 1, "command": "python preprocess.py", "jobType": "run"},
+                        {"stepNumber": 2, "command": "python train.py", "jobType": "run"},
+                        {"stepNumber": 1, "command": "make build", "jobType": "build"},
+                    ],
+                }
+
+                result = runner.invoke(show, ["-r", long_hash], obj=mock_ctx)
+
+        assert result.exit_code == 0
+        assert "3 step(s)" in result.output
+        assert "ml-project" in result.output
+        assert "deadbeef" in result.output
+        assert "@B" in result.output  # build step prefix
+
+    def test_remote_caches_session(self, runner, mock_ctx):
+        """GLaaS DAG lookup caches the result as a remote session."""
+        long_hash = "a1b2c3d4e5f67890"
+
+        with patch.object(show_module, "create_database_context") as mock_db:
+            db_ctx = MagicMock()
+            mock_db.return_value.__enter__.return_value = db_ctx
+            db_ctx.jobs.get_by_uid.return_value = None
+            db_ctx.artifacts.get_by_hash.return_value = None
+
+            with patch.object(show_module, "_lookup_artifact_glaas") as mock_glaas, \
+                 patch.object(show_module, "_lookup_dag_glaas") as mock_dag, \
+                 patch.object(show_module, "_cache_remote_session") as mock_cache:
+                mock_glaas.return_value = {"hash": long_hash + "0" * 48, "size": 100, "hashes": []}
+                mock_dag.return_value = {
+                    "gitRepo": "https://github.com/test/repo",
+                    "jobs": [{"stepNumber": 1, "command": "python train.py"}],
+                }
+
+                runner.invoke(show, [long_hash], obj=mock_ctx)
+
+                mock_cache.assert_called_once_with(
+                    db_ctx, mock_dag.return_value, long_hash
+                )
