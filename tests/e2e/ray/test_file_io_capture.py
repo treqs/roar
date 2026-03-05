@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.ray.conftest import submit_job_on_head
+from tests.e2e.ray.conftest import run_docker, submit_job_on_head
 
 COMPOSE_FILE = Path(__file__).resolve().parent / "docker-compose.yml"
 JOBS_DIR = "/app/tests/e2e/ray/jobs"
@@ -26,13 +26,12 @@ def _query_roar_db(compose_file, sql: str, params: tuple = ()) -> list[dict]:
     Run a query against .roar/roar.db inside the ray-head container
     by exporting it and reading locally.
     """
-    import subprocess
     import tempfile
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         tmp_path = tmp.name
 
-    subprocess.run(
+    run_docker(
         [
             "docker",
             "compose",
@@ -60,9 +59,7 @@ def _query_roar_db(compose_file, sql: str, params: tuple = ()) -> list[dict]:
 @pytest.fixture(autouse=True)
 def reset_roar_state(ray_cluster):
     """Reset roar state on the head node before each test."""
-    import subprocess
-
-    subprocess.run(
+    run_docker(
         [
             "docker",
             "compose",

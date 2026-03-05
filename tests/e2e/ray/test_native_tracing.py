@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from tests.e2e.ray.conftest import submit_job_on_head
+from tests.e2e.ray.conftest import run_docker, submit_job_on_head
 from tests.e2e.ray.test_file_io_capture import _query_roar_db
 
 COMPOSE_FILE = Path(__file__).resolve().parent / "docker-compose.yml"
@@ -18,7 +17,7 @@ JOBS_DIR = "/app/tests/e2e/ray/jobs"
 @pytest.fixture(autouse=True)
 def reset_roar_state(ray_cluster):
     """Reset roar state on the head node before each test."""
-    subprocess.run(
+    run_docker(
         [
             "docker",
             "compose",
