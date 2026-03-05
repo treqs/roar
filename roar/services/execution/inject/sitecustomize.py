@@ -340,12 +340,26 @@ def _ensure_collector_actor(ray_module, job_id: str) -> None:
     try:
         from roar.ray.actor import RoarLogCollectorActor
 
-        actor = RoarLogCollectorActor.options(
+        session_id = os.environ.get("ROAR_SESSION_ID")
+        fragment_token = os.environ.get("ROAR_FRAGMENT_TOKEN")
+        glaas_url = os.environ.get("GLAAS_URL") or os.environ.get("GLAAS_API_URL")
+
+        actor_options = RoarLogCollectorActor.options(
             name=actor_name,
             namespace="roar",
             lifetime="detached",
             num_cpus=0,
-        ).remote()
+        )
+
+        if session_id and fragment_token and glaas_url:
+            actor = actor_options.remote(
+                session_id=session_id,
+                token=fragment_token,
+                glaas_url=glaas_url,
+            )
+        else:
+            actor = actor_options.remote()
+
         get_fn = getattr(ray_module, "get", None)
         if callable(get_fn):
             get_all = getattr(actor, "get_all", None)

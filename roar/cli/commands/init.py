@@ -156,6 +156,33 @@ def _add_to_gitignore(gitignore_path: Path, gitignore_content: str) -> None:
         f.write(".roar/\n")
 
 
+def init_project(cwd: Path) -> Path:
+    """Create the minimal local roar project structure in ``cwd``."""
+    roar_dir = cwd / ".roar"
+    if roar_dir.exists():
+        return roar_dir
+
+    roar_dir.mkdir()
+
+    db_path = roar_dir / "roar.db"
+    engine = create_roar_engine(db_path)
+    init_database(engine)
+    engine.dispose()
+
+    raw_conn = _sqlite3.connect(str(db_path))
+    raw_conn.row_factory = _sqlite3.Row
+    try:
+        run_migrations(raw_conn)
+        raw_conn.commit()
+    finally:
+        raw_conn.close()
+
+    config_path = roar_dir / "config.toml"
+    config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
+
+    return roar_dir
+
+
 @click.command("init")
 @click.option(
     "--yes",
@@ -204,23 +231,10 @@ def init(ctx: RoarContext, yes: bool, no: bool, init_path: Path | None) -> None:
         click.echo(f".roar directory already exists at {roar_dir}")
         return
 
-    # Create .roar directory
-    roar_dir.mkdir()
-    click.echo(f"Created {roar_dir}")
+    init_project(cwd)
 
-    # Initialize the SQLite database and schema
-    db_path = roar_dir / "roar.db"
-    engine = create_roar_engine(db_path)
-    init_database(engine)
-    engine.dispose()
-    raw_conn = _sqlite3.connect(str(db_path))
-    raw_conn.row_factory = _sqlite3.Row
-    try:
-        run_migrations(raw_conn)
-        raw_conn.commit()
-    finally:
-        raw_conn.close()
-    click.echo(f"Initialized database at {db_path}")
+    click.echo(f"Created {roar_dir}")
+    click.echo(f"Initialized database at {roar_dir / 'roar.db'}")
 
     # Add privacy/data collection notice
     click.echo("")
@@ -228,10 +242,7 @@ def init(ctx: RoarContext, yes: bool, no: bool, init_path: Path | None) -> None:
     click.echo("It does not upload file contents to GLaaS.")
     click.echo("")
 
-    # Create default config.toml
-    config_path = roar_dir / "config.toml"
-    config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
-    click.echo(f"Created {config_path}")
+    click.echo(f"Created {roar_dir / 'config.toml'}")
 
     # Check if we're in a git repo
     if ctx.repo_root is None:

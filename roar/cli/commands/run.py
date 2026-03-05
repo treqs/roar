@@ -6,10 +6,14 @@ Usage: roar run [options] <command>
 """
 
 import shlex
+from pathlib import Path
 
 import click
 
 from ...core.tracer_modes import TRACER_MODE_VALUES
+from ...glaas_client import get_glaas_url
+from ...ray.fragment_key import load_key
+from ...ray.fragment_reconstituter import FragmentReconstituter
 from ..context import RoarContext
 from ..decorators import require_init
 from ._execution import (
@@ -18,6 +22,7 @@ from ._execution import (
     get_quiet_setting,
     validate_git_clean,
 )
+from ._ray_job_submit import maybe_rewrite_ray_job_submit
 
 
 @click.command(
@@ -126,6 +131,18 @@ def run(
             raise click.ClickException("No command specified")
         job_type = None
 
+    if (
+        len(command) >= 3
+        and Path(command[0]).name.lower() == "ray"
+        and command[1].lower() in {"job", "jobs"}
+        and command[2].lower() == "submit"
+    ):
+        rewritten = maybe_rewrite_ray_job_submit(command)
+        command = rewritten.command
+        session_id = rewritten.session_id
+    else:
+        session_id = None
+
     # Execute and report
     exit_code = execute_and_report(
         ctx=ctx,
@@ -138,6 +155,9 @@ def run(
         tracer_mode=tracer_mode,
         tracer_fallback=tracer_fallback,
     )
+
+    if session_id:
+        _maybe_reconstitute_lineage(ctx, session_id)
 
     if exit_code != 0:
         raise SystemExit(exit_code)
@@ -214,3 +234,39 @@ Hash algorithms: blake3 (default), sha256, sha512, md5
 Examples:
   roar run python train.py
   roar run @2 --epochs=10    # Re-run step 2 with parameter override"""
+
+
+def _maybe_reconstitute_lineage(ctx: RoarContext, session_id: str) -> None:
+    glaas_url = get_glaas_url()
+    if not glaas_url:
+        return
+
+    try:
+        key_payload = load_key(ctx.roar_dir, session_id)
+        token = key_payload.get("token")
+        if not isinstance(token, str) or not token:
+            raise ValueError("missing token in key payload")
+    except Exception as exc:
+        click.echo(
+            f"[roar] warning: failed to load fragment key for session {session_id}: {exc}",
+            err=True,
+        )
+        return
+
+    try:
+        result = FragmentReconstituter(
+            session_id=session_id,
+            token=token,
+            glaas_url=str(glaas_url),
+            roar_db_path=ctx.roar_dir / "roar.db",
+        ).reconstitute()
+    except Exception as exc:
+        click.echo(
+            f"[roar] warning: lineage reconstitution failed for session {session_id}: {exc}",
+            err=True,
+        )
+        return
+
+    click.echo(
+        f"[roar] lineage reconstituted: {result.jobs_merged} jobs, {result.artifacts_merged} artifacts"
+    )

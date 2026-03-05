@@ -10,6 +10,7 @@ Usage:
     from ._execution import validate_git_clean, get_quiet_setting, execute_and_report
 """
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -35,6 +36,8 @@ def validate_git_clean() -> str:
     """
     import subprocess
 
+    cwd = os.getcwd()
+
     # Find repo root (no bootstrap needed)
     try:
         repo_root = subprocess.check_output(
@@ -43,6 +46,10 @@ def validate_git_clean() -> str:
             text=True,
         ).strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
+        # Ray jobs run from extracted working dirs that are not git repos.
+        # Allow execution there while preserving git checks everywhere else.
+        if "RAY_JOB_CONFIG_JSON_ENV_VAR" in os.environ:
+            return cwd
         raise click.ClickException(
             "roar requires the working directory to be inside a git repository."
         ) from None

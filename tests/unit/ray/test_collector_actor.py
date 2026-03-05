@@ -20,13 +20,14 @@ class _FakeRemoteMethod:
 class _FakeActor:
     def __init__(self, events):
         self.get_all = _FakeRemoteMethod(events)
+        self.flush_to_glaas = _FakeRemoteMethod(True)
 
 
 class _FakeRayWithActor:
     def __init__(self, events):
         self.actor = _FakeActor(events)
         self.get_actor_calls: list[tuple[str, str | None]] = []
-        self.get_timeout: int | None = None
+        self.get_calls: list[tuple[object, int | None]] = []
         self.killed = False
 
     def is_initialized(self) -> bool:
@@ -37,7 +38,7 @@ class _FakeRayWithActor:
         return self.actor
 
     def get(self, value, timeout: int | None = None):
-        self.get_timeout = timeout
+        self.get_calls.append((value, timeout))
         return value
 
     def kill(self, actor) -> None:
@@ -70,7 +71,10 @@ def test_collect_events_prefers_actor_when_ray_is_initialized(
     assert set(events) == {"task-actor"}
     assert events["task-actor"][0]["path"] == "/tmp/actor.txt"
     assert fake_ray.get_actor_calls == [("roar-log-collector-job1234", "roar")]
-    assert fake_ray.get_timeout == 30
+    assert fake_ray.get_calls == [
+        ([{"task_id": "task-actor", "path": "/tmp/actor.txt", "mode": "w"}], 30),
+        (True, 5),
+    ]
     assert fake_ray.killed is True
 
 

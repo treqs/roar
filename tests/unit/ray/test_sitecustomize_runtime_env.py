@@ -192,6 +192,70 @@ def test_ensure_collector_actor_creates_named_actor_when_missing(
     assert fake_ray.get_calls == [("ready", 10)]
 
 
+def test_ensure_collector_actor_passes_fragment_streaming_args_when_env_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRay:
+        def __init__(self) -> None:
+            self.get_actor_calls: list[tuple[str, str | None]] = []
+            self.get_calls: list[tuple[object, int | None]] = []
+
+        def get_actor(self, name: str, namespace: str | None = None):
+            self.get_actor_calls.append((name, namespace))
+            raise ValueError("missing")
+
+        def get(self, value, timeout: int | None = None):
+            self.get_calls.append((value, timeout))
+            return value
+
+    created: dict[str, object] = {}
+    remote_kwargs: dict[str, object] = {}
+
+    class _FakeCollectorActor:
+        class _FakeRemoteMethod:
+            @staticmethod
+            def remote():
+                return "ready"
+
+        @classmethod
+        def options(cls, **kwargs):
+            created["options"] = kwargs
+
+            def _remote(**actor_kwargs):
+                remote_kwargs.update(actor_kwargs)
+                return SimpleNamespace(get_all=cls._FakeRemoteMethod())
+
+            return SimpleNamespace(remote=_remote)
+
+    fake_actor_module = ModuleType("roar.ray.actor")
+    fake_actor_module.RoarLogCollectorActor = _FakeCollectorActor
+    monkeypatch.setitem(
+        sys.modules,
+        "roar.ray.actor",
+        fake_actor_module,
+    )
+
+    monkeypatch.setenv("ROAR_SESSION_ID", "sess-123")
+    monkeypatch.setenv("ROAR_FRAGMENT_TOKEN", "ab" * 32)
+    monkeypatch.setenv("GLAAS_URL", "http://localhost:3001")
+
+    fake_ray = _FakeRay()
+    sitecustomize._ensure_collector_actor(fake_ray, "job1234")
+
+    assert created["options"] == {
+        "name": "roar-log-collector-job1234",
+        "namespace": "roar",
+        "lifetime": "detached",
+        "num_cpus": 0,
+    }
+    assert remote_kwargs == {
+        "session_id": "sess-123",
+        "token": "ab" * 32,
+        "glaas_url": "http://localhost:3001",
+    }
+    assert fake_ray.get_calls == [("ready", 10)]
+
+
 def test_patch_ray_init_starts_node_agent_spawn_in_background_thread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
