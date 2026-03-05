@@ -189,6 +189,12 @@ def _requirement_name(requirement: str) -> str:
 def _resolve_roar_requirement() -> str:
     import importlib.metadata as importlib_metadata
 
+    # Allow overriding the pip requirement — useful for testing unreleased wheels via S3 URL
+    # without a PyPI publish. Set ROAR_CLUSTER_PIP_REQ=https://... in the environment.
+    override = os.environ.get("ROAR_CLUSTER_PIP_REQ", "").strip()
+    if override:
+        return override
+
     try:
         version = importlib_metadata.version("roar-cli")
         return f"roar-cli=={version}"
