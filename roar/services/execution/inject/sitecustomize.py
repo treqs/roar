@@ -579,6 +579,17 @@ def _spawn_node_agents(ray_module, job_id: str) -> None:
             with _ray_node_agents_lock:
                 _ray_node_agents[node_id] = {"name": actor_name, "actor": agent}
 
+    # Wait for all agents to be ready (proxy listening) before returning.
+    with _ray_node_agents_lock:
+        agents_to_wait = list(_ray_node_agents.values())
+    for info in agents_to_wait:
+        agent = info.get("actor")
+        if agent is not None:
+            try:
+                ray_module.get(agent.get_proxy_port.remote(), timeout=15)
+            except Exception:
+                pass
+
 
 def _collect_node_agent_logs(ray_module) -> dict[str, dict]:
     with _ray_node_agents_lock:
