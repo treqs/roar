@@ -62,6 +62,15 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
 
     env_vars["ROAR_JOB_ID"] = _uuid.uuid4().hex[:8]
 
+    # Tell the job driver where roar.db lives (CWD inside the Ray job is the
+    # extracted working_dir, not the original project directory).
+    roar_dir = os.environ.get("ROAR_PROJECT_DIR", "")
+    if not roar_dir:
+        # Use CWD — `roar run` is invoked from the project root.
+        roar_dir = os.getcwd()
+    if roar_dir and os.path.isfile(os.path.join(roar_dir, ".roar", "roar.db")):
+        env_vars["ROAR_PROJECT_DIR"] = roar_dir
+
     # Route S3 traffic through the per-node proxy (port 19191) for I/O capture.
     # Save the REAL upstream endpoint (not the roar-run local proxy) so the
     # cluster-side proxy can forward to the actual S3 service.
