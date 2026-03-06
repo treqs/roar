@@ -568,6 +568,15 @@ def _patch_boto3() -> None:
         return _wrap_s3_client(client)
 
     boto3.client = _tracking_client
+    real_session_client = boto3.Session.client
+
+    def _tracking_session_client(self, service_name, *args, **kwargs):
+        client = real_session_client(self, service_name, *args, **kwargs)
+        if str(service_name).lower() != "s3":
+            return client
+        return _wrap_s3_client(client)
+
+    boto3.Session.client = _tracking_session_client
     boto3._roar_worker_boto3_patched = True
 
 

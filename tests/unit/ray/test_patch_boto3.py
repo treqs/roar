@@ -1,19 +1,3 @@
-# Fix plan (do not implement in this test-only iteration):
-# 1) `_patch_boto3()` should patch both `boto3.client` and `boto3.Session.client` so
-#    S3 clients created via either path are wrapped by `_wrap_s3_client`.
-# 2) Patch `boto3.Session.client` at the class level (once) rather than per-instance;
-#    this covers all session instances consistently and avoids missing late-created sessions.
-# 3) Edge cases:
-#    - Sessions created before patching: class-level method replacement should still affect them.
-#    - Sessions created after patching: should automatically inherit wrapped behavior.
-#    - `boto3.resource("s3")`: evaluate whether `resource.meta.client` usage must also be wrapped.
-#    - Thread safety: ensure method replacement is atomic enough for startup time and avoid
-#      partially patched states.
-#    - Re-entrancy: guard against double patching (`_roar_worker_boto3_patched`) and preserve
-#      original callables for idempotent behavior.
-# 4) Alternative approach: patch at botocore/client creation or event-hook layer so all S3
-#    clients/resources inherit tracking without multiple boto3 entrypoint patches.
-
 from __future__ import annotations
 
 import types
@@ -28,11 +12,18 @@ class _FakeS3Client:
         return {"ETag": '"fake-etag"'}
 
 
+class _FakeDynamoClient:
+    def put_item(self, *args, **kwargs):
+        del args, kwargs
+        return {"ConsumedCapacity": {"CapacityUnits": 1}}
+
+
 def _build_fake_boto3_module() -> types.SimpleNamespace:
     def _real_client(service_name: str, *args, **kwargs):
         del args, kwargs
-        assert str(service_name).lower() == "s3"
-        return _FakeS3Client()
+        if str(service_name).lower() == "s3":
+            return _FakeS3Client()
+        return _FakeDynamoClient()
 
     class Session:
         def client(self, service_name: str, *args, **kwargs):
@@ -67,14 +58,16 @@ def test_patch_boto3_wraps_module_level_client(_setup_worker_and_fake_boto3) -> 
     assert log_write.call_count == 1
 
 
-def test_patch_boto3_does_NOT_wrap_session_client(_setup_worker_and_fake_boto3) -> None:
+def test_patch_boto3_does_NOT_wrap_non_s3_session_client(
+    _setup_worker_and_fake_boto3,
+) -> None:
     roar_worker, boto3, log_write = _setup_worker_and_fake_boto3
 
     roar_worker._patch_boto3()
 
     session = boto3.Session()
-    s3 = session.client("s3")
-    s3.put_object(Bucket="demo-bucket", Key="demo.txt", Body=b"payload")
+    ddb = session.client("dynamodb")
+    ddb.put_item(TableName="demo-table", Item={"pk": {"S": "demo-key"}})
 
     log_write.assert_not_called()
 
