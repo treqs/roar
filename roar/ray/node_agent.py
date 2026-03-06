@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 import threading
@@ -64,6 +65,10 @@ class RoarNodeAgent:
 
         port = _find_free_port()
         cmd = [proxy_binary, "--port", str(port), "--job-id", self._job_id]
+
+        upstream = os.environ.get("ROAR_UPSTREAM_S3_ENDPOINT") or os.environ.get("AWS_ENDPOINT_URL")
+        if upstream:
+            cmd.extend(["--upstream", upstream])
 
         process = subprocess.Popen(
             cmd,
