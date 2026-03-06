@@ -873,7 +873,7 @@ def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
     if not parsed:
         return
 
-    # Emit parsed entries as GLaaS fragments so the host can reconstitute them.
+    # Try GLaaS fragment streaming first, fall back to direct DB write.
     session_id = os.environ.get("ROAR_SESSION_ID", "")
     fragment_token = os.environ.get("ROAR_FRAGMENT_TOKEN", "")
     glaas_url = (
@@ -882,27 +882,101 @@ def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
         or ""
     )
 
-    if not (session_id and fragment_token and glaas_url):
+    if session_id and fragment_token and glaas_url:
+        try:
+            from roar.ray.glaas_fragment_streamer import GlaasFragmentStreamer
+
+            streamer = GlaasFragmentStreamer(
+                session_id=session_id,
+                token=fragment_token,
+                glaas_url=glaas_url,
+            )
+            for kind, ref in parsed:
+                streamer.append_fragment({
+                    "kind": kind,
+                    "path": ref.path,
+                    "hash": ref.hash,
+                    "hash_algorithm": ref.hash_algorithm,
+                    "size": ref.size,
+                    "capture_method": ref.capture_method,
+                })
+            streamer.close()
+            return
+        except Exception:
+            pass
+
+    # Fallback: write directly to local roar.db (works when driver has project access).
+    _write_proxy_artifacts_to_db(parsed)
+
+
+def _write_proxy_artifacts_to_db(parsed: list) -> None:
+    """Write proxy-captured artifacts directly to roar.db."""
+    import sqlite3
+
+    project_dir = os.environ.get("ROAR_PROJECT_DIR", "")
+    if not project_dir:
+        # Try to find .roar in common locations.
+        for candidate in [os.getcwd(), os.environ.get("HOME", "")]:
+            if candidate and os.path.isfile(os.path.join(candidate, ".roar", "roar.db")):
+                project_dir = candidate
+                break
+    if not project_dir:
+        return
+
+    db_path = os.path.join(project_dir, ".roar", "roar.db")
+    if not os.path.isfile(db_path):
         return
 
     try:
-        from roar.ray.glaas_fragment_streamer import GlaasFragmentStreamer
+        import time as _time
 
-        streamer = GlaasFragmentStreamer(
-            session_id=session_id,
-            token=fragment_token,
-            glaas_url=glaas_url,
-        )
-        for kind, ref in parsed:
-            streamer.append_fragment({
-                "kind": kind,
-                "path": ref.path,
-                "hash": ref.hash,
-                "hash_algorithm": ref.hash_algorithm,
-                "size": ref.size,
-                "capture_method": ref.capture_method,
-            })
-        streamer.close()
+        conn = sqlite3.connect(db_path, timeout=10)
+        try:
+            # Discover available columns.
+            cursor = conn.execute("PRAGMA table_info(artifacts)")
+            columns = {row[1] for row in cursor.fetchall()}
+            now = _time.time()
+
+            for kind, ref in parsed:
+                artifact_id = uuid.uuid4().hex
+                fields = ["id", "size", "first_seen_at", "first_seen_path", "kind", "metadata"]
+                values: list = [artifact_id, ref.size or 0, now, ref.path, "primitive", "{}"]
+
+                if "path" in columns:
+                    fields.append("path")
+                    values.append(ref.path)
+                if "hash" in columns:
+                    fields.append("hash")
+                    values.append(ref.hash)
+                if "source_type" in columns:
+                    fields.append("source_type")
+                    values.append("s3" if ref.path.startswith("s3://") else None)
+                if "capture_method" in columns:
+                    fields.append("capture_method")
+                    values.append(ref.capture_method or "proxy")
+
+                placeholders = ", ".join("?" for _ in fields)
+                field_list = ", ".join(fields)
+                conn.execute(
+                    f"INSERT OR IGNORE INTO artifacts ({field_list}) VALUES ({placeholders})",
+                    values,
+                )
+
+                # Record hash if available.
+                if ref.hash and "artifact_hashes" in {
+                    row[0] for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO artifact_hashes (artifact_id, algorithm, digest) "
+                        "VALUES (?, ?, ?)",
+                        (artifact_id, ref.hash_algorithm or "etag", ref.hash),
+                    )
+
+            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         pass
 
