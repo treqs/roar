@@ -63,8 +63,13 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
     env_vars["ROAR_JOB_ID"] = _uuid.uuid4().hex[:8]
 
     # Route S3 traffic through the per-node proxy (port 19191) for I/O capture.
-    # Save the original endpoint so the proxy can forward to it.
-    original_endpoint = os.environ.get("AWS_ENDPOINT_URL", "")
+    # Save the REAL upstream endpoint (not the roar-run local proxy) so the
+    # cluster-side proxy can forward to the actual S3 service.
+    original_endpoint = (
+        os.environ.get("ROAR_UPSTREAM_S3_ENDPOINT")
+        or os.environ.get("AWS_ENDPOINT_URL")
+        or ""
+    )
     if original_endpoint:
         env_vars["ROAR_UPSTREAM_S3_ENDPOINT"] = original_endpoint
     env_vars["AWS_ENDPOINT_URL"] = "http://127.0.0.1:19191"
