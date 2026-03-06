@@ -380,7 +380,7 @@ def _submit_probe_job() -> int:
         payload.update(proxy_summary)
         payload.update(db_summary)
         payload["expected_s3_path"] = f"s3://{_TEST_BUCKET}/{key}"
-        payload["node_agents"] = node_agents
+        payload["node_agent_names"] = [info.get("name", "") for info in node_agents.values()]
         payload["probe_job_id"] = probe_job_id
         payload["run_id"] = run_id
         payload["workload"] = workload_payload
