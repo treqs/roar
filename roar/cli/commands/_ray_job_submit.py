@@ -57,6 +57,10 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
     env_vars[_ROAR_JOB_INSTRUMENTED_ENV_VAR] = "1"
     env_vars["ROAR_WRAP"] = "1"
     env_vars["ROAR_RAY_NODE_AGENTS"] = "1"
+    # Stable job_id shared by driver + workers for node agent name resolution.
+    import uuid as _uuid
+
+    env_vars["ROAR_JOB_ID"] = _uuid.uuid4().hex[:8]
     fragment_session_id: str | None = None
 
     glaas_url = _resolve_glaas_url()
