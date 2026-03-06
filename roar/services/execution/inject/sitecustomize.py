@@ -533,17 +533,10 @@ def _spawn_node_agents(ray_module, job_id: str) -> None:
     except Exception:
         return
 
-    _dbg = os.environ.get("ROAR_DEBUG_AGENTS", "")
     try:
         nodes = ray_module.nodes()
-    except Exception as exc:
-        if _dbg:
-            print(f"[roar-debug] ray.nodes() failed: {exc}", flush=True)
+    except Exception:
         return
-
-    if _dbg:
-        alive = [n for n in nodes if n.get("Alive")]
-        print(f"[roar-debug] _spawn_node_agents: {len(alive)} alive nodes, job_id={job_id}", flush=True)
 
     for node in nodes:
         if not isinstance(node, dict) or not node.get("Alive"):
@@ -589,19 +582,13 @@ def _spawn_node_agents(ray_module, job_id: str) -> None:
     # Wait for all agents to be ready (proxy listening) before returning.
     with _ray_node_agents_lock:
         agents_to_wait = list(_ray_node_agents.values())
-    _debug = os.environ.get("ROAR_DEBUG_AGENTS", "")
-    if _debug:
-        print(f"[roar-debug] Waiting for {len(agents_to_wait)} agents", flush=True)
     for info in agents_to_wait:
         agent = info.get("actor")
         if agent is not None:
             try:
-                port = ray_module.get(agent.get_proxy_port.remote(), timeout=15)
-                if _debug:
-                    print(f"[roar-debug] Agent {info.get('name')}: port={port}", flush=True)
-            except Exception as exc:
-                if _debug:
-                    print(f"[roar-debug] Agent {info.get('name')} wait FAILED: {exc}", flush=True)
+                ray_module.get(agent.get_proxy_port.remote(), timeout=15)
+            except Exception:
+                pass
 
 
 def _collect_node_agent_logs(ray_module) -> dict[str, dict]:

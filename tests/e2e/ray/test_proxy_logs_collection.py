@@ -69,7 +69,6 @@ def test_roar_run_ray_job_captures_s3_artifacts(ray_cluster: dict[str, str]) -> 
         "AWS_ACCESS_KEY_ID": "minioadmin",
         "AWS_SECRET_ACCESS_KEY": "minioadmin",
         "ROAR_CLUSTER_PIP_REQ": "skip",
-        "ROAR_DEBUG_AGENTS": "1",
     }
     stdout, stderr, rc = _exec_on_head(
         "roar run ray job submit"
