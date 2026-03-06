@@ -74,6 +74,12 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
         env_vars["ROAR_UPSTREAM_S3_ENDPOINT"] = original_endpoint
     env_vars["AWS_ENDPOINT_URL"] = "http://127.0.0.1:19191"
 
+    # Forward ROAR debug env vars to the job driver.
+    for _key in ("ROAR_DEBUG_AGENTS", "ROAR_LOG_LEVEL"):
+        _val = os.environ.get(_key, "")
+        if _val:
+            env_vars[_key] = _val
+
     fragment_session_id: str | None = None
 
     glaas_url = _resolve_glaas_url()
