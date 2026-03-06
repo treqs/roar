@@ -12,6 +12,7 @@ def _reset_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(roar_worker, "_current_task_id", None)
     monkeypatch.setattr(roar_worker, "_current_fragment", None)
+    monkeypatch.setattr(roar_worker, "_fragment_streamer", None)
     monkeypatch.setattr(roar_worker, "_startup_complete", False)
     monkeypatch.setattr(roar_worker, "_actor_attribution_mode", "per_call")
 
@@ -478,21 +479,13 @@ def test_run_worker_entrypoint_execs_python_for_worker_script(
     assert captured["argv"] == ["python3", "/tmp/default_worker.py", "--worker-type", "RAY_WORKER"]
 
 
-def test_finalise_fragment_emits_fragment_to_collector_actor(
+def test_finalise_fragment_emits_fragment_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import roar.ray.roar_worker as roar_worker
     from roar.ray.fragment import TaskFragment
 
     emitted: list[dict] = []
-
-    class _AppendFragment:
-        @staticmethod
-        def remote(payload: dict) -> None:
-            emitted.append(payload)
-
-    class _FakeActor:
-        append_fragment = _AppendFragment()
 
     fragment = TaskFragment(
         job_uid="abcd1234",
@@ -506,7 +499,11 @@ def test_finalise_fragment_emits_fragment_to_collector_actor(
         ended_at=1.0,
         exit_code=0,
     )
-    monkeypatch.setattr(roar_worker, "_collector_actor", _FakeActor())
+    monkeypatch.setattr(
+        roar_worker,
+        "_emit_fragment",
+        lambda payload: emitted.append(payload.to_dict()),
+    )
     monkeypatch.setattr(roar_worker.time, "time", lambda: 10.0)
 
     roar_worker._finalise_fragment(fragment)

@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 from roar.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
+from roar.ray.glaas_fragment_streamer import GlaasFragmentStreamer
 
 _real_open = builtins.open
 
@@ -24,9 +25,15 @@ else:
 
 _current_task_id: str | None = None
 _current_fragment: TaskFragment | None = None
-_collector_actor: Any = None
+_fragment_streamer: GlaasFragmentStreamer | None = None
 _startup_complete = False
 _actor_attribution_mode = "per_call"
+
+
+def _get_logger():
+    from roar.core.logging import get_logger
+
+    return get_logger()
 
 
 def _active_hash_algorithm() -> str:
@@ -488,39 +495,59 @@ def _wrap_s3_client(client):
     return client
 
 
-def _get_collector_actor():
-    global _collector_actor
+def _get_fragment_streamer() -> GlaasFragmentStreamer | None:
+    global _fragment_streamer
 
-    if _collector_actor is not None:
-        return _collector_actor
+    if _fragment_streamer is not None:
+        return _fragment_streamer
 
-    try:
-        import ray
-    except Exception:
-        _collector_actor = None
+    session_id = os.environ.get("ROAR_SESSION_ID")
+    token = os.environ.get("ROAR_FRAGMENT_TOKEN")
+    glaas_url = os.environ.get("GLAAS_URL") or os.environ.get("GLAAS_API_URL")
+    if not session_id or not token or not glaas_url:
         return None
 
-    actor_name = f"roar-log-collector-{os.environ.get('ROAR_JOB_ID', 'default')}"
     try:
-        _collector_actor = ray.get_actor(actor_name, namespace="roar")
-    except Exception:
-        _collector_actor = None
+        _fragment_streamer = GlaasFragmentStreamer(
+            session_id=session_id,
+            token=token,
+            glaas_url=glaas_url,
+        )
+    except Exception as exc:
+        _get_logger().warning(
+            "Failed to initialize Ray fragment streamer for session %s: %s",
+            session_id,
+            exc,
+        )
+        _fragment_streamer = None
 
-    return _collector_actor
+    return _fragment_streamer
 
 
 def _emit_fragment(fragment: TaskFragment) -> None:
-    actor = _get_collector_actor()
-    if actor is None:
+    streamer = _get_fragment_streamer()
+    if streamer is None:
         return
 
     try:
-        append_fragment = getattr(actor, "append_fragment", None)
-        remote = getattr(append_fragment, "remote", None) if append_fragment is not None else None
-        if callable(remote):
-            remote(fragment.to_dict())
-    except Exception:
-        pass
+        streamer.append_fragment(fragment.to_dict())
+    except Exception as exc:
+        _get_logger().warning("Failed to append Ray fragment: %s", exc)
+
+
+def _shutdown_streamer() -> None:
+    global _fragment_streamer
+
+    streamer = _fragment_streamer
+    if streamer is None:
+        return
+
+    try:
+        streamer.close()
+    except Exception as exc:
+        _get_logger().warning("Failed to close Ray fragment streamer: %s", exc)
+    finally:
+        _fragment_streamer = None
 
 
 def _patch_boto3() -> None:
@@ -587,6 +614,7 @@ def _startup() -> None:
     builtins.open = _tracking_open
     _patch_boto3()
     _patch_pandas_parquet()
+    atexit.register(_shutdown_streamer)
     atexit.register(_flush_current_fragment)
     _startup_complete = True
 
