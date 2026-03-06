@@ -100,7 +100,7 @@ class FragmentReconstituter:
             )
             return []
 
-        rows = payload.get("fragments")
+        rows = payload.get("data", {}).get("fragments", payload.get("fragments"))
         if not isinstance(rows, list):
             _get_logger().warning(
                 "Invalid fragment response for session %s: missing fragments list",
