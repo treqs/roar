@@ -790,6 +790,41 @@ def _configure_local_proxy_endpoint() -> None:
         _get_logger().warning("Failed to configure local proxy endpoint: %s", exc)
 
 
+def _configure_proxy_in_background() -> None:
+    """Start a daemon thread that configures the proxy endpoint after CoreWorker is ready.
+
+    ray.get_actor() segfaults if called before CoreWorker is initialized (happens
+    during worker_process_setup_hook). We wait until global_worker.connected is True
+    before attempting the GCS lookup.
+    """
+    import threading
+    import time
+
+    def _deferred_configure():
+        global _proxy_configured
+        try:
+            from ray._private.worker import global_worker
+        except Exception:
+            return
+
+        # Wait for CoreWorker to be ready (up to 10s).
+        for _ in range(100):
+            if getattr(global_worker, "connected", False):
+                break
+            time.sleep(0.1)
+        else:
+            return
+
+        try:
+            _configure_local_proxy_endpoint()
+            _proxy_configured = True
+        except Exception as exc:
+            _get_logger().warning("Deferred proxy config failed: %s", exc)
+
+    t = threading.Thread(target=_deferred_configure, daemon=True)
+    t.start()
+
+
 def _startup() -> None:
     global _startup_complete, _actor_attribution_mode
 
@@ -805,6 +840,11 @@ def _startup() -> None:
     _start_collector()
     atexit.register(_shutdown_collector)
     _startup_complete = True
+
+    # Configure proxy endpoint in a background thread — ray.get_actor() segfaults
+    # if called directly from worker_process_setup_hook (CoreWorker not ready).
+    # A short delay lets the worker finish initialization before we query GCS.
+    _configure_proxy_in_background()
 
 
 def _run_worker_entrypoint(argv: list[str]) -> None:
