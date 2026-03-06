@@ -57,6 +57,7 @@ else:
 _startup_complete = False
 _actor_attribution_mode = "per_call"
 _node_agent_handle: Any | None = None
+_proxy_configured = False
 _proxy_log_index = 0
 
 
@@ -669,6 +670,12 @@ class _TrackedWriteFile:
 
 
 def _tracking_open(*args, **kwargs):
+    global _proxy_configured
+
+    if _startup_complete and not _proxy_configured:
+        _proxy_configured = True
+        _configure_local_proxy_endpoint()
+
     handle = _real_open(*args, **kwargs)
 
     raw_path = args[0] if args else kwargs.get("file")
@@ -792,7 +799,6 @@ def _startup() -> None:
     _actor_attribution_mode = _get_actor_attribution()
     if "libroar_tracer_preload" in os.environ.get("LD_PRELOAD", ""):
         _start_native_tracer_socket()
-    _configure_local_proxy_endpoint()
     builtins.open = _tracking_open
     _patch_pandas_parquet()
     _patch_tempfile()
