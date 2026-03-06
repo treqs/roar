@@ -61,6 +61,7 @@ class FragmentReconstituter:
         if not fragments:
             return ReconstitutionResult()
 
+        fragments = self._deduplicate_fragments(fragments)
         jobs_before, artifacts_before = self._count_local_rows()
 
         try:
@@ -142,6 +143,67 @@ class FragmentReconstituter:
             return []
 
         return [item for item in decoded if isinstance(item, dict)]
+
+    @staticmethod
+    def _deduplicate_fragments(fragments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Deduplicate artifacts across capture methods within each task.
+
+        Priority: proxy > native > python.
+        For the same (task, path, kind) tuple, keep the highest-priority capture.
+        """
+        priority = {"proxy": 3, "native": 2, "python": 1, "tracer": 1}
+        winners: dict[tuple[str, str, str], tuple[int, dict[str, Any]]] = {}
+
+        for fragment_index, fragment in enumerate(fragments):
+            task_key = str(
+                fragment.get("job_uid")
+                or fragment.get("ray_task_id")
+                or f"fragment:{fragment_index}"
+            )
+            for list_key in ("reads", "writes"):
+                items = fragment.get(list_key, [])
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    path = item.get("path", "")
+                    if not isinstance(path, str) or not path:
+                        continue
+                    method = str(item.get("capture_method", "python"))
+                    current_priority = priority.get(method, 0)
+                    dedup_key = (task_key, list_key, path)
+                    existing = winners.get(dedup_key)
+                    if existing is None or current_priority > existing[0]:
+                        winners[dedup_key] = (current_priority, item)
+
+        for fragment_index, fragment in enumerate(fragments):
+            task_key = str(
+                fragment.get("job_uid")
+                or fragment.get("ray_task_id")
+                or f"fragment:{fragment_index}"
+            )
+            for list_key in ("reads", "writes"):
+                if list_key not in fragment:
+                    continue
+                items = fragment[list_key]
+                if not isinstance(items, list):
+                    continue
+
+                deduplicated_items: list[dict[str, Any]] = []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    path = item.get("path", "")
+                    if not isinstance(path, str) or not path:
+                        deduplicated_items.append(item)
+                        continue
+                    winner = winners.get((task_key, list_key, path))
+                    if winner is not None and item is winner[1]:
+                        deduplicated_items.append(item)
+                fragment[list_key] = deduplicated_items
+
+        return fragments
 
     @staticmethod
     def _sequence_key(batch: dict[str, Any]) -> int:

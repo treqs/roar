@@ -277,7 +277,14 @@ def _patch_ray_init(ray_module) -> None:
                 submitted_job_id = uuid.uuid4().hex[:8]
 
             result = _real_ray_init(*args, **kwargs)
-            _ensure_collector_actor(ray_module, str(submitted_job_id))
+            if _node_agents_enabled():
+                threading.Thread(
+                    target=_spawn_node_agents,
+                    args=(ray_module, str(submitted_job_id)),
+                    name="roar-ray-node-agent-bootstrap",
+                    daemon=True,
+                ).start()
+                _start_ray_node_poller(ray_module)
             return result
 
         runtime_env = dict(kwargs.pop("runtime_env", None) or {})
@@ -488,6 +495,8 @@ def _write_worker_wrapper(tmp_dir: str) -> None:
                 "#!/usr/bin/env bash\n"
                 'if [ -f "./libroar_tracer_preload.so" ]; then\n'
                 '    export LD_PRELOAD="$(pwd)/libroar_tracer_preload.so"\n'
+                '    SOCK_DIR=$(mktemp -d /tmp/roar-trace-XXXXXX)\n'
+                '    export ROAR_PRELOAD_TRACE_SOCK="$SOCK_DIR/trace.sock"\n'
                 "fi\n"
                 'exec python3 "$@"\n'
             )

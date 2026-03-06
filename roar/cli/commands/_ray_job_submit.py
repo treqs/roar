@@ -53,6 +53,8 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
 
     env_vars = dict(runtime_env.get("env_vars", {}) or {})
     env_vars[_ROAR_JOB_INSTRUMENTED_ENV_VAR] = "1"
+    env_vars["ROAR_WRAP"] = "1"
+    env_vars["ROAR_RAY_NODE_AGENTS"] = "1"
     fragment_session_id: str | None = None
 
     glaas_url = _resolve_glaas_url()

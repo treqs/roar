@@ -134,5 +134,17 @@ class RoarNodeAgent:
             "proxy_log_lines": log_lines,
         }
 
+    def get_log_entries_since(self, since_index: int) -> dict[str, Any]:
+        """Return proxy log entries added after since_index."""
+        with self._log_lock:
+            new_lines = self._proxy_log_lines[since_index:]
+            current_index = len(self._proxy_log_lines)
+        return {
+            "entries": new_lines,
+            "current_index": current_index,
+            "node_id": self._node_id,
+            "proxy_port": self._proxy_port,
+        }
+
     def shutdown(self) -> None:
         self._terminate_proxy()

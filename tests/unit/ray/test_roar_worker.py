@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import builtins
-import io
 
 import pytest
 
@@ -10,45 +9,55 @@ import pytest
 def _reset_state(monkeypatch: pytest.MonkeyPatch) -> None:
     import roar.ray.roar_worker as roar_worker
 
-    monkeypatch.setattr(roar_worker, "_current_task_id", None)
-    monkeypatch.setattr(roar_worker, "_current_fragment", None)
-    monkeypatch.setattr(roar_worker, "_fragment_streamer", None)
     monkeypatch.setattr(roar_worker, "_startup_complete", False)
     monkeypatch.setattr(roar_worker, "_actor_attribution_mode", "per_call")
+    # Drain any leftover events from previous tests
+    while not roar_worker._event_queue.empty():
+        try:
+            roar_worker._event_queue.get_nowait()
+        except Exception:
+            break
 
 
-def test_check_task_boundary_rotates_fragments_when_task_changes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_log_read_pushes_event_to_queue(monkeypatch: pytest.MonkeyPatch) -> None:
     import roar.ray.roar_worker as roar_worker
 
-    task_ids = iter(["task-1", "task-1", "task-2"])
-    monkeypatch.setattr(roar_worker, "_get_task_id", lambda: next(task_ids))
+    monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-1")
 
-    started: list[str] = []
-    finalised: list[str] = []
+    roar_worker._log_read(
+        path="/tmp/input.csv",
+        hash_value=None,
+        hash_algorithm="blake3",
+        size=0,
+        capture_method="python",
+    )
 
-    def _start_fragment(task_id: str):
-        started.append(task_id)
-        return {"task_id": task_id}
+    event = roar_worker._event_queue.get_nowait()
+    assert event.kind == "read"
+    assert event.task_id == "task-1"
+    assert event.path == "/tmp/input.csv"
+    assert event.capture_method == "python"
 
-    def _finalise_fragment(fragment: dict) -> None:
-        finalised.append(fragment["task_id"])
 
-    monkeypatch.setattr(roar_worker, "_start_fragment", _start_fragment)
-    monkeypatch.setattr(roar_worker, "_finalise_fragment", _finalise_fragment)
+def test_log_write_pushes_event_to_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    import roar.ray.roar_worker as roar_worker
 
-    roar_worker._check_task_boundary()
-    assert started == ["task-1"]
-    assert finalised == []
+    monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-2")
 
-    roar_worker._check_task_boundary()
-    assert started == ["task-1"]
-    assert finalised == []
+    roar_worker._log_write(
+        path="/tmp/output.bin",
+        hash_value="abc123",
+        hash_algorithm="blake3",
+        size=42,
+        capture_method="python",
+    )
 
-    roar_worker._check_task_boundary()
-    assert started == ["task-1", "task-2"]
-    assert finalised == ["task-1"]
+    event = roar_worker._event_queue.get_nowait()
+    assert event.kind == "write"
+    assert event.task_id == "task-2"
+    assert event.path == "/tmp/output.bin"
+    assert event.hash_value == "abc123"
+    assert event.size == 42
 
 
 def test_tracking_open_hashes_written_bytes_on_close(
@@ -58,25 +67,11 @@ def test_tracking_open_hashes_written_bytes_on_close(
     from blake3 import blake3
 
     import roar.ray.roar_worker as roar_worker
-    from roar.ray.fragment import TaskFragment
 
     output_path = tmp_path / "output.bin"
     payload = (b"checkpoint-data-" * 32) + b"end"
 
-    fragment = TaskFragment(
-        job_uid="abcd1234",
-        parent_job_uid="parent123",
-        ray_task_id="task-9",
-        ray_worker_id="worker-1",
-        ray_node_id="node-1",
-        ray_actor_id=None,
-        function_name="train",
-        started_at=1.0,
-        ended_at=1.0,
-        exit_code=0,
-    )
-    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
-    monkeypatch.setattr(roar_worker, "_check_task_boundary", lambda: None)
+    monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-9")
     monkeypatch.setattr(roar_worker, "_should_track_local_path", lambda _path: True)
 
     handle = roar_worker._tracking_open(output_path, "wb")
@@ -84,54 +79,13 @@ def test_tracking_open_hashes_written_bytes_on_close(
     handle.write(payload[100:])
     handle.close()
 
-    assert len(fragment.writes) == 1
-    write_ref = fragment.writes[0]
-    assert write_ref.path == str(output_path.resolve())
-    assert write_ref.hash_algorithm == "blake3"
-    assert write_ref.hash == blake3(payload).hexdigest()
-    assert write_ref.size == len(payload)
-
-
-def test_log_write_emits_fragment_snapshot_on_each_write(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import roar.ray.roar_worker as roar_worker
-    from roar.ray.fragment import TaskFragment
-
-    fragment = TaskFragment(
-        job_uid="emit1234",
-        parent_job_uid="parent123",
-        ray_task_id="task-9",
-        ray_worker_id="worker-1",
-        ray_node_id="node-1",
-        ray_actor_id=None,
-        function_name="train",
-        started_at=1.0,
-        ended_at=1.0,
-        exit_code=0,
-    )
-    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
-    monkeypatch.setattr(roar_worker.time, "time", lambda: 42.0)
-
-    emitted: list[dict] = []
-    monkeypatch.setattr(
-        roar_worker,
-        "_emit_fragment",
-        lambda value: emitted.append(value.to_dict()),
-    )
-
-    roar_worker._log_write(
-        path="/tmp/out.bin",
-        hash_value="abc123",
-        hash_algorithm="blake3",
-        size=3,
-        capture_method="python",
-    )
-
-    assert emitted
-    assert emitted[0]["job_uid"] == "emit1234"
-    assert emitted[0]["writes"][0]["path"] == "/tmp/out.bin"
-    assert fragment.ended_at == 42.0
+    # Write event should be in the queue
+    event = roar_worker._event_queue.get_nowait()
+    assert event.kind == "write"
+    assert event.path == str(output_path.resolve())
+    assert event.hash_algorithm == "blake3"
+    assert event.hash_value == blake3(payload).hexdigest()
+    assert event.size == len(payload)
 
 
 def test_get_task_and_actor_id_do_not_import_ray_during_startup(
@@ -150,197 +104,9 @@ def test_get_task_and_actor_id_do_not_import_ray_during_startup(
 
     monkeypatch.setattr(builtins, "__import__", _guard_import)
 
-    assert roar_worker._get_task_id() is None
+    # _get_current_task_id calls _get_task_id internally
+    assert roar_worker._get_current_task_id() == ""
     assert roar_worker._get_actor_id() is None
-
-
-def test_wrap_s3_client_logs_etag_on_put_object(monkeypatch: pytest.MonkeyPatch) -> None:
-    import roar.ray.roar_worker as roar_worker
-    from roar.ray.fragment import TaskFragment
-
-    fragment = TaskFragment(
-        job_uid="abcd1234",
-        parent_job_uid="parent123",
-        ray_task_id="task-9",
-        ray_worker_id="worker-1",
-        ray_node_id="node-1",
-        ray_actor_id=None,
-        function_name="train",
-        started_at=1.0,
-        ended_at=1.0,
-        exit_code=0,
-    )
-    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
-    monkeypatch.setattr(roar_worker, "_check_task_boundary", lambda: None)
-
-    class _FakeS3Client:
-        @staticmethod
-        def put_object(*args, **kwargs):
-            del args, kwargs
-            return {"ETag": '"etag-value-123"'}
-
-    wrapped = roar_worker._wrap_s3_client(_FakeS3Client())
-    wrapped.put_object(Bucket="demo-bucket", Key="path/to/object.bin", Body=b"payload")
-
-    assert len(fragment.writes) == 1
-    write_ref = fragment.writes[0]
-    assert write_ref.path == "s3://demo-bucket/path/to/object.bin"
-    assert write_ref.hash_algorithm == "etag"
-    assert write_ref.hash == "etag-value-123"
-    assert write_ref.size == len(b"payload")
-    assert write_ref.capture_method == "proxy"
-
-
-def test_wrap_s3_client_put_object_uses_size_for_empty_bytes_body(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import roar.ray.roar_worker as roar_worker
-    from roar.ray.fragment import TaskFragment
-
-    fragment = TaskFragment(
-        job_uid="abcd1234",
-        parent_job_uid="parent123",
-        ray_task_id="task-9",
-        ray_worker_id="worker-1",
-        ray_node_id="node-1",
-        ray_actor_id=None,
-        function_name="train",
-        started_at=1.0,
-        ended_at=1.0,
-        exit_code=0,
-    )
-    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
-    monkeypatch.setattr(roar_worker, "_check_task_boundary", lambda: None)
-
-    class _FakeS3Client:
-        @staticmethod
-        def put_object(*args, **kwargs):
-            del args, kwargs
-            return {"ETag": '"etag-value-123"'}
-
-    wrapped = roar_worker._wrap_s3_client(_FakeS3Client())
-    wrapped.put_object(Bucket="demo-bucket", Key="path/to/object.bin", Body=b"")
-
-    assert len(fragment.writes) == 1
-    assert fragment.writes[0].size == 0
-
-
-def test_wrap_s3_client_put_object_uses_size_for_seekable_body(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import roar.ray.roar_worker as roar_worker
-    from roar.ray.fragment import TaskFragment
-
-    fragment = TaskFragment(
-        job_uid="abcd1234",
-        parent_job_uid="parent123",
-        ray_task_id="task-9",
-        ray_worker_id="worker-1",
-        ray_node_id="node-1",
-        ray_actor_id=None,
-        function_name="train",
-        started_at=1.0,
-        ended_at=1.0,
-        exit_code=0,
-    )
-    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
-    monkeypatch.setattr(roar_worker, "_check_task_boundary", lambda: None)
-
-    class _FakeS3Client:
-        @staticmethod
-        def put_object(*args, **kwargs):
-            del args, kwargs
-            return {"ETag": '"etag-value-123"'}
-
-    body = io.BytesIO(b"hello world")
-    wrapped = roar_worker._wrap_s3_client(_FakeS3Client())
-    wrapped.put_object(Bucket="demo-bucket", Key="path/to/object.bin", Body=body)
-
-    assert len(fragment.writes) == 1
-    assert fragment.writes[0].size == 11
-    assert body.tell() == 0
-
-
-def test_wrap_s3_client_upload_file_uses_local_file_size(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    import roar.ray.roar_worker as roar_worker
-    from roar.ray.fragment import TaskFragment
-
-    fragment = TaskFragment(
-        job_uid="abcd1234",
-        parent_job_uid="parent123",
-        ray_task_id="task-9",
-        ray_worker_id="worker-1",
-        ray_node_id="node-1",
-        ray_actor_id=None,
-        function_name="train",
-        started_at=1.0,
-        ended_at=1.0,
-        exit_code=0,
-    )
-    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
-    monkeypatch.setattr(roar_worker, "_check_task_boundary", lambda: None)
-
-    payload = b"upload-file-payload"
-    local_file = tmp_path / "upload.bin"
-    local_file.write_bytes(payload)
-
-    class _FakeS3Client:
-        @staticmethod
-        def upload_file(*args, **kwargs):
-            del args, kwargs
-            return None
-
-    wrapped = roar_worker._wrap_s3_client(_FakeS3Client())
-    wrapped.upload_file(str(local_file), "demo-bucket", "path/to/object.bin")
-
-    assert len(fragment.writes) == 1
-    write_ref = fragment.writes[0]
-    assert write_ref.path == "s3://demo-bucket/path/to/object.bin"
-    assert write_ref.size == len(payload)
-    assert write_ref.capture_method == "proxy"
-
-
-def test_wrap_s3_client_logs_etag_on_get_object(monkeypatch: pytest.MonkeyPatch) -> None:
-    import roar.ray.roar_worker as roar_worker
-    from roar.ray.fragment import TaskFragment
-
-    fragment = TaskFragment(
-        job_uid="abcd1234",
-        parent_job_uid="parent123",
-        ray_task_id="task-9",
-        ray_worker_id="worker-1",
-        ray_node_id="node-1",
-        ray_actor_id=None,
-        function_name="train",
-        started_at=1.0,
-        ended_at=1.0,
-        exit_code=0,
-    )
-    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
-    monkeypatch.setattr(roar_worker, "_check_task_boundary", lambda: None)
-
-    class _FakeS3Client:
-        @staticmethod
-        def get_object(*args, **kwargs):
-            del args, kwargs
-            return {
-                "ETag": '"etag-read-123"',
-                "ContentLength": 4,
-                "Body": io.BytesIO(b"data"),
-            }
-
-    wrapped = roar_worker._wrap_s3_client(_FakeS3Client())
-    wrapped.get_object(Bucket="demo-bucket", Key="path/to/object.bin")
-
-    assert len(fragment.reads) == 1
-    read_ref = fragment.reads[0]
-    assert read_ref.path == "s3://demo-bucket/path/to/object.bin"
-    assert read_ref.hash_algorithm == "etag"
-    assert read_ref.hash == "etag-read-123"
-    assert read_ref.capture_method == "proxy"
 
 
 def test_start_fragment_uses_task_function_name(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -353,64 +119,37 @@ def test_start_fragment_uses_task_function_name(monkeypatch: pytest.MonkeyPatch)
     assert fragment.function_name == "ingest_shard"
 
 
-def test_actor_attribution_per_call_uses_task_boundaries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_parse_proxy_log_lines_extracts_s3_ops() -> None:
     import roar.ray.roar_worker as roar_worker
 
-    task_ids = iter(["task-1", "task-2"])
-    monkeypatch.setattr(roar_worker, "_get_task_id", lambda: next(task_ids))
-    monkeypatch.setattr(roar_worker, "_get_actor_id", lambda: "actor-1")
-    monkeypatch.setattr(roar_worker, "_actor_attribution_mode", "per_call")
+    lines = [
+        '[S3:PutObject] s3://test-bucket/data/file.csv  (1234 bytes)  etag="abc123"',
+        '[S3:GetObject] s3://test-bucket/data/file.csv  (5678 bytes)  etag="def456"',
+        "[S3:HeadObject] s3://test-bucket/data/file.csv",
+        "[S3:CreateMultipartUpload] s3://test-bucket/big/file.bin",
+        "some non-matching line",
+    ]
 
-    started: list[str] = []
-    finalised: list[str] = []
+    results = roar_worker._parse_proxy_log_lines(lines)
 
-    def _start_fragment(boundary_id: str):
-        started.append(boundary_id)
-        return {"boundary_id": boundary_id}
+    assert len(results) == 3  # CreateMultipartUpload and non-matching skipped
 
-    def _finalise_fragment(fragment: dict) -> None:
-        finalised.append(fragment["boundary_id"])
+    kind0, ref0 = results[0]
+    assert kind0 == "write"
+    assert ref0.path == "s3://test-bucket/data/file.csv"
+    assert ref0.size == 1234
+    assert ref0.hash == "abc123"
+    assert ref0.capture_method == "proxy"
 
-    monkeypatch.setattr(roar_worker, "_start_fragment", _start_fragment)
-    monkeypatch.setattr(roar_worker, "_finalise_fragment", _finalise_fragment)
+    kind1, ref1 = results[1]
+    assert kind1 == "read"
+    assert ref1.path == "s3://test-bucket/data/file.csv"
+    assert ref1.size == 5678
 
-    roar_worker._check_task_boundary()
-    roar_worker._check_task_boundary()
-
-    assert started == ["task-1", "task-2"]
-    assert finalised == ["task-1"]
-
-
-def test_actor_attribution_per_actor_groups_calls_under_actor(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import roar.ray.roar_worker as roar_worker
-
-    task_ids = iter(["task-1", "task-2"])
-    monkeypatch.setattr(roar_worker, "_get_task_id", lambda: next(task_ids))
-    monkeypatch.setattr(roar_worker, "_get_actor_id", lambda: "actor-1")
-    monkeypatch.setattr(roar_worker, "_actor_attribution_mode", "per_actor")
-
-    started: list[str] = []
-    finalised: list[str] = []
-
-    def _start_fragment(boundary_id: str):
-        started.append(boundary_id)
-        return {"boundary_id": boundary_id}
-
-    def _finalise_fragment(fragment: dict) -> None:
-        finalised.append(fragment["boundary_id"])
-
-    monkeypatch.setattr(roar_worker, "_start_fragment", _start_fragment)
-    monkeypatch.setattr(roar_worker, "_finalise_fragment", _finalise_fragment)
-
-    roar_worker._check_task_boundary()
-    roar_worker._check_task_boundary()
-
-    assert started == ["actor-1"]
-    assert finalised == []
+    kind2, ref2 = results[2]
+    assert kind2 == "read"
+    assert ref2.path == "s3://test-bucket/data/file.csv"
+    assert ref2.size == 0  # HeadObject has no size
 
 
 def test_main_calls_startup_and_runs_worker_entrypoint(
@@ -477,72 +216,3 @@ def test_run_worker_entrypoint_execs_python_for_worker_script(
 
     assert captured["program"] == "python3"
     assert captured["argv"] == ["python3", "/tmp/default_worker.py", "--worker-type", "RAY_WORKER"]
-
-
-def test_finalise_fragment_emits_fragment_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import roar.ray.roar_worker as roar_worker
-    from roar.ray.fragment import TaskFragment
-
-    emitted: list[dict] = []
-
-    fragment = TaskFragment(
-        job_uid="abcd1234",
-        parent_job_uid="parent123",
-        ray_task_id="task-9",
-        ray_worker_id="worker-1",
-        ray_node_id="node-1",
-        ray_actor_id=None,
-        function_name="train",
-        started_at=1.0,
-        ended_at=1.0,
-        exit_code=0,
-    )
-    monkeypatch.setattr(
-        roar_worker,
-        "_emit_fragment",
-        lambda payload: emitted.append(payload.to_dict()),
-    )
-    monkeypatch.setattr(roar_worker.time, "time", lambda: 10.0)
-
-    roar_worker._finalise_fragment(fragment)
-
-    assert emitted
-    assert emitted[0]["job_uid"] == "abcd1234"
-    assert emitted[0]["ended_at"] == 10.0
-
-
-def test_flush_current_fragment_finalises_last_task_fragment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import roar.ray.roar_worker as roar_worker
-    from roar.ray.fragment import TaskFragment
-
-    fragment = TaskFragment(
-        job_uid="flush1234",
-        parent_job_uid="parent123",
-        ray_task_id="task-9",
-        ray_worker_id="worker-1",
-        ray_node_id="node-1",
-        ray_actor_id=None,
-        function_name="train",
-        started_at=1.0,
-        ended_at=1.0,
-        exit_code=0,
-    )
-    monkeypatch.setattr(roar_worker, "_current_fragment", fragment)
-    monkeypatch.setattr(roar_worker, "_current_task_id", "task-9")
-
-    finalised: list[str] = []
-    monkeypatch.setattr(
-        roar_worker,
-        "_finalise_fragment",
-        lambda value: finalised.append(value.job_uid),
-    )
-
-    roar_worker._flush_current_fragment()
-
-    assert finalised == ["flush1234"]
-    assert roar_worker._current_fragment is None
-    assert roar_worker._current_task_id is None

@@ -166,7 +166,11 @@ def test_no_glaas_url_configured_only_instrumentation_env_var_is_injected(monkey
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
     runtime_env = _runtime_env_json(rewritten.command)
-    assert runtime_env["env_vars"] == {"ROAR_JOB_INSTRUMENTED": "1"}
+    assert runtime_env["env_vars"] == {
+        "ROAR_JOB_INSTRUMENTED": "1",
+        "ROAR_WRAP": "1",
+        "ROAR_RAY_NODE_AGENTS": "1",
+    }
     assert rewritten.session_id is None
 
 
