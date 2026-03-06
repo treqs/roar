@@ -14,4 +14,5 @@ RUN pip install --no-cache-dir \
     pydantic==2.12.5 \
     pydantic-settings==2.12.0 \
     boto3 pyarrow pandas pytest pytest-timeout minio \
-    && pip install --no-cache-dir -e .
+    && pip install --no-cache-dir -e . \
+    && cp /app/roar_inject.pth "$(python -c 'import site; print(site.getsitepackages()[0])')/"
