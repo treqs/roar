@@ -270,12 +270,13 @@ def _patch_ray_init(ray_module) -> None:
             # so both the driver and all workers see the same value.
             submitted_job_id = os.environ.get("ROAR_JOB_ID") or uuid.uuid4().hex[:8]
             if _node_agents_enabled():
-                threading.Thread(
-                    target=_spawn_node_agents,
-                    args=(ray_module, str(submitted_job_id)),
-                    name="roar-ray-node-agent-bootstrap",
-                    daemon=True,
-                ).start()
+                # Spawn node agents synchronously so proxies are ready before
+                # any tasks execute. Workers connect to the proxy via the
+                # well-known port injected in AWS_ENDPOINT_URL.
+                try:
+                    _spawn_node_agents(ray_module, str(submitted_job_id))
+                except Exception:
+                    pass
                 _start_ray_node_poller(ray_module)
             return result
 
