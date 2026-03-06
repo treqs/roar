@@ -264,19 +264,17 @@ def _patch_ray_init(ray_module) -> None:
             return _real_ray_init(*args, **kwargs)
 
         if os.environ.get("ROAR_JOB_INSTRUMENTED") == "1":
-            submitted_runtime_env = kwargs.get("runtime_env")
-            submitted_env_vars = {}
-            if isinstance(submitted_runtime_env, dict):
-                submitted_env_vars = dict(submitted_runtime_env.get("env_vars", {}) or {})
-            submitted_job_id = (
-                os.environ.get("ROAR_JOB_ID")
-                or submitted_env_vars.get("ROAR_JOB_ID")
-                or os.environ.get("RAY_JOB_ID")
-            )
-            if not submitted_job_id:
-                submitted_job_id = uuid.uuid4().hex[:8]
-
             result = _real_ray_init(*args, **kwargs)
+
+            # Use Ray's runtime job_id as the canonical identifier — workers see the
+            # same value via RAY_JOB_ID env var, ensuring node agent name resolution.
+            submitted_job_id = os.environ.get("RAY_JOB_ID") or os.environ.get("ROAR_JOB_ID")
+            if not submitted_job_id:
+                try:
+                    submitted_job_id = str(ray_module.get_runtime_context().get_job_id())
+                except Exception:
+                    submitted_job_id = uuid.uuid4().hex[:8]
+            os.environ.setdefault("ROAR_JOB_ID", str(submitted_job_id))
             if _node_agents_enabled():
                 threading.Thread(
                     target=_spawn_node_agents,
