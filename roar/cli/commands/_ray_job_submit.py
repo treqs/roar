@@ -42,8 +42,10 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
         return RayJobSubmitRewrite(command=command)
 
     merged_pip = _merge_roar_runtime_env_pip(runtime_env.get("pip"))
-    if merged_pip or ("pip" in runtime_env and merged_pip is not None):
+    if merged_pip:
         runtime_env["pip"] = merged_pip
+    else:
+        runtime_env.pop("pip", None)
 
     # py_executable is intentionally NOT set at job level — it would apply to the
     # JobSupervisor/driver process which doesn't have roar installed yet (pip runs after
@@ -157,8 +159,10 @@ def _merge_roar_runtime_env_pip(existing_pip: object) -> list[str] | None:
         for dependency in dependencies
         if _requirement_name(dependency) not in {"roar-cli", "roar"}
     ]
-    dependencies.append(roar_req)
-    return dependencies
+    # "skip" means roar is already installed on workers (e.g. Docker image with editable install).
+    if roar_req != "skip":
+        dependencies.append(roar_req)
+    return dependencies if dependencies else None
 
 
 def _coerce_runtime_env_pip(value: object) -> list[str]:

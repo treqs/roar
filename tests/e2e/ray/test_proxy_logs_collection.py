@@ -61,11 +61,14 @@ def test_roar_run_ray_job_captures_s3_artifacts(ray_cluster: dict[str, str]) -> 
     )
     assert rc == 0, f"roar init failed:\n{stdout}\n{stderr}"
 
-    # Run the job via the real production path
+    # Run the job via the real production path.
+    # ROAR_CLUSTER_PIP_REQ=skip prevents runtime_env from installing roar-cli from PyPI,
+    # so workers use the local code already installed in the Docker image.
     env = {
         "AWS_ENDPOINT_URL": "http://minio:9000",
         "AWS_ACCESS_KEY_ID": "minioadmin",
         "AWS_SECRET_ACCESS_KEY": "minioadmin",
+        "ROAR_CLUSTER_PIP_REQ": "skip",
     }
     stdout, stderr, rc = _exec_on_head(
         "roar run ray job submit"
