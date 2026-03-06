@@ -791,11 +791,11 @@ def _configure_local_proxy_endpoint() -> None:
 
 
 def _configure_proxy_in_background() -> None:
-    """Start a daemon thread that configures the proxy endpoint after CoreWorker is ready.
+    """Configure proxy endpoint with retries, waiting for node agent to be ready.
 
-    ray.get_actor() segfaults if called before CoreWorker is initialized (happens
-    during worker_process_setup_hook). We wait until global_worker.connected is True
-    before attempting the GCS lookup.
+    Runs in a daemon thread but blocks task execution via _tracking_open's
+    synchronous fallback. Retries handle the race where node agents haven't
+    been fully spawned by the driver yet.
     """
     import threading
     import time
@@ -815,11 +815,14 @@ def _configure_proxy_in_background() -> None:
         else:
             return
 
-        try:
-            _configure_local_proxy_endpoint()
-            _proxy_configured = True
-        except Exception as exc:
-            _get_logger().warning("Deferred proxy config failed: %s", exc)
+        # Retry with backoff — node agents may not be spawned yet.
+        for attempt in range(10):
+            try:
+                _configure_local_proxy_endpoint()
+                _proxy_configured = True
+                return
+            except Exception:
+                time.sleep(0.5 * (attempt + 1))
 
     t = threading.Thread(target=_deferred_configure, daemon=True)
     t.start()

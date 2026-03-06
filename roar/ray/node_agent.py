@@ -18,6 +18,9 @@ _DEFAULT_PROXY_START_TIMEOUT_SECONDS = 10.0
 __all__ = ["RoarNodeAgent", "build_node_agent_name"]
 
 
+_ROAR_PROXY_PORT = 19191
+
+
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -63,7 +66,7 @@ class RoarNodeAgent:
         if not proxy_binary:
             return
 
-        port = _find_free_port()
+        port = _ROAR_PROXY_PORT
         cmd = [proxy_binary, "--port", str(port), "--job-id", self._job_id]
 
         upstream = os.environ.get("ROAR_UPSTREAM_S3_ENDPOINT") or os.environ.get("AWS_ENDPOINT_URL")
