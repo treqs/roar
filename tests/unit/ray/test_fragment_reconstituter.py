@@ -43,6 +43,169 @@ def _fragments_payload(items: list[dict[str, object]]) -> bytes:
     return json.dumps({"fragments": items}, separators=(",", ":")).encode("utf-8")
 
 
+def _wrapped_fragments_payload(items: list[dict[str, object]]) -> bytes:
+    return json.dumps(
+        {"success": True, "data": {"fragments": items}, "meta": {"page": 1}},
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def test_fetch_batches_reads_wrapped_glaas_response(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    response_body = _wrapped_fragments_payload(
+        [
+            {"sequence": 1, "encrypted_batch": "batch-1"},
+            {"sequence": 0, "encrypted_batch": "batch-0"},
+        ]
+    )
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del request
+        assert timeout == 5
+        return _FakeHttpResponse(response_body)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    reconstituter = module.FragmentReconstituter(
+        session_id="session-fetch-wrapped",
+        token="ab" * 32,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    )
+
+    assert reconstituter._fetch_batches() == [
+        {"sequence": 0, "encrypted_batch": "batch-0"},
+        {"sequence": 1, "encrypted_batch": "batch-1"},
+    ]
+
+
+def test_fetch_batches_supports_flat_response_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    response_body = _fragments_payload(
+        [
+            {"sequence": 1, "encrypted_batch": "batch-1"},
+            {"sequence": 0, "encrypted_batch": "batch-0"},
+        ]
+    )
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del request
+        assert timeout == 5
+        return _FakeHttpResponse(response_body)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    reconstituter = module.FragmentReconstituter(
+        session_id="session-fetch-flat",
+        token="ab" * 32,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    )
+
+    assert reconstituter._fetch_batches() == [
+        {"sequence": 0, "encrypted_batch": "batch-0"},
+        {"sequence": 1, "encrypted_batch": "batch-1"},
+    ]
+
+
+def test_fetch_batches_returns_empty_list_for_empty_wrapped_fragments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    response_body = _wrapped_fragments_payload([])
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del request, timeout
+        return _FakeHttpResponse(response_body)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    reconstituter = module.FragmentReconstituter(
+        session_id="session-fetch-empty",
+        token="ab" * 32,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    )
+
+    assert reconstituter._fetch_batches() == []
+
+
+def test_fetch_batches_warns_and_returns_empty_when_fragments_are_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    response_body = json.dumps({"success": True}, separators=(",", ":")).encode("utf-8")
+
+    warnings: list[str] = []
+
+    class _FakeLogger:
+        def warning(self, message: str, *args: object) -> None:
+            warnings.append(message % args if args else message)
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del request, timeout
+        return _FakeHttpResponse(response_body)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(module, "_get_logger", lambda: _FakeLogger())
+    reconstituter = module.FragmentReconstituter(
+        session_id="session-fetch-missing",
+        token="ab" * 32,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    )
+
+    assert reconstituter._fetch_batches() == []
+    assert warnings
+    assert "missing fragments list" in warnings[0]
+
+
+def test_reconstitute_decrypts_wrapped_glaas_response_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    token = "0f" * 32
+    fragment = {
+        "job_uid": "job-glaas",
+        "ray_task_id": "task-glaas",
+        "command": "echo wrapped",
+    }
+    response_body = _wrapped_fragments_payload(
+        [{"sequence": 0, "encrypted_batch": _encrypt_batch(token, [fragment], 9)}]
+    )
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del request, timeout
+        return _FakeHttpResponse(response_body)
+
+    merged_fragments: list[list[dict]] = []
+
+    def _fake_collect_fragments(*args, **kwargs) -> None:
+        if args:
+            merged_fragments.append(list(args[0]))
+            return
+        merged_fragments.append(list(kwargs["fragments"]))
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(module, "collect_fragments", _fake_collect_fragments)
+
+    result = module.FragmentReconstituter(
+        session_id="session-reconstitute-wrapped",
+        token=token,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    ).reconstitute()
+
+    assert merged_fragments == [[fragment]]
+    assert result.fragments_processed == 1
+
+
 def test_reconstitute_fetches_decrypts_and_merges_fragments(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
