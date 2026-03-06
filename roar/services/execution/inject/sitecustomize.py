@@ -844,42 +844,67 @@ def _register_pre_shutdown_ray_collection() -> None:
 
 
 def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
-    """Atexit hook: flush final buffered fragments from the collector actor."""
-    del proxy_logs
-
+    """Shutdown hook: parse proxy logs from node agents and emit as GLaaS fragments."""
     if os.environ.get("ROAR_WRAP") != "1":
         return
 
+    if not proxy_logs:
+        return
+
+    # Collect all proxy log lines from every node agent.
+    all_lines: list[str] = []
+    for _node_id, payload in proxy_logs.items():
+        if not isinstance(payload, dict):
+            continue
+        lines = payload.get("proxy_log_lines", [])
+        if isinstance(lines, list):
+            all_lines.extend(str(line) for line in lines if line)
+
+    if not all_lines:
+        return
+
+    # Parse proxy log lines into artifact references.
     try:
-        import ray
+        from roar.ray.roar_worker import _parse_proxy_log_lines
     except Exception:
         return
 
-    try:
-        is_initialized = getattr(ray, "is_initialized", None)
-        if callable(is_initialized) and not is_initialized():
-            return
+    parsed = _parse_proxy_log_lines(all_lines)
+    if not parsed:
+        return
 
-        job_id = os.environ.get("ROAR_JOB_ID", "default")
-        actor_name = f"roar-log-collector-{job_id}"
-        actor = ray.get_actor(actor_name, namespace="roar")
+    # Emit parsed entries as GLaaS fragments so the host can reconstitute them.
+    session_id = os.environ.get("ROAR_SESSION_ID", "")
+    fragment_token = os.environ.get("ROAR_FRAGMENT_TOKEN", "")
+    glaas_url = (
+        os.environ.get("GLAAS_URL")
+        or os.environ.get("GLAAS_API_URL")
+        or ""
+    )
 
-    except Exception:
+    if not (session_id and fragment_token and glaas_url):
         return
 
     try:
-        flush_to_glaas = getattr(actor, "flush_to_glaas", None)
-        flush_remote = (
-            getattr(flush_to_glaas, "remote", None) if flush_to_glaas is not None else None
+        from roar.ray.glaas_fragment_streamer import GlaasFragmentStreamer
+
+        streamer = GlaasFragmentStreamer(
+            session_id=session_id,
+            token=fragment_token,
+            glaas_url=glaas_url,
         )
-        get_fn = getattr(ray, "get", None)
-        if callable(flush_remote) and callable(get_fn):
-            get_fn(flush_remote(), timeout=15)
+        for kind, ref in parsed:
+            streamer.append_fragment({
+                "kind": kind,
+                "path": ref.path,
+                "hash": ref.hash,
+                "hash_algorithm": ref.hash_algorithm,
+                "size": ref.size,
+                "capture_method": ref.capture_method,
+            })
+        streamer.close()
     except Exception:
-        return
-    finally:
-        with contextlib.suppress(Exception):
-            ray.kill(actor)
+        pass
 
 
 def _stop_ray_node_poller() -> None:
