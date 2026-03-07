@@ -35,7 +35,7 @@ def collect(
     """
     Compatibility entrypoint that now only accepts explicit fragments.
     """
-    del log_dir, proxy_logs
+    del log_dir
 
     if not fragments:
         return
