@@ -69,9 +69,12 @@ class RoarNodeAgent:
         package_path = Path(__file__).resolve().parents[1]
         proxy_binary = tracer_backends.find_proxy_binary(package_path)
         if not proxy_binary:
+            print(f"[roar-agent] roar-proxy binary not found in {package_path}")
             return
+        print(f"[roar-agent] found proxy binary: {proxy_binary}")
 
-        port = _ROAR_PROXY_PORT
+        port = _find_free_port()
+        print(f"[roar-agent] using dynamic port {port} (was hardcoded {_ROAR_PROXY_PORT})")
         cmd = [proxy_binary, "--port", str(port), "--job-id", self._job_id]
 
         # Only use ROAR_UPSTREAM_S3_ENDPOINT — never fall back to AWS_ENDPOINT_URL.
@@ -81,7 +84,11 @@ class RoarNodeAgent:
         upstream = os.environ.get("ROAR_UPSTREAM_S3_ENDPOINT")
         if upstream:
             cmd.extend(["--upstream", upstream])
+            print(f"[roar-agent] upstream: {upstream}")
+        else:
+            print("[roar-agent] no upstream set, proxy will use default AWS")
 
+        print(f"[roar-agent] starting proxy: {' '.join(cmd)}")
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
