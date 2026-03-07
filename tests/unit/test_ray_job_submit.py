@@ -70,14 +70,21 @@ def test_ray_jobs_submit_plural_also_works(monkeypatch) -> None:
     assert rewritten.session_id is None
 
 
-def test_entrypoint_is_unchanged(monkeypatch) -> None:
+def test_entrypoint_is_wrapped_with_roar_driver_entrypoint(monkeypatch) -> None:
     module = _module()
     monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==1.2.3")
     monkeypatch.setattr(module, "_resolve_glaas_url", lambda: None)
 
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
-    assert _entrypoint(rewritten.command) == ["python", "main.py"]
+    assert _entrypoint(rewritten.command) == [
+        "python",
+        "-m",
+        "roar.ray.driver_entrypoint",
+        "--",
+        "python",
+        "main.py",
+    ]
     assert rewritten.session_id is None
 
 
@@ -142,7 +149,51 @@ def test_existing_roar_run_entrypoint_is_unchanged(monkeypatch) -> None:
 
     rewritten = module.maybe_rewrite_ray_job_submit(command)
 
-    assert _entrypoint(rewritten.command) == ["roar", "run", "python", "main.py"]
+    assert _entrypoint(rewritten.command) == [
+        "python",
+        "-m",
+        "roar.ray.driver_entrypoint",
+        "--",
+        "roar",
+        "run",
+        "python",
+        "main.py",
+    ]
+    assert rewritten.session_id is None
+
+
+def test_existing_driver_entrypoint_wrapper_is_not_duplicated(monkeypatch) -> None:
+    module = _module()
+    monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==4.5.6")
+    monkeypatch.setattr(module, "_resolve_glaas_url", lambda: None)
+
+    command = [
+        "ray",
+        "job",
+        "submit",
+        "--address",
+        "http://localhost:8265",
+        "--working-dir",
+        ".",
+        "--",
+        "python",
+        "-m",
+        "roar.ray.driver_entrypoint",
+        "--",
+        "python",
+        "main.py",
+    ]
+
+    rewritten = module.maybe_rewrite_ray_job_submit(command)
+
+    assert _entrypoint(rewritten.command) == [
+        "python",
+        "-m",
+        "roar.ray.driver_entrypoint",
+        "--",
+        "python",
+        "main.py",
+    ]
     assert rewritten.session_id is None
 
 
@@ -158,6 +209,53 @@ def test_glaas_url_from_config_is_injected_as_both_env_vars(monkeypatch) -> None
     assert runtime_env["env_vars"]["GLAAS_API_URL"] == "http://localhost:3001"
 
 
+def test_cluster_glaas_url_override_is_used_for_runtime_env(monkeypatch) -> None:
+    module = _module()
+    registrations: list[tuple[str, str, str]] = []
+    saved_keys: list[tuple[str, dict[str, str]]] = []
+    key = {
+        "session_id": "11111111-1111-1111-1111-111111111111",
+        "token": "ab" * 32,
+        "token_hash": "cd" * 32,
+    }
+
+    monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==8.0.0")
+    monkeypatch.setattr(module, "_resolve_glaas_url", lambda: "http://localhost:3001")
+    monkeypatch.setattr(
+        module,
+        "_register_fragment_session",
+        lambda glaas_url, session_id, token_hash: registrations.append(
+            (glaas_url, session_id, token_hash)
+        ),
+    )
+    monkeypatch.setattr(module, "generate_fragment_key", lambda: key)
+    monkeypatch.setattr(
+        module,
+        "save_key",
+        lambda roar_dir, payload: saved_keys.append((str(roar_dir), payload)),
+    )
+    monkeypatch.setenv("ROAR_CLUSTER_GLAAS_URL", "http://host.docker.internal:3001")
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://localhost:9000")
+    monkeypatch.setenv("ROAR_CLUSTER_AWS_ENDPOINT_URL", "http://minio:9000")
+
+    rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
+
+    runtime_env = _runtime_env_json(rewritten.command)
+    assert runtime_env["env_vars"]["GLAAS_URL"] == "http://host.docker.internal:3001"
+    assert runtime_env["env_vars"]["GLAAS_API_URL"] == "http://host.docker.internal:3001"
+    assert runtime_env["env_vars"]["ROAR_UPSTREAM_S3_ENDPOINT"] == "http://minio:9000"
+    assert runtime_env["env_vars"]["ROAR_PROXY_PORT"] == "19191"
+    assert registrations == [
+        (
+            "http://localhost:3001",
+            "11111111-1111-1111-1111-111111111111",
+            "cd" * 32,
+        )
+    ]
+    assert saved_keys and saved_keys[0][1] == key
+    assert rewritten.session_id == key["session_id"]
+
+
 def test_no_glaas_url_configured_only_instrumentation_env_var_is_injected(monkeypatch) -> None:
     module = _module()
     monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==8.0.0")
@@ -170,6 +268,7 @@ def test_no_glaas_url_configured_only_instrumentation_env_var_is_injected(monkey
     assert env["ROAR_JOB_INSTRUMENTED"] == "1"
     assert env["ROAR_WRAP"] == "1"
     assert env["ROAR_RAY_NODE_AGENTS"] == "1"
+    assert env["ROAR_PROXY_PORT"] == "19191"
     assert "ROAR_JOB_ID" in env  # stable job_id for node agent name resolution
     assert rewritten.session_id is None
 

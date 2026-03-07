@@ -12,9 +12,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
 import time
 import uuid
 from collections import deque
+from pathlib import Path
 from typing import Any
 
 from roar.ray.fragment import ArtifactRef, TaskFragment
@@ -24,6 +26,134 @@ def _get_logger():
     from roar.core.logging import get_logger
 
     return get_logger()
+
+
+def _apply_reconstitution_filters(
+    fragments: list[TaskFragment],
+    *,
+    project_dir: str,
+) -> list[TaskFragment]:
+    try:
+        from roar.config import load_config
+        from roar.services.execution.provenance.file_filter import (
+            FileFilterService,
+            _get_editable_install_dirs,
+        )
+    except Exception:
+        return [fragment for fragment in fragments if fragment.reads or fragment.writes]
+
+    config = load_config(start_dir=project_dir)
+    filters_config = config.get("filters", {}) if isinstance(config, dict) else {}
+    cleanup_config = config.get("cleanup", {}) if isinstance(config, dict) else {}
+    ignore_system_reads = bool(filters_config.get("ignore_system_reads", True))
+    ignore_package_reads = bool(filters_config.get("ignore_package_reads", True))
+    ignore_torch_cache = bool(filters_config.get("ignore_torch_cache", True))
+    ignore_tmp_files = bool(filters_config.get("ignore_tmp_files", True))
+    if bool(cleanup_config.get("delete_tmp_writes", False)):
+        ignore_tmp_files = False
+
+    filter_service = FileFilterService()
+    editable_dirs = _get_editable_install_dirs()
+    sys_prefix = sys.prefix
+    sys_base_prefix = sys.base_prefix
+
+    filtered: list[TaskFragment] = []
+    for fragment in fragments:
+        for ref in [*fragment.reads, *fragment.writes]:
+            ref.path = _normalize_reconstituted_path(str(ref.path or ""), project_dir=project_dir)
+        fragment.reads = [
+            ref
+            for ref in fragment.reads
+            if _should_include_ref(
+                ref,
+                kind="read",
+                filter_service=filter_service,
+                ignore_system_reads=ignore_system_reads,
+                ignore_package_reads=ignore_package_reads,
+                ignore_torch_cache=ignore_torch_cache,
+                ignore_tmp_files=ignore_tmp_files,
+                sys_prefix=sys_prefix,
+                sys_base_prefix=sys_base_prefix,
+                editable_dirs=editable_dirs,
+            )
+        ]
+        fragment.writes = [
+            ref
+            for ref in fragment.writes
+            if _should_include_ref(
+                ref,
+                kind="write",
+                filter_service=filter_service,
+                ignore_system_reads=ignore_system_reads,
+                ignore_package_reads=ignore_package_reads,
+                ignore_torch_cache=ignore_torch_cache,
+                ignore_tmp_files=ignore_tmp_files,
+                sys_prefix=sys_prefix,
+                sys_base_prefix=sys_base_prefix,
+                editable_dirs=editable_dirs,
+            )
+        ]
+        if fragment.reads or fragment.writes:
+            filtered.append(fragment)
+    return filtered
+
+
+def _normalize_reconstituted_path(path: str, *, project_dir: str) -> str:
+    if not path or path.startswith("s3://"):
+        return path
+
+    normalized = os.path.normpath(path)
+    marker = f"{os.sep}runtime_resources{os.sep}working_dir_files{os.sep}"
+    if marker not in normalized:
+        return path
+
+    packaged_suffix = normalized.split(marker, 1)[1]
+    packaged_parts = Path(packaged_suffix).parts
+    if len(packaged_parts) < 2 or not packaged_parts[0].startswith("_ray_pkg_"):
+        return path
+
+    restored = Path(project_dir).joinpath(*packaged_parts[1:])
+    return str(restored.resolve(strict=False))
+
+
+def _should_include_ref(
+    ref: ArtifactRef,
+    *,
+    kind: str,
+    filter_service,
+    ignore_system_reads: bool,
+    ignore_package_reads: bool,
+    ignore_torch_cache: bool,
+    ignore_tmp_files: bool,
+    sys_prefix: str,
+    sys_base_prefix: str,
+    editable_dirs,
+) -> bool:
+    path = str(ref.path or "")
+    if not path or path.startswith("s3://"):
+        return bool(path)
+
+    if kind == "read":
+        if filter_service._is_roar_internal(path) or filter_service._is_git_metadata(path):
+            return False
+        if ignore_system_reads and filter_service._is_system_read(path):
+            return False
+        if ignore_torch_cache and filter_service._is_torch_cache(path):
+            return False
+        if ignore_package_reads and filter_service._is_package_file(
+            path,
+            sys_prefix,
+            sys_base_prefix,
+            editable_dirs=editable_dirs,
+        ):
+            return False
+        return not (ignore_tmp_files and filter_service._is_tmp_path(path))
+
+    if filter_service._is_write_noise(path):
+        return False
+    if ignore_torch_cache and filter_service._is_torch_cache(path):
+        return False
+    return not (ignore_tmp_files and filter_service._is_tmp_path(path))
 
 
 def collect(
@@ -94,6 +224,14 @@ def collect_fragments(
                 continue
             parsed_fragments.append(fragment)
 
+        parsed_fragments = _apply_reconstitution_filters(
+            parsed_fragments,
+            project_dir=project_dir,
+        )
+        if not parsed_fragments:
+            conn.commit()
+            return
+
         step_by_job_uid = _assign_step_numbers(parsed_fragments, base_step=step_number)
 
         for fragment in parsed_fragments:
@@ -117,21 +255,7 @@ def collect_fragments(
                 continue
             job_id = int(row["id"])
 
-            for ref in fragment.reads:
-                artifact_id = _upsert_artifact_for_ref(
-                    conn,
-                    columns=artifact_columns,
-                    ref=ref,
-                    now=now,
-                )
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO job_inputs
-                        (job_id, artifact_id, path)
-                    VALUES (?, ?, ?)
-                    """,
-                    (job_id, artifact_id, ref.path),
-                )
+            written_artifact_ids: dict[str, str] = {}
 
             for ref in fragment.writes:
                 artifact_id = _upsert_artifact_for_ref(
@@ -140,9 +264,28 @@ def collect_fragments(
                     ref=ref,
                     now=now,
                 )
+                written_artifact_ids[str(ref.path)] = artifact_id
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO job_outputs
+                        (job_id, artifact_id, path)
+                    VALUES (?, ?, ?)
+                    """,
+                    (job_id, artifact_id, ref.path),
+                )
+
+            for ref in fragment.reads:
+                artifact_id = written_artifact_ids.get(str(ref.path), "")
+                if not artifact_id:
+                    artifact_id = _upsert_artifact_for_ref(
+                        conn,
+                        columns=artifact_columns,
+                        ref=ref,
+                        now=now,
+                    )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO job_inputs
                         (job_id, artifact_id, path)
                     VALUES (?, ?, ?)
                     """,
@@ -370,18 +513,28 @@ def _upsert_artifact_for_ref(
 
 
 def _resolve_active_session_context(db_path: str) -> tuple[int | None, int]:
-    conn = sqlite3.connect(db_path)
+    if not db_path or not os.path.exists(db_path):
+        return None, 1
+
+    try:
+        conn = sqlite3.connect(db_path)
+    except sqlite3.Error:
+        return None, 1
+
     conn.row_factory = sqlite3.Row
     try:
-        row = conn.execute(
-            """
-            SELECT id, current_step
-            FROM sessions
-            WHERE is_active = 1
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
+        try:
+            row = conn.execute(
+                """
+                SELECT id, current_step
+                FROM sessions
+                WHERE is_active = 1
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        except sqlite3.Error:
+            return None, 1
         if row is None:
             return None, 1
         current_step = int(row["current_step"] or 1)

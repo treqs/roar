@@ -5,7 +5,7 @@ This test file reproduces the cloud topology exactly:
   - The Ray cluster (head + workers) runs in Docker containers
   - Workers are isolated processes that cannot reach 127.0.0.1 on the host
 
-This surfaces two bugs that only appear in the cloud/remote-cluster scenario:
+These tests cover host-submit behavior that only shows up in the cloud/remote-cluster topology:
 
   BUG 1 — Worker proxy endpoint unreachable (502 Bad Gateway):
     _ray_job_submit.py hardcodes AWS_ENDPOINT_URL=http://127.0.0.1:19191 into
@@ -18,7 +18,7 @@ This surfaces two bugs that only appear in the cloud/remote-cluster scenario:
     rather than a canonical package name, so the URL is never matched as an
     existing 'roar-cli' entry and gets appended a second time.
 
-Both tests are written to FAIL against the current code and PASS after the fix.
+The goal is to exercise the real user entrypoint without any roar-aware workload logic.
 """
 
 from __future__ import annotations
@@ -33,12 +33,14 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.ray.conftest import run_docker
-
 COMPOSE_FILE = Path(__file__).resolve().parent / "docker-compose.yml"
 JOBS_DIR = Path(__file__).resolve().parent / "jobs"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ROAR_BIN = REPO_ROOT / ".venv" / "bin" / "roar"
+HOST_GLAAS_URL = "http://localhost:3001"
+CLUSTER_GLAAS_URL = "http://host.docker.internal:3001"
+
+pytestmark = [pytest.mark.e2e, pytest.mark.ray_contract]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -55,6 +57,8 @@ def _roar_bin() -> str:
 def _init_project(project_dir: Path) -> None:
     """Create a minimal git repo + roar project under project_dir."""
     project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "README.md").write_text("ray host-submit e2e\n", encoding="utf-8")
+    (project_dir / ".gitignore").write_text(".roar/\n", encoding="utf-8")
     subprocess.run(
         ["git", "init", "-q"],
         cwd=project_dir, check=True, capture_output=True,
@@ -68,11 +72,19 @@ def _init_project(project_dir: Path) -> None:
         cwd=project_dir, check=True, capture_output=True,
     )
     subprocess.run(
-        ["git", "commit", "--allow-empty", "-q", "-m", "init"],
+        ["git", "add", "README.md", ".gitignore"],
+        cwd=project_dir, check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "init"],
         cwd=project_dir, check=True, capture_output=True,
     )
     subprocess.run(
         [_roar_bin(), "init", "--path", str(project_dir), "-n"],
+        cwd=project_dir, check=True, capture_output=True,
+    )
+    subprocess.run(
+        [_roar_bin(), "config", "set", "glaas.url", ""],
         cwd=project_dir, check=True, capture_output=True,
     )
 
@@ -94,9 +106,9 @@ def _artifact_count(project_dir: Path) -> int:
         conn.close()
 
 
-def _base_env(minio_endpoint: str) -> dict[str, str]:
+def _base_env(ray_cluster: dict[str, str]) -> dict[str, str]:
     """Build a clean env for roar run — inherits PATH but overrides AWS/roar vars."""
-    env = {k: v for k, v in os.environ.items()}
+    env = dict(os.environ)
     env.update({
         # Workers use the Docker image's installed roar — no PyPI download.
         "ROAR_CLUSTER_PIP_REQ": "skip",
@@ -105,10 +117,13 @@ def _base_env(minio_endpoint: str) -> dict[str, str]:
         "AWS_SECRET_ACCESS_KEY": "minioadmin",
         "AWS_DEFAULT_REGION": "us-east-1",
         # Point at the minio instance exposed on the host.
-        "AWS_ENDPOINT_URL": minio_endpoint,
-        # Suppress GLaaS fragment registration (not needed for this test).
-        "GLAAS_URL": "",
-        "GLAAS_API_URL": "",
+        "AWS_ENDPOINT_URL": str(ray_cluster["minio_endpoint"]),
+        # Workers must use the cluster-visible MinIO address, not the host loopback.
+        "ROAR_CLUSTER_AWS_ENDPOINT_URL": str(ray_cluster["cluster_minio_endpoint"]),
+        # Host submits use the host-visible URL; workers use the cluster-visible URL.
+        "GLAAS_URL": HOST_GLAAS_URL,
+        "GLAAS_API_URL": HOST_GLAAS_URL,
+        "ROAR_CLUSTER_GLAAS_URL": CLUSTER_GLAAS_URL,
     })
     return env
 
@@ -147,7 +162,7 @@ def test_roar_run_from_host_s3_job_succeeds_and_captures_artifacts(
     result = subprocess.run(
         cmd,
         cwd=project_dir,
-        env=_base_env(ray_cluster["minio_endpoint"]),
+        env=_base_env(ray_cluster),
         capture_output=True,
         text=True,
         timeout=180,
@@ -164,6 +179,63 @@ def test_roar_run_from_host_s3_job_succeeds_and_captures_artifacts(
         f"Job succeeded but 0 S3 artifacts were captured in roar.db. "
         f"Expected proxy logs to be collected and reconstituted. "
         f"roar.db path: {project_dir / '.roar' / 'roar.db'}"
+    )
+
+
+@pytest.mark.e2e
+@pytest.mark.ray_e2e
+def test_roar_run_from_host_subprocess_ray_job_captures_s3_artifacts(
+    ray_cluster: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    """Ray S3 jobs that exit child subprocesses without ray.shutdown() must still collect logs.
+
+    This matches the cloud-demo topology more closely than the simple workload:
+      - a parent driver process spawns child Python processes
+      - each child calls ray.init(), performs S3 work, and exits normally
+      - no child explicitly calls ray.shutdown()
+
+    The contract is still the same: `roar run ray job submit ...` must capture
+    S3 artifacts via the proxy with no workload knowledge of roar.
+    """
+    project_dir = tmp_path / "project"
+    _init_project(project_dir)
+
+    cmd = [
+        _roar_bin(),
+        "run",
+        "ray",
+        "job",
+        "submit",
+        "--address",
+        ray_cluster["dashboard_url"],
+        "--working-dir",
+        str(JOBS_DIR),
+        "--",
+        "python",
+        "s3_subprocess_pipeline.py",
+    ]
+
+    result = subprocess.run(
+        cmd,
+        cwd=project_dir,
+        env=_base_env(ray_cluster),
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+
+    assert result.returncode == 0, (
+        f"subprocess Ray job failed (rc={result.returncode}).\n"
+        f"STDOUT:\n{textwrap.indent(result.stdout, '  ')}\n"
+        f"STDERR:\n{textwrap.indent(result.stderr, '  ')}"
+    )
+
+    artifact_count = _artifact_count(project_dir)
+    assert artifact_count > 0, (
+        "Subprocess Ray job succeeded but 0 S3 artifacts were captured in roar.db. "
+        "This means proxy logs were lost when the child processes exited without "
+        "calling ray.shutdown()."
     )
 
 
@@ -200,7 +272,7 @@ def test_worker_proxy_endpoint_is_reachable(
     result = subprocess.run(
         cmd,
         cwd=project_dir,
-        env=_base_env(ray_cluster["minio_endpoint"]),
+        env=_base_env(ray_cluster),
         capture_output=True,
         text=True,
         timeout=180,
@@ -274,7 +346,7 @@ def test_roar_run_runtime_env_pip_no_duplicates(
         "env_vars": {},
     })
 
-    env = _base_env(ray_cluster["minio_endpoint"])
+    env = _base_env(ray_cluster)
     env["ROAR_CLUSTER_PIP_REQ"] = FAKE_WHEEL_URL
 
     # Use --dry-run flag is not available, so we intercept via a no-op entrypoint
@@ -340,7 +412,7 @@ def test_roar_run_runtime_env_pip_no_duplicates(
     duplicates = [p for p in normalised if normalised.count(p) > 1]
 
     assert not duplicates, (
-        f"Duplicate pip entries found in runtime_env:\n"
+        "Duplicate pip entries found in runtime_env:\n"
         + "\n".join(f"  {p}" for p in sorted(set(duplicates)))
         + f"\nFull pip list: {pip_list}"
     )

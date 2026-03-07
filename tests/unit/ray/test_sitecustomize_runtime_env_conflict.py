@@ -53,10 +53,36 @@ def test_patch_ray_init_conflicts_inside_preinstrumented_job(
         lambda _ray_module, runtime_env: runtime_env,
     )
     monkeypatch.setattr(sitecustomize, "_register_pre_shutdown_ray_collection", lambda: None)
-    monkeypatch.setattr(sitecustomize, "_ensure_collector_actor", lambda *_args, **_kwargs: None)
     monkeypatch.setenv("ROAR_JOB_INSTRUMENTED", "1")
 
     sitecustomize._patch_ray_init(fake_ray)
 
     result = fake_ray.init(runtime_env=job_runtime_env)
     assert result == "ok"
+
+
+def test_patch_ray_init_registers_pre_shutdown_collection_for_instrumented_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_ray = SimpleNamespace(init=lambda *_args, **_kwargs: "ok")
+    register_calls: list[str] = []
+
+    monkeypatch.setattr(
+        sitecustomize,
+        "_load_ray_config",
+        lambda: {"enabled": True, "pip_install": False},
+    )
+    monkeypatch.setattr(
+        sitecustomize,
+        "_register_pre_shutdown_ray_collection",
+        lambda: register_calls.append("called"),
+    )
+    monkeypatch.setenv("ROAR_JOB_INSTRUMENTED", "1")
+    monkeypatch.setenv("ROAR_RAY_NODE_AGENTS", "0")
+
+    sitecustomize._patch_ray_init(fake_ray)
+
+    result = fake_ray.init(runtime_env={})
+
+    assert result == "ok"
+    assert register_calls == ["called"]

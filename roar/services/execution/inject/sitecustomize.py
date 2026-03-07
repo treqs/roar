@@ -265,6 +265,7 @@ def _patch_ray_init(ray_module) -> None:
 
         if os.environ.get("ROAR_JOB_INSTRUMENTED") == "1":
             result = _real_ray_init(*args, **kwargs)
+            _register_pre_shutdown_ray_collection()
 
             # ROAR_JOB_ID is injected by _ray_job_submit.py into runtime_env env_vars,
             # so both the driver and all workers see the same value.
@@ -312,13 +313,24 @@ def _patch_ray_init(ray_module) -> None:
             value = os.environ.get(key)
             if value:
                 env_vars.setdefault(key, value)
+        cluster_glaas_url = (
+            os.environ.get("ROAR_CLUSTER_GLAAS_URL")
+            or os.environ.get("GLAAS_URL")
+            or os.environ.get("GLAAS_API_URL")
+        )
+        if cluster_glaas_url:
+            env_vars.setdefault("GLAAS_URL", cluster_glaas_url)
+            env_vars.setdefault("GLAAS_API_URL", cluster_glaas_url)
+        for key in ("ROAR_SESSION_ID", "ROAR_FRAGMENT_TOKEN"):
+            value = os.environ.get(key)
+            if value:
+                env_vars.setdefault(key, value)
         runtime_env["env_vars"] = env_vars
         runtime_env = _prepare_worker_runtime_env(runtime_env, job_id)
         runtime_env = _sanitize_worker_runtime_env_for_ray(ray_module, runtime_env)
         kwargs["runtime_env"] = runtime_env
         result = _real_ray_init(*args, **kwargs)
         _register_pre_shutdown_ray_collection()
-        _ensure_collector_actor(ray_module, job_id)
         if _node_agents_enabled():
             threading.Thread(
                 target=_spawn_node_agents,
@@ -336,59 +348,16 @@ def _patch_ray_shutdown(ray_module) -> None:
     real_ray_shutdown = getattr(ray_module, "shutdown", None)
     if not callable(real_ray_shutdown):
         return
+    if getattr(real_ray_shutdown, "_roar_patched", False):
+        return
 
     def _roar_ray_shutdown(*args, **kwargs):
         proxy_logs = _collect_node_agent_logs(ray_module) if _node_agents_enabled() else {}
         _collect_ray_io(proxy_logs=proxy_logs)
         return real_ray_shutdown(*args, **kwargs)
 
+    _roar_ray_shutdown._roar_patched = True  # type: ignore[attr-defined]
     ray_module.shutdown = _roar_ray_shutdown
-
-
-def _ensure_collector_actor(ray_module, job_id: str) -> None:
-    actor_name = f"roar-log-collector-{job_id}"
-
-    try:
-        ray_module.get_actor(actor_name, namespace="roar")
-        return
-    except Exception:
-        pass
-
-    try:
-        from roar.ray.actor import RoarLogCollectorActor
-
-        session_id = os.environ.get("ROAR_SESSION_ID")
-        fragment_token = os.environ.get("ROAR_FRAGMENT_TOKEN")
-        glaas_url = (
-            os.environ.get("GLAAS_URL")
-            or os.environ.get("GLAAS_API_URL")
-            or "https://api.glaas.ai"
-        )
-
-        actor_options = RoarLogCollectorActor.options(
-            name=actor_name,
-            namespace="roar",
-            lifetime="detached",
-            num_cpus=0,
-        )
-
-        if session_id and fragment_token and glaas_url:
-            actor = actor_options.remote(
-                session_id=session_id,
-                token=fragment_token,
-                glaas_url=glaas_url,
-            )
-        else:
-            actor = actor_options.remote()
-
-        get_fn = getattr(ray_module, "get", None)
-        if callable(get_fn):
-            ping = getattr(actor, "ping", None)
-            remote = getattr(ping, "remote", None) if ping is not None else None
-            if callable(remote):
-                get_fn(remote(), timeout=10)
-    except Exception:
-        pass
 
 
 def _node_agents_enabled() -> bool:
@@ -592,10 +561,8 @@ def _spawn_node_agents(ray_module, job_id: str) -> None:
     for info in agents_to_wait:
         agent = info.get("actor")
         if agent is not None:
-            try:
+            with contextlib.suppress(Exception):
                 ray_module.get(agent.get_proxy_port.remote(), timeout=15)
-            except Exception:
-                pass
 
 
 def _collect_node_agent_logs(ray_module) -> dict[str, dict]:
@@ -844,14 +811,39 @@ def _register_pre_shutdown_ray_collection() -> None:
 
     Ray registers its own shutdown hook during init. Registering this hook
     afterwards ensures worker logs are collected before Ray tears down.
+
+    The hook explicitly invokes the patched `ray.shutdown()` path while the
+    interpreter is still healthy. That is more reliable than trying to make
+    remote Ray calls from a late atexit hook after shutdown has already begun.
     """
     global _ray_collect_pre_shutdown_registered
 
     if _ray_collect_pre_shutdown_registered:
         return
 
-    atexit.register(_collect_ray_io)
+    atexit.register(_shutdown_ray_at_exit)
     _ray_collect_pre_shutdown_registered = True
+
+
+def _shutdown_ray_at_exit() -> None:
+    ray_module = sys.modules.get("ray")
+    if ray_module is None:
+        _collect_ray_io()
+        return
+
+    shutdown = getattr(ray_module, "shutdown", None)
+    is_initialized = getattr(ray_module, "is_initialized", None)
+    if callable(is_initialized):
+        with contextlib.suppress(Exception):
+            if not is_initialized():
+                return
+
+    if callable(shutdown):
+        with contextlib.suppress(Exception):
+            shutdown()
+            return
+
+    _collect_ray_io()
 
 
 def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
@@ -859,29 +851,63 @@ def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
     if os.environ.get("ROAR_WRAP") != "1":
         return
 
+    if proxy_logs is None and _node_agents_enabled():
+        ray_module = sys.modules.get("ray")
+        if ray_module is not None:
+            with contextlib.suppress(Exception):
+                proxy_logs = _collect_node_agent_logs(ray_module)
+
     if not proxy_logs:
         return
 
-    # Collect all proxy log lines from every node agent.
-    all_lines: list[str] = []
-    for _node_id, payload in proxy_logs.items():
-        if not isinstance(payload, dict):
-            continue
-        lines = payload.get("proxy_log_lines", [])
-        if isinstance(lines, list):
-            all_lines.extend(str(line) for line in lines if line)
-
-    if not all_lines:
-        return
-
-    # Parse proxy log lines into artifact references.
     try:
+        import time as _time
+
+        from roar.ray.fragment import TaskFragment, derive_task_uid
         from roar.ray.roar_worker import _parse_proxy_log_lines
     except Exception:
         return
 
-    parsed = _parse_proxy_log_lines(all_lines)
-    if not parsed:
+    now = _time.time()
+    roar_job_id = str(os.environ.get("ROAR_JOB_ID", "default"))
+    driver_job_uid = str(os.environ.get("ROAR_JOB_ID", ""))
+
+    fragments: list[dict[str, object]] = []
+    parsed_refs: list = []
+    for node_id, payload in proxy_logs.items():
+        if not isinstance(payload, dict):
+            continue
+        lines = payload.get("proxy_log_lines", [])
+        if not isinstance(lines, list):
+            continue
+        parsed = _parse_proxy_log_lines([str(line) for line in lines if line])
+        if not parsed:
+            continue
+
+        parsed_refs.extend(parsed)
+        runtime_node_id = str(payload.get("node_id") or node_id or "")
+        proxy_task_id = f"proxy:{runtime_node_id or 'unknown'}"
+        fragment = TaskFragment(
+            job_uid=derive_task_uid(roar_job_id, proxy_task_id),
+            parent_job_uid=driver_job_uid,
+            ray_task_id=proxy_task_id,
+            ray_worker_id="",
+            ray_node_id=runtime_node_id,
+            ray_actor_id=None,
+            function_name="s3_proxy",
+            started_at=now,
+            ended_at=now,
+            exit_code=0,
+        )
+        for kind, ref in parsed:
+            if kind == "write":
+                fragment.writes.append(ref)
+            else:
+                fragment.reads.append(ref)
+        if fragment.reads or fragment.writes:
+            fragments.append(fragment.to_dict())
+
+    if not fragments:
         return
 
     # Try GLaaS fragment streaming first, fall back to direct DB write.
@@ -902,22 +928,15 @@ def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
                 token=fragment_token,
                 glaas_url=glaas_url,
             )
-            for kind, ref in parsed:
-                streamer.append_fragment({
-                    "kind": kind,
-                    "path": ref.path,
-                    "hash": ref.hash,
-                    "hash_algorithm": ref.hash_algorithm,
-                    "size": ref.size,
-                    "capture_method": ref.capture_method,
-                })
+            for fragment in fragments:
+                streamer.append_fragment(fragment)
             streamer.close()
             return
         except Exception:
             pass
 
     # Fallback: write directly to local roar.db (works when driver has project access).
-    _write_proxy_artifacts_to_db(parsed)
+    _write_proxy_artifacts_to_db(parsed_refs)
 
 
 def _write_proxy_artifacts_to_db(parsed: list) -> None:
@@ -948,7 +967,7 @@ def _write_proxy_artifacts_to_db(parsed: list) -> None:
             columns = {row[1] for row in cursor.fetchall()}
             now = _time.time()
 
-            for kind, ref in parsed:
+            for _kind, ref in parsed:
                 artifact_id = uuid.uuid4().hex
                 fields = ["id", "size", "first_seen_at", "first_seen_path", "kind", "metadata"]
                 values: list = [artifact_id, ref.size or 0, now, ref.path, "primitive", "{}"]
@@ -997,5 +1016,4 @@ def _stop_ray_node_poller() -> None:
 
 
 atexit.register(_write_log)
-atexit.register(_collect_ray_io)
 atexit.register(_stop_ray_node_poller)

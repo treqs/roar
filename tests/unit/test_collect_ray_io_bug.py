@@ -110,3 +110,41 @@ def test_collect_ray_io_does_not_discard_proxy_logs_before_processing(
         "_collect_ray_io returned without ever inspecting proxy_logs. "
         "This drops node-agent proxy log data on the floor when the collector actor is gone."
     )
+
+
+def test_collect_ray_io_collects_node_agent_logs_when_called_without_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sitecustomize = _load_sitecustomize_module()
+
+    fake_ray = ModuleType("ray")
+    fake_ray.is_initialized = lambda: True
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    monkeypatch.setenv("ROAR_WRAP", "1")
+    monkeypatch.setenv("ROAR_RAY_NODE_AGENTS", "1")
+
+    parsed_refs = []
+
+    monkeypatch.setattr(
+        sitecustomize,
+        "_collect_node_agent_logs",
+        lambda _ray_module: {
+            "node-abc123": {
+                "proxy_log_lines": [
+                    "[S3:PutObject] s3://bucket/key.parquet  (1024 bytes)  etag=abc123",
+                    "[S3:GetObject] s3://bucket/input.csv  (2048 bytes)  etag=def456",
+                ],
+                "node_id": "node-abc123",
+                "proxy_port": 18080,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        sitecustomize,
+        "_write_proxy_artifacts_to_db",
+        lambda refs: parsed_refs.extend(refs),
+    )
+
+    sitecustomize._collect_ray_io()
+
+    assert [kind for kind, _ref in parsed_refs] == ["write", "read"]

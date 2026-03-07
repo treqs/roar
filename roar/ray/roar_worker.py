@@ -3,6 +3,7 @@ from __future__ import annotations
 import atexit
 import builtins
 import collections
+import contextlib
 import hashlib
 import os
 import queue
@@ -29,10 +30,14 @@ _collector_thread: threading.Thread | None = None
 _shutdown_event = threading.Event()
 _native_events_buffer: list[tuple[str, ArtifactRef]] = []
 _native_lock = threading.Lock()
+_direct_streamer: GlaasFragmentStreamer | None = None
+_direct_streamer_lock = threading.Lock()
 
 _FLUSH_INTERVAL_SECONDS = float(os.environ.get("ROAR_FRAGMENT_FLUSH_INTERVAL", "2.0"))
+_IDLE_FLUSH_INTERVAL_SECONDS = float(
+    os.environ.get("ROAR_FRAGMENT_IDLE_FLUSH_INTERVAL", "0.25")
+)
 _FLUSH_THRESHOLD_EVENTS = int(os.environ.get("ROAR_FRAGMENT_FLUSH_THRESHOLD", "200"))
-_PROXY_POLL_INTERVAL_SECONDS = float(os.environ.get("ROAR_PROXY_POLL_INTERVAL", "5.0"))
 
 _PROXY_LOG_RE = re.compile(
     r"^\[S3:(\w+)\]\s+(s3://[^\s]+)"
@@ -56,9 +61,8 @@ else:
 
 _startup_complete = False
 _actor_attribution_mode = "per_call"
-_node_agent_handle: Any | None = None
 _proxy_configured = False
-_proxy_log_index = 0
+_DEFAULT_LOCAL_PROXY_PORT = 19191
 
 
 def _get_logger():
@@ -198,6 +202,34 @@ def _append_fragment_ref(fragment: TaskFragment, kind: str, ref: ArtifactRef) ->
     fragment.reads.append(ref)
 
 
+def _emit_local_event_immediately(event: IOEvent) -> None:
+    streamer_instance = _ensure_direct_streamer()
+    if streamer_instance is None:
+        return
+
+    fragment = _start_fragment(event.task_id)
+    ref = ArtifactRef(
+        path=event.path,
+        hash=event.hash_value,
+        hash_algorithm=event.hash_algorithm,
+        size=event.size,
+        capture_method=event.capture_method,
+    )
+    _append_fragment_ref(fragment, event.kind, ref)
+    fragment.ended_at = time.time()
+
+    with _direct_streamer_lock:
+        try:
+            streamer_instance.append_fragment(fragment.to_dict())
+            if not streamer_instance.flush():
+                _get_logger().warning(
+                    "Failed to eagerly flush Ray local event for task %s",
+                    fragment.ray_task_id,
+                )
+        except Exception as exc:
+            _get_logger().warning("Failed to eagerly append Ray local event: %s", exc)
+
+
 def _drain_native_tracer_events() -> list[tuple[str, ArtifactRef]]:
     """Drain buffered native tracer events. Called by collector thread."""
     with _native_lock:
@@ -227,20 +259,16 @@ def _start_native_tracer_socket() -> None:
         os.environ["ROAR_PRELOAD_TRACE_SOCK"] = sock_path
 
     # Remove stale socket file if it exists (e.g. from a previous run)
-    try:
+    with contextlib.suppress(FileNotFoundError):
         os.unlink(sock_path)
-    except FileNotFoundError:
-        pass
 
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(sock_path)
     server.listen(8)
     server.settimeout(1.0)
 
-    try:
+    with contextlib.suppress(Exception):
         server.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
-    except Exception:
-        pass
 
     def _listener() -> None:
         while not _shutdown_event.is_set():
@@ -252,7 +280,7 @@ def _start_native_tracer_socket() -> None:
                     name="roar-preload-conn",
                     daemon=True,
                 ).start()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break
@@ -282,7 +310,7 @@ def _handle_preload_connection(conn: socket.socket) -> None:
                     break
                 buf.extend(data)
                 _parse_and_buffer_frames(buf)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break
@@ -350,64 +378,51 @@ def _parse_proxy_log_lines(lines: list[str]) -> list[tuple[str, ArtifactRef]]:
     return results
 
 
-def _resolve_node_agent_handle() -> None:
-    """Lazily resolve the node agent actor handle from the collector thread.
-
-    Called on first proxy poll. Uses env vars set by _configure_local_proxy_endpoint
-    instead of calling ray.get_actor() from the background config thread (which
-    segfaults during worker teardown in Ray 2.x).
-    """
-    global _node_agent_handle
-
-    if _node_agent_handle is not None:
-        return
-
-    job_id = os.environ.get("ROAR_PROXY_JOB_ID") or os.environ.get("ROAR_JOB_ID")
-    if not job_id:
-        return
-
-    try:
-        import ray
-        from roar.ray._agent_names import build_node_agent_name
-
-        ctx = ray.get_runtime_context()
-        raw_node_id = ctx.get_node_id()
-        if isinstance(raw_node_id, bytes):
-            node_id = raw_node_id.hex()
-        else:
-            to_hex = getattr(raw_node_id, "hex", None)
-            node_id = _to_text(to_hex()) if callable(to_hex) else _to_text(raw_node_id)
-
-        if node_id:
-            agent_name = build_node_agent_name(str(job_id), node_id)
-            print(f"[roar-worker] collector resolving actor handle: {agent_name}")
-            _node_agent_handle = ray.get_actor(agent_name, namespace="roar")
-            print(f"[roar-worker] collector got actor handle ✓")
-    except Exception as exc:
-        print(f"[roar-worker] collector could not resolve actor handle: {exc}")
+def _is_loopback_proxy_endpoint(url: str) -> bool:
+    text = str(url).strip().lower()
+    return text.startswith("http://127.0.0.1:") or text.startswith("http://localhost:")
 
 
-def _collect_proxy_logs() -> list[tuple[str, ArtifactRef]]:
-    global _proxy_log_index
+def _local_proxy_port() -> int:
+    raw_value = str(os.environ.get("ROAR_PROXY_PORT", "")).strip()
+    if raw_value.isdigit():
+        port = int(raw_value)
+        if 1024 < port <= 65535:
+            return port
+    return _DEFAULT_LOCAL_PROXY_PORT
 
-    # Lazily resolve handle on first call (from collector thread, not daemon thread).
-    if _node_agent_handle is None:
-        _resolve_node_agent_handle()
 
-    if _node_agent_handle is None:
-        return []
+def _ensure_direct_streamer() -> GlaasFragmentStreamer | None:
+    global _direct_streamer
 
-    try:
-        import ray
+    if _direct_streamer is not None:
+        return _direct_streamer
 
-        result = ray.get(
-            _node_agent_handle.get_log_entries_since.remote(_proxy_log_index),
-            timeout=5,
-        )
-        _proxy_log_index = result["current_index"]
-        return _parse_proxy_log_lines(result["entries"])
-    except Exception:
-        return []
+    session_id = os.environ.get("ROAR_SESSION_ID")
+    token = os.environ.get("ROAR_FRAGMENT_TOKEN")
+    glaas_url = os.environ.get("GLAAS_URL") or os.environ.get("GLAAS_API_URL")
+    if not (session_id and token and glaas_url):
+        return None
+
+    with _direct_streamer_lock:
+        if _direct_streamer is not None:
+            return _direct_streamer
+
+        try:
+            _direct_streamer = GlaasFragmentStreamer(
+                session_id=session_id,
+                token=token,
+                glaas_url=glaas_url,
+            )
+        except Exception as exc:
+            _get_logger().warning(
+                "Failed to initialize direct Ray fragment streamer for session %s: %s",
+                session_id,
+                exc,
+            )
+            return None
+
+    return _direct_streamer
 
 
 def _start_collector() -> None:
@@ -416,32 +431,16 @@ def _start_collector() -> None:
     if _collector_thread is not None and _collector_thread.is_alive():
         return
 
-    session_id = os.environ.get("ROAR_SESSION_ID")
-    token = os.environ.get("ROAR_FRAGMENT_TOKEN")
-    glaas_url = os.environ.get("GLAAS_URL") or os.environ.get("GLAAS_API_URL")
-
-    streamer: GlaasFragmentStreamer | None = None
-    if session_id and token and glaas_url:
-        try:
-            streamer = GlaasFragmentStreamer(
-                session_id=session_id,
-                token=token,
-                glaas_url=glaas_url,
-            )
-        except Exception as exc:
-            _get_logger().warning(
-                "Failed to initialize Ray fragment streamer for session %s: %s",
-                session_id,
-                exc,
-            )
-
     _shutdown_event.clear()
 
     def _collector_loop() -> None:
         fragment: TaskFragment | None = None
         events_since_flush = 0
         last_flush = time.monotonic()
-        last_proxy_poll = time.monotonic()
+        last_activity = last_flush
+
+        def _ensure_streamer() -> GlaasFragmentStreamer | None:
+            return _ensure_direct_streamer()
 
         def _flush_fragment_batch(*, continuation: bool) -> None:
             nonlocal events_since_flush, fragment, last_flush
@@ -454,11 +453,18 @@ def _start_collector() -> None:
 
             current_task_id = fragment.ray_task_id
             fragment.ended_at = time.time()
-            if streamer is not None:
-                try:
-                    streamer.append_fragment(fragment.to_dict())
-                except Exception as exc:
-                    _get_logger().warning("Failed to append Ray fragment: %s", exc)
+            streamer_instance = _ensure_streamer()
+            if streamer_instance is not None:
+                with _direct_streamer_lock:
+                    try:
+                        streamer_instance.append_fragment(fragment.to_dict())
+                        if not streamer_instance.flush():
+                            _get_logger().warning(
+                                "Failed to flush Ray fragment batch for task %s",
+                                fragment.ray_task_id,
+                            )
+                    except Exception as exc:
+                        _get_logger().warning("Failed to append Ray fragment: %s", exc)
 
             fragment = _start_fragment(current_task_id) if continuation else None
             events_since_flush = 0
@@ -480,7 +486,7 @@ def _start_collector() -> None:
             return fragment
 
         def _process_event(event: IOEvent) -> None:
-            nonlocal events_since_flush
+            nonlocal events_since_flush, last_activity
 
             current_fragment = _ensure_fragment(event.task_id)
             ref = ArtifactRef(
@@ -492,20 +498,10 @@ def _start_collector() -> None:
             )
             _append_fragment_ref(current_fragment, event.kind, ref)
             events_since_flush += 1
-
-        def _process_proxy_entries(entries: list[tuple[str, ArtifactRef]]) -> None:
-            nonlocal events_since_flush
-
-            if not entries:
-                return
-
-            current_fragment = _ensure_fragment(_get_current_task_id())
-            for kind, ref in entries:
-                _append_fragment_ref(current_fragment, kind, ref)
-                events_since_flush += 1
+            last_activity = time.monotonic()
 
         def _process_native_entries(entries: list[tuple[str, ArtifactRef]]) -> None:
-            nonlocal events_since_flush
+            nonlocal events_since_flush, last_activity
 
             if not entries:
                 return
@@ -514,6 +510,7 @@ def _start_collector() -> None:
             for kind, ref in entries:
                 _append_fragment_ref(current_fragment, kind, ref)
                 events_since_flush += 1
+            last_activity = time.monotonic()
 
         while True:
             if _shutdown_event.is_set():
@@ -541,16 +538,15 @@ def _start_collector() -> None:
             elif _shutdown_event.is_set():
                 break
 
-            _process_native_entries(_drain_native_tracer_events())
+            native_entries = _drain_native_tracer_events()
+            if native_entries:
+                _process_native_entries(native_entries)
 
             now = time.monotonic()
-            if now - last_proxy_poll >= _PROXY_POLL_INTERVAL_SECONDS:
-                _process_proxy_entries(_collect_proxy_logs())
-                last_proxy_poll = now
-
             if events_since_flush > 0 and (
                 events_since_flush >= _FLUSH_THRESHOLD_EVENTS
                 or now - last_flush >= _FLUSH_INTERVAL_SECONDS
+                or now - last_activity >= _IDLE_FLUSH_INTERVAL_SECONDS
             ):
                 _flush_fragment_batch(continuation=True)
 
@@ -564,14 +560,8 @@ def _start_collector() -> None:
             _process_event(queued_event)
 
         _process_native_entries(_drain_native_tracer_events())
-        _process_proxy_entries(_collect_proxy_logs())
         _flush_fragment_batch(continuation=False)
-
-        if streamer is not None:
-            try:
-                streamer.close()
-            except Exception as exc:
-                _get_logger().warning("Failed to close Ray fragment streamer: %s", exc)
+        _close_direct_streamer()
 
     _collector_thread = threading.Thread(
         target=_collector_loop,
@@ -586,6 +576,21 @@ def _shutdown_collector() -> None:
     _event_queue.put(None)
     if _collector_thread and _collector_thread.is_alive():
         _collector_thread.join(timeout=10)
+    _close_direct_streamer()
+
+
+def _close_direct_streamer() -> None:
+    global _direct_streamer
+
+    with _direct_streamer_lock:
+        if _direct_streamer is None:
+            return
+        try:
+            _direct_streamer.close()
+        except Exception as exc:
+            _get_logger().warning("Failed to close direct Ray fragment streamer: %s", exc)
+        finally:
+            _direct_streamer = None
 
 
 def _is_write_mode(mode: str) -> bool:
@@ -605,17 +610,17 @@ def _log_read(
     size: int,
     capture_method: str,
 ) -> None:
-    _event_queue.put(
-        IOEvent(
-            "read",
-            _get_current_task_id(),
-            path,
-            hash_value,
-            hash_algorithm,
-            size,
-            capture_method,
-        )
+    event = IOEvent(
+        "read",
+        _get_current_task_id(),
+        path,
+        hash_value,
+        hash_algorithm,
+        size,
+        capture_method,
     )
+    _event_queue.put(event)
+    _emit_local_event_immediately(event)
 
 
 def _log_write(
@@ -626,17 +631,17 @@ def _log_write(
     size: int,
     capture_method: str,
 ) -> None:
-    _event_queue.put(
-        IOEvent(
-            "write",
-            _get_current_task_id(),
-            path,
-            hash_value,
-            hash_algorithm,
-            size,
-            capture_method,
-        )
+    event = IOEvent(
+        "write",
+        _get_current_task_id(),
+        path,
+        hash_value,
+        hash_algorithm,
+        size,
+        capture_method,
     )
+    _event_queue.put(event)
+    _emit_local_event_immediately(event)
 
 
 class _TrackedWriteFile:
@@ -711,10 +716,7 @@ class _TrackedWriteFile:
 
 
 def _tracking_open(*args, **kwargs):
-    global _proxy_configured
-
     if _startup_complete and not _proxy_configured:
-        _proxy_configured = True
         _configure_local_proxy_endpoint()
 
     handle = _real_open(*args, **kwargs)
@@ -794,90 +796,29 @@ def _patch_tempfile() -> None:
 
 
 def _configure_local_proxy_endpoint() -> None:
-    """Point S3 traffic at the local node agent proxy using file-based port discovery.
+    """Point S3 traffic at the local node proxy on the well-known loopback port."""
+    global _proxy_configured
 
-    The node agent writes its proxy port to /tmp/roar-proxy-{job_id}.port.
-    This avoids calling ray.get_actor() which segfaults from background threads
-    during worker teardown on real clusters.
-    """
-    global _node_agent_handle
-
-    job_id = os.environ.get("ROAR_JOB_ID") or os.environ.get("RAY_JOB_ID")
-    if not job_id:
+    if _proxy_configured:
         return
-
-    port_file = f"/tmp/roar-proxy-{job_id}.port"
-    print(f"[roar-worker] looking for port file: {port_file}")
-    try:
-        port_text = open(port_file).read().strip()  # noqa: SIM115
-        if not port_text.isdigit():
-            print(f"[roar-worker] port file content not numeric: {port_text!r}")
-            return
-        port = int(port_text)
-        if port <= 1024 or port > 65535:
-            print(f"[roar-worker] port out of range: {port}")
-            return
-        print(f"[roar-worker] found proxy port {port} from file")
-    except FileNotFoundError:
-        print(f"[roar-worker] port file not found: {port_file}")
-        import glob
-        existing = glob.glob("/tmp/roar-proxy-*.port")
-        print(f"[roar-worker] existing port files: {existing}")
-        return
-    except Exception as exc:
-        print(f"[roar-worker] error reading port file: {exc}")
-        return
+    port = _local_proxy_port()
 
     # Configure the proxy endpoint.
-    original = os.environ.get("AWS_ENDPOINT_URL", "")
-    if original:
+    upstream = str(os.environ.get("ROAR_UPSTREAM_S3_ENDPOINT", "")).strip()
+    original = str(os.environ.get("AWS_ENDPOINT_URL", "")).strip()
+    if not upstream and original and not _is_loopback_proxy_endpoint(original):
         os.environ["ROAR_UPSTREAM_S3_ENDPOINT"] = original
     os.environ["AWS_ENDPOINT_URL"] = f"http://127.0.0.1:{port}"
     print(f"[roar-worker] set AWS_ENDPOINT_URL=http://127.0.0.1:{port}")
 
-    # Store job_id + port so collector thread can lazily look up the actor handle.
-    # We do NOT call ray.get_actor() here — that segfaults when called from a
-    # background/daemon thread during worker teardown (Ray 2.x known issue).
-    # The collector thread resolves the handle on first proxy poll instead.
-    os.environ["ROAR_PROXY_JOB_ID"] = str(job_id)
     os.environ["ROAR_PROXY_PORT"] = str(port)
-    print(f"[roar-worker] proxy endpoint configured, actor lookup deferred to collector thread")
+    _proxy_configured = True
+    print("[roar-worker] proxy endpoint configured")
 
 
 def _configure_proxy_in_background() -> None:
-    """Poll for the proxy port file and configure the endpoint when it appears.
-
-    Runs in a daemon thread. Polls every 0.5s for up to 30s. No GCS calls needed
-    for port discovery — just reads a file written by the node agent.
-    """
-    import threading
-
-    def _deferred_configure():
-        global _proxy_configured
-
-        job_id = os.environ.get("ROAR_JOB_ID") or os.environ.get("RAY_JOB_ID")
-        print(f"[roar-worker] background proxy config thread started (job_id={job_id})")
-        # Poll for port file (up to 30s). Check shutdown event to avoid
-        # blocking during worker teardown (which caused SIGSEGV via ray.get_actor).
-        for i in range(60):
-            if _shutdown_event.is_set():
-                print(f"[roar-worker] shutdown signalled, stopping port file poll at {i * 0.5:.1f}s")
-                return
-            port_file = f"/tmp/roar-proxy-{job_id}.port" if job_id else None
-            if port_file and os.path.exists(port_file):
-                try:
-                    _configure_local_proxy_endpoint()
-                    if _node_agent_handle is not None:
-                        _proxy_configured = True
-                        print(f"[roar-worker] proxy configured after {i * 0.5:.1f}s")
-                        return
-                except Exception as exc:
-                    print(f"[roar-worker] config attempt {i} failed: {exc}")
-            time.sleep(0.5)
-        print("[roar-worker] proxy config TIMED OUT after 30s")
-
-    t = threading.Thread(target=_deferred_configure, daemon=True)
-    t.start()
+    """Compatibility wrapper for older call sites."""
+    _configure_local_proxy_endpoint()
 
 
 def _startup() -> None:
@@ -896,10 +837,7 @@ def _startup() -> None:
     atexit.register(_shutdown_collector)
     _startup_complete = True
 
-    # Configure proxy endpoint in a background thread — ray.get_actor() segfaults
-    # if called directly from worker_process_setup_hook (CoreWorker not ready).
-    # A short delay lets the worker finish initialization before we query GCS.
-    _configure_proxy_in_background()
+    _configure_local_proxy_endpoint()
 
 
 def _run_worker_entrypoint(argv: list[str]) -> None:

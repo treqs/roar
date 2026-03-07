@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 
 import ray
 
@@ -29,46 +30,20 @@ def write_attributed_file(task_index: int, output_dir: str) -> dict:
         "output_path": output_path,
     }
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f)
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
 
     return payload
 
 
-@ray.remote
-def read_and_summarize(paths: list[str]) -> dict:
-    """Read multiple files written by other tasks and return a summary."""
-    ctx = ray.get_runtime_context()
-    records = []
-    for path in paths:
-        with open(path, encoding="utf-8") as f:
-            records.append(json.load(f))
-
-    # Trigger an explicit write so actor-backed buffering flushes prior read
-    # events before the worker idles.
-    with open("/tmp/roar_reader_flush.txt", "w", encoding="utf-8") as flush_file:
-        flush_file.write(str(len(records)))
-
-    return {
-        "reader_task_id": ctx.get_task_id(),
-        "reader_node_id": ctx.get_node_id(),
-        "records_read": len(records),
-        "paths": paths,
-    }
-
-
 if __name__ == "__main__":
-    output_dir = sys.argv[1] if len(sys.argv) > 1 else "/tmp/attributed"
+    default_dir = Path.cwd() / "artifacts" / "attributed"
+    output_dir = sys.argv[1] if len(sys.argv) > 1 else str(default_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     ray.init(address="auto")
 
-    # Distribute 6 write tasks across workers
     write_refs = [write_attributed_file.remote(i, output_dir) for i in range(6)]
     write_results = ray.get(write_refs)
-
-    # Read all outputs from a single task
-    written_paths = [r["output_path"] for r in write_results]
-    summary = ray.get(read_and_summarize.remote(written_paths))
-
-    print(json.dumps({"writes": write_results, "summary": summary}))
+    print(json.dumps({"writes": write_results}))

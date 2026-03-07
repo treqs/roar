@@ -3,25 +3,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import ray
 
 
 @ray.remote
-def write_file(path: str, data: str) -> str:
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(data)
-    return path
-
-
-@ray.remote
-def read_file(path: str) -> str:
-    with open(path, encoding="utf-8") as handle:
-        return handle.read()
-
-
-@ray.remote
-def transform(input_path: str, output_path: str) -> dict[str, object]:
+def run_file_io_pipeline(input_path: str, output_path: str) -> dict[str, object]:
+    seed_payload = {"a": 1, "b": 2, "label": "sample"}
+    Path(input_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(input_path, "w", encoding="utf-8") as handle:
+        json.dump(seed_payload, handle)
     with open(input_path, encoding="utf-8") as handle:
         payload = json.load(handle)
 
@@ -35,19 +27,20 @@ def transform(input_path: str, output_path: str) -> dict[str, object]:
     with open(output_path, "w", encoding="utf-8") as handle:
         json.dump(transformed, handle)
 
-    return transformed
+    with open(output_path, encoding="utf-8") as handle:
+        result = json.load(handle)
+    return {"input_path": input_path, "output_path": output_path, "result": result}
 
 
 def main() -> None:
     ray.init(address="auto")
-    input_path = "/tmp/input.json"
-    output_path = "/tmp/output.json"
-
-    seed_payload = {"a": 1, "b": 2, "label": "sample"}
-    ray.get(write_file.remote(input_path, json.dumps(seed_payload)))
-    ray.get(transform.remote(input_path, output_path))
-
-    result = json.loads(ray.get(read_file.remote(output_path)))
+    base_dir = Path.cwd() / "artifacts" / "basic_file_io"
+    result = ray.get(
+        run_file_io_pipeline.remote(
+            str(base_dir / "input.json"),
+            str(base_dir / "output.json"),
+        )
+    )
     print(json.dumps(result))
 
 

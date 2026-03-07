@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sqlite3
 import urllib.request
 from dataclasses import dataclass
@@ -10,7 +11,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .collector import collect_fragments
+from .collector import _resolve_active_session_context, collect_fragments
 
 
 def _get_logger():
@@ -63,11 +64,16 @@ class FragmentReconstituter:
 
         fragments = self._deduplicate_fragments(fragments)
         jobs_before, artifacts_before = self._count_local_rows()
+        session_id, step_number = _resolve_active_session_context(str(self._roar_db_path))
+        driver_job_uid = str(os.environ.get("ROAR_JOB_ID", "")).strip() or None
 
         try:
             collect_fragments(
                 fragments=fragments,
                 project_dir=str(self._project_dir()),
+                driver_job_uid=driver_job_uid,
+                session_id=session_id,
+                step_number=step_number,
             )
         except Exception as exc:
             _get_logger().warning(

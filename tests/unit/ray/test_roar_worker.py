@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import builtins
+import time
+from pathlib import Path
 
 import pytest
 
@@ -9,9 +11,27 @@ import pytest
 def _reset_state(monkeypatch: pytest.MonkeyPatch) -> None:
     import roar.ray.roar_worker as roar_worker
 
+    roar_worker._shutdown_collector()
     monkeypatch.setattr(roar_worker, "_startup_complete", False)
     monkeypatch.setattr(roar_worker, "_actor_attribution_mode", "per_call")
-    # Drain any leftover events from previous tests
+    monkeypatch.setattr(roar_worker, "_collector_thread", None)
+    monkeypatch.setattr(roar_worker, "_direct_streamer", None)
+    monkeypatch.setattr(roar_worker, "_proxy_configured", False)
+    builtins.open = roar_worker._real_open
+    roar_worker._shutdown_event.clear()
+    with roar_worker._native_lock:
+        roar_worker._native_events_buffer.clear()
+    while not roar_worker._event_queue.empty():
+        try:
+            roar_worker._event_queue.get_nowait()
+        except Exception:
+            break
+    yield
+    builtins.open = roar_worker._real_open
+    roar_worker._shutdown_collector()
+    roar_worker._shutdown_event.clear()
+    with roar_worker._native_lock:
+        roar_worker._native_events_buffer.clear()
     while not roar_worker._event_queue.empty():
         try:
             roar_worker._event_queue.get_nowait()
@@ -62,7 +82,7 @@ def test_log_write_pushes_event_to_queue(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_tracking_open_hashes_written_bytes_on_close(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     from blake3 import blake3
 
@@ -79,7 +99,6 @@ def test_tracking_open_hashes_written_bytes_on_close(
     handle.write(payload[100:])
     handle.close()
 
-    # Write event should be in the queue
     event = roar_worker._event_queue.get_nowait()
     assert event.kind == "write"
     assert event.path == str(output_path.resolve())
@@ -104,7 +123,6 @@ def test_get_task_and_actor_id_do_not_import_ray_during_startup(
 
     monkeypatch.setattr(builtins, "__import__", _guard_import)
 
-    # _get_current_task_id calls _get_task_id internally
     assert roar_worker._get_current_task_id() == ""
     assert roar_worker._get_actor_id() is None
 
@@ -132,7 +150,7 @@ def test_parse_proxy_log_lines_extracts_s3_ops() -> None:
 
     results = roar_worker._parse_proxy_log_lines(lines)
 
-    assert len(results) == 3  # CreateMultipartUpload and non-matching skipped
+    assert len(results) == 3
 
     kind0, ref0 = results[0]
     assert kind0 == "write"
@@ -149,7 +167,271 @@ def test_parse_proxy_log_lines_extracts_s3_ops() -> None:
     kind2, ref2 = results[2]
     assert kind2 == "read"
     assert ref2.path == "s3://test-bucket/data/file.csv"
-    assert ref2.size == 0  # HeadObject has no size
+    assert ref2.size == 0
+
+
+def test_configure_local_proxy_endpoint_preserves_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    import roar.ray.roar_worker as roar_worker
+
+    monkeypatch.setenv("ROAR_UPSTREAM_S3_ENDPOINT", "http://minio:9000")
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:19191")
+    monkeypatch.setenv("ROAR_PROXY_PORT", "19191")
+
+    roar_worker._configure_local_proxy_endpoint()
+
+    assert roar_worker.os.environ["ROAR_UPSTREAM_S3_ENDPOINT"] == "http://minio:9000"
+    assert roar_worker.os.environ["AWS_ENDPOINT_URL"] == "http://127.0.0.1:19191"
+    assert roar_worker.os.environ["ROAR_PROXY_PORT"] == "19191"
+    assert roar_worker._proxy_configured is True
+
+
+def test_configure_local_proxy_endpoint_captures_original_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    import roar.ray.roar_worker as roar_worker
+
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://minio:9000")
+    monkeypatch.delenv("ROAR_UPSTREAM_S3_ENDPOINT", raising=False)
+    monkeypatch.delenv("ROAR_PROXY_PORT", raising=False)
+
+    roar_worker._configure_local_proxy_endpoint()
+
+    assert roar_worker.os.environ["ROAR_UPSTREAM_S3_ENDPOINT"] == "http://minio:9000"
+    assert roar_worker.os.environ["AWS_ENDPOINT_URL"] == "http://127.0.0.1:19191"
+    assert roar_worker.os.environ["ROAR_PROXY_PORT"] == "19191"
+    assert roar_worker._proxy_configured is True
+
+
+def test_collector_flushes_local_events_after_short_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.ray.roar_worker as roar_worker
+
+    flushed: list[dict[str, object]] = []
+
+    class _FakeStreamer:
+        def __init__(
+            self,
+            *,
+            session_id: str,
+            token: str,
+            glaas_url: str,
+            sequence_start: int = 0,
+            sequence_step: int = 1,
+        ) -> None:
+            self.session_id = session_id
+            self.token = token
+            self.glaas_url = glaas_url
+            self.sequence_start = sequence_start
+            self.sequence_step = sequence_step
+            self._pending: list[dict[str, object]] = []
+
+        def append_fragment(self, fragment_dict: dict[str, object]) -> None:
+            self._pending.append(fragment_dict)
+
+        def flush(self) -> bool:
+            flushed.extend(self._pending)
+            self._pending.clear()
+            return True
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setenv("ROAR_SESSION_ID", "session-1")
+    monkeypatch.setenv("ROAR_FRAGMENT_TOKEN", "ab" * 32)
+    monkeypatch.setenv("GLAAS_URL", "http://localhost:3001")
+    monkeypatch.setattr(roar_worker, "GlaasFragmentStreamer", _FakeStreamer)
+    monkeypatch.setattr(roar_worker, "_FLUSH_INTERVAL_SECONDS", 60.0)
+    monkeypatch.setattr(roar_worker, "_IDLE_FLUSH_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(roar_worker, "_FLUSH_THRESHOLD_EVENTS", 200)
+    monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-local")
+
+    roar_worker._start_collector()
+    roar_worker._log_write(
+        path="/tmp/output.bin",
+        hash_value="deadbeef",
+        hash_algorithm="blake3",
+        size=8,
+        capture_method="python",
+    )
+
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not flushed:
+        time.sleep(0.01)
+
+    roar_worker._shutdown_collector()
+
+    assert flushed, "collector did not flush local event after going idle"
+    fragment = flushed[0]
+    assert fragment["ray_task_id"] == "task-local"
+    assert fragment["writes"][0]["path"] == "/tmp/output.bin"
+
+
+def test_collector_lazily_initializes_streamer_from_worker_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.ray.roar_worker as roar_worker
+
+    appended: list[dict[str, object]] = []
+
+    class _FakeStreamer:
+        def __init__(
+            self,
+            *,
+            session_id: str,
+            token: str,
+            glaas_url: str,
+            sequence_start: int = 0,
+            sequence_step: int = 1,
+        ) -> None:
+            self.session_id = session_id
+            self.token = token
+            self.glaas_url = glaas_url
+            self.sequence_start = sequence_start
+            self.sequence_step = sequence_step
+
+        def append_fragment(self, fragment_dict: dict[str, object]) -> None:
+            appended.append(fragment_dict)
+
+        def flush(self) -> bool:
+            return True
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.delenv("ROAR_SESSION_ID", raising=False)
+    monkeypatch.delenv("ROAR_FRAGMENT_TOKEN", raising=False)
+    monkeypatch.delenv("GLAAS_URL", raising=False)
+    monkeypatch.delenv("GLAAS_API_URL", raising=False)
+    monkeypatch.setattr(roar_worker, "GlaasFragmentStreamer", _FakeStreamer)
+    monkeypatch.setattr(roar_worker, "_FLUSH_INTERVAL_SECONDS", 60.0)
+    monkeypatch.setattr(roar_worker, "_IDLE_FLUSH_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(roar_worker, "_FLUSH_THRESHOLD_EVENTS", 200)
+    monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-lazy")
+
+    roar_worker._start_collector()
+
+    monkeypatch.setenv("ROAR_SESSION_ID", "session-lazy")
+    monkeypatch.setenv("ROAR_FRAGMENT_TOKEN", "ef" * 32)
+    monkeypatch.setenv("GLAAS_URL", "http://localhost:3001")
+    roar_worker._log_write(
+        path="/tmp/lazy.bin",
+        hash_value="cafebabe",
+        hash_algorithm="blake3",
+        size=4,
+        capture_method="python",
+    )
+
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not appended:
+        time.sleep(0.01)
+
+    roar_worker._shutdown_collector()
+
+    assert appended, "collector did not initialize streamer after env vars appeared"
+    fragment = appended[0]
+    assert fragment["ray_task_id"] == "task-lazy"
+    assert fragment["writes"][0]["path"] == "/tmp/lazy.bin"
+
+
+def test_log_write_eagerly_flushes_local_event_when_streamer_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.ray.roar_worker as roar_worker
+
+    flushed: list[dict[str, object]] = []
+
+    class _FakeStreamer:
+        def append_fragment(self, fragment_dict: dict[str, object]) -> None:
+            flushed.append(fragment_dict)
+
+        def flush(self) -> bool:
+            return True
+
+    monkeypatch.setattr(roar_worker, "_ensure_direct_streamer", lambda: _FakeStreamer())
+    monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-eager")
+    monkeypatch.setenv("ROAR_JOB_ID", "job-eager")
+
+    roar_worker._log_write(
+        path="/tmp/eager.bin",
+        hash_value="facefeed",
+        hash_algorithm="blake3",
+        size=12,
+        capture_method="python",
+    )
+
+    assert flushed, "local event was not eagerly flushed"
+    fragment = flushed[0]
+    assert fragment["ray_task_id"] == "task-eager"
+    assert fragment["writes"][0]["path"] == "/tmp/eager.bin"
+
+
+def test_collector_flushes_native_entries_with_current_task_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.ray.roar_worker as roar_worker
+    from roar.ray.fragment import ArtifactRef
+
+    appended: list[dict[str, object]] = []
+
+    class _FakeStreamer:
+        def __init__(
+            self,
+            *,
+            session_id: str,
+            token: str,
+            glaas_url: str,
+            sequence_start: int = 0,
+            sequence_step: int = 1,
+        ) -> None:
+            self.session_id = session_id
+            self.token = token
+            self.glaas_url = glaas_url
+            self.sequence_start = sequence_start
+            self.sequence_step = sequence_step
+
+        def append_fragment(self, fragment_dict: dict[str, object]) -> None:
+            appended.append(fragment_dict)
+
+        def flush(self) -> bool:
+            return True
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setenv("ROAR_SESSION_ID", "session-native")
+    monkeypatch.setenv("ROAR_FRAGMENT_TOKEN", "cd" * 32)
+    monkeypatch.setenv("GLAAS_URL", "http://localhost:3001")
+    monkeypatch.setattr(roar_worker, "GlaasFragmentStreamer", _FakeStreamer)
+    monkeypatch.setattr(roar_worker, "_FLUSH_INTERVAL_SECONDS", 60.0)
+    monkeypatch.setattr(roar_worker, "_IDLE_FLUSH_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(roar_worker, "_FLUSH_THRESHOLD_EVENTS", 200)
+    monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-native")
+
+    roar_worker._start_collector()
+    with roar_worker._native_lock:
+        roar_worker._native_events_buffer.append(
+            (
+                "write",
+                ArtifactRef(
+                    path="/tmp/native-output.bin",
+                    hash=None,
+                    hash_algorithm="",
+                    size=0,
+                    capture_method="native",
+                ),
+            )
+        )
+
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not appended:
+        time.sleep(0.01)
+
+    roar_worker._shutdown_collector()
+
+    assert appended, "collector did not flush native entries after going idle"
+    fragment = appended[0]
+    assert fragment["ray_task_id"] == "task-native"
+    assert fragment["writes"][0]["path"] == "/tmp/native-output.bin"
+    assert fragment["writes"][0]["capture_method"] == "native"
 
 
 def test_main_calls_startup_and_runs_worker_entrypoint(

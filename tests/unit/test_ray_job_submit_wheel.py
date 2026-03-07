@@ -83,7 +83,14 @@ def test_maybe_rewrite_injects_pip_even_when_vendor_wheel_exists(tmp_path, monke
 
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
-    assert _entrypoint(rewritten.command) == ["python", "main.py"]
+    assert _entrypoint(rewritten.command) == [
+        "python",
+        "-m",
+        "roar.ray.driver_entrypoint",
+        "--",
+        "python",
+        "main.py",
+    ]
     env = _runtime_env_json(rewritten.command)
     assert env["pip"] == ["roar-cli==1.2.3"]
     assert env["env_vars"]["ROAR_JOB_INSTRUMENTED"] == "1"

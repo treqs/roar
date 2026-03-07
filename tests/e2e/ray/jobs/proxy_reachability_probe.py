@@ -20,7 +20,8 @@ import ray
 def check_proxy_endpoint() -> dict[str, object]:
     """Return connectivity info for the proxy endpoint this worker sees."""
     endpoint = os.environ.get("AWS_ENDPOINT_URL", "")
-    node_id = ray.get_runtime_context().get_node_id().hex()
+    raw_node_id = ray.get_runtime_context().get_node_id()
+    node_id = raw_node_id.hex() if hasattr(raw_node_id, "hex") else str(raw_node_id)
 
     if not endpoint:
         return {"endpoint": None, "reachable": False, "error": "AWS_ENDPOINT_URL not set", "node_id": node_id}

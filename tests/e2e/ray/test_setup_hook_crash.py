@@ -35,6 +35,7 @@ def _parse_json_line(stdout: str) -> dict[str, Any]:
 
 @pytest.mark.e2e
 @pytest.mark.ray_e2e
+@pytest.mark.ray_diagnostic
 def test_worker_process_setup_hook_job_succeeds(ray_cluster: dict[str, str]) -> None:
     del ray_cluster
 

@@ -2,150 +2,39 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import functools
-import hashlib
-import http.server
 import importlib
 import json
 import os
 import shlex
+import sqlite3
 import subprocess
 import sys
-import threading
+import tempfile
 import time
 import urllib.parse
+import urllib.request
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 COMPOSE_FILE = Path(__file__).resolve().parent / "docker-compose.yml"
+REPO_ROOT = COMPOSE_FILE.parent.parent.parent.parent.resolve()
+ROAR_BIN = REPO_ROOT / ".venv" / "bin" / "roar"
+HOST_JOBS_DIR = COMPOSE_FILE.parent / "jobs"
+HOST_PROJECTS_DIR = REPO_ROOT.parent / ".tmp-ray-e2e"
+HOST_GLAAS_URL = "http://localhost:3001"
+CLUSTER_GLAAS_URL = "http://host.docker.internal:3001"
+HEAD_PROJECT_DIR = "/app"
+JOBS_DIR = f"{HEAD_PROJECT_DIR}/tests/e2e/ray/jobs"
+FRAGMENT_STORE_URL = CLUSTER_GLAAS_URL
 HEAD_TIMEOUT_SECONDS = 120
 WORKERS_TIMEOUT_SECONDS = 60
 POLL_INTERVAL_SECONDS = 3
-FRAGMENT_GLAAS_URL_ENV = "ROAR_E2E_FRAGMENT_GLAAS_URL"
-
-os.environ.setdefault(FRAGMENT_GLAAS_URL_ENV, "http://localhost:3301")
-
-
-class _FragmentStoreHandler(http.server.BaseHTTPRequestHandler):
-    sessions: dict[str, dict[str, object]] = {}
-    lock = threading.Lock()
-
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A003
-        return
-
-    def _read_json_body(self) -> dict[str, object]:
-        length = int(self.headers.get("content-length", "0") or "0")
-        if length <= 0:
-            return {}
-        raw = self.rfile.read(length)
-        try:
-            payload = json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError:
-            return {}
-        return payload if isinstance(payload, dict) else {}
-
-    def _write_json(self, status: int, payload: dict[str, object]) -> None:
-        encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        self.send_response(status)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
-
-    def _route_parts(self) -> tuple[list[str], urllib.parse.ParseResult]:
-        parsed = urllib.parse.urlparse(self.path)
-        parts = [part for part in parsed.path.split("/") if part]
-        return parts, parsed
-
-    @staticmethod
-    def _token_hash(token: str) -> str:
-        return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-    def do_GET(self) -> None:  # noqa: N802
-        parts, parsed = self._route_parts()
-        if parts == ["api", "v1", "health"]:
-            self._write_json(200, {"success": True, "status": "healthy"})
-            return
-
-        if len(parts) == 6 and parts[:4] == ["api", "v1", "fragments", "sessions"] and parts[5] == "fragments":
-            session_id = parts[4]
-            token = urllib.parse.parse_qs(parsed.query).get("token", [None])[0]
-            if not token:
-                token = self.headers.get("x-roar-fragment-token")
-            if not token:
-                self._write_json(401, {"success": False, "error": "missing token"})
-                return
-
-            with self.lock:
-                session = self.sessions.get(session_id)
-                if not isinstance(session, dict):
-                    self._write_json(404, {"success": False, "error": "unknown session"})
-                    return
-                expected_hash = str(session.get("token_hash") or "")
-                if expected_hash and self._token_hash(str(token)) != expected_hash:
-                    self._write_json(403, {"success": False, "error": "invalid token"})
-                    return
-                fragments = list(session.get("fragments", []))
-
-            self._write_json(
-                200,
-                {
-                    "success": True,
-                    "data": {"fragments": fragments},
-                    "fragments": fragments,
-                },
-            )
-            return
-
-        self._write_json(404, {"success": False, "error": "not found"})
-
-    def do_POST(self) -> None:  # noqa: N802
-        parts, _parsed = self._route_parts()
-        body = self._read_json_body()
-
-        if parts == ["api", "v1", "fragments", "sessions"]:
-            session_id = str(body.get("session_id") or "")
-            token_hash = str(body.get("token_hash") or "")
-            if not session_id or not token_hash:
-                self._write_json(400, {"success": False, "error": "missing fields"})
-                return
-
-            with self.lock:
-                self.sessions.setdefault(session_id, {"token_hash": token_hash, "fragments": []})
-            self._write_json(200, {"success": True, "data": {"session_id": session_id}})
-            return
-
-        if len(parts) == 6 and parts[:4] == ["api", "v1", "fragments", "sessions"] and parts[5] == "fragments":
-            session_id = parts[4]
-            token = self.headers.get("x-roar-fragment-token", "")
-            encrypted_batch = body.get("encrypted_batch")
-            sequence = body.get("sequence")
-            if not isinstance(encrypted_batch, str) or not encrypted_batch:
-                self._write_json(400, {"success": False, "error": "missing encrypted_batch"})
-                return
-
-            with self.lock:
-                session = self.sessions.get(session_id)
-                if not isinstance(session, dict):
-                    self._write_json(404, {"success": False, "error": "unknown session"})
-                    return
-                expected_hash = str(session.get("token_hash") or "")
-                if expected_hash and self._token_hash(token) != expected_hash:
-                    self._write_json(403, {"success": False, "error": "invalid token"})
-                    return
-                fragments = session.setdefault("fragments", [])
-                if not isinstance(fragments, list):
-                    fragments = []
-                    session["fragments"] = fragments
-                fragments.append({"encrypted_batch": encrypted_batch, "sequence": sequence})
-
-            self._write_json(200, {"success": True})
-            return
-
-        self._write_json(404, {"success": False, "error": "not found"})
 
 
 def _is_compiled_extension(module: object) -> bool:
@@ -195,8 +84,7 @@ def _get_ray():
 def pytest_configure(config: pytest.Config) -> None:
     # Ensure subprocess calls in tests can find tools installed in this repo's
     # virtualenv (for example the `ray` CLI used by infra health checks).
-    repo_root = COMPOSE_FILE.parent.parent.parent.parent.resolve()
-    venv_bin = repo_root / ".venv" / "bin"
+    venv_bin = REPO_ROOT / ".venv" / "bin"
     if venv_bin.exists():
         current_path = os.environ.get("PATH", "")
         venv_bin_text = str(venv_bin)
@@ -209,12 +97,22 @@ def pytest_configure(config: pytest.Config) -> None:
     ):  # Ray not installed; e2e tests require a live Docker cluster
         _get_ray()
     config.addinivalue_line("markers", "ray_e2e: Ray end-to-end tests requiring Docker")
+    config.addinivalue_line(
+        "markers",
+        "ray_contract: User-facing Ray contract tests using `roar run ray job submit ...`",
+    )
+    config.addinivalue_line(
+        "markers",
+        "ray_diagnostic: Diagnostic Ray tests that inspect internal runtime details",
+    )
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     marker = pytest.mark.ray_e2e
     for item in items:
         item.add_marker(marker)
+        if item.get_closest_marker("timeout") is None:
+            item.add_marker(pytest.mark.timeout(180))
 
 
 @functools.lru_cache(maxsize=1)
@@ -318,8 +216,398 @@ def _ensure_roar_db(compose_file: Path) -> None:
     )
 
 
+def exec_on_service(
+    service: str,
+    args: Sequence[str],
+    *,
+    compose_file: str | Path = COMPOSE_FILE,
+    env: Mapping[str, str] | None = None,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    compose_path = Path(compose_file)
+    command = ["docker", "compose", "-f", str(compose_path), "exec", "-T"]
+    if env:
+        for key, value in env.items():
+            command.extend(["-e", f"{key}={value}"])
+    command.append(service)
+    command.extend(args)
+    return run_docker(command, capture_output=True, text=True, check=False, timeout=timeout)
+
+
+def _roar_bin() -> str:
+    if ROAR_BIN.exists():
+        return str(ROAR_BIN)
+    return "roar"
+
+
+def _run_checked_local(command: Sequence[str], *, cwd: Path) -> None:
+    subprocess.run(list(command), cwd=cwd, check=True, capture_output=True)
+
+
+def make_host_project_dir(prefix: str = "project") -> Path:
+    HOST_PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=f"{prefix}-", dir=str(HOST_PROJECTS_DIR)))
+
+
+def init_host_project(
+    project_dir: Path,
+    *,
+    glaas_url: str | None = HOST_GLAAS_URL,
+    ignore_tmp_files: bool | None = None,
+) -> None:
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "README.md").write_text("ray host-submit e2e\n", encoding="utf-8")
+    (project_dir / ".gitignore").write_text(".roar/\n", encoding="utf-8")
+    _run_checked_local(["git", "init", "-q"], cwd=project_dir)
+    _run_checked_local(["git", "config", "user.email", "test@test.com"], cwd=project_dir)
+    _run_checked_local(["git", "config", "user.name", "test"], cwd=project_dir)
+    _run_checked_local(["git", "add", "README.md", ".gitignore"], cwd=project_dir)
+    _run_checked_local(["git", "commit", "-q", "-m", "init"], cwd=project_dir)
+    _run_checked_local([_roar_bin(), "init", "--path", str(project_dir), "-n"], cwd=project_dir)
+    if glaas_url:
+        _run_checked_local([_roar_bin(), "config", "set", "glaas.url", glaas_url], cwd=project_dir)
+    if ignore_tmp_files is not None:
+        _run_checked_local(
+            [
+                _roar_bin(),
+                "config",
+                "set",
+                "filters.ignore_tmp_files",
+                "true" if ignore_tmp_files else "false",
+            ],
+            cwd=project_dir,
+        )
+
+
+def build_roar_submit_env_from_host(
+    ray_cluster: Mapping[str, str],
+    *,
+    use_fragment_store: bool,
+    extra_env: Mapping[str, str] | None = None,
+    glaas_url: str = HOST_GLAAS_URL,
+    cluster_glaas_url: str = CLUSTER_GLAAS_URL,
+) -> dict[str, str]:
+    env = dict(os.environ)
+    env.update(
+        {
+            "ROAR_CLUSTER_PIP_REQ": "skip",
+            "AWS_ACCESS_KEY_ID": "minioadmin",
+            "AWS_SECRET_ACCESS_KEY": "minioadmin",
+            "AWS_DEFAULT_REGION": "us-east-1",
+            "AWS_ENDPOINT_URL": str(ray_cluster["minio_endpoint"]),
+            "ROAR_CLUSTER_AWS_ENDPOINT_URL": str(
+                ray_cluster.get("cluster_minio_endpoint", "http://minio:9000")
+            ),
+        }
+    )
+    if use_fragment_store:
+        env["GLAAS_URL"] = glaas_url
+        env["GLAAS_API_URL"] = glaas_url
+        env["ROAR_CLUSTER_GLAAS_URL"] = cluster_glaas_url
+    else:
+        env["GLAAS_URL"] = ""
+        env["GLAAS_API_URL"] = ""
+        env.pop("ROAR_CLUSTER_GLAAS_URL", None)
+    if extra_env:
+        env.update({str(key): str(value) for key, value in extra_env.items()})
+    return env
+
+
+def run_roar_ray_job_from_host(
+    project_dir: Path,
+    ray_cluster: Mapping[str, str],
+    script_path: str | Path,
+    *,
+    use_fragment_store: bool,
+    tracer: str | None = "ptrace",
+    extra_env: Mapping[str, str] | None = None,
+    script_args: Sequence[str] | None = None,
+    submit_args: Sequence[str] | None = None,
+    working_dir: Path = HOST_JOBS_DIR,
+    timeout: float = 180,
+) -> subprocess.CompletedProcess[str]:
+    resolved_script = Path(script_path)
+    if resolved_script.is_absolute():
+        try:
+            script_arg = str(resolved_script.relative_to(working_dir))
+        except ValueError:
+            script_arg = str(resolved_script)
+    else:
+        script_arg = str(script_path)
+
+    command = [
+        _roar_bin(),
+        "run",
+    ]
+    if tracer:
+        command.extend(["--tracer", tracer])
+    command.extend(
+        [
+            "ray",
+            "job",
+            "submit",
+            "--address",
+            str(ray_cluster["dashboard_url"]),
+            "--working-dir",
+            str(working_dir),
+        ]
+    )
+    if submit_args:
+        command.extend(submit_args)
+    command.extend(["--", "python", script_arg])
+    if script_args:
+        command.extend(script_args)
+
+    return subprocess.run(
+        command,
+        cwd=project_dir,
+        env=build_roar_submit_env_from_host(
+            ray_cluster,
+            use_fragment_store=use_fragment_store,
+            extra_env=extra_env,
+        ),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def query_roar_db(
+    project_dir: Path,
+    sql: str,
+    params: Sequence[object] = (),
+) -> list[dict[str, object]]:
+    db_path = project_dir / ".roar" / "roar.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, tuple(params))
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def load_fragment_key(project_dir: Path) -> dict[str, str]:
+    key_dir = project_dir / ".roar" / "fragment-sessions"
+    key_files = sorted(key_dir.glob("*.key"))
+    assert key_files, f"Expected a fragment key under {key_dir}"
+    payload = json.loads(key_files[-1].read_text(encoding="utf-8"))
+    assert isinstance(payload, dict), f"Unexpected fragment key payload: {payload!r}"
+    return {str(key): str(value) for key, value in payload.items()}
+
+
+def fetch_fragment_batches(
+    session_id: str,
+    token: str,
+    *,
+    glaas_url: str = HOST_GLAAS_URL,
+) -> list[dict[str, object]]:
+    encoded_token = urllib.parse.quote(token, safe="")
+    url = f"{glaas_url.rstrip('/')}/api/v1/fragments/sessions/{session_id}/fragments?token={encoded_token}"
+    with urllib.request.urlopen(url, timeout=5) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    fragments = payload.get("fragments")
+    if fragments is None and isinstance(payload.get("data"), dict):
+        fragments = payload["data"].get("fragments")
+    assert isinstance(fragments, list), f"Expected fragment list from {url}, got: {payload!r}"
+    return [item for item in fragments if isinstance(item, dict)]
+
+
+def decrypt_fragment_batches(
+    batches: Sequence[dict[str, object]],
+    token: str,
+) -> list[dict[str, object]]:
+    key = bytes.fromhex(token)
+    decrypted: list[dict[str, object]] = []
+    for batch in batches:
+        encrypted_batch = batch.get("encrypted_batch")
+        if not isinstance(encrypted_batch, str) or not encrypted_batch:
+            continue
+        payload = base64.b64decode(encrypted_batch)
+        nonce = payload[:12]
+        ciphertext = payload[12:]
+        plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)
+        decoded = json.loads(plaintext.decode("utf-8"))
+        if isinstance(decoded, list):
+            decrypted.extend(item for item in decoded if isinstance(item, dict))
+    return decrypted
+
+
+def exec_shell_on_service(
+    service: str,
+    cmd: str,
+    *,
+    compose_file: str | Path = COMPOSE_FILE,
+    env: Mapping[str, str] | None = None,
+) -> tuple[str, str, int]:
+    result = exec_on_service(
+        service,
+        ["bash", "-lc", cmd],
+        compose_file=compose_file,
+        env=env,
+    )
+    return result.stdout, result.stderr, result.returncode
+
+
+def exec_on_head(
+    args: Sequence[str],
+    *,
+    compose_file: str | Path = COMPOSE_FILE,
+    env: Mapping[str, str] | None = None,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return exec_on_service(
+        "ray-head",
+        args,
+        compose_file=compose_file,
+        env=env,
+        timeout=timeout,
+    )
+
+
+def exec_shell_on_head(
+    cmd: str,
+    *,
+    compose_file: str | Path = COMPOSE_FILE,
+    env: Mapping[str, str] | None = None,
+) -> tuple[str, str, int]:
+    return exec_shell_on_service("ray-head", cmd, compose_file=compose_file, env=env)
+
+
+def reset_roar_project_on_head(
+    compose_file: str | Path = COMPOSE_FILE,
+    *,
+    project_dir: str = HEAD_PROJECT_DIR,
+    glaas_url: str | None = FRAGMENT_STORE_URL,
+) -> None:
+    configure_glaas = ""
+    if glaas_url is not None:
+        configure_glaas = (
+            f" && roar config set glaas.url {shlex.quote(str(glaas_url))}"
+            f" && roar config set glaas.web_url {shlex.quote(str(glaas_url))}"
+        )
+    stdout, stderr, rc = exec_shell_on_head(
+        (
+            f"cd {shlex.quote(project_dir)}"
+            " && git config --global user.email test@test.com"
+            " && git config --global user.name test"
+            " && git init -q"
+            " && git add -A"
+            " && git commit -q -m init --allow-empty"
+            f" && rm -rf {shlex.quote(project_dir)}/.roar"
+            f" && roar init --path {shlex.quote(project_dir)} -n"
+            f"{configure_glaas}"
+        ),
+        compose_file=compose_file,
+    )
+    if rc != 0:
+        raise AssertionError(f"roar init failed on ray-head:\nstdout:\n{stdout}\nstderr:\n{stderr}")
+
+
+def build_roar_submit_env_on_head(
+    *,
+    use_fragment_store: bool,
+    extra_env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    env = {
+        "AWS_ENDPOINT_URL": "http://minio:9000",
+        "AWS_ACCESS_KEY_ID": "minioadmin",
+        "AWS_SECRET_ACCESS_KEY": "minioadmin",
+        "ROAR_CLUSTER_PIP_REQ": "skip",
+    }
+    if use_fragment_store:
+        env["GLAAS_URL"] = FRAGMENT_STORE_URL
+        env["GLAAS_API_URL"] = FRAGMENT_STORE_URL
+    else:
+        env["GLAAS_URL"] = ""
+        env["GLAAS_API_URL"] = ""
+    if extra_env:
+        env.update({str(key): str(value) for key, value in extra_env.items()})
+    return env
+
+
+def run_roar_ray_job_on_head(
+    script_path: str,
+    *,
+    compose_file: str | Path = COMPOSE_FILE,
+    use_fragment_store: bool,
+    extra_env: Mapping[str, str] | None = None,
+    script_args: Sequence[str] | None = None,
+    submit_args: Sequence[str] | None = None,
+    working_dir: str = HEAD_PROJECT_DIR,
+    timeout: float = 180,
+) -> tuple[str, str, int]:
+    command = [
+        "roar",
+        "run",
+        "ray",
+        "job",
+        "submit",
+        "--address",
+        "http://127.0.0.1:8265",
+        "--working-dir",
+        working_dir,
+    ]
+    if submit_args:
+        command.extend(submit_args)
+    command.extend(["--", "python", script_path])
+    if script_args:
+        command.extend(script_args)
+
+    result = exec_on_head(
+        command,
+        compose_file=compose_file,
+        env=build_roar_submit_env_on_head(
+            use_fragment_store=use_fragment_store,
+            extra_env=extra_env,
+        ),
+        timeout=timeout,
+    )
+    return result.stdout, result.stderr, result.returncode
+
+
+def query_roar_db_on_head(
+    sql: str,
+    params: Sequence[object] = (),
+    *,
+    compose_file: str | Path = COMPOSE_FILE,
+    db_path: str = f"{HEAD_PROJECT_DIR}/.roar/roar.db",
+) -> list[dict[str, object]]:
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    run_docker(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(Path(compose_file)),
+            "cp",
+            f"ray-head:{db_path}",
+            tmp_path,
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    conn = sqlite3.connect(tmp_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, tuple(params))
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+        Path(tmp_path).unlink(missing_ok=True)
+
+
 @pytest.fixture(scope="session")
 def ray_cluster() -> dict[str, str]:
+    run_docker(
+        _compose_args(COMPOSE_FILE, "down", "-v", "--remove-orphans"),
+        check=False,
+    )
     run_docker(
         _compose_args(COMPOSE_FILE, "up", "-d", "--build"),
         check=True,
@@ -332,6 +620,7 @@ def ray_cluster() -> dict[str, str]:
             "head_address": "ray://localhost:10001",
             "dashboard_url": "http://localhost:8265",
             "minio_endpoint": "http://localhost:9000",
+            "cluster_minio_endpoint": "http://minio:9000",
             "compose_file": str(COMPOSE_FILE),
         }
     finally:
@@ -357,6 +646,7 @@ def submit_job_on_head(
     script_path: str,
     env: Mapping[str, str] | None = None,
 ) -> tuple[str, str, int]:
+    """Diagnostic helper that bypasses `roar run ray job submit`."""
     compose_path = Path(compose_file)
     merged_env = dict(env or {})
 

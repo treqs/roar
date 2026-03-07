@@ -45,6 +45,8 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "6379:6379"
       - "8265:8265"
@@ -70,6 +72,8 @@ services:
     depends_on:
       ray-head:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - roar-ray-test
 
@@ -86,6 +90,8 @@ services:
     depends_on:
       ray-head:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - roar-ray-test
 

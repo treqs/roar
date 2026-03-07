@@ -1,271 +1,272 @@
-"""
-Contract tests for roar's Ray integration.
-
-Each test encodes one architectural contract that roar must uphold when a user
-runs `roar run ray job submit ...`. Customer workload scripts are completely
-roar-unaware — zero imports, zero env vars, zero roar actor names.
-
-Entry point for every test: `roar run ray job submit` (the real user workflow).
-
-Tests are ordered by the data flow: injection → capture → delivery → reconstitution.
-"""
+"""User-facing Ray contract tests for `roar run ray job submit ...`."""
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-pytestmark = pytest.mark.e2e
+from tests.e2e.ray.conftest import (
+    decrypt_fragment_batches,
+    fetch_fragment_batches,
+    init_host_project,
+    load_fragment_key,
+    make_host_project_dir,
+    query_roar_db,
+    run_roar_ray_job_from_host,
+)
+
+pytestmark = [pytest.mark.e2e, pytest.mark.ray_contract, pytest.mark.timeout(180)]
 
 
-# ---------------------------------------------------------------------------
-# Contract 1: Environment injection
-#
-# When `roar run ray job submit` rewrites the Ray runtime_env, the following
-# env vars MUST be injected into every worker process:
-#
-#   ROAR_JOB_INSTRUMENTED=1   — sentinel telling sitecustomize to skip re-init
-#   ROAR_WRAP=1                — tells driver-side sitecustomize to intercept ray.init
-#   ROAR_RAY_NODE_AGENTS=1     — tells sitecustomize to spawn per-node agents
-#   ROAR_SESSION_ID            — fragment session UUID for GLaaS
-#   ROAR_FRAGMENT_TOKEN        — 32-byte hex encryption key for fragment batches
-#   GLAAS_URL                  — GLaaS endpoint for fragment streaming
-#
-# Invariants:
-#   - All six env vars are present and non-empty on every worker.
-#   - Customer workload script does NOT set any of these.
-#   - Values are consistent across all workers in the same job.
-# ---------------------------------------------------------------------------
-class TestEnvInjection:
-    def test_worker_env_vars_injected(self):
-        pytest.skip("Not implemented")
+def _assert_submit_ok(result) -> None:
+    assert result.returncode == 0, (
+        f"submit failed (rc={result.returncode})\nstdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+    )
 
 
-# ---------------------------------------------------------------------------
-# Contract 2: Node agent presence
-#
-# On every live Ray node, sitecustomize MUST spawn a RoarNodeAgent actor.
-# Each node agent runs an S3 proxy process and exposes its port.
-#
-# Invariants:
-#   - Number of node agents == number of live Ray nodes.
-#   - Each agent is named `roar-node-agent-<node_id>`.
-#   - Each agent's `get_proxy_port()` returns a valid port (1024–65535).
-#   - Agents are Ray detached actors (survive task completion).
-# ---------------------------------------------------------------------------
-class TestNodeAgentPresence:
-    def test_node_agent_per_live_node(self):
-        pytest.skip("Not implemented")
+def _parse_last_json(stdout: str) -> dict[str, object]:
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    raise AssertionError(f"Unable to parse JSON payload from stdout:\n{stdout}")
 
 
-# ---------------------------------------------------------------------------
-# Contract 3: S3 proxy routing
-#
-# Every worker process MUST have AWS_ENDPOINT_URL set to the local node
-# agent's proxy (http://127.0.0.1:<port>). All S3 SDK calls — regardless
-# of client construction method — route through the proxy transparently.
-#
-# Invariants:
-#   - AWS_ENDPOINT_URL is set on every worker and points to 127.0.0.1.
-#   - boto3.client("s3"), boto3.Session().client("s3"), boto3.resource("s3"),
-#     and awscli subprocesses all route through the proxy.
-#   - The proxy forwards to the real S3 endpoint (original AWS_ENDPOINT_URL
-#     saved as ROAR_UPSTREAM_S3_ENDPOINT before overwrite).
-#   - S3 operations succeed (data integrity preserved — read back == written).
-# ---------------------------------------------------------------------------
-class TestS3ProxyRouting:
-    def test_all_sdk_methods_route_through_proxy(self):
-        pytest.skip("Not implemented")
+def _artifact_rows(project_dir: Path, path_like: str) -> list[dict[str, object]]:
+    return query_roar_db(
+        project_dir,
+        """
+        SELECT id,
+               COALESCE(path, first_seen_path) AS path,
+               capture_method,
+               metadata
+        FROM artifacts
+        WHERE COALESCE(path, first_seen_path) LIKE ?
+        ORDER BY id
+        """,
+        (path_like,),
+    )
 
 
-# ---------------------------------------------------------------------------
-# Contract 4: Python hook activation
-#
-# Every worker process MUST have builtins.open replaced with _tracking_open.
-# All Python-level file I/O is captured with capture_method="python".
-#
-# Invariants:
-#   - builtins.open is patched (not the original).
-#   - File reads produce ArtifactRef entries in fragments.
-#   - File writes produce ArtifactRef entries with hash + size.
-#   - Tracking does NOT alter file content or behavior (data integrity).
-#   - System paths (/proc, /sys, /dev) are excluded.
-# ---------------------------------------------------------------------------
-class TestPythonHookActivation:
-    def test_builtins_open_patched_on_workers(self):
-        pytest.skip("Not implemented")
+def _output_rows(project_dir: Path, path_like: str) -> list[dict[str, object]]:
+    return query_roar_db(
+        project_dir,
+        """
+        SELECT j.id AS job_id,
+               json_extract(j.metadata, '$.ray_task_id') AS ray_task_id,
+               json_extract(j.metadata, '$.ray_node_id') AS ray_node_id,
+               COALESCE(a.path, a.first_seen_path) AS path
+        FROM jobs j
+        JOIN job_outputs jo ON jo.job_id = j.id
+        JOIN artifacts a ON a.id = jo.artifact_id
+        WHERE j.job_type = 'ray_task'
+          AND COALESCE(a.path, a.first_seen_path) LIKE ?
+        ORDER BY j.id, path
+        """,
+        (path_like,),
+    )
 
 
-# ---------------------------------------------------------------------------
-# Contract 5: Native tracer activation
-#
-# Every worker process MUST have the LD_PRELOAD native tracer active:
-#   - libroar_tracer_preload.so loaded via LD_PRELOAD
-#   - ROAR_PRELOAD_TRACE_SOCK set to a valid Unix domain socket path
-#   - A collector thread listening on that socket
-#   - TraceEvent messages (msgpack) flowing from .so → socket → collector
-#
-# Invariants:
-#   - LD_PRELOAD contains path to libroar_tracer_preload.so.
-#   - ROAR_PRELOAD_TRACE_SOCK is set and the socket file exists.
-#   - C-level file operations (e.g. from native libraries) produce events.
-#   - Events include pid and absolute path.
-#   - Events are captured even when builtins.open is NOT involved (e.g.
-#     a C extension calling libc open() directly).
-# ---------------------------------------------------------------------------
-class TestNativeTracerActivation:
-    def test_preload_tracer_connected_and_streaming(self):
-        pytest.skip("Not implemented")
+def test_local_file_io_reconstitutes_into_host_roar_db(
+    ray_cluster: dict[str, str],
+) -> None:
+    project_dir = make_host_project_dir("ray-contract")
+    init_host_project(project_dir)
+
+    result = run_roar_ray_job_from_host(
+        project_dir,
+        ray_cluster,
+        "basic_file_io.py",
+        use_fragment_store=True,
+    )
+
+    _assert_submit_ok(result)
+    inputs = query_roar_db(
+        project_dir,
+        "SELECT path FROM job_inputs WHERE path LIKE ?",
+        ("%/artifacts/basic_file_io/%",),
+    )
+    outputs = query_roar_db(
+        project_dir,
+        "SELECT path FROM job_outputs WHERE path LIKE ?",
+        ("%/artifacts/basic_file_io/%",),
+    )
+    jobs = query_roar_db(
+        project_dir,
+        """
+        SELECT job_uid, parent_job_uid, json_extract(metadata, '$.ray_task_id') AS ray_task_id
+        FROM jobs
+        WHERE job_type = 'ray_task'
+        """,
+    )
+
+    assert inputs
+    assert outputs
+    assert jobs
+    assert all(row["ray_task_id"] for row in jobs)
+    assert any(str(row["path"]).endswith("/artifacts/basic_file_io/input.json") for row in inputs)
+    assert any(str(row["path"]).endswith("/artifacts/basic_file_io/output.json") for row in outputs)
 
 
-# ---------------------------------------------------------------------------
-# Contract 6: Collector thread (non-blocking I/O tracking)
-#
-# Worker I/O tracking MUST be non-blocking. The customer's thread pushes
-# events into an unbounded queue; a background collector thread drains the
-# queue, builds fragments, and streams to GLaaS.
-#
-# Invariants:
-#   - _log_read / _log_write do queue.put() — O(1), no serialization.
-#   - Fragment serialization + encryption + HTTP happen only on the
-#     collector thread, never on the customer's thread.
-#   - The collector merges events from all three sources: Python hooks
-#     (queue), native tracer (Unix socket), S3 proxy logs (node agent poll).
-#   - Each ArtifactRef carries capture_method identifying its source.
-#   - Task boundaries are detected via task_id in each IOEvent.
-#   - Flush interval and threshold are configurable via env vars
-#     (ROAR_FRAGMENT_FLUSH_INTERVAL, ROAR_FRAGMENT_FLUSH_THRESHOLD).
-# ---------------------------------------------------------------------------
-class TestCollectorThread:
-    def test_io_tracking_is_nonblocking(self):
-        pytest.skip("Not implemented")
+def test_s3_proxy_routing_captures_worker_inputs_and_outputs(
+    ray_cluster: dict[str, str],
+) -> None:
+    project_dir = make_host_project_dir("ray-contract")
+    init_host_project(project_dir)
+
+    result = run_roar_ray_job_from_host(
+        project_dir,
+        ray_cluster,
+        "s3_io.py",
+        use_fragment_store=True,
+    )
+
+    _assert_submit_ok(result)
+    artifacts = _artifact_rows(project_dir, "s3://%")
+    inputs = query_roar_db(
+        project_dir,
+        "SELECT path FROM job_inputs WHERE path LIKE 's3://%' ORDER BY path",
+    )
+    outputs = query_roar_db(
+        project_dir,
+        "SELECT path FROM job_outputs WHERE path LIKE 's3://%' ORDER BY path",
+    )
+
+    assert artifacts
+    assert inputs
+    assert outputs
+    assert any(row["capture_method"] == "proxy" for row in artifacts)
 
 
-# ---------------------------------------------------------------------------
-# Contract 7: Fragment delivery to GLaaS
-#
-# Fragments from every worker MUST reach GLaaS during job execution.
-# The GlaasFragmentStreamer encrypts with AES-256-GCM, batches, and POSTs.
-#
-# Invariants:
-#   - At least one fragment batch per worker that performed I/O.
-#   - Batches are encrypted (AESGCM with the session token as key).
-#   - Batches have monotonically increasing sequence numbers.
-#   - GLaaS stores batches and they are retrievable by session_id.
-#   - Fragment data includes reads, writes, ray_task_id, ray_node_id.
-# ---------------------------------------------------------------------------
-class TestFragmentDelivery:
-    def test_fragments_reach_glaas_from_all_workers(self):
-        pytest.skip("Not implemented")
+def test_artifacts_are_attributed_to_distinct_ray_tasks(
+    ray_cluster: dict[str, str],
+) -> None:
+    project_dir = make_host_project_dir("ray-contract")
+    init_host_project(project_dir)
+
+    result = run_roar_ray_job_from_host(
+        project_dir,
+        ray_cluster,
+        "attributed_file_io.py",
+        use_fragment_store=True,
+    )
+
+    _assert_submit_ok(result)
+    payload = _parse_last_json(result.stdout)
+    writes = payload.get("writes", [])
+    assert isinstance(writes, list) and len(writes) == 6
+
+    outputs = _output_rows(project_dir, "%/artifacts/attributed/%")
+    task_ids = {row["ray_task_id"] for row in outputs if row["ray_task_id"]}
+    output_paths = {row["path"] for row in outputs if row["path"]}
+
+    assert len(task_ids) == 6
+    assert len(output_paths) == 6
 
 
-# ---------------------------------------------------------------------------
-# Contract 8: Reconstitution after job completion
-#
-# After `roar run ray job submit` returns, reconstitution MUST fetch all
-# fragment batches from GLaaS, decrypt them, and merge into local roar.db.
-#
-# Invariants:
-#   - Reconstitution runs automatically (no user action beyond `roar run`).
-#   - All fragments are decrypted successfully (key matches).
-#   - jobs_merged > 0 and artifacts_merged > 0.
-#   - The local roar.db contains the same artifacts that were captured
-#     on workers (nothing lost in transit).
-#   - Multiple fragment batches from the same task are merged correctly.
-# ---------------------------------------------------------------------------
-class TestReconstitution:
-    def test_lineage_in_local_db_after_job_completes(self):
-        pytest.skip("Not implemented")
+def test_multi_node_lineage_merges_jobs_from_multiple_nodes(
+    ray_cluster: dict[str, str],
+) -> None:
+    project_dir = make_host_project_dir("ray-contract")
+    init_host_project(project_dir)
+
+    result = run_roar_ray_job_from_host(
+        project_dir,
+        ray_cluster,
+        "s3_multi_node_affinity.py",
+        use_fragment_store=True,
+    )
+
+    _assert_submit_ok(result)
+    payload = _parse_last_json(result.stdout)
+    results = payload.get("results", [])
+    assert isinstance(results, list) and results
+
+    runtime_node_ids = {str(item.get("node_id") or "") for item in results if isinstance(item, dict)}
+    runtime_node_ids.discard("")
+    assert len(runtime_node_ids) >= 2
+
+    run_id = str(payload["run_id"])
+    db_rows = query_roar_db(
+        project_dir,
+        """
+        SELECT DISTINCT json_extract(j.metadata, '$.ray_node_id') AS ray_node_id
+        FROM jobs j
+        JOIN job_outputs jo ON jo.job_id = j.id
+        JOIN artifacts a ON a.id = jo.artifact_id
+        WHERE j.job_type = 'ray_task'
+          AND COALESCE(a.path, a.first_seen_path) LIKE ?
+        """,
+        (f"%multi-node-affinity/{run_id}/%",),
+    )
+    db_node_ids = {str(row["ray_node_id"] or "") for row in db_rows}
+    db_node_ids.discard("")
+
+    assert len(db_node_ids) >= 2
 
 
-# ---------------------------------------------------------------------------
-# Contract 9: Task attribution
-#
-# Every captured artifact MUST be attributed to the Ray task that produced
-# it. When task T1 writes file A and task T2 reads file B, the lineage
-# graph must show T1→A and T2→B, not a single blob.
-#
-# Invariants:
-#   - Each fragment carries ray_task_id (non-empty, unique per task).
-#   - Reads/writes are associated with the task that was executing when
-#     the I/O occurred.
-#   - Task boundaries are detected correctly even when tasks run
-#     sequentially on the same worker process.
-#   - After reconstitution, querying roar.db by task_id returns only
-#     that task's artifacts.
-# ---------------------------------------------------------------------------
-class TestTaskAttribution:
-    def test_artifacts_attributed_to_correct_task(self):
-        pytest.skip("Not implemented")
+def test_fragments_capture_tmp_paths_but_reconstitution_filters_them_by_default(
+    ray_cluster: dict[str, str],
+) -> None:
+    project_dir = make_host_project_dir("ray-contract")
+    init_host_project(project_dir)
+
+    result = run_roar_ray_job_from_host(
+        project_dir,
+        ray_cluster,
+        "tmp_filter_probe.py",
+        use_fragment_store=True,
+    )
+
+    _assert_submit_ok(result)
+    payload = _parse_last_json(result.stdout)
+    workspace_path = str(payload["workspace_path"])
+    tmp_path_str = str(payload["tmp_path"])
+
+    key_payload = load_fragment_key(project_dir)
+    batches = fetch_fragment_batches(key_payload["session_id"], key_payload["token"])
+    fragments = decrypt_fragment_batches(batches, key_payload["token"])
+
+    captured_paths = set()
+    for fragment in fragments:
+        for key in ("reads", "writes"):
+            refs = fragment.get(key, [])
+            if not isinstance(refs, list):
+                continue
+            for ref in refs:
+                if isinstance(ref, dict) and isinstance(ref.get("path"), str):
+                    captured_paths.add(ref["path"])
+
+    assert workspace_path in captured_paths
+    assert tmp_path_str in captured_paths
+
+    kept_rows = _artifact_rows(project_dir, f"%{Path(workspace_path).name}")
+    filtered_rows = _artifact_rows(project_dir, f"%{Path(tmp_path_str).name}")
+
+    assert kept_rows
+    assert not filtered_rows
 
 
-# ---------------------------------------------------------------------------
-# Contract 10: Multi-node lineage
-#
-# In a multi-node Ray cluster, lineage from ALL nodes MUST be captured
-# and merged into a single coherent lineage graph.
-#
-# Invariants:
-#   - Tasks execute on at least 2 distinct nodes (verified via node_id).
-#   - Fragments arrive from each node that ran tasks.
-#   - After reconstitution, roar.db contains artifacts from all nodes.
-#   - Cross-node data flow is traceable: if node A writes to S3 and
-#     node B reads it, both operations appear in lineage.
-# ---------------------------------------------------------------------------
-class TestMultiNodeLineage:
-    def test_lineage_from_all_nodes_merged(self):
-        pytest.skip("Not implemented")
+def test_contract_workloads_remain_roar_unaware() -> None:
+    jobs_dir = Path(__file__).resolve().parent / "jobs"
+    workload_names = [
+        "basic_file_io.py",
+        "attributed_file_io.py",
+        "s3_io.py",
+        "s3_pipeline.py",
+        "tmp_filter_probe.py",
+    ]
 
-
-# ---------------------------------------------------------------------------
-# Contract 11: Customer workload isolation
-#
-# Customer workload scripts MUST be completely roar-unaware. Zero roar
-# imports, zero ROAR_* env var references, zero roar actor names. The
-# litmus test: "Could you hand this script to Thomas's team without
-# explanation?"
-#
-# Invariants:
-#   - Workload scripts contain no `import roar` or `from roar`.
-#   - Workload scripts do not read ROAR_* env vars.
-#   - Workload scripts do not reference roar actor names.
-#   - Workload scripts use standard boto3/ray APIs only.
-#   - Removing roar from the equation doesn't break the workload.
-# ---------------------------------------------------------------------------
-class TestCustomerWorkloadIsolation:
-    def test_workload_scripts_are_roar_unaware(self):
-        pytest.skip("Not implemented")
-
-
-# ---------------------------------------------------------------------------
-# Contract 12: No collector actor (dead code removal)
-#
-# The legacy RoarLogCollectorActor MUST NOT be present. It was part of
-# Phase 1 and is now dead code — the fragment pipeline replaces it.
-#
-# Invariants:
-#   - No Ray actor named `roar-log-collector-*` exists after ray.init().
-#   - sitecustomize does NOT call _ensure_collector_actor() in the
-#     sentinel (ROAR_JOB_INSTRUMENTED=1) path.
-#   - Worker code does not attempt to find or use the collector actor.
-# ---------------------------------------------------------------------------
-class TestNoCollectorActor:
-    def test_collector_actor_not_present(self):
-        pytest.skip("Not implemented")
-
-
-# ---------------------------------------------------------------------------
-# Contract 13: Deduplication
-#
-# When the same file operation is captured by multiple tracers (e.g.
-# Python hooks + native tracer both see the same open()), reconstitution
-# MUST deduplicate. Preference order: proxy > native > python.
-#
-# Invariants:
-#   - Each ArtifactRef carries capture_method ("python", "native", "proxy").
-#   - After reconstitution, each unique (path, operation) pair appears
-#     once in the lineage — with the highest-priority capture_method.
-#   - No duplicate artifacts in the final lineage graph.
-# ---------------------------------------------------------------------------
-class TestDeduplication:
-    def test_overlapping_captures_deduplicated(self):
-        pytest.skip("Not implemented")
+    for name in workload_names:
+        text = (jobs_dir / name).read_text(encoding="utf-8")
+        assert "import roar" not in text
+        assert "from roar" not in text
+        assert "ROAR_" not in text

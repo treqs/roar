@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import ray
 
@@ -21,7 +22,9 @@ def write_and_report(path: str) -> dict[str, str]:
 
 def main() -> None:
     ray.init(address="auto")
-    payload = ray.get(write_and_report.remote("/tmp/native_tracing_output.txt"))
+    payload = ray.get(
+        write_and_report.remote(str(Path.cwd() / "artifacts" / "native_tracing_output.txt"))
+    )
     print(json.dumps(payload))
 
 

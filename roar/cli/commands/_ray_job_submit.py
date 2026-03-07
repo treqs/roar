@@ -12,7 +12,10 @@ from ...ray.fragment_key import generate_fragment_key, save_key
 
 _ROAR_WORKER_PY_EXECUTABLE = "roar-worker"
 _ROAR_WORKER_SETUP_HOOK = "roar.ray.roar_worker._startup"
+_ROAR_DRIVER_ENTRYPOINT_MODULE = "roar.ray.driver_entrypoint"
 _ROAR_JOB_INSTRUMENTED_ENV_VAR = "ROAR_JOB_INSTRUMENTED"
+_ROAR_CLUSTER_GLAAS_URL_ENV = "ROAR_CLUSTER_GLAAS_URL"
+_ROAR_CLUSTER_AWS_ENDPOINT_URL_ENV = "ROAR_CLUSTER_AWS_ENDPOINT_URL"
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,7 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
     entrypoint = list(command[separator_index + 1 :])
     if not entrypoint:
         return RayJobSubmitRewrite(command=command)
+    entrypoint = _wrap_entrypoint_for_driver_proxy(entrypoint)
 
     runtime_env_json_arg = _find_runtime_env_json(before_separator)
     runtime_env = _load_runtime_env(before_separator, runtime_env_json_arg)
@@ -79,16 +83,20 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
         or os.environ.get("AWS_ENDPOINT_URL")
         or ""
     )
-    if original_endpoint:
-        env_vars["ROAR_UPSTREAM_S3_ENDPOINT"] = original_endpoint
+    cluster_upstream_endpoint = _resolve_cluster_upstream_s3_endpoint(original_endpoint)
+    if cluster_upstream_endpoint:
+        env_vars["ROAR_UPSTREAM_S3_ENDPOINT"] = cluster_upstream_endpoint
+    env_vars["ROAR_PROXY_PORT"] = "19191"
     env_vars["AWS_ENDPOINT_URL"] = "http://127.0.0.1:19191"
 
     fragment_session_id: str | None = None
 
     glaas_url = _resolve_glaas_url()
     if glaas_url:
-        env_vars["GLAAS_URL"] = glaas_url
-        env_vars["GLAAS_API_URL"] = glaas_url
+        cluster_glaas_url = _resolve_cluster_glaas_url(glaas_url)
+        if cluster_glaas_url:
+            env_vars["GLAAS_URL"] = cluster_glaas_url
+            env_vars["GLAAS_API_URL"] = cluster_glaas_url
 
         key = generate_fragment_key()
         try:
@@ -122,6 +130,13 @@ def _is_ray_job_submit(command: list[str]) -> bool:
     noun = command[1].lower()
     verb = command[2].lower()
     return binary == "ray" and noun in {"job", "jobs"} and verb == "submit"
+
+
+def _wrap_entrypoint_for_driver_proxy(entrypoint: list[str]) -> list[str]:
+    if len(entrypoint) >= 3 and entrypoint[1] == "-m" and entrypoint[2] == _ROAR_DRIVER_ENTRYPOINT_MODULE:
+        return entrypoint
+
+    return ["python", "-m", _ROAR_DRIVER_ENTRYPOINT_MODULE, "--", *entrypoint]
 
 
 def _find_runtime_env_json(command: list[str]) -> tuple[int, int | None] | None:
@@ -246,6 +261,24 @@ def _resolve_glaas_url() -> str | None:
     if not url:
         return "https://api.glaas.ai"
     return str(url)
+
+
+def _resolve_cluster_glaas_url(host_glaas_url: str | None) -> str | None:
+    override = os.environ.get(_ROAR_CLUSTER_GLAAS_URL_ENV, "").strip()
+    if override:
+        return override
+    if not host_glaas_url:
+        return None
+    return str(host_glaas_url)
+
+
+def _resolve_cluster_upstream_s3_endpoint(host_endpoint: str | None) -> str | None:
+    override = os.environ.get(_ROAR_CLUSTER_AWS_ENDPOINT_URL_ENV, "").strip()
+    if override:
+        return override
+    if not host_endpoint:
+        return None
+    return str(host_endpoint)
 
 
 def _register_fragment_session(

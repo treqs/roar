@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import socket
 import subprocess
@@ -21,15 +22,10 @@ __all__ = ["RoarNodeAgent", "build_node_agent_name"]
 _ROAR_PROXY_PORT = 19191
 
 
-def _proxy_port_file_path(job_id: str) -> str:
-    """Well-known file path for workers to discover the proxy port without GCS."""
-    return f"/tmp/roar-proxy-{job_id}.port"
-
-
-def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+def _can_connect_to_local_proxy(port: int) -> bool:
+    with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", port), timeout=0.25):
+        return True
+    return False
 
 
 @ray.remote(num_cpus=0)
@@ -73,8 +69,12 @@ class RoarNodeAgent:
             return
         print(f"[roar-agent] found proxy binary: {proxy_binary}")
 
-        port = _find_free_port()
-        print(f"[roar-agent] using dynamic port {port} (was hardcoded {_ROAR_PROXY_PORT})")
+        port = _ROAR_PROXY_PORT
+        if _can_connect_to_local_proxy(port):
+            self._proxy_port = port
+            print(f"[roar-agent] reusing existing local proxy on port {port}")
+            return
+
         cmd = [proxy_binary, "--port", str(port), "--job-id", self._job_id]
 
         # Only use ROAR_UPSTREAM_S3_ENDPOINT — never fall back to AWS_ENDPOINT_URL.
@@ -119,12 +119,6 @@ class RoarNodeAgent:
                 ready = any(line.startswith(_READY_SENTINEL) for line in self._proxy_log_lines)
             if ready:
                 self._proxy_port = port
-                port_path = _proxy_port_file_path(self._job_id)
-                try:
-                    Path(port_path).write_text(str(port))
-                    print(f"[roar-agent] wrote port file {port_path} = {port}")
-                except Exception as exc:
-                    print(f"[roar-agent] FAILED to write port file {port_path}: {exc}")
                 return
 
             if process.poll() is not None:
@@ -139,14 +133,7 @@ class RoarNodeAgent:
 
         self._terminate_proxy()
 
-    def _cleanup_port_file(self) -> None:
-        try:
-            Path(_proxy_port_file_path(self._job_id)).unlink(missing_ok=True)
-        except Exception:
-            pass
-
     def _terminate_proxy(self) -> None:
-        self._cleanup_port_file()
         process = self._proxy_process
         if process is None:
             return
@@ -189,5 +176,4 @@ class RoarNodeAgent:
         }
 
     def shutdown(self) -> None:
-        self._cleanup_port_file()
         self._terminate_proxy()
