@@ -121,7 +121,11 @@ class RoarNodeAgent:
                 return
 
             if process.poll() is not None:
+                with self._log_lock:
+                    output = "\n".join(self._proxy_log_lines[-20:])
                 print(f"[roar-agent] proxy process exited early (rc={process.returncode})")
+                print(f"[roar-agent] proxy cmd: {' '.join(cmd)}")
+                print(f"[roar-agent] proxy output:\n{output}")
                 return
 
             time.sleep(0.05)
