@@ -817,6 +817,9 @@ def _configure_local_proxy_endpoint() -> None:
             print(f"[roar-worker] looking for actor: {agent_name} in namespace 'roar'")
             last_exc = None
             for attempt in range(10):
+                if _shutdown_event.is_set():
+                    print(f"[roar-worker] shutdown in progress, aborting actor lookup after {attempt} attempts")
+                    break
                 try:
                     _node_agent_handle = ray.get_actor(agent_name, namespace="roar")
                     print(f"[roar-worker] got actor handle on attempt {attempt + 1}")
@@ -843,18 +846,24 @@ def _configure_proxy_in_background() -> None:
     def _deferred_configure():
         global _proxy_configured
 
-        print(f"[roar-worker] background proxy config thread started (job_id={os.environ.get('ROAR_JOB_ID')})")
-        # Poll for port file (up to 30s).
+        job_id = os.environ.get("ROAR_JOB_ID") or os.environ.get("RAY_JOB_ID")
+        print(f"[roar-worker] background proxy config thread started (job_id={job_id})")
+        # Poll for port file (up to 30s). Check shutdown event to avoid
+        # blocking during worker teardown (which caused SIGSEGV via ray.get_actor).
         for i in range(60):
-            try:
-                _configure_local_proxy_endpoint()
-                if os.environ.get("AWS_ENDPOINT_URL", "").startswith("http://127.0.0.1:"):
-                    _proxy_configured = True
-                    print(f"[roar-worker] proxy configured after {i * 0.5:.1f}s")
-                    return
-            except Exception as exc:
-                if i == 0:
-                    print(f"[roar-worker] first config attempt failed: {exc}")
+            if _shutdown_event.is_set():
+                print(f"[roar-worker] shutdown signalled, stopping port file poll at {i * 0.5:.1f}s")
+                return
+            port_file = f"/tmp/roar-proxy-{job_id}.port" if job_id else None
+            if port_file and os.path.exists(port_file):
+                try:
+                    _configure_local_proxy_endpoint()
+                    if _node_agent_handle is not None:
+                        _proxy_configured = True
+                        print(f"[roar-worker] proxy configured after {i * 0.5:.1f}s")
+                        return
+                except Exception as exc:
+                    print(f"[roar-worker] config attempt {i} failed: {exc}")
             time.sleep(0.5)
         print("[roar-worker] proxy config TIMED OUT after 30s")
 
