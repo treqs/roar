@@ -350,8 +350,49 @@ def _parse_proxy_log_lines(lines: list[str]) -> list[tuple[str, ArtifactRef]]:
     return results
 
 
+def _resolve_node_agent_handle() -> None:
+    """Lazily resolve the node agent actor handle from the collector thread.
+
+    Called on first proxy poll. Uses env vars set by _configure_local_proxy_endpoint
+    instead of calling ray.get_actor() from the background config thread (which
+    segfaults during worker teardown in Ray 2.x).
+    """
+    global _node_agent_handle
+
+    if _node_agent_handle is not None:
+        return
+
+    job_id = os.environ.get("ROAR_PROXY_JOB_ID") or os.environ.get("ROAR_JOB_ID")
+    if not job_id:
+        return
+
+    try:
+        import ray
+        from roar.ray._agent_names import build_node_agent_name
+
+        ctx = ray.get_runtime_context()
+        raw_node_id = ctx.get_node_id()
+        if isinstance(raw_node_id, bytes):
+            node_id = raw_node_id.hex()
+        else:
+            to_hex = getattr(raw_node_id, "hex", None)
+            node_id = _to_text(to_hex()) if callable(to_hex) else _to_text(raw_node_id)
+
+        if node_id:
+            agent_name = build_node_agent_name(str(job_id), node_id)
+            print(f"[roar-worker] collector resolving actor handle: {agent_name}")
+            _node_agent_handle = ray.get_actor(agent_name, namespace="roar")
+            print(f"[roar-worker] collector got actor handle ✓")
+    except Exception as exc:
+        print(f"[roar-worker] collector could not resolve actor handle: {exc}")
+
+
 def _collect_proxy_logs() -> list[tuple[str, ArtifactRef]]:
     global _proxy_log_index
+
+    # Lazily resolve handle on first call (from collector thread, not daemon thread).
+    if _node_agent_handle is None:
+        _resolve_node_agent_handle()
 
     if _node_agent_handle is None:
         return []
@@ -794,39 +835,13 @@ def _configure_local_proxy_endpoint() -> None:
     os.environ["AWS_ENDPOINT_URL"] = f"http://127.0.0.1:{port}"
     print(f"[roar-worker] set AWS_ENDPOINT_URL=http://127.0.0.1:{port}")
 
-    # Opportunistically grab the actor handle for log collection.
-    # Retry a few times since CoreWorker may not be fully ready yet.
-    try:
-        import ray
-        from roar.ray._agent_names import build_node_agent_name
-
-        ctx = ray.get_runtime_context()
-        raw_node_id = ctx.get_node_id()
-        print(f"[roar-worker] raw node_id: {raw_node_id!r} (type={type(raw_node_id).__name__})")
-        if isinstance(raw_node_id, bytes):
-            node_id = raw_node_id.hex()
-        else:
-            to_hex = getattr(raw_node_id, "hex", None)
-            if callable(to_hex):
-                node_id = _to_text(to_hex())
-            else:
-                node_id = _to_text(raw_node_id)
-        print(f"[roar-worker] resolved node_id: {node_id!r}")
-        if node_id:
-            agent_name = build_node_agent_name(str(job_id), node_id)
-            print(f"[roar-worker] looking for actor: {agent_name} in namespace 'roar'")
-            # Single attempt only — retrying risks SIGSEGV if CoreWorker tears
-            # down mid-call. The port file already confirms the agent is ready.
-            if not _shutdown_event.is_set():
-                try:
-                    _node_agent_handle = ray.get_actor(agent_name, namespace="roar")
-                    print(f"[roar-worker] got actor handle for {agent_name}")
-                except Exception as exc:
-                    print(f"[roar-worker] could not get actor handle: {exc}")
-        else:
-            print("[roar-worker] node_id is empty, skipping actor lookup")
-    except Exception as exc:
-        print(f"[roar-worker] actor handle error: {exc}")
+    # Store job_id + port so collector thread can lazily look up the actor handle.
+    # We do NOT call ray.get_actor() here — that segfaults when called from a
+    # background/daemon thread during worker teardown (Ray 2.x known issue).
+    # The collector thread resolves the handle on first proxy poll instead.
+    os.environ["ROAR_PROXY_JOB_ID"] = str(job_id)
+    os.environ["ROAR_PROXY_PORT"] = str(port)
+    print(f"[roar-worker] proxy endpoint configured, actor lookup deferred to collector thread")
 
 
 def _configure_proxy_in_background() -> None:
