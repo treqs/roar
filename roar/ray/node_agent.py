@@ -112,13 +112,16 @@ class RoarNodeAgent:
                 ready = any(line.startswith(_READY_SENTINEL) for line in self._proxy_log_lines)
             if ready:
                 self._proxy_port = port
+                port_path = _proxy_port_file_path(self._job_id)
                 try:
-                    Path(_proxy_port_file_path(self._job_id)).write_text(str(port))
-                except Exception:
-                    pass
+                    Path(port_path).write_text(str(port))
+                    print(f"[roar-agent] wrote port file {port_path} = {port}")
+                except Exception as exc:
+                    print(f"[roar-agent] FAILED to write port file {port_path}: {exc}")
                 return
 
             if process.poll() is not None:
+                print(f"[roar-agent] proxy process exited early (rc={process.returncode})")
                 return
 
             time.sleep(0.05)

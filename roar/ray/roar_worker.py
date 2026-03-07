@@ -766,17 +766,25 @@ def _configure_local_proxy_endpoint() -> None:
         return
 
     port_file = f"/tmp/roar-proxy-{job_id}.port"
+    print(f"[roar-worker] looking for port file: {port_file}")
     try:
         port_text = open(port_file).read().strip()  # noqa: SIM115
         if not port_text.isdigit():
+            print(f"[roar-worker] port file content not numeric: {port_text!r}")
             return
         port = int(port_text)
         if port <= 1024 or port > 65535:
+            print(f"[roar-worker] port out of range: {port}")
             return
+        print(f"[roar-worker] found proxy port {port} from file")
     except FileNotFoundError:
+        print(f"[roar-worker] port file not found: {port_file}")
+        import glob
+        existing = glob.glob("/tmp/roar-proxy-*.port")
+        print(f"[roar-worker] existing port files: {existing}")
         return
     except Exception as exc:
-        _get_logger().warning("Failed to read proxy port file %s: %s", port_file, exc)
+        print(f"[roar-worker] error reading port file: {exc}")
         return
 
     # Configure the proxy endpoint.
@@ -784,35 +792,44 @@ def _configure_local_proxy_endpoint() -> None:
     if original:
         os.environ["ROAR_UPSTREAM_S3_ENDPOINT"] = original
     os.environ["AWS_ENDPOINT_URL"] = f"http://127.0.0.1:{port}"
+    print(f"[roar-worker] set AWS_ENDPOINT_URL=http://127.0.0.1:{port}")
 
     # Opportunistically grab the actor handle for log collection.
-    # This is non-critical — if it fails, proxy routing still works,
-    # we just can't poll logs from the node agent in the collector thread.
     # Retry a few times since CoreWorker may not be fully ready yet.
     try:
         import ray
         from roar.ray._agent_names import build_node_agent_name
 
         ctx = ray.get_runtime_context()
-        node_id = ctx.get_node_id()
-        if isinstance(node_id, bytes):
-            node_id = node_id.hex()
+        raw_node_id = ctx.get_node_id()
+        print(f"[roar-worker] raw node_id: {raw_node_id!r} (type={type(raw_node_id).__name__})")
+        if isinstance(raw_node_id, bytes):
+            node_id = raw_node_id.hex()
         else:
-            to_hex = getattr(node_id, "hex", None)
+            to_hex = getattr(raw_node_id, "hex", None)
             if callable(to_hex):
                 node_id = _to_text(to_hex())
             else:
-                node_id = _to_text(node_id)
+                node_id = _to_text(raw_node_id)
+        print(f"[roar-worker] resolved node_id: {node_id!r}")
         if node_id:
             agent_name = build_node_agent_name(str(job_id), node_id)
-            for _attempt in range(10):
+            print(f"[roar-worker] looking for actor: {agent_name} in namespace 'roar'")
+            last_exc = None
+            for attempt in range(10):
                 try:
                     _node_agent_handle = ray.get_actor(agent_name, namespace="roar")
+                    print(f"[roar-worker] got actor handle on attempt {attempt + 1}")
                     break
-                except Exception:
+                except Exception as exc:
+                    last_exc = exc
                     time.sleep(1.0)
+            else:
+                print(f"[roar-worker] FAILED to get actor after 10 attempts: {last_exc}")
+        else:
+            print("[roar-worker] node_id is empty, skipping actor lookup")
     except Exception as exc:
-        _get_logger().warning("Could not get node agent handle (non-fatal): %s", exc)
+        print(f"[roar-worker] actor handle error: {exc}")
 
 
 def _configure_proxy_in_background() -> None:
@@ -826,16 +843,20 @@ def _configure_proxy_in_background() -> None:
     def _deferred_configure():
         global _proxy_configured
 
+        print(f"[roar-worker] background proxy config thread started (job_id={os.environ.get('ROAR_JOB_ID')})")
         # Poll for port file (up to 30s).
-        for _ in range(60):
+        for i in range(60):
             try:
                 _configure_local_proxy_endpoint()
                 if os.environ.get("AWS_ENDPOINT_URL", "").startswith("http://127.0.0.1:"):
                     _proxy_configured = True
+                    print(f"[roar-worker] proxy configured after {i * 0.5:.1f}s")
                     return
-            except Exception:
-                pass
+            except Exception as exc:
+                if i == 0:
+                    print(f"[roar-worker] first config attempt failed: {exc}")
             time.sleep(0.5)
+        print("[roar-worker] proxy config TIMED OUT after 30s")
 
     t = threading.Thread(target=_deferred_configure, daemon=True)
     t.start()
