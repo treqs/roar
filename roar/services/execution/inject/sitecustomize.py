@@ -274,11 +274,11 @@ def _patch_ray_init(ray_module) -> None:
                 # any tasks execute. Workers connect to the proxy via the
                 # well-known port injected in AWS_ENDPOINT_URL.
                 try:
-                    _warn_roar(f"[roar] spawning node agents for job {submitted_job_id}")
+                    print(f"[roar] spawning node agents for job {submitted_job_id}")
                     _spawn_node_agents(ray_module, str(submitted_job_id))
-                    _warn_roar(f"[roar] node agents spawned (count={len(_ray_node_agents)})")
+                    print(f"[roar] node agents spawned (count={len(_ray_node_agents)})")
                 except Exception as exc:
-                    _warn_roar(f"[roar] WARNING: _spawn_node_agents failed: {exc}")
+                    print(f"[roar] WARNING: _spawn_node_agents failed: {exc}")
                 _start_ray_node_poller(ray_module)
             return result
 
@@ -533,17 +533,17 @@ def _spawn_node_agents(ray_module, job_id: str) -> None:
     try:
         from roar.ray.node_agent import RoarNodeAgent, build_node_agent_name
     except Exception as exc:
-        _warn_roar(f"[roar] cannot import RoarNodeAgent: {exc}")
+        print(f"[roar] cannot import RoarNodeAgent: {exc}")
         return
 
     try:
         nodes = ray_module.nodes()
     except Exception as exc:
-        _warn_roar(f"[roar] ray.nodes() failed: {exc}")
+        print(f"[roar] ray.nodes() failed: {exc}")
         return
 
     alive_nodes = [n for n in nodes if isinstance(n, dict) and n.get("Alive")]
-    _warn_roar(f"[roar] cluster has {len(alive_nodes)} alive nodes (of {len(nodes)} total)")
+    print(f"[roar] cluster has {len(alive_nodes)} alive nodes (of {len(nodes)} total)")
 
     for node in alive_nodes:
         node_id = str(node.get("NodeID") or "")
@@ -558,7 +558,7 @@ def _spawn_node_agents(ray_module, job_id: str) -> None:
         agent = None
         try:
             agent = ray_module.get_actor(actor_name, namespace="roar")
-            _warn_roar(f"[roar] found existing agent {actor_name}")
+            print(f"[roar] found existing agent {actor_name}")
         except Exception:
             remote_options = {
                 "name": actor_name,
@@ -577,9 +577,9 @@ def _spawn_node_agents(ray_module, job_id: str) -> None:
                 agent = RoarNodeAgent.options(**remote_options).remote(
                     job_id=job_id,
                 )
-                _warn_roar(f"[roar] spawned agent {actor_name} on node {node_id[:8]}")
+                print(f"[roar] spawned agent {actor_name} on node {node_id[:8]}")
             except Exception as exc:
-                _warn_roar(f"[roar] FAILED to spawn agent {actor_name}: {exc}")
+                print(f"[roar] FAILED to spawn agent {actor_name}: {exc}")
                 agent = None
 
         if agent is not None:
