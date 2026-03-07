@@ -788,6 +788,7 @@ def _configure_local_proxy_endpoint() -> None:
     # Opportunistically grab the actor handle for log collection.
     # This is non-critical — if it fails, proxy routing still works,
     # we just can't poll logs from the node agent in the collector thread.
+    # Retry a few times since CoreWorker may not be fully ready yet.
     try:
         import ray
         from roar.ray._agent_names import build_node_agent_name
@@ -804,7 +805,12 @@ def _configure_local_proxy_endpoint() -> None:
                 node_id = _to_text(node_id)
         if node_id:
             agent_name = build_node_agent_name(str(job_id), node_id)
-            _node_agent_handle = ray.get_actor(agent_name, namespace="roar")
+            for _attempt in range(10):
+                try:
+                    _node_agent_handle = ray.get_actor(agent_name, namespace="roar")
+                    break
+                except Exception:
+                    time.sleep(1.0)
     except Exception as exc:
         _get_logger().warning("Could not get node agent handle (non-fatal): %s", exc)
 
