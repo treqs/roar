@@ -21,6 +21,11 @@ __all__ = ["RoarNodeAgent", "build_node_agent_name"]
 _ROAR_PROXY_PORT = 19191
 
 
+def _proxy_port_file_path(job_id: str) -> str:
+    """Well-known file path for workers to discover the proxy port without GCS."""
+    return f"/tmp/roar-proxy-{job_id}.port"
+
+
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -107,6 +112,10 @@ class RoarNodeAgent:
                 ready = any(line.startswith(_READY_SENTINEL) for line in self._proxy_log_lines)
             if ready:
                 self._proxy_port = port
+                try:
+                    Path(_proxy_port_file_path(self._job_id)).write_text(str(port))
+                except Exception:
+                    pass
                 return
 
             if process.poll() is not None:
@@ -116,7 +125,14 @@ class RoarNodeAgent:
 
         self._terminate_proxy()
 
+    def _cleanup_port_file(self) -> None:
+        try:
+            Path(_proxy_port_file_path(self._job_id)).unlink(missing_ok=True)
+        except Exception:
+            pass
+
     def _terminate_proxy(self) -> None:
+        self._cleanup_port_file()
         process = self._proxy_process
         if process is None:
             return
@@ -159,4 +175,5 @@ class RoarNodeAgent:
         }
 
     def shutdown(self) -> None:
+        self._cleanup_port_file()
         self._terminate_proxy()

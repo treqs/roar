@@ -753,13 +753,41 @@ def _patch_tempfile() -> None:
 
 
 def _configure_local_proxy_endpoint() -> None:
-    """Point S3 traffic at the local node agent proxy for this worker."""
+    """Point S3 traffic at the local node agent proxy using file-based port discovery.
+
+    The node agent writes its proxy port to /tmp/roar-proxy-{job_id}.port.
+    This avoids calling ray.get_actor() which segfaults from background threads
+    during worker teardown on real clusters.
+    """
     global _node_agent_handle
 
     job_id = os.environ.get("ROAR_JOB_ID") or os.environ.get("RAY_JOB_ID")
     if not job_id:
         return
 
+    port_file = f"/tmp/roar-proxy-{job_id}.port"
+    try:
+        port_text = open(port_file).read().strip()  # noqa: SIM115
+        if not port_text.isdigit():
+            return
+        port = int(port_text)
+        if port <= 1024 or port > 65535:
+            return
+    except FileNotFoundError:
+        return
+    except Exception as exc:
+        _get_logger().warning("Failed to read proxy port file %s: %s", port_file, exc)
+        return
+
+    # Configure the proxy endpoint.
+    original = os.environ.get("AWS_ENDPOINT_URL", "")
+    if original:
+        os.environ["ROAR_UPSTREAM_S3_ENDPOINT"] = original
+    os.environ["AWS_ENDPOINT_URL"] = f"http://127.0.0.1:{port}"
+
+    # Opportunistically grab the actor handle for log collection.
+    # This is non-critical — if it fails, proxy routing still works,
+    # we just can't poll logs from the node agent in the collector thread.
     try:
         import ray
         from roar.ray._agent_names import build_node_agent_name
@@ -774,55 +802,34 @@ def _configure_local_proxy_endpoint() -> None:
                 node_id = _to_text(to_hex())
             else:
                 node_id = _to_text(node_id)
-        if not node_id:
-            return
-
-        agent_name = build_node_agent_name(str(job_id), node_id)
-        agent = ray.get_actor(agent_name, namespace="roar")
-        _node_agent_handle = agent
-        port = ray.get(agent.get_proxy_port.remote(), timeout=10)
-        if port:
-            original = os.environ.get("AWS_ENDPOINT_URL", "")
-            if original:
-                os.environ["ROAR_UPSTREAM_S3_ENDPOINT"] = original
-            os.environ["AWS_ENDPOINT_URL"] = f"http://127.0.0.1:{port}"
+        if node_id:
+            agent_name = build_node_agent_name(str(job_id), node_id)
+            _node_agent_handle = ray.get_actor(agent_name, namespace="roar")
     except Exception as exc:
-        _get_logger().warning("Failed to configure local proxy endpoint: %s", exc)
+        _get_logger().warning("Could not get node agent handle (non-fatal): %s", exc)
 
 
 def _configure_proxy_in_background() -> None:
-    """Configure proxy endpoint with retries, waiting for node agent to be ready.
+    """Poll for the proxy port file and configure the endpoint when it appears.
 
-    Runs in a daemon thread but blocks task execution via _tracking_open's
-    synchronous fallback. Retries handle the race where node agents haven't
-    been fully spawned by the driver yet.
+    Runs in a daemon thread. Polls every 0.5s for up to 30s. No GCS calls needed
+    for port discovery — just reads a file written by the node agent.
     """
     import threading
-    import time
 
     def _deferred_configure():
         global _proxy_configured
-        try:
-            from ray._private.worker import global_worker
-        except Exception:
-            return
 
-        # Wait for CoreWorker to be ready (up to 10s).
-        for _ in range(100):
-            if getattr(global_worker, "connected", False):
-                break
-            time.sleep(0.1)
-        else:
-            return
-
-        # Retry with backoff — node agents may not be spawned yet.
-        for attempt in range(10):
+        # Poll for port file (up to 30s).
+        for _ in range(60):
             try:
                 _configure_local_proxy_endpoint()
-                _proxy_configured = True
-                return
+                if os.environ.get("AWS_ENDPOINT_URL", "").startswith("http://127.0.0.1:"):
+                    _proxy_configured = True
+                    return
             except Exception:
-                time.sleep(0.5 * (attempt + 1))
+                pass
+            time.sleep(0.5)
 
     t = threading.Thread(target=_deferred_configure, daemon=True)
     t.start()
