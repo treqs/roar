@@ -815,20 +815,14 @@ def _configure_local_proxy_endpoint() -> None:
         if node_id:
             agent_name = build_node_agent_name(str(job_id), node_id)
             print(f"[roar-worker] looking for actor: {agent_name} in namespace 'roar'")
-            last_exc = None
-            for attempt in range(10):
-                if _shutdown_event.is_set():
-                    print(f"[roar-worker] shutdown in progress, aborting actor lookup after {attempt} attempts")
-                    break
+            # Single attempt only — retrying risks SIGSEGV if CoreWorker tears
+            # down mid-call. The port file already confirms the agent is ready.
+            if not _shutdown_event.is_set():
                 try:
                     _node_agent_handle = ray.get_actor(agent_name, namespace="roar")
-                    print(f"[roar-worker] got actor handle on attempt {attempt + 1}")
-                    break
+                    print(f"[roar-worker] got actor handle for {agent_name}")
                 except Exception as exc:
-                    last_exc = exc
-                    time.sleep(1.0)
-            else:
-                print(f"[roar-worker] FAILED to get actor after 10 attempts: {last_exc}")
+                    print(f"[roar-worker] could not get actor handle: {exc}")
         else:
             print("[roar-worker] node_id is empty, skipping actor lookup")
     except Exception as exc:
