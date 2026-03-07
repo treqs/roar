@@ -184,6 +184,11 @@ def _merge_roar_runtime_env_pip(existing_pip: object) -> list[str] | None:
         dependency
         for dependency in dependencies
         if _requirement_name(dependency) not in {"roar-cli", "roar"}
+        # Also deduplicate URL-based requirements (e.g. presigned S3 URLs).
+        # _requirement_name() returns the full URL for these, so the name-based
+        # filter above never matches them — without this check the URL would
+        # survive the filter and get appended again, producing duplicates.
+        and dependency.strip() != roar_req.strip()
     ]
     # "skip" means roar is already installed on workers (e.g. Docker image with editable install).
     if roar_req != "skip":

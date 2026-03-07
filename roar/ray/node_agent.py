@@ -69,7 +69,11 @@ class RoarNodeAgent:
         port = _ROAR_PROXY_PORT
         cmd = [proxy_binary, "--port", str(port), "--job-id", self._job_id]
 
-        upstream = os.environ.get("ROAR_UPSTREAM_S3_ENDPOINT") or os.environ.get("AWS_ENDPOINT_URL")
+        # Only use ROAR_UPSTREAM_S3_ENDPOINT — never fall back to AWS_ENDPOINT_URL.
+        # By the time the node agent runs on a worker, AWS_ENDPOINT_URL has been
+        # overwritten to http://127.0.0.1:19191 (the proxy itself) by _ray_job_submit.py.
+        # Using it as --upstream would make the proxy forward to itself → 502.
+        upstream = os.environ.get("ROAR_UPSTREAM_S3_ENDPOINT")
         if upstream:
             cmd.extend(["--upstream", upstream])
 
