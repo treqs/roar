@@ -244,6 +244,16 @@ def _run_checked_local(command: Sequence[str], *, cwd: Path) -> None:
     subprocess.run(list(command), cwd=cwd, check=True, capture_output=True)
 
 
+def _sync_packaged_rust_artifacts_for_ray_images() -> None:
+    subprocess.run(
+        [sys.executable, "scripts/sync_packaged_rust_artifacts.py"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def make_host_project_dir(prefix: str = "project") -> Path:
     HOST_PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     return Path(tempfile.mkdtemp(prefix=f"{prefix}-", dir=str(HOST_PROJECTS_DIR)))
@@ -608,6 +618,7 @@ def ray_cluster() -> dict[str, str]:
         _compose_args(COMPOSE_FILE, "down", "-v", "--remove-orphans"),
         check=False,
     )
+    _sync_packaged_rust_artifacts_for_ray_images()
     run_docker(
         _compose_args(COMPOSE_FILE, "up", "-d", "--build"),
         check=True,

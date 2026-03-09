@@ -1,6 +1,7 @@
 """Tests for shared tracer backend discovery/readiness helpers."""
 
 from pathlib import Path
+import subprocess
 from unittest.mock import mock_open, patch
 
 from roar.services.execution import tracer_backends
@@ -18,6 +19,60 @@ def test_preload_is_ready_requires_library(tmp_path: Path) -> None:
 
     assert not ok
     assert reason == "preload library not found"
+
+
+def test_preload_is_ready_probes_launcher_execution(tmp_path: Path) -> None:
+    package_path = tmp_path / "roar"
+    package_path.mkdir()
+
+    launcher = tmp_path / "roar-tracer-preload"
+    launcher.write_text("")
+    library = tmp_path / "libroar_tracer_preload.so"
+    library.write_text("")
+
+    def _run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        Path(command[1]).write_text("{}")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    with (
+        patch.object(tracer_backends, "find_preload_library", return_value=str(library)),
+        patch.object(tracer_backends.subprocess, "run", side_effect=_run),
+    ):
+        ok, reason = tracer_backends.preload_is_ready(package_path, str(launcher))
+
+    assert ok
+    assert reason is None
+
+
+def test_preload_is_ready_reports_probe_failure(tmp_path: Path) -> None:
+    package_path = tmp_path / "roar"
+    package_path.mkdir()
+
+    launcher = tmp_path / "roar-tracer-preload"
+    launcher.write_text("")
+    library = tmp_path / "libroar_tracer_preload.so"
+    library.write_text("")
+
+    with (
+        patch.object(tracer_backends, "find_preload_library", return_value=str(library)),
+        patch.object(
+            tracer_backends.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                [str(launcher)],
+                1,
+                "",
+                "roar-tracer-preload: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found",
+            ),
+        ),
+    ):
+        ok, reason = tracer_backends.preload_is_ready(package_path, str(launcher))
+
+    assert not ok
+    assert reason == (
+        "preload launcher probe failed: "
+        "roar-tracer-preload: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found"
+    )
 
 
 def test_backend_ready_auto_prefers_preload_when_ebpf_not_ready(tmp_path: Path) -> None:

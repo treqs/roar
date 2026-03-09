@@ -70,7 +70,7 @@ struct TracerState {
     fd_tracker: FdTracker,
     awaiting_exit: HashSet<i32>, // PIDs waiting for syscall exit stop
     pending_opens: HashMap<i32, (String, u64)>, // pid -> (path, flags)
-    pending_writes: HashMap<i32, String>, // pid -> path (write syscalls pending confirmation)
+    pending_writes: HashMap<i32, (String, u32)>, // tid -> (path, thread_id)
     pending_closes: HashMap<i32, i32>, // pid -> fd (close syscalls pending confirmation)
     pending_chdirs: HashMap<i32, ()>, // pid -> () (chdir pending confirmation)
     pending_fchdirs: HashMap<i32, ()>, // pid -> () (fchdir pending confirmation)
@@ -217,7 +217,7 @@ fn handle_syscall_entry(
             // All read variants have fd in rdi
             let fd = regs.rdi as i32;
             if let Some(pid_u32) = pid_u32 {
-                state.fd_tracker.mark_read(pid_u32, fd);
+                state.fd_tracker.mark_read_with_thread(pid_u32, fd, pid_u32);
             }
         }
         SYS_WRITE | SYS_PWRITE64 | SYS_WRITEV | SYS_PWRITEV | SYS_PWRITEV2 => {
@@ -226,7 +226,7 @@ fn handle_syscall_entry(
             let fd = regs.rdi as i32;
             if let Some(pid_u32) = pid_u32 {
                 if let Some(path) = state.fd_tracker.path_for_fd(pid_u32, fd).cloned() {
-                    state.pending_writes.insert(pid_raw, path);
+                    state.pending_writes.insert(pid_raw, (path, pid_u32));
                 }
             }
         }
@@ -235,10 +235,10 @@ fn handle_syscall_entry(
             let out_fd = regs.rdi as i32;
             let in_fd = regs.rsi as i32;
             if let Some(pid_u32) = pid_u32 {
-                state.fd_tracker.mark_read(pid_u32, in_fd);
+                state.fd_tracker.mark_read_with_thread(pid_u32, in_fd, pid_u32);
                 // Track write as pending - confirm at exit if bytes > 0
                 if let Some(path) = state.fd_tracker.path_for_fd(pid_u32, out_fd).cloned() {
-                    state.pending_writes.insert(pid_raw, path);
+                    state.pending_writes.insert(pid_raw, (path, pid_u32));
                 }
             }
         }
@@ -247,10 +247,10 @@ fn handle_syscall_entry(
             let in_fd = regs.rdi as i32;
             let out_fd = regs.r8 as i32;
             if let Some(pid_u32) = pid_u32 {
-                state.fd_tracker.mark_read(pid_u32, in_fd);
+                state.fd_tracker.mark_read_with_thread(pid_u32, in_fd, pid_u32);
                 // Track write as pending - confirm at exit if bytes > 0
                 if let Some(path) = state.fd_tracker.path_for_fd(pid_u32, out_fd).cloned() {
-                    state.pending_writes.insert(pid_raw, path);
+                    state.pending_writes.insert(pid_raw, (path, pid_u32));
                 }
             }
         }
@@ -272,12 +272,12 @@ fn handle_syscall_entry(
 
                         // Any file-backed mmap is a read
                         if prot & 1 != 0 {
-                            state.fd_tracker.mark_path_read(path.clone());
+                            state.fd_tracker.mark_path_read_with_thread(path.clone(), pid_u32);
                         }
                         // Only MAP_SHARED + PROT_WRITE is a real write (changes go to disk)
                         // MAP_PRIVATE writes are copy-on-write and don't modify the file
                         if is_shared && (prot & 2 != 0) {
-                            state.fd_tracker.mark_path_written(path);
+                            state.fd_tracker.mark_path_written_with_thread(path, pid_u32);
                         }
                     }
                 }
@@ -288,7 +288,11 @@ fn handle_syscall_entry(
             // The destination (newpath) is effectively written
             if let Some(newpath) = read_string_from_tracee(pid, regs.rsi) {
                 let abs_path = resolve_path(&newpath, pid_raw, &mut state.cwd_cache);
-                state.fd_tracker.mark_path_written(abs_path);
+                if let Some(pid_u32) = pid_u32 {
+                    state.fd_tracker.mark_path_written_with_thread(abs_path, pid_u32);
+                } else {
+                    state.fd_tracker.mark_path_written(abs_path);
+                }
             }
         }
         SYS_RENAMEAT | SYS_RENAMEAT2 => {
@@ -296,7 +300,11 @@ fn handle_syscall_entry(
             // The destination (newpath) is effectively written
             if let Some(newpath) = read_string_from_tracee(pid, regs.r10) {
                 let abs_path = resolve_path(&newpath, pid_raw, &mut state.cwd_cache);
-                state.fd_tracker.mark_path_written(abs_path);
+                if let Some(pid_u32) = pid_u32 {
+                    state.fd_tracker.mark_path_written_with_thread(abs_path, pid_u32);
+                } else {
+                    state.fd_tracker.mark_path_written(abs_path);
+                }
             }
         }
         SYS_CHDIR => {
@@ -344,9 +352,9 @@ fn handle_syscall_exit(
         SYS_WRITE | SYS_PWRITE64 | SYS_WRITEV | SYS_PWRITEV | SYS_PWRITEV2 | SYS_SENDFILE
         | SYS_COPY_FILE_RANGE => {
             // Only count as written if bytes were actually written (ret_val > 0)
-            if let Some(path) = state.pending_writes.remove(&pid_raw) {
+            if let Some((path, thread_id)) = state.pending_writes.remove(&pid_raw) {
                 if ret_val > 0 {
-                    state.fd_tracker.mark_path_written(path);
+                    state.fd_tracker.mark_path_written_with_thread(path, thread_id);
                 }
             }
         }

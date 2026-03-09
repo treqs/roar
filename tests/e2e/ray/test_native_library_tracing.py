@@ -1,4 +1,4 @@
-"""Ray contract: host submit activates worker native tracing and reconstitutes it."""
+"""Ray contract: in-process native library I/O must surface as native lineage."""
 
 from __future__ import annotations
 
@@ -34,20 +34,6 @@ def _parse_json_line(stdout: str) -> dict[str, str]:
     return {}
 
 
-def _artifact_rows(project_dir: Path, path_like: str) -> list[dict[str, object]]:
-    return query_roar_db(
-        project_dir,
-        """
-        SELECT COALESCE(path, first_seen_path) AS path,
-               capture_method
-        FROM artifacts
-        WHERE COALESCE(path, first_seen_path) LIKE ?
-        ORDER BY id
-        """,
-        (path_like,),
-    )
-
-
 def _fragment_entries_for_path(
     fragments: list[dict[str, object]],
     suffix: str,
@@ -74,44 +60,34 @@ def _fragment_entries_for_path(
     return matches
 
 
-def _native_entries_for_worker(
-    fragments: list[dict[str, object]],
-    worker_id: str,
-) -> list[dict[str, object]]:
-    matches: list[dict[str, object]] = []
-    for fragment in fragments:
-        if str(fragment.get("ray_worker_id") or "") != worker_id:
-            continue
-        for key in ("reads", "writes"):
-            refs = fragment.get(key, [])
-            if not isinstance(refs, list):
-                continue
-            for ref in refs:
-                if not isinstance(ref, dict):
-                    continue
-                if str(ref.get("capture_method") or "") != "native":
-                    continue
-                matches.append(
-                    {
-                        "io_kind": key,
-                        "ray_task_id": fragment.get("ray_task_id"),
-                        "ray_worker_id": fragment.get("ray_worker_id"),
-                        **ref,
-                    }
-                )
-    return matches
+def _output_rows(project_dir: Path, path_like: str) -> list[dict[str, object]]:
+    return query_roar_db(
+        project_dir,
+        """
+        SELECT json_extract(j.metadata, '$.ray_task_id') AS ray_task_id,
+               COALESCE(a.path, a.first_seen_path) AS path,
+               a.capture_method
+        FROM jobs j
+        JOIN job_outputs jo ON jo.job_id = j.id
+        JOIN artifacts a ON a.id = jo.artifact_id
+        WHERE j.job_type = 'ray_task'
+          AND COALESCE(a.path, a.first_seen_path) LIKE ?
+        ORDER BY j.id, path
+        """,
+        (path_like,),
+    )
 
 
-def test_host_submit_reconstitutes_native_worker_lineage(
+def test_host_submit_reconstitutes_inprocess_native_library_output(
     ray_cluster: dict[str, str],
 ) -> None:
-    project_dir = make_host_project_dir("ray-native")
+    project_dir = make_host_project_dir("ray-native-lib")
     init_host_project(project_dir)
 
     result = run_roar_ray_job_from_host(
         project_dir,
         ray_cluster,
-        "native_tracing.py",
+        "native_library_tracing.py",
         use_fragment_store=True,
         tracer="ptrace",
     )
@@ -124,22 +100,24 @@ def test_host_submit_reconstitutes_native_worker_lineage(
     assert payload, f"Expected JSON payload in stdout, got:\n{result.stdout}"
     assert "libroar_tracer_preload.so" in payload.get("ld_preload", "")
     assert payload.get("trace_sock"), payload
+    assert payload.get("task_id"), payload
+    assert payload.get("worker_id"), payload
 
     key_payload = load_fragment_key(project_dir)
     batches = fetch_fragment_batches(key_payload["session_id"], key_payload["token"])
     fragments = decrypt_fragment_batches(batches, key_payload["token"])
-    fragment_refs = _fragment_entries_for_path(fragments, "/artifacts/native_tracing_output.txt")
-    native_worker_refs = _native_entries_for_worker(fragments, payload.get("worker_id", ""))
+    fragment_refs = _fragment_entries_for_path(fragments, "/artifacts/native_library_output.txt")
+    native_output_refs = [
+        ref for ref in fragment_refs if str(ref.get("capture_method") or "") == "native"
+    ]
 
-    assert fragment_refs, "Expected fragment payloads for the worker output artifact"
-    assert any(str(ref.get("ray_worker_id")) == payload.get("worker_id", "") for ref in fragment_refs), (
-        "Expected the output artifact fragments to belong to the worker that reported preload activation"
+    assert native_output_refs, (
+        "Expected native fragment refs for the in-process native library output artifact"
     )
-    assert native_worker_refs, (
-        "Expected at least one native fragment entry from the same Ray worker that reported "
-        "preload activation"
-    )
+    assert {str(ref.get("ray_worker_id") or "") for ref in native_output_refs} == {
+        payload["worker_id"]
+    }
 
-    rows = _artifact_rows(project_dir, "%/artifacts/native_tracing_output.txt")
-    assert rows, "Expected worker output artifact to be reconstituted into the host roar.db"
-    assert "[roar] lineage reconstituted:" in f"{result.stdout}\n{result.stderr}"
+    rows = _output_rows(project_dir, "%/artifacts/native_library_output.txt")
+    assert rows, "Expected in-process native library output artifact in the reconstituted roar.db"
+    assert {str(row.get("capture_method") or "") for row in rows} == {"native"}

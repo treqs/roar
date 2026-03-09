@@ -27,7 +27,7 @@ static TRACE_SOCK_PATH: OnceLock<Option<String>> = OnceLock::new();
 static REAL_WRITE: OnceLock<Option<WriteFn>> = OnceLock::new();
 
 #[cfg(target_os = "macos")]
-extern "C" {
+unsafe extern "C" {
     fn roar_preload_interpose_keep() -> c_int;
 }
 
@@ -466,6 +466,47 @@ fn get_real_write() -> Option<WriteFn> {
     *REAL_WRITE.get_or_init(|| unsafe { resolve_symbol::<WriteFn>(b"write\0") })
 }
 
+fn write_frame(fd: c_int, frame: &[u8]) -> bool {
+    let mut written = 0usize;
+    while written < frame.len() {
+        let rc: ssize_t;
+        unsafe {
+            #[cfg(target_os = "macos")]
+            {
+                rc = sys_write(
+                    fd,
+                    frame[written..].as_ptr() as *const c_void,
+                    frame.len() - written,
+                );
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let Some(real_write) = get_real_write() else {
+                    return false;
+                };
+                rc = real_write(
+                    fd,
+                    frame[written..].as_ptr() as *const c_void,
+                    frame.len() - written,
+                );
+            }
+        }
+
+        if rc < 0 {
+            let err = get_errno();
+            if err == libc::EINTR {
+                continue;
+            }
+            return false;
+        }
+        if rc == 0 {
+            return false;
+        }
+        written += rc as usize;
+    }
+    true
+}
+
 fn send_event(event: &TraceEvent) {
     let Some(fd) = get_trace_fd() else {
         return;
@@ -478,42 +519,12 @@ fn send_event(event: &TraceEvent) {
     frame.extend_from_slice(&len.to_le_bytes());
     frame.extend_from_slice(&payload);
 
-    let rc: ssize_t;
-    unsafe {
-        #[cfg(target_os = "macos")]
-        {
-            rc = sys_write(fd, frame.as_ptr() as *const c_void, frame.len());
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let Some(real_write) = get_real_write() else {
-                return;
-            };
-            rc = real_write(fd, frame.as_ptr() as *const c_void, frame.len());
-        }
-    }
-
-    if rc < 0 {
+    if !write_frame(fd, &frame) {
         let err = get_errno();
         if err == libc::EBADF || err == libc::EPIPE || err == libc::ENOTCONN {
             invalidate_trace_fd();
             if let Some(new_fd) = get_trace_fd() {
-                unsafe {
-                    #[cfg(target_os = "macos")]
-                    {
-                        let _ = sys_write(new_fd, frame.as_ptr() as *const c_void, frame.len());
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        if let Some(real_write) = get_real_write() {
-                            let _ = real_write(
-                                new_fd,
-                                frame.as_ptr() as *const c_void,
-                                frame.len(),
-                            );
-                        }
-                    }
-                }
+                let _ = write_frame(new_fd, &frame);
             }
         }
     }
@@ -522,6 +533,24 @@ fn send_event(event: &TraceEvent) {
 fn current_pid() -> u32 {
     // SAFETY: libc getpid has no preconditions.
     unsafe { libc::getpid() as u32 }
+}
+
+#[cfg(target_os = "macos")]
+fn current_thread_id() -> u32 {
+    let mut thread_id = 0u64;
+    // SAFETY: pthread_threadid_np writes the current thread id into the provided pointer.
+    let rc = unsafe { libc::pthread_threadid_np(0, &mut thread_id) };
+    if rc == 0 {
+        thread_id as u32
+    } else {
+        current_pid()
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn current_thread_id() -> u32 {
+    // SAFETY: syscall(SYS_gettid) has no preconditions on Linux.
+    unsafe { libc::syscall(libc::SYS_gettid) as u32 }
 }
 
 fn fd_path(fd: c_int) -> Option<String> {
@@ -604,6 +633,7 @@ fn emit_fd_read(fd: c_int) {
     };
     send_event(&TraceEvent::Read {
         pid: current_pid(),
+        thread_id: current_thread_id(),
         path,
     });
 }
@@ -614,6 +644,7 @@ fn emit_fd_write(fd: c_int) {
     };
     send_event(&TraceEvent::Write {
         pid: current_pid(),
+        thread_id: current_thread_id(),
         path,
     });
 }
@@ -624,6 +655,7 @@ fn emit_path_write(path: String) {
     }
     send_event(&TraceEvent::Write {
         pid: current_pid(),
+        thread_id: current_thread_id(),
         path,
     });
 }
@@ -636,6 +668,27 @@ fn mode_implies_write(mode: &str) -> bool {
     mode.contains('w') || mode.contains('a') || mode.contains('x') || mode.contains('+')
 }
 
+#[cfg(target_os = "macos")]
+const O_TMPFILE_FLAG: c_int = 0;
+
+#[cfg(not(target_os = "macos"))]
+const O_TMPFILE_FLAG: c_int = libc::O_TMPFILE;
+
+fn flags_imply_read(flags: c_int) -> bool {
+    let access_mode = flags & libc::O_ACCMODE;
+    access_mode == libc::O_RDONLY || access_mode == libc::O_RDWR
+}
+
+fn flags_imply_write(flags: c_int) -> bool {
+    let access_mode = flags & libc::O_ACCMODE;
+    access_mode == libc::O_WRONLY
+        || access_mode == libc::O_RDWR
+        || (flags & libc::O_CREAT) != 0
+        || (flags & libc::O_TRUNC) != 0
+        || (flags & libc::O_APPEND) != 0
+        || (flags & O_TMPFILE_FLAG) != 0
+}
+
 fn emit_path_mode(path: String, mode: &str) {
     if path.is_empty() {
         return;
@@ -643,12 +696,34 @@ fn emit_path_mode(path: String, mode: &str) {
     if mode_implies_read(mode) {
         send_event(&TraceEvent::Read {
             pid: current_pid(),
+            thread_id: current_thread_id(),
             path: path.clone(),
         });
     }
     if mode_implies_write(mode) {
         send_event(&TraceEvent::Write {
             pid: current_pid(),
+            thread_id: current_thread_id(),
+            path,
+        });
+    }
+}
+
+fn emit_path_flags(path: String, flags: c_int) {
+    if path.is_empty() {
+        return;
+    }
+    if flags_imply_read(flags) {
+        send_event(&TraceEvent::Read {
+            pid: current_pid(),
+            thread_id: current_thread_id(),
+            path: path.clone(),
+        });
+    }
+    if flags_imply_write(flags) {
+        send_event(&TraceEvent::Write {
+            pid: current_pid(),
+            thread_id: current_thread_id(),
             path,
         });
     }
@@ -667,6 +742,34 @@ fn resolve_at_path(dirfd: c_int, path: *const c_char) -> Option<String> {
         return Some(path_s);
     }
     Some(format!("{base}/{path_s}"))
+}
+
+#[cfg_attr(not(target_os = "macos"), no_mangle)]
+pub unsafe extern "C" fn roar_preload_emit_path_flags(path: *const c_char, flags: c_int) {
+    if in_hook() {
+        return;
+    }
+    with_hook_guard(|| {
+        if let Some(path_s) = c_str_to_owned(path) {
+            emit_path_flags(path_s, flags);
+        }
+    });
+}
+
+#[cfg_attr(not(target_os = "macos"), no_mangle)]
+pub unsafe extern "C" fn roar_preload_emit_at_path_flags(
+    dirfd: c_int,
+    path: *const c_char,
+    flags: c_int,
+) {
+    if in_hook() {
+        return;
+    }
+    with_hook_guard(|| {
+        if let Some(path_s) = resolve_at_path(dirfd, path) {
+            emit_path_flags(path_s, flags);
+        }
+    });
 }
 
 unsafe fn resolve_symbol<T: Copy>(symbol: &[u8]) -> Option<T> {

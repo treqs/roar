@@ -243,6 +243,7 @@ _DEFAULT_RAY_NODE_POLL_INTERVAL_SECONDS = 5.0
 _NODE_AGENT_RESOURCE_FRACTION = 0.0001
 _WORKER_SETUP_HOOK_ENV_VAR = "__RAY_WORKER_PROCESS_SETUP_HOOK_ENV_VAR"
 _WORKER_SETUP_HOOK = "roar.ray.roar_worker._startup"
+_WORKER_PY_EXECUTABLE = "roar-worker"
 _ray_node_poller_lock = threading.Lock()
 _ray_node_poller_stop = threading.Event()
 _ray_node_poller_thread = None
@@ -264,12 +265,21 @@ def _patch_ray_init(ray_module) -> None:
             return _real_ray_init(*args, **kwargs)
 
         if os.environ.get("ROAR_JOB_INSTRUMENTED") == "1":
+            runtime_env = dict(kwargs.pop("runtime_env", None) or {})
+            submitted_job_id = (
+                os.environ.get("ROAR_JOB_ID")
+                or dict(runtime_env.get("env_vars", {}) or {}).get("ROAR_JOB_ID")
+                or uuid.uuid4().hex[:8]
+            )
+            kwargs["runtime_env"] = _sanitize_worker_runtime_env_for_ray(
+                ray_module,
+                _prepare_instrumented_job_worker_runtime_env(runtime_env, str(submitted_job_id)),
+            )
             result = _real_ray_init(*args, **kwargs)
             _register_pre_shutdown_ray_collection()
 
             # ROAR_JOB_ID is injected by _ray_job_submit.py into runtime_env env_vars,
             # so both the driver and all workers see the same value.
-            submitted_job_id = os.environ.get("ROAR_JOB_ID") or uuid.uuid4().hex[:8]
             if _node_agents_enabled():
                 # Spawn node agents synchronously so proxies are ready before
                 # any tasks execute. Workers connect to the proxy via the
@@ -344,6 +354,21 @@ def _patch_ray_init(ray_module) -> None:
     ray_module.init = _roar_ray_init
 
 
+def _prepare_instrumented_job_worker_runtime_env(runtime_env, job_id: str):
+    """Augment worker runtime_env inside a pre-instrumented Ray submit job.
+
+    Keep submit-time `pip`, `working_dir`, `env_vars`, and setup-hook fields
+    untouched to avoid runtime-env merge conflicts with the job-level runtime_env
+    supplied by `ray job submit`. The submit rewrite already injects env_vars and
+    worker_process_setup_hook; the missing piece at `ray.init()` time is the
+    worker py_executable that can turn preload on before the final Python exec.
+    """
+    del job_id
+    runtime_env = dict(runtime_env or {})
+    runtime_env["py_executable"] = _WORKER_PY_EXECUTABLE
+    return runtime_env
+
+
 def _patch_ray_shutdown(ray_module) -> None:
     real_ray_shutdown = getattr(ray_module, "shutdown", None)
     if not callable(real_ray_shutdown):
@@ -414,7 +439,7 @@ def _prepare_worker_runtime_env(runtime_env, job_id: str):
     env_vars = dict(runtime_env.get("env_vars", {}) or {})
     env_vars[_WORKER_SETUP_HOOK_ENV_VAR] = _WORKER_SETUP_HOOK
     runtime_env["working_dir"] = prepared_working_dir
-    runtime_env["py_executable"] = "roar-worker"
+    runtime_env["py_executable"] = _WORKER_PY_EXECUTABLE
     runtime_env["worker_process_setup_hook"] = _WORKER_SETUP_HOOK
     runtime_env["env_vars"] = env_vars
     return runtime_env

@@ -15,12 +15,14 @@ def test_patch_ray_init_conflicts_inside_preinstrumented_job(
         "working_dir": "/tmp/job-level-working-dir",
         "env_vars": {"ROAR_WORKER": "1"},
     }
+    captured_runtime_env: dict[str, object] = {}
 
     def fake_prepare_worker_runtime_env(_runtime_env: dict, _job_id: str) -> dict:
         raise AssertionError("_prepare_worker_runtime_env should be skipped in instrumented jobs")
 
     def fake_ray_init(*_args, **kwargs):
         runtime_env = dict(kwargs.get("runtime_env", {}) or {})
+        captured_runtime_env.update(runtime_env)
         conflicting_keys = {
             key
             for key in ("pip", "working_dir")
@@ -59,6 +61,10 @@ def test_patch_ray_init_conflicts_inside_preinstrumented_job(
 
     result = fake_ray.init(runtime_env=job_runtime_env)
     assert result == "ok"
+    assert captured_runtime_env["pip"] == ["roar-cli==0.0.1"]
+    assert captured_runtime_env["working_dir"] == "/tmp/job-level-working-dir"
+    assert captured_runtime_env["py_executable"] == "roar-worker"
+    assert captured_runtime_env["env_vars"]["ROAR_WORKER"] == "1"
 
 
 def test_patch_ray_init_registers_pre_shutdown_collection_for_instrumented_jobs(

@@ -56,6 +56,7 @@ fn cargo_bin(name: &str) -> String {
 }
 
 fn preload_lib() -> String {
+    let mut candidates: Vec<PathBuf> = Vec::new();
     for debug_dir in target_debug_dirs() {
         for name in [
             "libroar_tracer_preload.dylib",
@@ -65,7 +66,7 @@ fn preload_lib() -> String {
         ] {
             let path = debug_dir.join(name);
             if path.exists() {
-                return path.to_string_lossy().into_owned();
+                candidates.push(path);
             }
         }
         let deps_dir = debug_dir.join("deps");
@@ -79,11 +80,21 @@ fn preload_lib() -> String {
                     || name.starts_with("libroar-tracer-preload"))
                     && (name.ends_with(".dylib") || name.ends_with(".so"));
                 if is_match {
-                    return path.to_string_lossy().into_owned();
+                    candidates.push(path);
                 }
             }
         }
     }
+
+    candidates.sort_by_key(|path| {
+        fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+    });
+    if let Some(path) = candidates.pop() {
+        return path.to_string_lossy().into_owned();
+    }
+
     panic!("preload interposer library not found");
 }
 

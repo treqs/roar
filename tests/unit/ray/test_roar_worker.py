@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import builtins
+import sys
 import time
+import types
+from collections import namedtuple
 from pathlib import Path
 
 import pytest
@@ -21,6 +24,10 @@ def _reset_state(monkeypatch: pytest.MonkeyPatch) -> None:
     roar_worker._shutdown_event.clear()
     with roar_worker._native_lock:
         roar_worker._native_events_buffer.clear()
+    with roar_worker._native_child_task_lock:
+        roar_worker._native_child_task_ids.clear()
+    with roar_worker._native_thread_task_lock:
+        roar_worker._native_thread_task_ids.clear()
     while not roar_worker._event_queue.empty():
         try:
             roar_worker._event_queue.get_nowait()
@@ -32,6 +39,10 @@ def _reset_state(monkeypatch: pytest.MonkeyPatch) -> None:
     roar_worker._shutdown_event.clear()
     with roar_worker._native_lock:
         roar_worker._native_events_buffer.clear()
+    with roar_worker._native_child_task_lock:
+        roar_worker._native_child_task_ids.clear()
+    with roar_worker._native_thread_task_lock:
+        roar_worker._native_thread_task_ids.clear()
     while not roar_worker._event_queue.empty():
         try:
             roar_worker._event_queue.get_nowait()
@@ -410,9 +421,78 @@ def test_collector_flushes_native_entries_with_current_task_id(
     with roar_worker._native_lock:
         roar_worker._native_events_buffer.append(
             (
+                "",
                 "write",
                 ArtifactRef(
                     path="/tmp/native-output.bin",
+                    hash=None,
+                    hash_algorithm="",
+                    size=0,
+                    capture_method="native",
+                ),
+            )
+        )
+
+
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not appended:
+        time.sleep(0.01)
+
+    roar_worker._shutdown_collector()
+
+    assert appended, "collector did not flush native entries after going idle"
+    fragment = appended[0]
+    assert fragment["ray_task_id"] == "task-native"
+    assert fragment["writes"][0]["path"] == "/tmp/native-output.bin"
+    assert fragment["writes"][0]["capture_method"] == "native"
+
+
+def test_collector_prefers_bound_task_id_for_native_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.ray.roar_worker as roar_worker
+    from roar.ray.fragment import ArtifactRef
+
+    appended: list[dict[str, object]] = []
+
+    class _FakeStreamer:
+        def __init__(
+            self,
+            *,
+            session_id: str,
+            token: str,
+            glaas_url: str,
+            sequence_start: int = 0,
+            sequence_step: int = 1,
+        ) -> None:
+            del session_id, token, glaas_url, sequence_start, sequence_step
+
+        def append_fragment(self, fragment_dict: dict[str, object]) -> None:
+            appended.append(fragment_dict)
+
+        def flush(self) -> bool:
+            return True
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setenv("ROAR_SESSION_ID", "session-bound-native")
+    monkeypatch.setenv("ROAR_FRAGMENT_TOKEN", "aa" * 32)
+    monkeypatch.setenv("GLAAS_URL", "http://localhost:3001")
+    monkeypatch.setattr(roar_worker, "GlaasFragmentStreamer", _FakeStreamer)
+    monkeypatch.setattr(roar_worker, "_FLUSH_INTERVAL_SECONDS", 60.0)
+    monkeypatch.setattr(roar_worker, "_IDLE_FLUSH_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(roar_worker, "_FLUSH_THRESHOLD_EVENTS", 200)
+    monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-current")
+
+    roar_worker._start_collector()
+    with roar_worker._native_lock:
+        roar_worker._native_events_buffer.append(
+            (
+                "task-launch",
+                "write",
+                ArtifactRef(
+                    path="/tmp/bound-native-output.bin",
                     hash=None,
                     hash_algorithm="",
                     size=0,
@@ -427,11 +507,147 @@ def test_collector_flushes_native_entries_with_current_task_id(
 
     roar_worker._shutdown_collector()
 
-    assert appended, "collector did not flush native entries after going idle"
+    assert appended, "collector did not flush bound native entries after going idle"
     fragment = appended[0]
-    assert fragment["ray_task_id"] == "task-native"
-    assert fragment["writes"][0]["path"] == "/tmp/native-output.bin"
-    assert fragment["writes"][0]["capture_method"] == "native"
+    assert fragment["ray_task_id"] == "task-launch"
+    assert fragment["writes"][0]["path"] == "/tmp/bound-native-output.bin"
+
+
+def test_parse_and_buffer_frames_binds_registered_child_pid_to_launch_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import msgpack
+
+    import roar.ray.roar_worker as roar_worker
+
+    monkeypatch.setattr(roar_worker, "_should_track_local_path", lambda _path: True)
+    roar_worker._register_native_child_pid(43210, "task-launch")
+
+    payload = msgpack.packb(
+        {
+            "kind": "write",
+            "pid": 43210,
+            "path": "/tmp/child-native-output.bin",
+        },
+        use_bin_type=True,
+    )
+    buf = bytearray(len(payload).to_bytes(4, "little") + payload)
+
+    roar_worker._parse_and_buffer_frames(buf)
+
+    entries = roar_worker._drain_native_tracer_events()
+    assert len(entries) == 1
+    task_id, kind, ref = entries[0]
+    assert task_id == "task-launch"
+    assert kind == "write"
+    assert ref.path == "/tmp/child-native-output.bin"
+
+
+def test_parse_and_buffer_frames_binds_same_process_thread_to_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import msgpack
+
+    import roar.ray.roar_worker as roar_worker
+
+    monkeypatch.setattr(roar_worker, "_should_track_local_path", lambda _path: True)
+    roar_worker._register_native_thread_task(54321, "task-thread")
+
+    payload = msgpack.packb(
+        {
+            "kind": "write",
+            "pid": roar_worker.os.getpid(),
+            "thread_id": 54321,
+            "path": "/tmp/thread-native-output.bin",
+        },
+        use_bin_type=True,
+    )
+    buf = bytearray(len(payload).to_bytes(4, "little") + payload)
+
+    roar_worker._parse_and_buffer_frames(buf)
+
+    entries = roar_worker._drain_native_tracer_events()
+    assert len(entries) == 1
+    task_id, kind, ref = entries[0]
+    assert task_id == "task-thread"
+    assert kind == "write"
+    assert ref.path == "/tmp/thread-native-output.bin"
+
+
+def test_wrap_task_executor_keeps_current_thread_bound_until_reused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.ray.roar_worker as roar_worker
+
+    monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-thread")
+    monkeypatch.setattr(roar_worker.threading, "get_native_id", lambda: 321)
+    monkeypatch.setattr(roar_worker, "_flush_current_task_native_events_immediately", lambda: None)
+
+    observed: list[str] = []
+
+    def _task() -> None:
+        observed.append(
+            roar_worker._bound_native_task_id_for_event(roar_worker.os.getpid(), 321)
+        )
+
+    wrapped = roar_worker._wrap_task_executor_for_native_flush(_task)
+    wrapped()
+
+    assert observed == ["task-thread"]
+    assert roar_worker._bound_native_task_id_for_event(roar_worker.os.getpid(), 321) == "task-thread"
+
+    monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-next")
+    wrapped()
+    assert roar_worker._bound_native_task_id_for_event(roar_worker.os.getpid(), 321) == "task-next"
+
+
+def test_patch_wraps_actor_method_inside_executor_task_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.ray.roar_worker as roar_worker
+
+    task_state = {"task_id": ""}
+    monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: task_state["task_id"])
+    monkeypatch.setattr(roar_worker.threading, "get_native_id", lambda: 321)
+    monkeypatch.setattr(roar_worker, "_flush_current_task_native_events_immediately", lambda: None)
+
+    function_execution_info = namedtuple(
+        "FunctionExecutionInfo",
+        ["function", "function_name", "max_calls"],
+    )
+
+    class _FakeFunctionActorManager:
+        def __init__(self) -> None:
+            self._function_execution_info: dict[str, object] = {}
+
+        def get_execution_info(self, job_id, function_descriptor):
+            del job_id, function_descriptor
+            return function_execution_info(function=lambda: None, function_name="fn", max_calls=0)
+
+        def _make_actor_method_executor(self, method_name, method):
+            def executor(actor, *args, **kwargs):
+                task_state["task_id"] = "task-actor"
+                try:
+                    return method(actor, *args, **kwargs)
+                finally:
+                    task_state["task_id"] = ""
+
+            return executor
+
+    fake_module = types.ModuleType("ray._private.function_manager")
+    fake_module.FunctionActorManager = _FakeFunctionActorManager
+    fake_module.FunctionExecutionInfo = function_execution_info
+    monkeypatch.setitem(sys.modules, "ray._private.function_manager", fake_module)
+
+    roar_worker._patch_ray_task_execution_for_native_flush()
+
+    manager = _FakeFunctionActorManager()
+
+    def _actor_method(_actor) -> str:
+        return roar_worker._bound_native_task_id_for_event(roar_worker.os.getpid(), 321)
+
+    executor = manager._make_actor_method_executor("write", _actor_method)
+    assert executor(object()) == "task-actor"
 
 
 def test_main_calls_startup_and_runs_worker_entrypoint(
@@ -458,14 +674,22 @@ def test_main_calls_startup_and_runs_worker_entrypoint(
 
 def test_run_worker_entrypoint_execs_python_for_non_script(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     import roar.ray.roar_worker as roar_worker
 
     captured: dict[str, object] = {}
+    preload_library = tmp_path / "libroar_tracer_preload.so"
+    preload_library.write_text("preload", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LD_PRELOAD", raising=False)
+    monkeypatch.delenv("ROAR_PRELOAD_TRACE_SOCK", raising=False)
 
     def _fake_execvp(program: str, argv: list[str]) -> None:
         captured["program"] = program
         captured["argv"] = argv
+        captured["ld_preload"] = roar_worker.os.environ.get("LD_PRELOAD", "")
+        captured["trace_sock"] = roar_worker.os.environ.get("ROAR_PRELOAD_TRACE_SOCK", "")
         raise SystemExit(0)
 
     monkeypatch.setattr(roar_worker.os, "execvp", _fake_execvp)
@@ -475,6 +699,8 @@ def test_run_worker_entrypoint_execs_python_for_non_script(
 
     assert captured["program"] == "python3"
     assert captured["argv"] == ["python3", "-u", "worker.py"]
+    assert str(preload_library.resolve()) in str(captured["ld_preload"])
+    assert str(captured["trace_sock"]).endswith("/trace.sock")
 
 
 def test_run_worker_entrypoint_execs_python_for_worker_script(

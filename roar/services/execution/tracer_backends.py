@@ -11,7 +11,9 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 from ...core.tracer_modes import TRACER_BACKEND_ORDER
@@ -251,7 +253,8 @@ def preload_readiness(package_path: Path, launcher_path: str | None = None) -> T
     library_path = find_preload_library(package_path)
     if not library_path:
         return TracerReadiness(ok=False, reason="preload library not found")
-    return TracerReadiness(ok=True, reason=None)
+
+    return _probe_preload_launcher(launcher_path, library_path)
 
 
 def preload_is_ready(
@@ -320,3 +323,49 @@ def _find_binary(package_path: Path, binary_name: str) -> str | None:
 
     resolved = shutil.which(binary_name)
     return resolved if resolved else None
+
+
+@cache
+def _probe_preload_launcher(launcher_path: str, library_path: str) -> TracerReadiness:
+    env = dict(os.environ)
+    env["ROAR_PRELOAD_LIB"] = library_path
+
+    with tempfile.TemporaryDirectory(prefix="roar-preload-check-") as tmp_dir:
+        report_path = Path(tmp_dir) / "probe.json"
+        command = [launcher_path, str(report_path), sys.executable, "-c", "pass"]
+
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+                env=env,
+            )
+        except OSError as exc:
+            return TracerReadiness(ok=False, reason=f"preload launcher failed to exec: {exc}")
+        except subprocess.TimeoutExpired:
+            return TracerReadiness(ok=False, reason="preload launcher probe timed out")
+
+        if result.returncode != 0:
+            detail = _first_nonempty_line(result.stderr) or _first_nonempty_line(result.stdout)
+            if detail:
+                return TracerReadiness(ok=False, reason=f"preload launcher probe failed: {detail}")
+            return TracerReadiness(
+                ok=False,
+                reason=f"preload launcher probe failed with exit code {result.returncode}",
+            )
+
+        if not report_path.exists():
+            return TracerReadiness(ok=False, reason="preload launcher probe produced no report")
+
+    return TracerReadiness(ok=True, reason=None)
+
+
+def _first_nonempty_line(text: str) -> str | None:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line:
+            return line[:200]
+    return None

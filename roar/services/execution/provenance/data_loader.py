@@ -82,6 +82,10 @@ class DataLoaderService:
                     "read": bool(record.get("read", False)),
                     "written": bool(record.get("written", False)),
                 }
+                for key in ("read_threads", "written_threads"):
+                    value = record.get(key)
+                    if isinstance(value, list):
+                        item[key] = [thread for thread in value if isinstance(thread, int)]
                 if "chunks_read" in record:
                     item["chunks_read"] = record.get("chunks_read")
                 if "chunks_written" in record:

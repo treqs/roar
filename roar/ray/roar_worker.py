@@ -4,18 +4,21 @@ import atexit
 import builtins
 import collections
 import contextlib
+import functools
 import hashlib
 import os
 import queue
 import re
 import socket
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 from roar.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
 from roar.ray.glaas_fragment_streamer import GlaasFragmentStreamer
@@ -28,8 +31,12 @@ IOEvent = collections.namedtuple(
 _event_queue: queue.Queue[IOEvent | None] = queue.Queue()
 _collector_thread: threading.Thread | None = None
 _shutdown_event = threading.Event()
-_native_events_buffer: list[tuple[str, ArtifactRef]] = []
+_native_events_buffer: list[tuple[str, str, ArtifactRef]] = []
 _native_lock = threading.Lock()
+_native_child_task_ids: dict[int, str] = {}
+_native_child_task_lock = threading.Lock()
+_native_thread_task_ids: dict[int, str] = {}
+_native_thread_task_lock = threading.Lock()
 _direct_streamer: GlaasFragmentStreamer | None = None
 _direct_streamer_lock = threading.Lock()
 
@@ -38,6 +45,15 @@ _IDLE_FLUSH_INTERVAL_SECONDS = float(
     os.environ.get("ROAR_FRAGMENT_IDLE_FLUSH_INTERVAL", "0.25")
 )
 _FLUSH_THRESHOLD_EVENTS = int(os.environ.get("ROAR_FRAGMENT_FLUSH_THRESHOLD", "200"))
+_TASK_BOUNDARY_NATIVE_FLUSH_WAIT_SECONDS = float(
+    os.environ.get("ROAR_RAY_TASK_NATIVE_FLUSH_WAIT", "0.2")
+)
+_TASK_BOUNDARY_NATIVE_QUIET_PERIOD_SECONDS = float(
+    os.environ.get("ROAR_RAY_TASK_NATIVE_FLUSH_QUIET", "0.02")
+)
+_TASK_BOUNDARY_NATIVE_POLL_INTERVAL_SECONDS = float(
+    os.environ.get("ROAR_RAY_TASK_NATIVE_FLUSH_POLL", "0.01")
+)
 
 _PROXY_LOG_RE = re.compile(
     r"^\[S3:(\w+)\]\s+(s3://[^\s]+)"
@@ -63,6 +79,7 @@ _startup_complete = False
 _actor_attribution_mode = "per_call"
 _proxy_configured = False
 _DEFAULT_LOCAL_PROXY_PORT = 19191
+_real_subprocess_popen = subprocess.Popen
 
 
 def _get_logger():
@@ -230,12 +247,230 @@ def _emit_local_event_immediately(event: IOEvent) -> None:
             _get_logger().warning("Failed to eagerly append Ray local event: %s", exc)
 
 
-def _drain_native_tracer_events() -> list[tuple[str, ArtifactRef]]:
+def _emit_native_entries_immediately(task_id: str, entries: list[tuple[str, ArtifactRef]]) -> None:
+    if not task_id or not entries:
+        return
+
+    streamer_instance = _ensure_direct_streamer()
+    if streamer_instance is None:
+        return
+
+    fragment = _start_fragment(task_id)
+    for kind, ref in entries:
+        _append_fragment_ref(fragment, kind, ref)
+    fragment.ended_at = time.time()
+
+    with _direct_streamer_lock:
+        try:
+            streamer_instance.append_fragment(fragment.to_dict())
+            if not streamer_instance.flush():
+                _get_logger().warning(
+                    "Failed to eagerly flush Ray native events for task %s",
+                    fragment.ray_task_id,
+                )
+        except Exception as exc:
+            _get_logger().warning("Failed to eagerly append Ray native events: %s", exc)
+
+
+def _drain_native_tracer_events() -> list[tuple[str, str, ArtifactRef]]:
     """Drain buffered native tracer events. Called by collector thread."""
     with _native_lock:
         events = list(_native_events_buffer)
         _native_events_buffer.clear()
     return events
+
+
+def _register_native_child_pid(pid: int | None, task_id: str) -> None:
+    if not task_id or not isinstance(pid, int) or pid <= 0:
+        return
+    with _native_child_task_lock:
+        _native_child_task_ids[pid] = task_id
+
+
+def _unregister_native_child_pid(pid: int | None) -> None:
+    if not isinstance(pid, int) or pid <= 0:
+        return
+    with _native_child_task_lock:
+        _native_child_task_ids.pop(pid, None)
+
+
+def _register_native_thread_task(thread_id: int | None, task_id: str) -> None:
+    if not task_id or not isinstance(thread_id, int) or thread_id <= 0:
+        return
+    with _native_thread_task_lock:
+        _native_thread_task_ids[thread_id] = task_id
+
+
+def _unregister_native_thread_task(thread_id: int | None, task_id: str | None = None) -> None:
+    if not isinstance(thread_id, int) or thread_id <= 0:
+        return
+    with _native_thread_task_lock:
+        current = _native_thread_task_ids.get(thread_id)
+        if current is None:
+            return
+        if task_id is not None and current != task_id:
+            return
+        _native_thread_task_ids.pop(thread_id, None)
+
+
+def _bound_native_task_id_for_event(pid: int | None, thread_id: int | None) -> str:
+    if not isinstance(pid, int) or pid <= 0:
+        pid = None
+    if pid is not None and pid != os.getpid():
+        with _native_child_task_lock:
+            return _native_child_task_ids.get(pid, "")
+    if isinstance(thread_id, int) and thread_id > 0:
+        with _native_thread_task_lock:
+            return _native_thread_task_ids.get(thread_id, "")
+    with _native_child_task_lock:
+        return _native_child_task_ids.get(pid, "") if pid is not None else ""
+
+
+def _flush_current_task_native_events_immediately() -> None:
+    task_id = _get_current_task_id()
+    if not task_id:
+        return
+
+    deadline = time.monotonic() + _TASK_BOUNDARY_NATIVE_FLUSH_WAIT_SECONDS
+    quiet_deadline: float | None = None
+    pending_by_task: dict[str, list[tuple[str, ArtifactRef]]] = {}
+
+    while True:
+        batch = _drain_native_tracer_events()
+        if batch:
+            for bound_task_id, kind, ref in batch:
+                resolved_task_id = bound_task_id or task_id
+                if not resolved_task_id:
+                    continue
+                pending_by_task.setdefault(resolved_task_id, []).append((kind, ref))
+            quiet_deadline = time.monotonic() + _TASK_BOUNDARY_NATIVE_QUIET_PERIOD_SECONDS
+
+        now = time.monotonic()
+        if quiet_deadline is not None:
+            if now >= quiet_deadline or now >= deadline:
+                break
+        elif now >= deadline:
+            break
+
+        remaining = deadline - now
+        if remaining <= 0:
+            break
+        time.sleep(min(_TASK_BOUNDARY_NATIVE_POLL_INTERVAL_SECONDS, remaining))
+
+    for resolved_task_id, entries in pending_by_task.items():
+        _emit_native_entries_immediately(resolved_task_id, entries)
+
+
+def _patch_subprocess_for_native_task_attribution() -> None:
+    current_popen = getattr(subprocess, "Popen", None)
+    if not isinstance(current_popen, type):
+        return
+    if getattr(current_popen, "_roar_patched", False):
+        return
+
+    class _TrackedPopen(_real_subprocess_popen):  # type: ignore[misc, valid-type]
+        _roar_patched = True
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            _register_native_child_pid(self.pid, _get_current_task_id())
+
+        def _roar_maybe_unregister(self, result: int | None = None) -> None:
+            if result is not None or self.returncode is not None:
+                _unregister_native_child_pid(self.pid)
+
+        def poll(self):
+            result = super().poll()
+            self._roar_maybe_unregister(result)
+            return result
+
+        def wait(self, timeout=None):
+            result = super().wait(timeout=timeout)
+            self._roar_maybe_unregister(result)
+            return result
+
+        def communicate(self, input=None, timeout=None):
+            result = super().communicate(input=input, timeout=timeout)
+            self._roar_maybe_unregister(0 if self.returncode is not None else None)
+            return result
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            try:
+                return super().__exit__(exc_type, exc_val, exc_tb)
+            finally:
+                self._roar_maybe_unregister(0 if self.returncode is not None else None)
+
+    subprocess.Popen = _TrackedPopen  # type: ignore[misc]
+
+
+def _wrap_task_executor_for_native_flush(function: Callable[..., Any]) -> Callable[..., Any]:
+    if getattr(function, "_roar_native_flush_wrapped", False):
+        return function
+
+    @functools.wraps(function)
+    def _wrapped(*args, **kwargs):
+        task_id = _get_current_task_id()
+        thread_id = threading.get_native_id()
+        _register_native_thread_task(thread_id, task_id)
+        try:
+            return function(*args, **kwargs)
+        finally:
+            with contextlib.suppress(Exception):
+                _flush_current_task_native_events_immediately()
+
+    cast(Any, _wrapped)._roar_native_flush_wrapped = True
+    for attr in ("name", "method"):
+        if hasattr(function, attr):
+            with contextlib.suppress(Exception):
+                setattr(_wrapped, attr, getattr(function, attr))
+    return _wrapped
+
+
+def _patch_ray_task_execution_for_native_flush() -> None:
+    try:
+        from ray._private.function_manager import FunctionActorManager, FunctionExecutionInfo
+    except Exception:
+        return
+
+    current_get_execution_info = getattr(FunctionActorManager, "get_execution_info", None)
+    if callable(current_get_execution_info) and not getattr(
+        current_get_execution_info, "_roar_patched", False
+    ):
+        def _roar_get_execution_info(self, job_id, function_descriptor):
+            info = current_get_execution_info(self, job_id, function_descriptor)
+            wrapped_function = _wrap_task_executor_for_native_flush(info.function)
+            if wrapped_function is info.function:
+                return info
+
+            wrapped_info = FunctionExecutionInfo(
+                function=wrapped_function,
+                function_name=info.function_name,
+                max_calls=info.max_calls,
+            )
+
+            function_id = getattr(function_descriptor, "function_id", None)
+            if function_id is not None:
+                with contextlib.suppress(Exception):
+                    self._function_execution_info[function_id] = wrapped_info
+            return wrapped_info
+
+        _roar_get_execution_info._roar_patched = True  # type: ignore[attr-defined]
+        FunctionActorManager.get_execution_info = _roar_get_execution_info  # type: ignore[method-assign]
+
+    current_make_actor_method_executor = getattr(
+        FunctionActorManager,
+        "_make_actor_method_executor",
+        None,
+    )
+    if callable(current_make_actor_method_executor) and not getattr(
+        current_make_actor_method_executor, "_roar_patched", False
+    ):
+        def _roar_make_actor_method_executor(self, method_name, method):
+            wrapped_method = _wrap_task_executor_for_native_flush(method)
+            return current_make_actor_method_executor(self, method_name, wrapped_method)
+
+        _roar_make_actor_method_executor._roar_patched = True  # type: ignore[attr-defined]
+        FunctionActorManager._make_actor_method_executor = _roar_make_actor_method_executor  # type: ignore[method-assign]
 
 
 def _start_native_tracer_socket() -> None:
@@ -343,6 +578,10 @@ def _parse_and_buffer_frames(buf: bytearray) -> None:
         path = event.get("path", "")
         if not isinstance(path, str) or not path or not _should_track_local_path(path):
             continue
+        pid_value = event.get("pid")
+        pid = pid_value if isinstance(pid_value, int) else None
+        thread_id_value = event.get("thread_id")
+        thread_id = thread_id_value if isinstance(thread_id_value, int) else None
 
         kind = "write" if kind_str == "write" else "read"
         ref = ArtifactRef(
@@ -353,7 +592,7 @@ def _parse_and_buffer_frames(buf: bytearray) -> None:
             capture_method="native",
         )
         with _native_lock:
-            _native_events_buffer.append((kind, ref))
+            _native_events_buffer.append((_bound_native_task_id_for_event(pid, thread_id), kind, ref))
 
 
 def _parse_proxy_log_lines(lines: list[str]) -> list[tuple[str, ArtifactRef]]:
@@ -500,14 +739,15 @@ def _start_collector() -> None:
             events_since_flush += 1
             last_activity = time.monotonic()
 
-        def _process_native_entries(entries: list[tuple[str, ArtifactRef]]) -> None:
+        def _process_native_entries(entries: list[tuple[str, str, ArtifactRef]]) -> None:
             nonlocal events_since_flush, last_activity
 
             if not entries:
                 return
 
-            current_fragment = _ensure_fragment(_get_current_task_id())
-            for kind, ref in entries:
+            current_task_id = _get_current_task_id()
+            for bound_task_id, kind, ref in entries:
+                current_fragment = _ensure_fragment(bound_task_id or current_task_id)
                 _append_fragment_ref(current_fragment, kind, ref)
                 events_since_flush += 1
             last_activity = time.monotonic()
@@ -821,6 +1061,47 @@ def _configure_proxy_in_background() -> None:
     _configure_local_proxy_endpoint()
 
 
+def _resolve_preload_library_for_worker_exec() -> str | None:
+    explicit = str(os.environ.get("ROAR_PRELOAD_LIB", "")).strip()
+    if explicit and os.path.exists(explicit):
+        return explicit
+
+    for candidate_name in ("libroar_tracer_preload.so", "libroar-tracer-preload.so"):
+        candidate = Path.cwd() / candidate_name
+        if candidate.exists():
+            return str(candidate.resolve())
+
+    try:
+        import roar
+        from roar.services.execution.tracer_backends import find_preload_library
+
+        roar_package_dir = Path(roar.__file__).resolve().parent
+        library_path = find_preload_library(roar_package_dir)
+    except Exception:
+        return None
+
+    if library_path and os.path.exists(library_path):
+        return str(Path(library_path).resolve())
+    return None
+
+
+def _prepare_preload_env_for_worker_exec() -> None:
+    library_path = _resolve_preload_library_for_worker_exec()
+    if not library_path:
+        return
+
+    current_ld_preload = str(os.environ.get("LD_PRELOAD", "")).strip()
+    current_entries = [entry for entry in re.split(r"[\s:]+", current_ld_preload) if entry]
+    if library_path not in current_entries:
+        current_entries.insert(0, library_path)
+        os.environ["LD_PRELOAD"] = " ".join(current_entries)
+
+    sock_path = str(os.environ.get("ROAR_PRELOAD_TRACE_SOCK", "")).strip()
+    if not sock_path:
+        sock_dir = tempfile.mkdtemp(prefix="roar-trace-")
+        os.environ["ROAR_PRELOAD_TRACE_SOCK"] = os.path.join(sock_dir, "trace.sock")
+
+
 def _startup() -> None:
     global _startup_complete, _actor_attribution_mode
 
@@ -831,8 +1112,10 @@ def _startup() -> None:
     if "libroar_tracer_preload" in os.environ.get("LD_PRELOAD", ""):
         _start_native_tracer_socket()
     builtins.open = _tracking_open
+    _patch_subprocess_for_native_task_attribution()
     _patch_pandas_parquet()
     _patch_tempfile()
+    _patch_ray_task_execution_for_native_flush()
     _start_collector()
     atexit.register(_shutdown_collector)
     _startup_complete = True
@@ -844,6 +1127,9 @@ def _run_worker_entrypoint(argv: list[str]) -> None:
     if not argv:
         return
 
+    # Set preload vars immediately before exec so the final Python worker
+    # process, not this bootstrap helper, starts with the interposer active.
+    _prepare_preload_env_for_worker_exec()
     os.execvp("python3", ["python3", *argv])
 
 

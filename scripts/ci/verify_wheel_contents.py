@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import glob
 import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
 import zipfile
 
 
 def main() -> None:
-    wheels = sorted(glob.glob("dist/*.whl"))
+    wheel_glob = os.environ.get("ROAR_WHEEL_GLOB", "dist/*.whl")
+    wheels = sorted(glob.glob(wheel_glob))
     if len(wheels) != 1:
-        raise SystemExit(f"Expected exactly one wheel, found: {wheels}")
+        raise SystemExit(f"Expected exactly one wheel matching {wheel_glob!r}, found: {wheels}")
 
     wheel = wheels[0]
     with zipfile.ZipFile(wheel) as zf:
@@ -60,7 +66,56 @@ def main() -> None:
     if not has_preload_lib:
         raise SystemExit("Missing preload interposer library in wheel (roar/bin/libroar*_preload*)")
 
+    if platform == "linux":
+        _verify_linux_glibc_floor(wheel, names, required_bins)
+
     print(f"Verified wheel contents: {wheel}")
+
+
+def _verify_linux_glibc_floor(wheel: str, names: set[str], required_bins: set[str]) -> None:
+    max_allowed = _parse_glibc_version(os.environ.get("ROAR_WHEEL_MAX_GLIBC", "2.17"))
+    members = sorted(required_bins) + sorted(
+        name
+        for name in names
+        if name.startswith("roar/bin/libroar_tracer_preload")
+        or name.startswith("roar/bin/libroar-tracer-preload")
+    )
+
+    with tempfile.TemporaryDirectory(prefix="roar-wheel-verify-") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        with zipfile.ZipFile(wheel) as zf:
+            for member in members:
+                extracted = Path(zf.extract(member, tmp_path))
+                max_found = _max_glibc_version(extracted)
+                if max_found is None:
+                    continue
+                if max_found > max_allowed:
+                    raise SystemExit(
+                        f"{member} requires GLIBC_{max_found[0]}.{max_found[1]} "
+                        f"(max allowed GLIBC_{max_allowed[0]}.{max_allowed[1]})"
+                    )
+
+
+def _max_glibc_version(path: Path) -> tuple[int, int] | None:
+    if not shutil.which("objdump"):
+        raise SystemExit("objdump is required to verify Linux wheel portability")
+
+    result = subprocess.run(
+        ["objdump", "-p", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"objdump failed for {path}: {result.stderr.strip()}")
+
+    versions = [_parse_glibc_version(match.group(1)) for match in re.finditer(r"GLIBC_(\d+\.\d+)", result.stdout)]
+    return max(versions) if versions else None
+
+
+def _parse_glibc_version(raw: str) -> tuple[int, int]:
+    major, minor = raw.split(".", 1)
+    return int(major), int(minor)
 
 
 if __name__ == "__main__":
