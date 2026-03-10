@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import time
@@ -10,6 +11,7 @@ import uuid
 from typing import Any
 
 import boto3
+
 import ray
 
 
@@ -31,7 +33,7 @@ def _percentile(samples: list[float], percentile: float) -> float:
     if not samples:
         return 0.0
     ordered = sorted(samples)
-    rank = int(math.ceil((percentile / 100.0) * len(ordered))) - 1
+    rank = math.ceil((percentile / 100.0) * len(ordered)) - 1
     rank = max(0, min(rank, len(ordered) - 1))
     return float(ordered[rank])
 
@@ -44,7 +46,7 @@ def _run_micro_probe(ops: int, bucket: str, run_id: str) -> dict[str, Any]:
 
     for idx in range(ops):
         key = f"s3-perf/{run_id}/item-{idx:05d}.txt"
-        payload = f"{run_id}-{idx}-{time.time_ns()}".encode("utf-8")
+        payload = f"{run_id}-{idx}-{time.time_ns()}".encode()
 
         start = time.perf_counter()
         s3.put_object(Bucket=bucket, Key=key, Body=payload)
@@ -103,10 +105,8 @@ def main(argv: list[str] | None = None) -> int:
         }
         print(json.dumps(report, sort_keys=True))
     finally:
-        try:
+        with contextlib.suppress(Exception):
             ray.shutdown()
-        except Exception:
-            pass
     return 0
 
 

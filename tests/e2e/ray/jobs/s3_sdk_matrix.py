@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ import uuid
 from typing import Any
 
 import boto3
+
 import ray
 
 
@@ -241,10 +243,8 @@ def main(argv: list[str] | None = None) -> int:
         }
         print(json.dumps(report, sort_keys=True))
     finally:
-        try:
+        with contextlib.suppress(Exception):
             ray.shutdown()
-        except Exception:
-            pass
 
     if report["errors"]:
         return 1

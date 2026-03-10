@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import inspect
 import json
 import os
@@ -304,10 +305,8 @@ def main(argv: list[str] | None = None) -> int:
             payload["driver_env"] = _driver_env_snapshot()
             print(json.dumps(payload, sort_keys=True))
     finally:
-        try:
+        with contextlib.suppress(Exception):
             ray.shutdown()
-        except Exception:
-            pass
     return 0
 
 

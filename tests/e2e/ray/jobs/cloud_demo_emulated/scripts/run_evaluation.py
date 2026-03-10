@@ -11,7 +11,7 @@ APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR.parent) not in sys.path:
     sys.path.insert(0, str(APP_DIR.parent))
 
-from cloud_demo_emulated.workload.evaluation import run_evaluation
+from cloud_demo_emulated.workload.evaluation import run_evaluation  # noqa: E402
 
 
 def main() -> None:

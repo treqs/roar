@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import glob
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
 import zipfile
+from pathlib import Path
 
 
 def main() -> None:

@@ -14,7 +14,6 @@ import pytest
 
 from roar.cli.commands._ray_job_submit import _merge_roar_runtime_env_pip
 
-
 FAKE_WHEEL_URL = (
     "https://example.com/wheels/roar_cli-0.2.12-cp312-cp312-linux_x86_64.whl"
     "?X-Amz-Signature=deadbeef"

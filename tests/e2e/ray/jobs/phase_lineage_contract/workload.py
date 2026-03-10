@@ -7,6 +7,7 @@ import os
 from urllib.parse import urlparse
 
 import boto3
+
 import ray
 
 DATA_BUCKET = "test-bucket"

@@ -1,7 +1,7 @@
 """Tests for shared tracer backend discovery/readiness helpers."""
 
-from pathlib import Path
 import subprocess
+from pathlib import Path
 from unittest.mock import mock_open, patch
 
 from roar.services.execution import tracer_backends

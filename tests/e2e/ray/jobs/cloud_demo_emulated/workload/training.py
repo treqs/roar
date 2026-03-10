@@ -6,10 +6,10 @@ import io
 import json
 
 import pyarrow.parquet as pq
-import ray
-
 from cloud_demo_emulated.workload.aws_client import resolve_s3_endpoint, s3_client
 from cloud_demo_emulated.workload.config import NUM_EPOCHS, S3_DATA_BUCKET, S3_MODELS_BUCKET
+
+import ray
 
 
 @ray.remote

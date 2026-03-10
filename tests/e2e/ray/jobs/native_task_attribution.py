@@ -11,7 +11,6 @@ from pathlib import Path
 
 import ray
 
-
 _HELPER_SOURCE = textwrap.dedent(
     r"""
     #include <stdio.h>

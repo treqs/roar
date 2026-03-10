@@ -7,10 +7,10 @@ import io
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-import ray
-
 from cloud_demo_emulated.workload.aws_client import resolve_s3_endpoint, s3_client
 from cloud_demo_emulated.workload.config import NUM_FRAMES_PER_FILE, S3_DATA_BUCKET, SHARD_COUNT
+
+import ray
 
 
 @ray.remote

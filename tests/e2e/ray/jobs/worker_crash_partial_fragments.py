@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import time
 import uuid
 from typing import Any
 
 import boto3
+
 import ray
 
 
@@ -82,10 +84,8 @@ def main(argv: list[str] | None = None) -> int:
         report["crashed_count"] = len(report["crashed"])
         print(json.dumps(report, sort_keys=True))
     finally:
-        try:
+        with contextlib.suppress(Exception):
             ray.shutdown()
-        except Exception:
-            pass
 
     return 1 if report["crashed"] else 0
 

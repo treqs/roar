@@ -27,7 +27,7 @@ def _build_driver_proxy_fragment(
     started_at: float,
     ended_at: float,
     exit_code: int,
-) -> object | None:
+) -> TaskFragment | None:
     return build_proxy_fragment(
         entries,
         function_name="s3_driver_proxy",

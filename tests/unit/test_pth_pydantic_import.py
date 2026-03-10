@@ -4,7 +4,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-
 SOURCE_ROOT = Path("/home/trevor/dev/roar")
 
 

@@ -11,7 +11,7 @@ APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR.parent) not in sys.path:
     sys.path.insert(0, str(APP_DIR.parent))
 
-from phase_lineage_contract.workload import run_training
+from phase_lineage_contract.workload import run_training  # noqa: E402
 
 
 def main() -> None:
@@ -30,4 +30,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

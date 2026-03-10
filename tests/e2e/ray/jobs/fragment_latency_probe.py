@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import time
@@ -10,6 +11,7 @@ import uuid
 from typing import Any
 
 import boto3
+
 import ray
 
 
@@ -21,7 +23,7 @@ def _percentile(values: list[float], pct: float) -> float:
     if not values:
         return 0.0
     ordered = sorted(values)
-    idx = int(math.ceil((pct / 100.0) * len(ordered))) - 1
+    idx = math.ceil((pct / 100.0) * len(ordered)) - 1
     idx = max(0, min(idx, len(ordered) - 1))
     return float(ordered[idx])
 
@@ -101,10 +103,8 @@ def main(argv: list[str] | None = None) -> int:
         }
         print(json.dumps(report, sort_keys=True))
     finally:
-        try:
+        with contextlib.suppress(Exception):
             ray.shutdown()
-        except Exception:
-            pass
 
     return 1 if report["errors"] else 0
 

@@ -11,7 +11,7 @@ APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR.parent) not in sys.path:
     sys.path.insert(0, str(APP_DIR.parent))
 
-from cloud_demo_like.workload import run_extraction
+from cloud_demo_like.workload import run_extraction  # noqa: E402
 
 
 def main() -> None:
@@ -29,4 +29,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
