@@ -120,6 +120,9 @@ class RunCoordinator:
                     upstream_url=existing_endpoint,
                 )
                 extra_env = {"AWS_ENDPOINT_URL": f"http://127.0.0.1:{proxy_handle.port}"}
+                # Preserve the real upstream for cluster-side proxies (ray job submit).
+                if existing_endpoint:
+                    extra_env["ROAR_UPSTREAM_S3_ENDPOINT"] = existing_endpoint
                 self.logger.debug("Proxy started on port %d", proxy_handle.port)
             except Exception as e:
                 self.logger.warning("Failed to start proxy: %s", e)

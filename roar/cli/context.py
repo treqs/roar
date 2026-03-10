@@ -7,6 +7,7 @@ passed through the Click command chain via ctx.obj.
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -137,5 +138,12 @@ class RoarContext:
 
     @property
     def has_repo(self) -> bool:
-        """Check if we're in a git repository."""
-        return self.repo_root is not None
+        """Check if we're in a git repository.
+
+        Returns True when ROAR_JOB_INSTRUMENTED=1 (Ray job driver running
+        from an extracted working_dir that is not a git repo).
+        """
+        if self.repo_root is not None:
+            return True
+        # Ray job drivers run from extracted working dirs without .git
+        return os.environ.get("ROAR_JOB_INSTRUMENTED") == "1"

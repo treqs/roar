@@ -138,11 +138,6 @@ CONFIGURABLE_KEYS = {
         "default": True,
         "description": "Inject roar-cli into Ray runtime_env.pip for remote workers",
     },
-    "ray.log_dir": {
-        "type": str,
-        "default": "/shared/.roar-logs",
-        "description": "Shared Ray worker log directory for roar collection",
-    },
     "ray.actor_attribution": {
         "type": str,
         "default": "per_call",

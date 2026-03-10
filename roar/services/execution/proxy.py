@@ -137,6 +137,7 @@ class ProxyService:
         session_id: str | None = None,
         job_id: str | None = None,
         upstream_url: str | None = None,
+        port: int | None = None,
     ) -> ProxyHandle:
         """Start a proxy for a single `roar run`.
 
@@ -153,10 +154,11 @@ class ProxyService:
                 "  cargo build --release --manifest-path rust/Cargo.toml -p roar-proxy"
             )
 
-        # Find a free port
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
-            port = s.getsockname()[1]
+        if port is None:
+            # Find a free port
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", 0))
+                port = s.getsockname()[1]
 
         cmd = [proxy_path, "--port", str(port)]
         if session_id:
