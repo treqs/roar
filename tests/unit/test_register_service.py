@@ -82,6 +82,114 @@ class TestRegisterService:
             session_service=mock_session_service,
         )
 
+    def test_register_lineage_target_dispatches_step_reference(self, service, tmp_path):
+        with patch.object(service, "register_step_lineage") as register_step:
+            register_step.return_value = RegisterResult(success=True)
+
+            result = service.register_lineage_target(
+                target="@4",
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+            )
+
+        assert result.success is True
+        register_step.assert_called_once_with(
+            step_reference="@4",
+            roar_dir=tmp_path / ".roar",
+            cwd=tmp_path,
+            dry_run=False,
+            as_blake3=False,
+            skip_confirmation=False,
+            confirm_callback=None,
+        )
+
+    def test_register_lineage_target_dispatches_session_hash(self, service, tmp_path):
+        session_hash = "a" * 64
+        with patch.object(service, "register_session_lineage") as register_session:
+            register_session.return_value = RegisterResult(success=True)
+
+            result = service.register_lineage_target(
+                target=session_hash,
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+            )
+
+        assert result.success is True
+        register_session.assert_called_once_with(
+            session_hash=session_hash,
+            roar_dir=tmp_path / ".roar",
+            cwd=tmp_path,
+            dry_run=False,
+            as_blake3=False,
+            skip_confirmation=False,
+            confirm_callback=None,
+        )
+
+    def test_register_lineage_target_dispatches_artifact_path(self, service, tmp_path):
+        artifact_path = "metrics.json"
+        with patch.object(service, "register_artifact_lineage") as register_artifact:
+            register_artifact.return_value = RegisterResult(success=True)
+
+            result = service.register_lineage_target(
+                target=artifact_path,
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+            )
+
+        assert result.success is True
+        register_artifact.assert_called_once_with(
+            artifact_path=artifact_path,
+            roar_dir=tmp_path / ".roar",
+            cwd=tmp_path,
+            dry_run=False,
+            as_blake3=False,
+            skip_confirmation=False,
+            confirm_callback=None,
+        )
+
+    def test_order_jobs_for_registration_puts_parent_before_child(self, service):
+        parent = {
+            "id": 2,
+            "job_uid": "parent-uid",
+            "step_number": 1,
+            "timestamp": 20.0,
+        }
+        child = {
+            "id": 1,
+            "job_uid": "child-uid",
+            "parent_job_uid": "parent-uid",
+            "step_number": 1,
+            "timestamp": 10.0,
+        }
+
+        ordered = service._order_jobs_for_registration([child, parent])
+
+        assert [job["job_uid"] for job in ordered] == ["parent-uid", "child-uid"]
+
+    def test_normalize_jobs_for_registration_maps_unresolved_ray_parent_to_submit_job(self, service):
+        submit_job = {
+            "id": 1,
+            "job_uid": "local-submit",
+            "step_number": 1,
+            "timestamp": 10.0,
+            "command": "ray job submit --address http://localhost:8265 -- python main.py",
+            "job_type": None,
+        }
+        phase_job = {
+            "id": 2,
+            "job_uid": "phase-job",
+            "parent_job_uid": "remote-driver",
+            "step_number": 4,
+            "timestamp": 40.0,
+            "command": "ray_task:evaluation",
+            "job_type": "ray_task",
+        }
+
+        normalized = service._normalize_jobs_for_registration([phase_job, submit_job])
+
+        jobs_by_uid = {job["job_uid"]: job for job in normalized}
+        assert jobs_by_uid["phase-job"]["parent_job_uid"] == "local-submit"
+
     def test_register_artifact_lineage_file_not_found(self, service):
         """Test error when artifact file doesn't exist."""
         result = service.register_artifact_lineage(

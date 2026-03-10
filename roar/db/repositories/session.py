@@ -11,11 +11,19 @@ from pathlib import Path
 from typing import Any
 
 import blake3
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.orm import Session as SASession
 
 from ...core.interfaces.repositories import SessionRepository
 from ..models import Job, Session
+
+_STEP_NOISE_COMMANDS = (
+    "ray_task:unknown",
+    "ray_task:__init__",
+    "ray_task:s3_proxy",
+    "ray_task:s3_driver_proxy",
+    "ray_task:RoarNodeAgent.__init__",
+)
 
 
 class SQLAlchemySessionRepository(SessionRepository):
@@ -212,6 +220,15 @@ class SQLAlchemySessionRepository(SessionRepository):
         session = self._session.get(Session, session_id)
         return self._session_to_dict(session) if session else None
 
+    def get_all(self) -> list[dict[str, Any]]:
+        """Get all sessions ordered by most recent first."""
+        sessions = (
+            self._session.execute(select(Session).order_by(Session.created_at.desc(), Session.id.desc()))
+            .scalars()
+            .all()
+        )
+        return [self._session_to_dict(session) for session in sessions]
+
     def get_by_hash(self, session_hash: str) -> dict[str, Any] | None:
         """
         Get a session by its content hash.
@@ -313,9 +330,30 @@ class SQLAlchemySessionRepository(SessionRepository):
                 .where(
                     Job.session_id == session_id,
                     Job.step_number == step_number,
-                    Job.job_type.is_(None) | (Job.job_type == "run"),
+                    Job.job_type.is_(None) | (Job.job_type != "build"),
+                )
+                .order_by(
+                    case(
+                        (Job.job_type.is_(None), 6),
+                        (Job.job_type == "run", 6),
+                        (
+                            Job.command.is_not(None)
+                            & (~Job.command.in_(_STEP_NOISE_COMMANDS))
+                            & Job.parent_job_uid.is_not(None)
+                            & Job.script.is_not(None)
+                            & (~Job.script.like("%.%")),
+                            5,
+                        ),
+                        (
+                            Job.command.is_not(None) & (~Job.command.in_(_STEP_NOISE_COMMANDS)),
+                            4,
+                        ),
+                        (Job.command.in_(_STEP_NOISE_COMMANDS), 1),
+                        else_=2,
+                    ).desc()
                 )
                 .order_by(Job.timestamp.desc())
+                .order_by(Job.id.desc())
                 .limit(1)
             )
         job = self._session.execute(query).scalar_one_or_none()
@@ -605,6 +643,7 @@ class SQLAlchemySessionRepository(SessionRepository):
         return {
             "id": job.id,
             "job_uid": job.job_uid,
+            "parent_job_uid": job.parent_job_uid,
             "timestamp": job.timestamp,
             "command": job.command,
             "script": job.script,

@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
+_STEP_NOISE_COMMANDS = {
+    "ray_task:unknown",
+    "ray_task:__init__",
+    "ray_task:s3_proxy",
+    "ray_task:s3_driver_proxy",
+    "ray_task:RoarNodeAgent.__init__",
+}
+
 
 class DagDataBuilder:
     """Build DAG visualization data from session."""
@@ -115,6 +123,41 @@ class DagDataBuilder:
 
         return steps_by_number
 
+    def _step_sort_key(self, step: dict) -> tuple[int, float, int]:
+        job_type = step.get("job_type")
+        command = str(step.get("command") or "")
+        script = str(step.get("script") or "")
+        parent_job_uid = str(step.get("parent_job_uid") or "")
+        is_phase_wrapper = (
+            command.startswith("ray_task:")
+            and command not in _STEP_NOISE_COMMANDS
+            and bool(parent_job_uid)
+            and bool(script)
+            and "." not in script
+        )
+        if job_type in (None, "run"):
+            priority = 6
+        elif is_phase_wrapper:
+            priority = 5
+        elif command and command not in _STEP_NOISE_COMMANDS:
+            priority = 4
+        elif command in _STEP_NOISE_COMMANDS:
+            priority = 1
+        else:
+            priority = 2
+        return (
+            priority,
+            float(step.get("timestamp") or 0.0),
+            int(step.get("id") or 0),
+        )
+
+    def _representative_steps(self, steps_by_number: dict[int, list[dict]]) -> dict[int, dict]:
+        return {
+            num: max(group, key=self._step_sort_key)
+            for num, group in steps_by_number.items()
+            if group
+        }
+
     def _select_steps(
         self,
         steps_by_number: dict[int, list[dict]],
@@ -124,13 +167,14 @@ class DagDataBuilder:
         """Pick which steps to show based on expanded mode."""
         if expanded:
             return steps
-        return [steps_by_number[num][-1] for num in sorted(steps_by_number.keys())]
+        representative_by_step = self._representative_steps(steps_by_number)
+        return [representative_by_step[num] for num in sorted(representative_by_step.keys())]
 
     def _collect_artifacts(
         self, steps_by_number: dict[int, list[dict]]
     ) -> tuple[dict[str, dict], dict[str, list[str]]]:
         """Build all_artifacts and artifacts_by_path from latest step outputs."""
-        latest_by_step: dict[int, dict] = {num: group[-1] for num, group in steps_by_number.items()}
+        latest_by_step = self._representative_steps(steps_by_number)
 
         all_artifacts: dict[str, dict] = {}
         artifacts_by_path: dict[str, list[str]] = {}
@@ -179,7 +223,7 @@ class DagDataBuilder:
         all_artifacts: dict[str, dict],
     ) -> dict[str, list[int]]:
         """Build consumer relationships from step inputs."""
-        latest_by_step: dict[int, dict] = {num: group[-1] for num, group in steps_by_number.items()}
+        latest_by_step = self._representative_steps(steps_by_number)
 
         artifact_consumers: dict[str, list[int]] = {}
 
@@ -206,7 +250,7 @@ class DagDataBuilder:
         expanded: bool,
     ) -> list[dict]:
         """Build node data for each step to show."""
-        latest_by_step: dict[int, dict] = {num: group[-1] for num, group in steps_by_number.items()}
+        latest_by_step = self._representative_steps(steps_by_number)
         nodes = []
 
         for step in steps_to_show:

@@ -1,9 +1,9 @@
 """
 Native Click implementation of the register command.
 
-Usage: roar register [options] <artifact_path>
+Usage: roar register [options] <target>
 
-Registers an artifact and its complete lineage with GLaaS.
+Registers artifact, step, or session lineage with GLaaS.
 """
 
 import click
@@ -25,7 +25,7 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
 
 
 @click.command("register")
-@click.argument("artifact_path", type=click.STRING)
+@click.argument("target", type=click.STRING)
 @click.option(
     "--dry-run",
     is_flag=True,
@@ -45,14 +45,16 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
 @click.pass_obj
 @require_init
 def register(
-    ctx: RoarContext, artifact_path: str, dry_run: bool, yes: bool, as_blake3: bool
+    ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3: bool
 ) -> None:
-    """Register artifact lineage with GLaaS.
+    """Register lineage with GLaaS.
 
-    Submits the complete lineage of an artifact to the GLaaS server,
-    including all jobs and artifacts in the dependency chain.
+    Submits lineage to the GLaaS server, starting from one of:
+    - an artifact path
+    - a DAG step reference like ``@4``
+    - a local session hash/prefix previously shown by roar
 
-    The ARTIFACT_PATH must be a file that has been tracked by roar run.
+    Artifact paths must refer to files tracked by roar.
 
     If secrets are detected in the data (API keys, tokens, passwords, etc.),
     you will be prompted to confirm. Use --yes to skip the prompt and
@@ -67,6 +69,10 @@ def register(
 
         roar register -y model.pt           # Skip confirmation prompt
 
+        roar register @4                    # Register the lineage for DAG step 4
+
+        roar register 8d7a1f2c...           # Register a whole local session
+
         roar register --as-blake3 model.pt  # Upgrade S3 etag hashes
 
         roar register outputs/metrics.json  # Register from subdirectory
@@ -74,9 +80,9 @@ def register(
     # Create service
     service = RegisterService()
 
-    # Register the artifact lineage
-    result = service.register_artifact_lineage(
-        artifact_path=artifact_path,
+    # Register the requested lineage target
+    result = service.register_lineage_target(
+        target=target,
         roar_dir=ctx.roar_dir,
         cwd=ctx.cwd,
         dry_run=dry_run,
@@ -105,9 +111,10 @@ def register(
         click.echo("")
         click.echo("View on GLaaS:")
         click.echo(f"  Session:  {web_url}/dag/{result.session_hash}")
-        click.echo(f"  Artifact: {web_url}/artifact/{result.artifact_hash}")
+        if result.artifact_hash:
+            click.echo(f"  Artifact: {web_url}/artifact/{result.artifact_hash}")
     else:
-        click.echo(f"Registered lineage for: {artifact_path}")
+        click.echo(f"Registered lineage for: {target}")
         click.echo(f"  Session: {result.session_hash[:12]}...")
         click.echo(f"  Jobs: {result.jobs_registered}")
         click.echo(f"  Artifacts: {result.artifacts_registered}")
@@ -122,12 +129,13 @@ def register(
             for error in result.error.split("; "):
                 click.echo(f"  - {error}", err=True)
 
-        # Print reproduce command
-        click.echo("")
-        click.echo("To reproduce this artifact:")
-        click.echo(f"  roar reproduce {result.artifact_hash}")
+        if result.artifact_hash:
+            click.echo("")
+            click.echo("To reproduce this artifact:")
+            click.echo(f"  roar reproduce {result.artifact_hash}")
 
         click.echo("")
         click.echo("View on GLaaS:")
         click.echo(f"  Session:  {web_url}/dag/{result.session_hash}")
-        click.echo(f"  Artifact: {web_url}/artifact/{result.artifact_hash}")
+        if result.artifact_hash:
+            click.echo(f"  Artifact: {web_url}/artifact/{result.artifact_hash}")
