@@ -45,6 +45,8 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "6379:6379"
       - "8265:8265"
@@ -54,8 +56,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    volumes:
-      - roar-data:/shared
     networks:
       - roar-ray-test
 
@@ -72,8 +72,8 @@ services:
     depends_on:
       ray-head:
         condition: service_healthy
-    volumes:
-      - roar-data:/shared
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - roar-ray-test
 
@@ -90,13 +90,10 @@ services:
     depends_on:
       ray-head:
         condition: service_healthy
-    volumes:
-      - roar-data:/shared
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - roar-ray-test
-
-volumes:
-  roar-data:
 
 networks:
   roar-ray-test:
