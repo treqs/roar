@@ -4,11 +4,14 @@ import sys
 import textwrap
 from pathlib import Path
 
-SOURCE_ROOT = Path("/home/trevor/dev/roar")
+SOURCE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _run_python(code: str) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "PYTHONPATH": str(SOURCE_ROOT)}
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    source_root = str(SOURCE_ROOT)
+    env["PYTHONPATH"] = source_root if not existing else source_root + os.pathsep + existing
     return subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
