@@ -69,7 +69,11 @@ def test_emit_driver_proxy_fragment_streams_to_glaas_when_session_is_present(
             calls.append(("close", None))
 
     monkeypatch.setattr(driver_entrypoint, "GlaasFragmentStreamer", _FakeStreamer)
-    monkeypatch.setattr(driver_entrypoint, "collect_fragments", lambda *args, **kwargs: calls.append(("collect", args or kwargs)))
+    monkeypatch.setattr(
+        driver_entrypoint,
+        "collect_fragments",
+        lambda *args, **kwargs: calls.append(("collect", args or kwargs)),
+    )
     monkeypatch.setenv("ROAR_SESSION_ID", "session-1")
     monkeypatch.setenv("ROAR_FRAGMENT_TOKEN", "ab" * 32)
     monkeypatch.setenv("GLAAS_URL", "http://localhost:3001")

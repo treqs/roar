@@ -44,9 +44,7 @@ def main() -> None:
                 ),
                 "task_started_at": final_state.get("task_started_at"),
                 "task_ended_at": final_state.get("task_ended_at"),
-                "task_expected_duration_seconds": final_state.get(
-                    "task_expected_duration_seconds"
-                ),
+                "task_expected_duration_seconds": final_state.get("task_expected_duration_seconds"),
             }
         )
     )

@@ -190,7 +190,9 @@ def test_multi_node_lineage_merges_jobs_from_multiple_nodes(
     results = payload.get("results", [])
     assert isinstance(results, list) and results
 
-    runtime_node_ids = {str(item.get("node_id") or "") for item in results if isinstance(item, dict)}
+    runtime_node_ids = {
+        str(item.get("node_id") or "") for item in results if isinstance(item, dict)
+    }
     runtime_node_ids.discard("")
     assert len(runtime_node_ids) >= 2
 

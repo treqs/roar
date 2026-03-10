@@ -236,7 +236,9 @@ def test_configure_local_proxy_endpoint_preserves_upstream(monkeypatch: pytest.M
     assert roar_worker._proxy_configured is True
 
 
-def test_configure_local_proxy_endpoint_captures_original_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configure_local_proxy_endpoint_captures_original_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import roar.ray.roar_worker as roar_worker
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://minio:9000")
@@ -473,7 +475,6 @@ def test_collector_flushes_native_entries_with_current_task_id(
             )
         )
 
-
     deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline and not appended:
         time.sleep(0.01)
@@ -626,15 +627,15 @@ def test_wrap_task_executor_keeps_current_thread_bound_until_reused(
     observed: list[str] = []
 
     def _task() -> None:
-        observed.append(
-            roar_worker._bound_native_task_id_for_event(roar_worker.os.getpid(), 321)
-        )
+        observed.append(roar_worker._bound_native_task_id_for_event(roar_worker.os.getpid(), 321))
 
     wrapped = roar_worker._wrap_task_executor_for_native_flush(_task)
     wrapped()
 
     assert observed == ["task-thread"]
-    assert roar_worker._bound_native_task_id_for_event(roar_worker.os.getpid(), 321) == "task-thread"
+    assert (
+        roar_worker._bound_native_task_id_for_event(roar_worker.os.getpid(), 321) == "task-thread"
+    )
 
     monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-next")
     wrapped()
@@ -666,10 +667,13 @@ def test_patch_threading_binds_spawned_thread_to_launching_task(
 
     assert not thread.is_alive()
     assert observed["task_id"] == "task-background"
-    assert roar_worker._bound_native_task_id_for_event(
-        roar_worker.os.getpid(),
-        int(observed["thread_id"]),
-    ) == "task-background"
+    assert (
+        roar_worker._bound_native_task_id_for_event(
+            roar_worker.os.getpid(),
+            int(observed["thread_id"]),
+        )
+        == "task-background"
+    )
 
 
 def test_recent_thread_binding_expires_after_linger_window(
@@ -684,7 +688,9 @@ def test_recent_thread_binding_expires_after_linger_window(
     roar_worker._register_native_thread_task(4321, "task-thread")
     roar_worker._unregister_native_thread_task(4321, "task-thread")
 
-    assert roar_worker._bound_native_task_id_for_event(roar_worker.os.getpid(), 4321) == "task-thread"
+    assert (
+        roar_worker._bound_native_task_id_for_event(roar_worker.os.getpid(), 4321) == "task-thread"
+    )
 
     now["value"] = 100.6
     assert roar_worker._bound_native_task_id_for_event(roar_worker.os.getpid(), 4321) == ""

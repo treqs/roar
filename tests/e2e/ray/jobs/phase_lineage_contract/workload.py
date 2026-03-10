@@ -96,4 +96,3 @@ def run_evaluation(model_key: str, run_id: str, ray_address: str = "auto") -> st
         return str(ray.get(evaluate_model.remote(model_key, run_id)))
     finally:
         ray.shutdown()
-

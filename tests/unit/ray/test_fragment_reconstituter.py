@@ -265,10 +265,13 @@ def test_shard_cluster_candidates_get_lower_reconstitution_confidence_floor() ->
     candidate = {"evidence": ["high_cardinality", "payload_ext", "shard_cluster"]}
 
     assert module.FragmentReconstituter._composite_confidence_floor(candidate, config) == 0.5
-    assert module.FragmentReconstituter._composite_confidence_floor(
-        {"evidence": ["payload_ext"]},
-        config,
-    ) == 0.8
+    assert (
+        module.FragmentReconstituter._composite_confidence_floor(
+            {"evidence": ["payload_ext"]},
+            config,
+        )
+        == 0.8
+    )
 
 
 def test_resolve_s3_key_placeholders_rewrites_paths_when_concrete_match_exists() -> None:

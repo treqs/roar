@@ -248,7 +248,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if report["errors"]:
         return 1
-    if any(not bool(item.get("payload_match")) for item in report["results"] if isinstance(item, dict)):
+    if any(
+        not bool(item.get("payload_match")) for item in report["results"] if isinstance(item, dict)
+    ):
         return 1
     return 0
 

@@ -8,9 +8,7 @@ from roar.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
 from roar.ray.glaas_fragment_streamer import GlaasFragmentStreamer
 from roar.services.execution.proxy import S3LogEntry
 
-_S3_WRITE_OPS = frozenset(
-    {"PutObject", "UploadPart", "CompleteMultipartUpload", "DeleteObject"}
-)
+_S3_WRITE_OPS = frozenset({"PutObject", "UploadPart", "CompleteMultipartUpload", "DeleteObject"})
 
 
 def entry_to_ref(entry: S3LogEntry) -> tuple[str, ArtifactRef] | None:

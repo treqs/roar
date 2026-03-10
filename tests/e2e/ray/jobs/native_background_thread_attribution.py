@@ -98,7 +98,9 @@ class BackgroundThreadNativeWriter:
         self._background_thread: threading.Thread | None = None
         self._background_meta: dict[str, str] = {}
 
-    def launch_background_write(self, path: str, payload: str, native_delay_ms: int) -> dict[str, str]:
+    def launch_background_write(
+        self, path: str, payload: str, native_delay_ms: int
+    ) -> dict[str, str]:
         from roar.ray import roar_worker
 
         target = Path(path)

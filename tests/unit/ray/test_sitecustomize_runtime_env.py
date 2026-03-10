@@ -61,9 +61,7 @@ def test_patch_ray_init_skips_pip_dependency_by_default(
     assert result == "ok"
     runtime_env = calls[-1]["runtime_env"]
     assert "pip" not in runtime_env
-    assert {"USER_KEY", "ROAR_JOB_ID", "ROAR_DRIVER_JOB_UID"}.issubset(
-        runtime_env["env_vars"]
-    )
+    assert {"USER_KEY", "ROAR_JOB_ID", "ROAR_DRIVER_JOB_UID"}.issubset(runtime_env["env_vars"])
     assert runtime_env["env_vars"]["ROAR_JOB_ID"]
 
 

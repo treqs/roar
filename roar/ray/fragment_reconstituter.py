@@ -414,7 +414,9 @@ class FragmentReconstituter:
 
                     materialized: list[dict[str, Any]] = []
                     for root_path, members in grouped_roots.items():
-                        artifact_id_by_path = {member.path: member.artifact_id for member in members}
+                        artifact_id_by_path = {
+                            member.path: member.artifact_id for member in members
+                        }
                         composite_leaves = [
                             CompositeLeaf(
                                 relative_path=self._relative_path_for_root(member.path, root_path),
@@ -457,7 +459,9 @@ class FragmentReconstituter:
                         component_payload = []
                         for component in list(composite.payload.get("components") or []):
                             relative_path = str(component.get("relative_path") or "")
-                            component_path = self._path_for_relative_member(root_path, relative_path)
+                            component_path = self._path_for_relative_member(
+                                root_path, relative_path
+                            )
                             component_payload.append(
                                 {
                                     **component,
@@ -495,7 +499,9 @@ class FragmentReconstituter:
             )
 
     @staticmethod
-    def _extract_composite_output_leaves(outputs: list[dict[str, Any]]) -> list[_CompositeOutputLeaf]:
+    def _extract_composite_output_leaves(
+        outputs: list[dict[str, Any]],
+    ) -> list[_CompositeOutputLeaf]:
         leaves: list[_CompositeOutputLeaf] = []
         seen_paths: set[str] = set()
         for output in outputs:

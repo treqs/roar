@@ -19,4 +19,3 @@ def s3_client(*, endpoint_url: str | None = None):
         aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "minioadmin"),
         region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
     )
-

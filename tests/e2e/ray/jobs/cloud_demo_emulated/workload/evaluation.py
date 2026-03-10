@@ -34,7 +34,9 @@ def evaluate_shard(
     return {"shard": shard_key, "score": score}
 
 
-def run_evaluation(model_key: str, shard_keys: list[str], run_id: str, ray_address: str = "auto") -> str:
+def run_evaluation(
+    model_key: str, shard_keys: list[str], run_id: str, ray_address: str = "auto"
+) -> str:
     ray.init(address=ray_address, ignore_reinit_error=True, logging_level="ERROR")
     try:
         endpoint = resolve_s3_endpoint()

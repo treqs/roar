@@ -98,7 +98,9 @@ class ThreadedNativeWriter:
         self._start_barrier = threading.Barrier(2)
         self._finish_barrier = threading.Barrier(2)
 
-    def write(self, path: str, payload: str, native_delay_ms: int, return_delay_ms: int) -> dict[str, str]:
+    def write(
+        self, path: str, payload: str, native_delay_ms: int, return_delay_ms: int
+    ) -> dict[str, str]:
         from roar.ray import roar_worker
 
         target = Path(path)

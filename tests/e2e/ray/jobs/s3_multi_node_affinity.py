@@ -106,7 +106,9 @@ def main(argv: list[str] | None = None) -> int:
             options: dict[str, Any] = {}
             if node_resource:
                 options["resources"] = {node_resource: 0.001}
-            scheduled.append(_node_s3_write.options(**options).remote(run_id, str(args.bucket), index))
+            scheduled.append(
+                _node_s3_write.options(**options).remote(run_id, str(args.bucket), index)
+            )
 
         for ref in scheduled:
             try:
@@ -132,7 +134,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if report["errors"]:
         return 1
-    if any(not bool(item.get("payload_match")) for item in report["results"] if isinstance(item, dict)):
+    if any(
+        not bool(item.get("payload_match")) for item in report["results"] if isinstance(item, dict)
+    ):
         return 1
     return 0
 

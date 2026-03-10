@@ -14,7 +14,9 @@ import ray
 
 
 @ray.remote
-def generate_sensor_shard(shard_id: int, num_frames: int, bucket: str, endpoint: str | None) -> dict:
+def generate_sensor_shard(
+    shard_id: int, num_frames: int, bucket: str, endpoint: str | None
+) -> dict:
     rng = np.random.default_rng(shard_id)
     table = pa.table(
         {

@@ -132,7 +132,9 @@ def test_host_submit_reconstitutes_native_worker_lineage(
     native_worker_refs = _native_entries_for_worker(fragments, payload.get("worker_id", ""))
 
     assert fragment_refs, "Expected fragment payloads for the worker output artifact"
-    assert any(str(ref.get("ray_worker_id")) == payload.get("worker_id", "") for ref in fragment_refs), (
+    assert any(
+        str(ref.get("ray_worker_id")) == payload.get("worker_id", "") for ref in fragment_refs
+    ), (
         "Expected the output artifact fragments to belong to the worker that reported preload activation"
     )
     assert native_worker_refs, (

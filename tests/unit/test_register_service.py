@@ -166,7 +166,9 @@ class TestRegisterService:
 
         assert [job["job_uid"] for job in ordered] == ["parent-uid", "child-uid"]
 
-    def test_normalize_jobs_for_registration_maps_unresolved_ray_parent_to_submit_job(self, service):
+    def test_normalize_jobs_for_registration_maps_unresolved_ray_parent_to_submit_job(
+        self, service
+    ):
         submit_job = {
             "id": 1,
             "job_uid": "local-submit",

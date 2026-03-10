@@ -43,7 +43,7 @@ def _multipart_upload(run_id: str, bucket: str, parts: int, part_size_mb: int) -
     try:
         for index in range(part_count):
             # Keep payload deterministic and large enough for multipart semantics.
-            payload = (bytes([65 + (index % 20)]) * part_size)
+            payload = bytes([65 + (index % 20)]) * part_size
             total_size += len(payload)
             result = client.upload_part(
                 Bucket=bucket,

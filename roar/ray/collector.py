@@ -578,7 +578,9 @@ def _upsert_artifact_for_ref(
                 (path_artifact_id, algorithm),
             ).fetchone()
             path_digest = _normalize_hash(
-                _to_text(path_digest_row["digest"]) if path_digest_row is not None else existing_by_path["hash"]
+                _to_text(path_digest_row["digest"])
+                if path_digest_row is not None
+                else existing_by_path["hash"]
             )
 
             if path_digest in (None, digest):

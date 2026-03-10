@@ -46,6 +46,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.ray_contract]
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _roar_bin() -> str:
     """Return path to the local roar binary."""
     if ROAR_BIN.exists():
@@ -61,31 +62,45 @@ def _init_project(project_dir: Path) -> None:
     (project_dir / ".gitignore").write_text(".roar/\n", encoding="utf-8")
     subprocess.run(
         ["git", "init", "-q"],
-        cwd=project_dir, check=True, capture_output=True,
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
         ["git", "config", "user.email", "test@test.com"],
-        cwd=project_dir, check=True, capture_output=True,
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
         ["git", "config", "user.name", "test"],
-        cwd=project_dir, check=True, capture_output=True,
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
         ["git", "add", "README.md", ".gitignore"],
-        cwd=project_dir, check=True, capture_output=True,
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
         ["git", "commit", "-q", "-m", "init"],
-        cwd=project_dir, check=True, capture_output=True,
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
         [_roar_bin(), "init", "--path", str(project_dir), "-n"],
-        cwd=project_dir, check=True, capture_output=True,
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
         [_roar_bin(), "config", "set", "glaas.url", ""],
-        cwd=project_dir, check=True, capture_output=True,
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
     )
 
 
@@ -109,27 +124,30 @@ def _artifact_count(project_dir: Path) -> int:
 def _base_env(ray_cluster: dict[str, str]) -> dict[str, str]:
     """Build a clean env for roar run — inherits PATH but overrides AWS/roar vars."""
     env = dict(os.environ)
-    env.update({
-        # Workers use the Docker image's installed roar — no PyPI download.
-        "ROAR_CLUSTER_PIP_REQ": "skip",
-        # Minio credentials (Docker compose defaults).
-        "AWS_ACCESS_KEY_ID": "minioadmin",
-        "AWS_SECRET_ACCESS_KEY": "minioadmin",
-        "AWS_DEFAULT_REGION": "us-east-1",
-        # Point at the minio instance exposed on the host.
-        "AWS_ENDPOINT_URL": str(ray_cluster["minio_endpoint"]),
-        # Workers must use the cluster-visible MinIO address, not the host loopback.
-        "ROAR_CLUSTER_AWS_ENDPOINT_URL": str(ray_cluster["cluster_minio_endpoint"]),
-        # Host submits use the host-visible URL; workers use the cluster-visible URL.
-        "GLAAS_URL": HOST_GLAAS_URL,
-        "ROAR_CLUSTER_GLAAS_URL": CLUSTER_GLAAS_URL,
-    })
+    env.update(
+        {
+            # Workers use the Docker image's installed roar — no PyPI download.
+            "ROAR_CLUSTER_PIP_REQ": "skip",
+            # Minio credentials (Docker compose defaults).
+            "AWS_ACCESS_KEY_ID": "minioadmin",
+            "AWS_SECRET_ACCESS_KEY": "minioadmin",
+            "AWS_DEFAULT_REGION": "us-east-1",
+            # Point at the minio instance exposed on the host.
+            "AWS_ENDPOINT_URL": str(ray_cluster["minio_endpoint"]),
+            # Workers must use the cluster-visible MinIO address, not the host loopback.
+            "ROAR_CLUSTER_AWS_ENDPOINT_URL": str(ray_cluster["cluster_minio_endpoint"]),
+            # Host submits use the host-visible URL; workers use the cluster-visible URL.
+            "GLAAS_URL": HOST_GLAAS_URL,
+            "ROAR_CLUSTER_GLAAS_URL": CLUSTER_GLAAS_URL,
+        }
+    )
     return env
 
 
 # ---------------------------------------------------------------------------
 # Test 1: S3 job succeeds and captures artifacts (proves BUG 1 / proxy routing)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.e2e
 @pytest.mark.ray_e2e
@@ -151,11 +169,18 @@ def test_roar_run_from_host_s3_job_succeeds_and_captures_artifacts(
     _init_project(project_dir)
 
     cmd = [
-        _roar_bin(), "run",
-        "ray", "job", "submit",
-        "--address", ray_cluster["dashboard_url"],
-        "--working-dir", str(JOBS_DIR),
-        "--", "python", "s3_workload.py",
+        _roar_bin(),
+        "run",
+        "ray",
+        "job",
+        "submit",
+        "--address",
+        ray_cluster["dashboard_url"],
+        "--working-dir",
+        str(JOBS_DIR),
+        "--",
+        "python",
+        "s3_workload.py",
     ]
 
     result = subprocess.run(
@@ -242,6 +267,7 @@ def test_roar_run_from_host_subprocess_ray_job_captures_s3_artifacts(
 # Test 2: Worker proxy endpoint is reachable from inside the cluster
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.e2e
 @pytest.mark.ray_e2e
 def test_worker_proxy_endpoint_is_reachable(
@@ -261,11 +287,18 @@ def test_worker_proxy_endpoint_is_reachable(
     _init_project(project_dir)
 
     cmd = [
-        _roar_bin(), "run",
-        "ray", "job", "submit",
-        "--address", ray_cluster["dashboard_url"],
-        "--working-dir", str(JOBS_DIR),
-        "--", "python", "proxy_reachability_probe.py",
+        _roar_bin(),
+        "run",
+        "ray",
+        "job",
+        "submit",
+        "--address",
+        ray_cluster["dashboard_url"],
+        "--working-dir",
+        str(JOBS_DIR),
+        "--",
+        "python",
+        "proxy_reachability_probe.py",
     ]
 
     result = subprocess.run(
@@ -294,9 +327,7 @@ def test_worker_proxy_endpoint_is_reachable(
             except json.JSONDecodeError:
                 continue
 
-    assert probe_output is not None, (
-        f"Could not find probe JSON output in stdout:\n{result.stdout}"
-    )
+    assert probe_output is not None, f"Could not find probe JSON output in stdout:\n{result.stdout}"
 
     worker_results: list[dict] = probe_output["results"]
     unreachable = [r for r in worker_results if not r.get("reachable")]
@@ -313,6 +344,7 @@ def test_worker_proxy_endpoint_is_reachable(
 # ---------------------------------------------------------------------------
 # Test 3: Runtime env pip list has no duplicates (proves BUG 2)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.e2e
 @pytest.mark.ray_e2e
@@ -340,10 +372,12 @@ def test_roar_run_runtime_env_pip_no_duplicates(
     _init_project(project_dir)
 
     # A pre-existing runtime env that already has the wheel URL in pip.
-    existing_runtime_env = json.dumps({
-        "pip": [FAKE_WHEEL_URL],
-        "env_vars": {},
-    })
+    existing_runtime_env = json.dumps(
+        {
+            "pip": [FAKE_WHEEL_URL],
+            "env_vars": {},
+        }
+    )
 
     env = _base_env(ray_cluster)
     env["ROAR_CLUSTER_PIP_REQ"] = FAKE_WHEEL_URL
@@ -352,30 +386,40 @@ def test_roar_run_runtime_env_pip_no_duplicates(
     # and inspect the --runtime-env-json that roar passes through.
     # Strategy: write a tiny Python script that captures sys.argv and exits 0.
     spy_script = tmp_path / "spy.py"
-    spy_script.write_text(textwrap.dedent("""\
+    spy_script.write_text(
+        textwrap.dedent("""\
         import sys, json, pathlib
         args = sys.argv[1:]
         pathlib.Path('/tmp/roar_spy_args.json').write_text(json.dumps(args))
         raise SystemExit(0)
-    """))
+    """)
+    )
 
     # Patch 'ray' in PATH to the spy script so roar run intercepts the final command.
     fake_ray_dir = tmp_path / "fakebin"
     fake_ray_dir.mkdir()
     fake_ray = fake_ray_dir / "ray"
-    fake_ray.write_text(f"#!/bin/sh\nexec {sys.executable} {spy_script} \"$@\"\n")
+    fake_ray.write_text(f'#!/bin/sh\nexec {sys.executable} {spy_script} "$@"\n')
     fake_ray.chmod(0o755)
 
     patched_env = dict(env)
     patched_env["PATH"] = f"{fake_ray_dir}:{patched_env.get('PATH', '')}"
 
     cmd = [
-        _roar_bin(), "run",
-        "ray", "job", "submit",
-        "--address", ray_cluster["dashboard_url"],
-        "--runtime-env-json", existing_runtime_env,
-        "--working-dir", str(JOBS_DIR),
-        "--", "python", "s3_workload.py",
+        _roar_bin(),
+        "run",
+        "ray",
+        "job",
+        "submit",
+        "--address",
+        ray_cluster["dashboard_url"],
+        "--runtime-env-json",
+        existing_runtime_env,
+        "--working-dir",
+        str(JOBS_DIR),
+        "--",
+        "python",
+        "s3_workload.py",
     ]
 
     subprocess.run(

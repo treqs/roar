@@ -73,18 +73,15 @@ def _maybe_skip_for_environment_errors(result: subprocess.CompletedProcess[str])
         pytest.skip("Ray dashboard became unreachable during job submission")
 
 
-def _run_submit(project_dir: Path, *, override_job_runtime_env: bool) -> subprocess.CompletedProcess[str]:
+def _run_submit(
+    project_dir: Path, *, override_job_runtime_env: bool
+) -> subprocess.CompletedProcess[str]:
     candidate = Path(sys.executable).with_name("ray")
     ray_binary = str(candidate) if candidate.exists() else shutil.which("ray")
     if not ray_binary:
         pytest.skip("ray CLI is not available in PATH")
 
-    probe = (
-        "import ray; "
-        "ray.init(); "
-        f"print('{_SUCCESS_MARKER}'); "
-        "ray.shutdown()"
-    )
+    probe = f"import ray; ray.init(); print('{_SUCCESS_MARKER}'); ray.shutdown()"
     runtime_env: dict[str, object] = {
         "pip": ["pydantic==2.12.5", "pydantic-settings==2.12.0"],
     }
@@ -146,8 +143,7 @@ def test_runtime_env_conflict_without_override(ray_cluster: dict[str, str], tmp_
         f"output:\n{output}"
     )
     assert (
-        _CONFLICT_MARKER in output_lower
-        or "failed to merge the job's runtime_env" in output_lower
+        _CONFLICT_MARKER in output_lower or "failed to merge the job's runtime_env" in output_lower
     ), output
     assert "conflict" in output_lower, output
 

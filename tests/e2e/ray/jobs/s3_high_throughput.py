@@ -109,7 +109,9 @@ def main(argv: list[str] | None = None) -> int:
             "duration_s": duration_s,
             "ops_succeeded": total_succeeded,
             "ops_failed": max(0, total_ops - total_succeeded),
-            "throughput_ops_per_s": (float(total_succeeded) / duration_s) if duration_s > 0 else 0.0,
+            "throughput_ops_per_s": (float(total_succeeded) / duration_s)
+            if duration_s > 0
+            else 0.0,
         }
         print(json.dumps(report, sort_keys=True))
     finally:

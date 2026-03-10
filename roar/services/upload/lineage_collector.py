@@ -188,10 +188,7 @@ class LineageCollector:
             if not session:
                 return LineageData()
 
-            jobs = [
-                self._hydrate_job(ctx_db, job)
-                for job in ctx_db.sessions.get_steps(session_id)
-            ]
+            jobs = [self._hydrate_job(ctx_db, job) for job in ctx_db.sessions.get_steps(session_id)]
             jobs = self._add_parent_jobs(ctx_db, jobs)
             jobs = self._add_parent_linked_ray_tasks(ctx_db, jobs)
             jobs.sort(key=lambda job: job["timestamp"])
@@ -447,7 +444,9 @@ class LineageCollector:
         inputs = ctx_db.jobs.get_inputs(job_id)
         outputs = ctx_db.jobs.get_outputs(job_id)
 
-        job_dict["_input_hashes"] = [h for h in (_extract_primary_digest(inp) for inp in inputs) if h]
+        job_dict["_input_hashes"] = [
+            h for h in (_extract_primary_digest(inp) for inp in inputs) if h
+        ]
         job_dict["_output_hashes"] = [
             h for h in (_extract_primary_digest(out) for out in outputs) if h
         ]

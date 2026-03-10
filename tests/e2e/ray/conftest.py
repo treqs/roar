@@ -89,7 +89,9 @@ def pytest_configure(config: pytest.Config) -> None:
         current_path = os.environ.get("PATH", "")
         venv_bin_text = str(venv_bin)
         if venv_bin_text not in current_path.split(":"):
-            os.environ["PATH"] = f"{venv_bin_text}:{current_path}" if current_path else venv_bin_text
+            os.environ["PATH"] = (
+                f"{venv_bin_text}:{current_path}" if current_path else venv_bin_text
+            )
 
     config.option.importmode = "importlib"
     with contextlib.suppress(

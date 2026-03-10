@@ -22,7 +22,9 @@ def main() -> None:
     state_path = Path(args.state_file)
     state = json.loads(state_path.read_text(encoding="utf-8"))
     run_id = str(state["run_id"])
-    state["metrics_key"] = run_evaluation(str(state["model_key"]), list(state["shard_keys"]), run_id)
+    state["metrics_key"] = run_evaluation(
+        str(state["model_key"]), list(state["shard_keys"]), run_id
+    )
     state_path.write_text(json.dumps(state), encoding="utf-8")
     print(f"Saved evaluation state to {state_path} (metrics={state['metrics_key']})")
 

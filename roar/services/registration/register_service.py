@@ -559,9 +559,13 @@ class RegisterService:
         if len(candidates) == 1:
             return candidates[0][0], candidates[0][1], None
         if len(candidates) > 1:
-            return None, None, (
-                f"Ambiguous session hash prefix '{session_hash}'. "
-                "Provide more characters to select a single local session."
+            return (
+                None,
+                None,
+                (
+                    f"Ambiguous session hash prefix '{session_hash}'. "
+                    "Provide more characters to select a single local session."
+                ),
             )
 
         local_session = db_ctx.sessions.get_by_hash_prefix(session_hash)
@@ -588,9 +592,7 @@ class RegisterService:
         root_candidates = [job for job in normalized if self._is_local_parent_candidate(job)]
         if not root_candidates:
             root_candidates = [
-                job
-                for job in normalized
-                if not str(job.get("command", "")).startswith("ray_task:")
+                job for job in normalized if not str(job.get("command", "")).startswith("ray_task:")
             ]
 
         for job in normalized:

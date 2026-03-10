@@ -24,7 +24,12 @@ def check_proxy_endpoint() -> dict[str, object]:
     node_id = raw_node_id.hex() if hasattr(raw_node_id, "hex") else str(raw_node_id)
 
     if not endpoint:
-        return {"endpoint": None, "reachable": False, "error": "AWS_ENDPOINT_URL not set", "node_id": node_id}
+        return {
+            "endpoint": None,
+            "reachable": False,
+            "error": "AWS_ENDPOINT_URL not set",
+            "node_id": node_id,
+        }
 
     parsed = urllib.parse.urlparse(endpoint)
     host = parsed.hostname or ""

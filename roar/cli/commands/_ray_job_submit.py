@@ -79,9 +79,7 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
     # Save the REAL upstream endpoint (not the roar-run local proxy) so the
     # cluster-side proxy can forward to the actual S3 service.
     original_endpoint = (
-        os.environ.get("ROAR_UPSTREAM_S3_ENDPOINT")
-        or os.environ.get("AWS_ENDPOINT_URL")
-        or ""
+        os.environ.get("ROAR_UPSTREAM_S3_ENDPOINT") or os.environ.get("AWS_ENDPOINT_URL") or ""
     )
     cluster_upstream_endpoint = _resolve_cluster_upstream_s3_endpoint(original_endpoint)
     if cluster_upstream_endpoint:
@@ -132,7 +130,11 @@ def _is_ray_job_submit(command: list[str]) -> bool:
 
 
 def _wrap_entrypoint_for_driver_proxy(entrypoint: list[str]) -> list[str]:
-    if len(entrypoint) >= 3 and entrypoint[1] == "-m" and entrypoint[2] == _ROAR_DRIVER_ENTRYPOINT_MODULE:
+    if (
+        len(entrypoint) >= 3
+        and entrypoint[1] == "-m"
+        and entrypoint[2] == _ROAR_DRIVER_ENTRYPOINT_MODULE
+    ):
         return entrypoint
 
     return ["python", "-m", _ROAR_DRIVER_ENTRYPOINT_MODULE, "--", *entrypoint]

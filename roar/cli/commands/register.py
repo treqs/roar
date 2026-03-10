@@ -44,9 +44,7 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
 )
 @click.pass_obj
 @require_init
-def register(
-    ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3: bool
-) -> None:
+def register(ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3: bool) -> None:
     """Register lineage with GLaaS.
 
     Submits lineage to the GLaaS server, starting from one of:

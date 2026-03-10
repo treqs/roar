@@ -189,7 +189,9 @@ def _submit_job(
     return result
 
 
-def _query_project_db(project_dir: Path, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+def _query_project_db(
+    project_dir: Path, sql: str, params: tuple[Any, ...] = ()
+) -> list[dict[str, Any]]:
     db_path = project_dir / ".roar" / "roar.db"
     if not db_path.exists():
         raise FileNotFoundError(f"Expected local roar DB at {db_path}, but it does not exist.")
@@ -475,7 +477,9 @@ class TestP0Gaps:
                 f"agent_port={agent_ports_by_node[node_id]}."
             )
 
-    def test_g5_proxy_logs_should_flow_into_fragments_and_db_for_awscli(self, roar_project: Path) -> None:
+    def test_g5_proxy_logs_should_flow_into_fragments_and_db_for_awscli(
+        self, roar_project: Path
+    ) -> None:
         job_id = f"gap5-{uuid.uuid4().hex[:8]}"
         result = _submit_job(
             roar_project,
@@ -539,10 +543,14 @@ class TestP0Gaps:
         )
 
         fragment_batches = _fetch_fragment_batches(session_id, token)
-        assert fragment_batches, "Gap G5: fragment API should return encrypted batches for this session."
+        assert fragment_batches, (
+            "Gap G5: fragment API should return encrypted batches for this session."
+        )
 
         fragments = _decrypt_fragment_batches(token, fragment_batches)
-        assert fragments, "Gap G5: encrypted fragment batches should decrypt into fragment payloads."
+        assert fragments, (
+            "Gap G5: encrypted fragment batches should decrypt into fragment payloads."
+        )
 
         fragment_paths = {
             entry["path"]
@@ -557,7 +565,9 @@ class TestP0Gaps:
 
 
 class TestP0HappyPaths:
-    def test_hp1_clean_submit_should_produce_proxy_backed_s3_lineage(self, roar_project: Path) -> None:
+    def test_hp1_clean_submit_should_produce_proxy_backed_s3_lineage(
+        self, roar_project: Path
+    ) -> None:
         result = _submit_job(roar_project, "s3_io.py")
         output = f"{result.stdout}\n{result.stderr}"
         assert result.returncode == 0, (
@@ -609,7 +619,9 @@ class TestP0HappyPaths:
         assert session_id and token, "HP1: fragment session key should exist after clean submit."
 
         fragment_batches = _fetch_fragment_batches(session_id, token)
-        assert fragment_batches, "HP1: fragment API should return encrypted batches for the job session."
+        assert fragment_batches, (
+            "HP1: fragment API should return encrypted batches for the job session."
+        )
 
         fragments = _decrypt_fragment_batches(token, fragment_batches)
         fragment_entries = _s3_fragment_entries(fragments)
@@ -635,7 +647,9 @@ class TestP0HappyPaths:
 
         report = _require_payload(
             output,
-            lambda item: isinstance(item.get("run_id"), str) and isinstance(item.get("report_key"), str),
+            lambda item: (
+                isinstance(item.get("run_id"), str) and isinstance(item.get("report_key"), str)
+            ),
             "HP2 pipeline report",
         )
         run_id = str(report.get("run_id", ""))
@@ -720,11 +734,15 @@ class TestP0HappyPaths:
         assert session_id and token, "HP2: fragment session key should exist after pipeline submit."
 
         fragment_batches = _fetch_fragment_batches(session_id, token)
-        assert fragment_batches, "HP2: fragment API should return encrypted batches for pipeline run."
+        assert fragment_batches, (
+            "HP2: fragment API should return encrypted batches for pipeline run."
+        )
 
         fragments = _decrypt_fragment_batches(token, fragment_batches)
         fragment_entries = _s3_fragment_entries(fragments)
-        run_entries = [entry for entry in fragment_entries if f"/{run_id}/" in entry.get("path", "")]
+        run_entries = [
+            entry for entry in fragment_entries if f"/{run_id}/" in entry.get("path", "")
+        ]
         assert run_entries, (
             "HP2: decrypted fragments should include S3 entries for the pipeline run_id, "
             f"but none were found for run_id={run_id!r}."
@@ -823,7 +841,9 @@ class TestP1Gaps:
         )
 
         lineage_rows = _query_s3_lineage_rows(roar_project, f"s3://%/sdk-matrix/{run_id}/%")
-        lineage_paths = {str(row.get("path", "")) for row in lineage_rows if str(row.get("path", ""))}
+        lineage_paths = {
+            str(row.get("path", "")) for row in lineage_rows if str(row.get("path", ""))
+        }
         missing_paths = sorted(expected_paths - lineage_paths)
         assert not missing_paths, (
             "Gap G4: every SDK call-path S3 object should appear in DB lineage, "

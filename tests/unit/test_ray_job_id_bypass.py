@@ -32,8 +32,7 @@ def test_run_with_ray_job_id_auto_inits_and_bypasses_git_check(tmp_path, monkeyp
     assert (tmp_path / ".roar").is_dir(), (
         "Expected auto-init to create .roar when RAY_JOB_ID is present."
     )
-    assert "roar requires the working directory to be inside a git repository." not in result.output, (
-        "Expected git validation to be bypassed when RAY_JOB_ID is present."
-    )
+    assert (
+        "roar requires the working directory to be inside a git repository." not in result.output
+    ), "Expected git validation to be bypassed when RAY_JOB_ID is present."
     mock_exec.assert_called_once()
-

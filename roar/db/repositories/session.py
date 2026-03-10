@@ -223,7 +223,9 @@ class SQLAlchemySessionRepository(SessionRepository):
     def get_all(self) -> list[dict[str, Any]]:
         """Get all sessions ordered by most recent first."""
         sessions = (
-            self._session.execute(select(Session).order_by(Session.created_at.desc(), Session.id.desc()))
+            self._session.execute(
+                select(Session).order_by(Session.created_at.desc(), Session.id.desc())
+            )
             .scalars()
             .all()
         )

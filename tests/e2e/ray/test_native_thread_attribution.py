@@ -133,11 +133,15 @@ def test_host_submit_reconstitutes_same_process_native_writes_on_their_originati
     }
     for label, (suffix, expected_task_id) in expectations.items():
         fragment_refs = _fragment_entries_for_path(fragments, suffix)
-        native_refs = [ref for ref in fragment_refs if str(ref.get("capture_method") or "") == "native"]
+        native_refs = [
+            ref for ref in fragment_refs if str(ref.get("capture_method") or "") == "native"
+        ]
 
         assert native_refs, f"Expected native fragment refs for {label} output"
         assert {str(ref.get("ray_worker_id") or "") for ref in native_refs} == {fast["worker_id"]}
-        assert {str(ref.get("ray_task_id") or "") for ref in native_refs} == {expected_task_id}, native_refs
+        assert {str(ref.get("ray_task_id") or "") for ref in native_refs} == {expected_task_id}, (
+            native_refs
+        )
 
         rows = _output_rows(project_dir, f"%{suffix}")
         assert rows, f"Expected reconstituted roar.db rows for {label} output"

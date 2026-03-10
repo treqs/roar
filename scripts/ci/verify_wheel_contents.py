@@ -109,7 +109,10 @@ def _max_glibc_version(path: Path) -> tuple[int, int] | None:
     if result.returncode != 0:
         raise SystemExit(f"objdump failed for {path}: {result.stderr.strip()}")
 
-    versions = [_parse_glibc_version(match.group(1)) for match in re.finditer(r"GLIBC_(\d+\.\d+)", result.stdout)]
+    versions = [
+        _parse_glibc_version(match.group(1))
+        for match in re.finditer(r"GLIBC_(\d+\.\d+)", result.stdout)
+    ]
     return max(versions) if versions else None
 
 

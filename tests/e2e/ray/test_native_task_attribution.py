@@ -142,6 +142,4 @@ def test_host_submit_reconstitutes_delayed_native_child_output(
     rows = _output_rows(project_dir, "%/artifacts/native_task_output.txt")
     assert rows, "Expected delayed native child output artifact in the reconstituted roar.db"
     assert {str(row.get("capture_method") or "") for row in rows} == {"native"}
-    assert {str(row.get("ray_task_id") or "") for row in rows} == {
-        launch_payload["task_id"]
-    }, rows
+    assert {str(row.get("ray_task_id") or "") for row in rows} == {launch_payload["task_id"]}, rows

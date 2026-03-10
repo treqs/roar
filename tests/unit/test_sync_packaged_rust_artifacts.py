@@ -84,8 +84,12 @@ def test_sync_reason_detects_preload_library_mismatch(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     _write_file(layout.rust_manifest, "[workspace]\n")
     _write_file(layout.root_dir / "rust" / "Cargo.lock", "")
-    _write_file(layout.root_dir / "rust" / "tracers" / "ptrace" / "src" / "main.rs", "ptrace source\n")
-    _write_file(layout.root_dir / "rust" / "tracers" / "preload" / "src" / "lib.rs", "preload source\n")
+    _write_file(
+        layout.root_dir / "rust" / "tracers" / "ptrace" / "src" / "main.rs", "ptrace source\n"
+    )
+    _write_file(
+        layout.root_dir / "rust" / "tracers" / "preload" / "src" / "lib.rs", "preload source\n"
+    )
     _write_file(layout.release_dir / "roar-tracer", "release-tracer\n")
     _write_file(layout.package_bin_dir / "roar-tracer", "release-tracer\n")
     _write_file(layout.release_dir / "roar-tracer-preload", "release-preload\n")
@@ -93,21 +97,34 @@ def test_sync_reason_detects_preload_library_mismatch(tmp_path: Path) -> None:
     _write_file(layout.package_bin_dir / "roar-tracer-preload", "release-preload\n")
     _write_file(layout.package_bin_dir / "libroar_tracer_preload.so", "different-library\n")
 
-    assert sync_reason(layout) == "packaged library for roar-tracer-preload differs from release artifact"
+    assert (
+        sync_reason(layout)
+        == "packaged library for roar-tracer-preload differs from release artifact"
+    )
 
 
 def test_sync_packaged_rust_artifacts_copies_release_outputs(tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     _write_file(layout.rust_manifest, "[workspace]\n")
     _write_file(layout.root_dir / "rust" / "Cargo.lock", "")
-    _write_file(layout.root_dir / "rust" / "tracers" / "ptrace" / "src" / "main.rs", "ptrace source\n")
-    _write_file(layout.root_dir / "rust" / "tracers" / "preload" / "src" / "lib.rs", "preload source\n")
+    _write_file(
+        layout.root_dir / "rust" / "tracers" / "ptrace" / "src" / "main.rs", "ptrace source\n"
+    )
+    _write_file(
+        layout.root_dir / "rust" / "tracers" / "preload" / "src" / "lib.rs", "preload source\n"
+    )
     _write_file(layout.release_dir / "roar-tracer", "release-tracer\n")
     _write_file(layout.release_dir / "roar-tracer-preload", "release-preload\n")
     _write_file(layout.release_dir / "libroar_tracer_preload.so", "release-library\n")
 
     sync_packaged_rust_artifacts(layout)
 
-    assert (layout.package_bin_dir / "roar-tracer").read_text(encoding="utf-8") == "release-tracer\n"
-    assert (layout.package_bin_dir / "roar-tracer-preload").read_text(encoding="utf-8") == "release-preload\n"
-    assert (layout.package_bin_dir / "libroar_tracer_preload.so").read_text(encoding="utf-8") == "release-library\n"
+    assert (layout.package_bin_dir / "roar-tracer").read_text(
+        encoding="utf-8"
+    ) == "release-tracer\n"
+    assert (layout.package_bin_dir / "roar-tracer-preload").read_text(
+        encoding="utf-8"
+    ) == "release-preload\n"
+    assert (layout.package_bin_dir / "libroar_tracer_preload.so").read_text(
+        encoding="utf-8"
+    ) == "release-library\n"

@@ -80,7 +80,12 @@ def tracking_import(name, globals=None, locals=None, fromlist=(), level=0):
     if (
         not _driver_phase_s3_clients_patched
         and os.environ.get("ROAR_DRIVER_PHASE_PROXY_URL")
-        and (name == "boto3" or name.startswith("boto3.") or name == "botocore" or name.startswith("botocore."))
+        and (
+            name == "boto3"
+            or name.startswith("boto3.")
+            or name == "botocore"
+            or name.startswith("botocore.")
+        )
     ):
         try:
             _patch_driver_phase_s3_clients()
@@ -316,8 +321,10 @@ def _patch_ray_init(ray_module) -> None:
         else:
             runtime_env.pop("pip", None)
 
-        job_id = os.environ.get("ROAR_JOB_ID") or env_vars.get("ROAR_JOB_ID") or os.environ.get(
-            "RAY_JOB_ID"
+        job_id = (
+            os.environ.get("ROAR_JOB_ID")
+            or env_vars.get("ROAR_JOB_ID")
+            or os.environ.get("RAY_JOB_ID")
         )
         if not job_id:
             job_id = uuid.uuid4().hex[:8]
@@ -392,7 +399,9 @@ def _patch_driver_phase_s3_clients() -> None:
 
     current_endpoint = str(os.environ.get("AWS_ENDPOINT_URL", "")).strip()
     session_client = getattr(boto3.session.Session, "client", None)
-    if callable(session_client) and not getattr(session_client, "_roar_driver_phase_patched", False):
+    if callable(session_client) and not getattr(
+        session_client, "_roar_driver_phase_patched", False
+    ):
         real_session_client = session_client
 
         def _session_client(self, service_name, *args, **kwargs):
@@ -504,7 +513,9 @@ def _resolve_driver_phase_timestamp(
     return None
 
 
-def _append_driver_phase_state_refs(fragment, phase_label: str, pre_state: dict, post_state: dict, env) -> None:
+def _append_driver_phase_state_refs(
+    fragment, phase_label: str, pre_state: dict, post_state: dict, env
+) -> None:
     from roar.ray.fragment import ArtifactRef
     from roar.ray.s3_key_paths import build_s3_path_or_placeholder
 
@@ -613,7 +624,9 @@ def _build_driver_phase_capture(args, kwargs):
     }
 
 
-def _emit_driver_phase_fragment(capture: dict, *, exit_code: int, started_at: float, ended_at: float) -> None:
+def _emit_driver_phase_fragment(
+    capture: dict, *, exit_code: int, started_at: float, ended_at: float
+) -> None:
     from roar.ray.fragment import TaskFragment, derive_task_uid
     from roar.ray.proxy_fragments import build_proxy_fragment, emit_fragment
 
@@ -895,7 +908,7 @@ def _write_worker_wrapper(tmp_dir: str) -> None:
                 "#!/usr/bin/env bash\n"
                 'if [ -f "./libroar_tracer_preload.so" ]; then\n'
                 '    export LD_PRELOAD="$(pwd)/libroar_tracer_preload.so"\n'
-                '    SOCK_DIR=$(mktemp -d /tmp/roar-trace-XXXXXX)\n'
+                "    SOCK_DIR=$(mktemp -d /tmp/roar-trace-XXXXXX)\n"
                 '    export ROAR_PRELOAD_TRACE_SOCK="$SOCK_DIR/trace.sock"\n'
                 "fi\n"
                 'exec python3 "$@"\n'
@@ -1349,10 +1362,7 @@ def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
     # Try GLaaS fragment streaming first, fall back to direct DB write.
     session_id = os.environ.get("ROAR_SESSION_ID", "")
     fragment_token = os.environ.get("ROAR_FRAGMENT_TOKEN", "")
-    glaas_url = (
-        os.environ.get("GLAAS_URL")
-        or ""
-    )
+    glaas_url = os.environ.get("GLAAS_URL") or ""
 
     if session_id and fragment_token and glaas_url:
         try:
@@ -1429,7 +1439,8 @@ def _write_proxy_artifacts_to_db(parsed: list) -> None:
 
                 # Record hash if available.
                 if ref.hash and "artifact_hashes" in {
-                    row[0] for row in conn.execute(
+                    row[0]
+                    for row in conn.execute(
                         "SELECT name FROM sqlite_master WHERE type='table'"
                     ).fetchall()
                 }:

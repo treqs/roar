@@ -23,7 +23,9 @@ FAKE_WHEEL_URL = (
 class TestMergeRoarRuntimeEnvPipDedup:
     """_merge_roar_runtime_env_pip must deduplicate URL-based wheel requirements."""
 
-    def test_url_req_not_duplicated_when_already_in_pip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_url_req_not_duplicated_when_already_in_pip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """If pip already contains the ROAR_CLUSTER_PIP_REQ URL, it must not appear twice."""
         monkeypatch.setenv("ROAR_CLUSTER_PIP_REQ", FAKE_WHEEL_URL)
 
@@ -38,7 +40,9 @@ class TestMergeRoarRuntimeEnvPipDedup:
             f"Full result: {result}"
         )
 
-    def test_url_req_appears_exactly_once_with_empty_pip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_url_req_appears_exactly_once_with_empty_pip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """ROAR_CLUSTER_PIP_REQ URL should appear exactly once when pip starts empty."""
         monkeypatch.setenv("ROAR_CLUSTER_PIP_REQ", FAKE_WHEEL_URL)
 
@@ -49,7 +53,9 @@ class TestMergeRoarRuntimeEnvPipDedup:
             f"Expected URL to appear once, got {result.count(FAKE_WHEEL_URL)}: {result}"
         )
 
-    def test_url_req_replaces_existing_roar_cli_version_pin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_url_req_replaces_existing_roar_cli_version_pin(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A URL override should replace an existing roar-cli==x.y.z pin, not join it."""
         monkeypatch.setenv("ROAR_CLUSTER_PIP_REQ", FAKE_WHEEL_URL)
 

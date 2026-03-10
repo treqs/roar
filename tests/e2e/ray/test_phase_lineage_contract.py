@@ -102,7 +102,9 @@ def test_phase_lineage_contract_persists_expected_phase_jobs(
     phase_jobs = _phase_jobs(project_dir)
     jobs_by_command = _jobs_by_command(project_dir)
 
-    missing_commands = [command for command in EXPECTED_PHASE_COMMANDS if command not in jobs_by_command]
+    missing_commands = [
+        command for command in EXPECTED_PHASE_COMMANDS if command not in jobs_by_command
+    ]
     assert not missing_commands, (
         "Expected first-class Ray phase jobs in the reconstituted DB, "
         f"missing={missing_commands}, observed={[row['command'] for row in phase_jobs]}"
@@ -141,7 +143,9 @@ def test_phase_lineage_contract_dag_surfaces_dependency_chain(
         for node in dag_payload.get("nodes", [])
         if isinstance(node, dict) and str(node.get("command", "")).startswith("ray_task:")
     }
-    missing_nodes = [command for command in EXPECTED_PHASE_COMMANDS if command not in nodes_by_command]
+    missing_nodes = [
+        command for command in EXPECTED_PHASE_COMMANDS if command not in nodes_by_command
+    ]
     assert not missing_nodes, (
         "Expected `roar dag --expanded --json` to surface the phase Ray jobs, "
         f"missing={missing_nodes}, observed={sorted(nodes_by_command)}"

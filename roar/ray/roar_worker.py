@@ -58,9 +58,7 @@ _direct_streamer_lock = threading.Lock()
 _s3_tracking_scope = threading.local()
 
 _FLUSH_INTERVAL_SECONDS = float(os.environ.get("ROAR_FRAGMENT_FLUSH_INTERVAL", "2.0"))
-_IDLE_FLUSH_INTERVAL_SECONDS = float(
-    os.environ.get("ROAR_FRAGMENT_IDLE_FLUSH_INTERVAL", "0.25")
-)
+_IDLE_FLUSH_INTERVAL_SECONDS = float(os.environ.get("ROAR_FRAGMENT_IDLE_FLUSH_INTERVAL", "0.25"))
 _FLUSH_THRESHOLD_EVENTS = int(os.environ.get("ROAR_FRAGMENT_FLUSH_THRESHOLD", "200"))
 _TASK_BOUNDARY_NATIVE_FLUSH_WAIT_SECONDS = float(
     os.environ.get("ROAR_RAY_TASK_NATIVE_FLUSH_WAIT", "0.2")
@@ -80,9 +78,7 @@ _PROXY_LOG_RE = re.compile(
     r"(?:\s+\((\d+)\s+bytes\))?"
     r"(?:\s+etag=(\S+))?"
 )
-_S3_WRITE_OPS = frozenset(
-    {"PutObject", "UploadPart", "CompleteMultipartUpload", "DeleteObject"}
-)
+_S3_WRITE_OPS = frozenset({"PutObject", "UploadPart", "CompleteMultipartUpload", "DeleteObject"})
 
 _real_open = builtins.open
 
@@ -245,7 +241,9 @@ def _start_fragment(task_id: str, function_name: str = "") -> TaskFragment:
     now = time.time()
     roar_job_id = str(os.environ.get("ROAR_JOB_ID", "default"))
     started_at = _task_started_at(task_id) or now
-    resolved_function_name = function_name or _task_function_name(task_id) or _get_task_function_name()
+    resolved_function_name = (
+        function_name or _task_function_name(task_id) or _get_task_function_name()
+    )
     return TaskFragment(
         job_uid=derive_task_uid(roar_job_id, task_id),
         parent_job_uid=str(os.environ.get("ROAR_DRIVER_JOB_UID", "")),
@@ -678,6 +676,7 @@ def _patch_ray_task_execution_for_native_flush() -> None:
     if callable(current_get_execution_info) and not getattr(
         current_get_execution_info, "_roar_patched", False
     ):
+
         def _roar_get_execution_info(self, job_id, function_descriptor):
             info = current_get_execution_info(self, job_id, function_descriptor)
             wrapped_function = _wrap_task_executor_for_native_flush(
@@ -710,6 +709,7 @@ def _patch_ray_task_execution_for_native_flush() -> None:
     if callable(current_make_actor_method_executor) and not getattr(
         current_make_actor_method_executor, "_roar_patched", False
     ):
+
         def _roar_make_actor_method_executor(self, method_name, method):
             wrapped_method = _wrap_task_executor_for_native_flush(
                 method,
@@ -840,7 +840,9 @@ def _parse_and_buffer_frames(buf: bytearray) -> None:
             capture_method="native",
         )
         with _native_lock:
-            _native_events_buffer.append((_bound_native_task_id_for_event(pid, thread_id), kind, ref))
+            _native_events_buffer.append(
+                (_bound_native_task_id_for_event(pid, thread_id), kind, ref)
+            )
 
 
 def _parse_proxy_log_lines(lines: list[str]) -> list[tuple[str, ArtifactRef]]:
@@ -1104,7 +1106,9 @@ def _log_read(
     function_name: str | None = None,
 ) -> None:
     resolved_task_id = task_id if task_id is not None else _resolved_task_id()
-    resolved_function_name = function_name if function_name is not None else _get_task_function_name()
+    resolved_function_name = (
+        function_name if function_name is not None else _get_task_function_name()
+    )
     event = IOEvent(
         "read",
         resolved_task_id,
@@ -1131,7 +1135,9 @@ def _log_write(
     function_name: str | None = None,
 ) -> None:
     resolved_task_id = task_id if task_id is not None else _resolved_task_id()
-    resolved_function_name = function_name if function_name is not None else _get_task_function_name()
+    resolved_function_name = (
+        function_name if function_name is not None else _get_task_function_name()
+    )
     event = IOEvent(
         "write",
         resolved_task_id,
@@ -1307,7 +1313,9 @@ def _normalize_etag(value: Any) -> str | None:
     return text or None
 
 
-def _extract_bucket_key(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[str | None, str | None]:
+def _extract_bucket_key(
+    args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> tuple[str | None, str | None]:
     bucket = kwargs.get("Bucket")
     key = kwargs.get("Key")
     if bucket and key:

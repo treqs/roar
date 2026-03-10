@@ -51,7 +51,11 @@ class GlaasFragmentStreamer:
                     del self._buffer[:chunk_size]
                     self._next_sequence += 1
                     break
-                if too_large and chunk_size == 1 and self._split_oversized_fragment(self._buffer[0]):
+                if (
+                    too_large
+                    and chunk_size == 1
+                    and self._split_oversized_fragment(self._buffer[0])
+                ):
                     break
                 if too_large and chunk_size > 1:
                     chunk_size = max(1, chunk_size // 2)

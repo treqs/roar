@@ -51,7 +51,10 @@ def run_extraction(run_id: str, ray_address: str = "auto") -> list[str]:
         results = ray.get([extract_shard.remote(index, run_id) for index in range(SHARD_COUNT)])
     finally:
         ray.shutdown()
-    return [str(item["processed_key"]) for item in sorted(results, key=lambda item: int(item["shard_id"]))]
+    return [
+        str(item["processed_key"])
+        for item in sorted(results, key=lambda item: int(item["shard_id"]))
+    ]
 
 
 @ray.remote
@@ -76,7 +79,9 @@ def run_training(processed_keys: list[str], run_id: str, ray_address: str = "aut
         results = ray.get([train_on_shard.remote(key, run_id) for key in processed_keys])
     finally:
         ray.shutdown()
-    return [str(item["model_key"]) for item in sorted(results, key=lambda item: int(item["shard_id"]))]
+    return [
+        str(item["model_key"]) for item in sorted(results, key=lambda item: int(item["shard_id"]))
+    ]
 
 
 @ray.remote
@@ -92,7 +97,11 @@ def evaluate_shard(model_key: str, run_id: str) -> dict[str, object]:
     }
     metrics_key = f"cloud-demo-like/{run_id}/metrics/metric_{shard_id}.json"
     s3.put_object(Bucket=RESULTS_BUCKET, Key=metrics_key, Body=json.dumps(metrics).encode("utf-8"))
-    return {"shard_id": shard_id, "metrics_key": f"s3://{RESULTS_BUCKET}/{metrics_key}", "score": metrics["score"]}
+    return {
+        "shard_id": shard_id,
+        "metrics_key": f"s3://{RESULTS_BUCKET}/{metrics_key}",
+        "score": metrics["score"],
+    }
 
 
 def run_evaluation(model_keys: list[str], run_id: str, ray_address: str = "auto") -> str:
@@ -104,7 +113,9 @@ def run_evaluation(model_keys: list[str], run_id: str, ray_address: str = "auto"
 
     report = {
         "run_id": run_id,
-        "scores": [float(item["score"]) for item in sorted(results, key=lambda item: int(item["shard_id"]))],
+        "scores": [
+            float(item["score"]) for item in sorted(results, key=lambda item: int(item["shard_id"]))
+        ],
     }
     report["avg_score"] = sum(report["scores"]) / max(len(report["scores"]), 1)
 
@@ -112,4 +123,3 @@ def run_evaluation(model_keys: list[str], run_id: str, ray_address: str = "auto"
     report_key = f"cloud-demo-like/{run_id}/results/final_report.json"
     s3.put_object(Bucket=RESULTS_BUCKET, Key=report_key, Body=json.dumps(report).encode("utf-8"))
     return f"s3://{RESULTS_BUCKET}/{report_key}"
-

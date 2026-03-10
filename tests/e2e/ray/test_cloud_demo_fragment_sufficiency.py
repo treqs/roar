@@ -243,7 +243,9 @@ def test_cloud_demo_reconstitution_keeps_phase_outputs_on_named_jobs(
 
     phase_jobs = _phase_jobs(project_dir)
     observed_commands = {str(row["command"]) for row in phase_jobs}
-    missing_commands = [command for command in EXPECTED_PHASE_COMMANDS if command not in observed_commands]
+    missing_commands = [
+        command for command in EXPECTED_PHASE_COMMANDS if command not in observed_commands
+    ]
     assert not missing_commands, (
         "Expected all phase task families in the reconstituted DB, "
         f"missing={missing_commands}, observed={sorted(observed_commands)}"
@@ -296,7 +298,9 @@ def test_cloud_demo_compact_dag_surfaces_phase_story(
         for node in nodes
         if isinstance(node, dict) and str(node.get("command", "")).startswith("ray_task:")
     }
-    missing_nodes = [command for command in EXPECTED_PHASE_COMMANDS if command not in nodes_by_command]
+    missing_nodes = [
+        command for command in EXPECTED_PHASE_COMMANDS if command not in nodes_by_command
+    ]
     assert not missing_nodes, (
         "Expected compact `roar dag` to show the user-facing extraction/training/evaluation phases, "
         f"missing={missing_nodes}, observed={sorted(nodes_by_command)}"

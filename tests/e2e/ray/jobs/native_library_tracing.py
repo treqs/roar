@@ -39,6 +39,7 @@ _LIBRARY_SOURCE = textwrap.dedent(
     """
 ).strip()
 
+
 def _to_text(value: object) -> str:
     if value is None:
         return ""
@@ -97,9 +98,7 @@ def write_via_native_library(path: str) -> dict[str, str]:
 def main() -> None:
     ray.init(address="auto")
     payload = ray.get(
-        write_via_native_library.remote(
-            str(Path.cwd() / "artifacts" / "native_library_output.txt")
-        )
+        write_via_native_library.remote(str(Path.cwd() / "artifacts" / "native_library_output.txt"))
     )
     print(json.dumps(payload))
 

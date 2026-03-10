@@ -269,7 +269,9 @@ def sync_packaged_rust_artifacts(layout: SyncLayout) -> None:
         if artifact.library_names:
             release_library = _first_existing_path(layout.release_dir, artifact.library_names)
             if release_library is None:
-                raise SystemExit(f"release library for {artifact.package_name} is missing after build")
+                raise SystemExit(
+                    f"release library for {artifact.package_name} is missing after build"
+                )
             for library_name in artifact.library_names:
                 candidate = layout.package_bin_dir / library_name
                 if candidate.exists() and candidate.name != release_library.name:

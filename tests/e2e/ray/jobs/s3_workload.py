@@ -42,11 +42,15 @@ def main() -> None:
         write_uri = ray.get(s3_write.remote(bucket, key, "hello from proxy test"))
         result = ray.get(s3_read.remote(bucket, key))
 
-        print(json.dumps({
-            "status": "ok",
-            "write_uri": write_uri,
-            "data": result,
-        }))
+        print(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "write_uri": write_uri,
+                    "data": result,
+                }
+            )
+        )
     finally:
         ray.shutdown()
 

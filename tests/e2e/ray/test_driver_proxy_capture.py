@@ -115,7 +115,9 @@ def test_host_submit_reconstitutes_driver_proxy_fragment(
 
     assert proxy_refs, "Expected proxy fragment refs for the driver-only S3 artifact"
     assert {str(ref.get("ray_task_id") or "") for ref in proxy_refs} == {"proxy:driver"}, proxy_refs
-    assert {str(ref.get("function_name") or "") for ref in proxy_refs} == {"s3_driver_proxy"}, proxy_refs
+    assert {str(ref.get("function_name") or "") for ref in proxy_refs} == {"s3_driver_proxy"}, (
+        proxy_refs
+    )
 
     rows = _proxy_rows_for_key(project_dir, key_suffix=key_suffix)
     assert rows, "Expected driver proxy artifact in the reconstituted roar.db"
