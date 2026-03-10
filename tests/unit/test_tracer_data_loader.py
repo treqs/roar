@@ -87,3 +87,35 @@ class TestDataLoaderService:
         assert data.written_files == ["/legacy/written.txt"]
         # Raw files are still retained for callers that need richer info.
         assert data.files == [{"path": "/from/files.txt", "read": True, "written": True}]
+
+    def test_preserves_thread_aware_file_contract_fields(self, tmp_path: Path) -> None:
+        report = {
+            "version": 1,
+            "tracer_mode": "preload",
+            "files": [
+                {
+                    "path": "/repo/native.txt",
+                    "read": True,
+                    "written": True,
+                    "read_threads": [101, 202],
+                    "written_threads": [202],
+                }
+            ],
+            "processes": [],
+            "start_time": 1.0,
+            "end_time": 2.0,
+        }
+        report_path = tmp_path / "trace.msgpack"
+        _write_msgpack(report_path, report)
+
+        data = DataLoaderService().load_tracer_data(str(report_path))
+
+        assert data.files == [
+            {
+                "path": "/repo/native.txt",
+                "read": True,
+                "written": True,
+                "read_threads": [101, 202],
+                "written_threads": [202],
+            }
+        ]

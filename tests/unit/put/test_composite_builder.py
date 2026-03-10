@@ -6,7 +6,7 @@ from pathlib import Path
 
 import blake3
 
-from roar.services.put.composite_builder import CompositeArtifactBuilder
+from roar.services.put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
 from roar.services.put.resolver import ResolvedSource
 
 
@@ -195,3 +195,37 @@ def test_bloom_parameters_target_point_one_percent_false_positive_rate():
 
     assert bloom_hashes == 10
     assert estimated_false_positive_rate <= 0.001
+
+
+def test_builder_supports_prehashed_leaves_with_non_blake_component_algorithms():
+    builder = CompositeArtifactBuilder()
+
+    result = builder.build_for_leaves(
+        root_path="s3://test-bucket/sensor_data",
+        leaves=[
+            CompositeLeaf(
+                relative_path="shard_000000.parquet",
+                digest="11" * 16,
+                size=128,
+                component_type="application/vnd.apache.parquet",
+                component_algorithm="etag",
+            ),
+            CompositeLeaf(
+                relative_path="shard_000001.parquet",
+                digest="22" * 16,
+                size=256,
+                component_type="application/vnd.apache.parquet",
+                component_algorithm="etag",
+            ),
+        ],
+        session_hash="",
+        source_type="s3",
+    )
+
+    assert result is not None
+    assert result.root_path == "s3://test-bucket/sensor_data"
+    assert result.payload["hashes"][0]["algorithm"] == "composite-blake3"
+    assert [item["component_algorithm"] for item in result.payload["components"]] == [
+        "etag",
+        "etag",
+    ]

@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from roar.ray.glaas_fragment_streamer import GlaasFragmentStreamer
 
@@ -29,6 +30,17 @@ class _FakeHttpResponse:
 @pytest.fixture
 def token() -> str:
     return "ab" * 32
+
+
+def _decrypt_fragment_count(request: urllib.request.Request, token: str) -> int:
+    payload = json.loads(request.data.decode("utf-8"))
+    encrypted_batch = base64.b64decode(payload["encrypted_batch"])
+    nonce = encrypted_batch[:12]
+    ciphertext = encrypted_batch[12:]
+    plaintext = AESGCM(bytes.fromhex(token)).decrypt(nonce, ciphertext, None)
+    decoded = json.loads(plaintext.decode("utf-8"))
+    assert isinstance(decoded, list)
+    return len(decoded)
 
 
 def test_enqueue_buffers_fragment_until_threshold(
@@ -180,6 +192,93 @@ def test_flush_keeps_buffer_when_post_fails(monkeypatch: pytest.MonkeyPatch, tok
     assert streamer.flush() is False
     assert streamer._buffer == [fragment]
     assert streamer._next_sequence == 0
+
+
+def test_flush_splits_oversized_batches_after_413(
+    monkeypatch: pytest.MonkeyPatch, token: str
+) -> None:
+    posted_sizes: list[int] = []
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del timeout
+        fragment_count = _decrypt_fragment_count(request, token)
+        if fragment_count > 1:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                413,
+                "Payload Too Large",
+                hdrs=None,
+                fp=None,
+            )
+        posted_sizes.append(fragment_count)
+        return _FakeHttpResponse(status=202)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    streamer = GlaasFragmentStreamer(
+        session_id="session-split",
+        token=token,
+        glaas_url="http://localhost:3001",
+    )
+    streamer.append_fragment({"job_uid": "job-1"})
+    streamer.append_fragment({"job_uid": "job-2"})
+    streamer.append_fragment({"job_uid": "job-3"})
+
+    assert streamer.flush() is True
+    assert posted_sizes == [1, 1, 1]
+    assert streamer._buffer == []
+    assert streamer._next_sequence == 3
+
+
+def test_flush_splits_oversized_single_fragment_by_refs(
+    monkeypatch: pytest.MonkeyPatch, token: str
+) -> None:
+    posted_ref_counts: list[tuple[int, int]] = []
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del timeout
+        payload = json.loads(request.data.decode("utf-8"))
+        encrypted_batch = base64.b64decode(payload["encrypted_batch"])
+        nonce = encrypted_batch[:12]
+        ciphertext = encrypted_batch[12:]
+        plaintext = AESGCM(bytes.fromhex(token)).decrypt(nonce, ciphertext, None)
+        decoded = json.loads(plaintext.decode("utf-8"))
+        assert isinstance(decoded, list)
+        total_reads = sum(len(fragment.get("reads", [])) for fragment in decoded)
+        total_writes = sum(len(fragment.get("writes", [])) for fragment in decoded)
+        if total_reads + total_writes > 1:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                413,
+                "Payload Too Large",
+                hdrs=None,
+                fp=None,
+            )
+        posted_ref_counts.extend(
+            (len(fragment.get("reads", [])), len(fragment.get("writes", [])))
+            for fragment in decoded
+        )
+        return _FakeHttpResponse(status=202)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    streamer = GlaasFragmentStreamer(
+        session_id="session-split-fragment",
+        token=token,
+        glaas_url="http://localhost:3001",
+    )
+    streamer.append_fragment(
+        {
+            "job_uid": "job-big",
+            "reads": [{"path": "/tmp/input-a"}, {"path": "/tmp/input-b"}],
+            "writes": [{"path": "/tmp/output-a"}, {"path": "/tmp/output-b"}],
+        }
+    )
+
+    assert streamer.flush() is True
+    assert posted_ref_counts == [(1, 0), (1, 0), (0, 1), (0, 1)]
+    assert streamer._buffer == []
+    assert streamer._next_sequence == 4
 
 
 def test_close_flushes_remaining_fragments(monkeypatch: pytest.MonkeyPatch, token: str) -> None:

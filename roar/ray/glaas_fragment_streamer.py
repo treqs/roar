@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import os
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -39,8 +41,51 @@ class GlaasFragmentStreamer:
         if not self._buffer:
             return True
 
+        while self._buffer:
+            remaining = len(self._buffer)
+            chunk_size = remaining
+
+            while chunk_size >= 1:
+                ok, too_large = self._post_chunk(self._buffer[:chunk_size])
+                if ok:
+                    del self._buffer[:chunk_size]
+                    self._next_sequence += 1
+                    break
+                if too_large and chunk_size == 1 and self._split_oversized_fragment(self._buffer[0]):
+                    break
+                if too_large and chunk_size > 1:
+                    chunk_size = max(1, chunk_size // 2)
+                    continue
+                return False
+
+        return True
+
+    def _split_oversized_fragment(self, fragment: dict[str, Any]) -> bool:
+        reads = fragment.get("reads")
+        writes = fragment.get("writes")
+        if not isinstance(reads, list) or not isinstance(writes, list):
+            return False
+
+        refs: list[tuple[str, dict[str, Any]]] = []
+        refs.extend(("reads", copy.deepcopy(ref)) for ref in reads if isinstance(ref, dict))
+        refs.extend(("writes", copy.deepcopy(ref)) for ref in writes if isinstance(ref, dict))
+        if len(refs) <= 1:
+            return False
+
+        midpoint = max(1, len(refs) // 2)
+        replacement: list[dict[str, Any]] = []
+        for subset in (refs[:midpoint], refs[midpoint:]):
+            part = copy.deepcopy(fragment)
+            part["reads"] = [ref for kind, ref in subset if kind == "reads"]
+            part["writes"] = [ref for kind, ref in subset if kind == "writes"]
+            replacement.append(part)
+
+        self._buffer[:1] = replacement
+        return True
+
+    def _post_chunk(self, chunk: list[dict[str, Any]]) -> tuple[bool, bool]:
         try:
-            plaintext = json.dumps(self._buffer, separators=(",", ":")).encode("utf-8")
+            plaintext = json.dumps(chunk, separators=(",", ":")).encode("utf-8")
             key = bytes.fromhex(self._token)
             nonce = os.urandom(12)
             ciphertext = AESGCM(key).encrypt(nonce, plaintext, None)
@@ -63,6 +108,14 @@ class GlaasFragmentStreamer:
             )
             with urllib.request.urlopen(request, timeout=5):
                 pass
+        except urllib.error.HTTPError as exc:
+            _get_logger().warning(
+                "Failed to stream Ray fragments for session %s sequence %d: %s",
+                self._session_id,
+                self._next_sequence,
+                exc,
+            )
+            return False, exc.code == 413
         except Exception as exc:
             _get_logger().warning(
                 "Failed to stream Ray fragments for session %s sequence %d: %s",
@@ -70,11 +123,9 @@ class GlaasFragmentStreamer:
                 self._next_sequence,
                 exc,
             )
-            return False
+            return False, False
 
-        self._buffer.clear()
-        self._next_sequence += 1
-        return True
+        return True, False
 
     def close(self) -> None:
         self.flush()

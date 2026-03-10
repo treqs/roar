@@ -22,7 +22,7 @@ def _init_db(project_dir: Path) -> Path:
 
 def _ref(hash_value: str) -> ArtifactRef:
     return ArtifactRef(
-        path=f"/tmp/{hash_value}",
+        path=f"/workspace/{hash_value}",
         hash=hash_value,
         hash_algorithm="blake3",
         size=0,
@@ -122,7 +122,7 @@ def test_collect_fragments_writes_task_jobs_and_deduplicates_artifacts(tmp_path:
         exit_code=0,
         reads=[
             ArtifactRef(
-                path="/tmp/input-1.bin",
+                path="/workspace/input-1.bin",
                 hash=input_1_digest,
                 hash_algorithm="blake3",
                 size=10,
@@ -131,7 +131,7 @@ def test_collect_fragments_writes_task_jobs_and_deduplicates_artifacts(tmp_path:
         ],
         writes=[
             ArtifactRef(
-                path="/tmp/shared-output.bin",
+                path="/workspace/shared-output.bin",
                 hash=shared_digest,
                 hash_algorithm="blake3",
                 size=20,
@@ -153,7 +153,7 @@ def test_collect_fragments_writes_task_jobs_and_deduplicates_artifacts(tmp_path:
         exit_code=0,
         reads=[
             ArtifactRef(
-                path="/tmp/input-2.bin",
+                path="/workspace/input-2.bin",
                 hash=input_2_digest,
                 hash_algorithm="blake3",
                 size=11,
@@ -162,7 +162,7 @@ def test_collect_fragments_writes_task_jobs_and_deduplicates_artifacts(tmp_path:
         ],
         writes=[
             ArtifactRef(
-                path="/tmp/shared-output.bin",
+                path="/workspace/shared-output.bin",
                 hash=shared_digest,
                 hash_algorithm="blake3",
                 size=20,
@@ -213,7 +213,7 @@ def test_collect_fragments_writes_task_jobs_and_deduplicates_artifacts(tmp_path:
     ).fetchall()
     assert len(output_rows) == 2
     assert {row["artifact_id"] for row in output_rows} == {shared_artifact_id}
-    assert {row["path"] for row in output_rows} == {"/tmp/shared-output.bin"}
+    assert {row["path"] for row in output_rows} == {"/workspace/shared-output.bin"}
 
     input_rows = conn.execute(
         """
@@ -281,6 +281,56 @@ def test_collect_fragments_persists_artifact_size_from_fragment_refs(tmp_path: P
     conn.close()
 
 
+def test_collect_fragments_shortens_command_to_task_family_and_keeps_full_script(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "project"
+    db_path = _init_db(project_dir)
+
+    fragment = TaskFragment(
+        job_uid="shortcmd1",
+        parent_job_uid="abc",
+        ray_task_id="task-short",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="cloud_demo_like.workload.extract_shard",
+        started_at=1.0,
+        ended_at=2.0,
+        exit_code=0,
+        writes=[
+            ArtifactRef(
+                path="s3://demo-bucket/output.json",
+                hash="etag-1",
+                hash_algorithm="etag",
+                size=1,
+                capture_method="proxy",
+            )
+        ],
+    )
+
+    collect_fragments(
+        fragments=[fragment.to_dict()],
+        project_dir=str(project_dir),
+        driver_job_uid="abc",
+    )
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        """
+        SELECT command, script
+        FROM jobs
+        WHERE job_uid = ?
+        """,
+        (fragment.job_uid,),
+    ).fetchone()
+    assert row is not None
+    assert row["command"] == "ray_task:extract_shard"
+    assert row["script"] == "cloud_demo_like.workload.extract_shard"
+    conn.close()
+
+
 def test_collect_fragments_assigns_step_numbers_from_fragment_dependencies(tmp_path: Path) -> None:
     project_dir = tmp_path / "project"
     db_path = _init_db(project_dir)
@@ -316,3 +366,91 @@ def test_collect_fragments_assigns_step_numbers_from_fragment_dependencies(tmp_p
 
     step_map = {row["job_uid"]: row["step_number"] for row in rows}
     assert step_map == {"ingest01": 2, "train002": 3, "eval0003": 4}
+
+
+def test_collect_fragments_is_idempotent_when_fragment_reads_and_writes_same_path(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "project"
+    db_path = _init_db(project_dir)
+
+    fragment = TaskFragment(
+        job_uid="same-path-1",
+        parent_job_uid="abc",
+        ray_task_id="task-1",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="process",
+        started_at=1.0,
+        ended_at=2.0,
+        exit_code=0,
+        reads=[
+            ArtifactRef(
+                path="/workspace/data.json",
+                hash=None,
+                hash_algorithm="blake3",
+                size=0,
+                capture_method="python",
+            )
+        ],
+        writes=[
+            ArtifactRef(
+                path="/workspace/data.json",
+                hash="d" * 64,
+                hash_algorithm="blake3",
+                size=12,
+                capture_method="python",
+            )
+        ],
+    )
+
+    payload = [fragment.to_dict()]
+    collect_fragments(
+        fragments=payload,
+        project_dir=str(project_dir),
+        driver_job_uid="abc",
+    )
+    collect_fragments(
+        fragments=payload,
+        project_dir=str(project_dir),
+        driver_job_uid="abc",
+    )
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            """
+            SELECT ji.artifact_id AS input_artifact_id, jo.artifact_id AS output_artifact_id
+            FROM job_inputs ji
+            JOIN job_outputs jo ON jo.job_id = ji.job_id AND jo.path = ji.path
+            JOIN jobs j ON j.id = ji.job_id
+            WHERE j.job_uid = ?
+            """,
+            ("same-path-1",),
+        ).fetchone()
+        counts = conn.execute("SELECT COUNT(*) AS count FROM job_inputs").fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row["input_artifact_id"] == row["output_artifact_id"]
+    assert int(counts["count"]) == 1
+
+
+def test_normalize_reconstituted_path_restores_ray_working_dir_to_project_dir(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "project"
+    packaged_path = (
+        "/tmp/ray/session_2026-01-01_00-00-00_000000_0/"
+        "runtime_resources/working_dir_files/_ray_pkg_deadbeef/artifacts/output.json"
+    )
+
+    normalized = ray_collector._normalize_reconstituted_path(
+        packaged_path,
+        project_dir=str(project_dir),
+    )
+
+    assert normalized == str((project_dir / "artifacts" / "output.json").resolve(strict=False))

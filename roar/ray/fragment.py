@@ -26,6 +26,7 @@ class TaskFragment:
     started_at: float
     ended_at: float
     exit_code: int
+    recorded_at: float | None = None
     reads: list[ArtifactRef] = field(default_factory=list)
     writes: list[ArtifactRef] = field(default_factory=list)
     worker_packages: dict[str, str] | None = None
