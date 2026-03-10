@@ -334,6 +334,7 @@ fn try_sys_exit_rw(ctx: &TracePointContext, event_type: EventType) -> Result<(),
 
     emit_small(&SmallEvent {
         pid,
+        thread_id: bpf_get_current_pid_tgid() as u32,
         event_type: event_type as u16,
         _pad: 0,
         ret_val: ret,
@@ -374,6 +375,7 @@ fn try_sys_exit_close(ctx: &TracePointContext) -> Result<(), i64> {
 
     emit_small(&SmallEvent {
         pid,
+        thread_id: bpf_get_current_pid_tgid() as u32,
         event_type: EventType::Close as u16,
         _pad: 0,
         ret_val: ret,
@@ -432,6 +434,7 @@ fn try_sys_exit_copy_file_range(ctx: &TracePointContext) -> Result<(), i64> {
     // Emit CopyFileRange event: arg0=fd_in, arg1=fd_out, ret_val=bytes
     emit_small(&SmallEvent {
         pid,
+        thread_id: bpf_get_current_pid_tgid() as u32,
         event_type: EventType::CopyFileRange as u16,
         _pad: 0,
         ret_val: ret,
@@ -500,6 +503,7 @@ fn try_sys_exit_dup(ctx: &TracePointContext) -> Result<(), i64> {
     // Emit Dup event: arg0=oldfd, ret_val=newfd
     emit_small(&SmallEvent {
         pid,
+        thread_id: bpf_get_current_pid_tgid() as u32,
         event_type: EventType::Dup as u16,
         _pad: 0,
         ret_val: ret,

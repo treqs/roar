@@ -92,6 +92,7 @@ fn target_debug_dirs() -> Vec<PathBuf> {
 }
 
 fn preload_lib() -> String {
+    let mut candidates: Vec<PathBuf> = Vec::new();
     for debug_dir in target_debug_dirs() {
         let direct = [
             debug_dir.join("libroar_tracer_preload.dylib"),
@@ -101,7 +102,7 @@ fn preload_lib() -> String {
         ];
         for path in direct {
             if path.exists() {
-                return path.to_string_lossy().into_owned();
+                candidates.push(path);
             }
         }
 
@@ -117,11 +118,20 @@ fn preload_lib() -> String {
                         || name.starts_with("libroar-tracer-preload"))
                         && (name.ends_with(".dylib") || name.ends_with(".so"));
                     if is_match {
-                        return path.to_string_lossy().into_owned();
+                        candidates.push(path);
                     }
                 }
             }
         }
+    }
+
+    candidates.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+    });
+    if let Some(path) = candidates.pop() {
+        return path.to_string_lossy().into_owned();
     }
 
     panic!("preload interposer library not found in target/debug");

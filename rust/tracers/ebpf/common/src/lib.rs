@@ -34,6 +34,7 @@ pub enum EventType {
 #[repr(C)]
 pub struct SmallEvent {
     pub pid: u32,
+    pub thread_id: u32,
     pub event_type: u16,
     pub _pad: u16,
     pub ret_val: i64,

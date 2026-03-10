@@ -67,6 +67,7 @@ pub fn process_event(state: &mut TracerState, data: &[u8]) {
 
 fn process_small_event(state: &mut TracerState, event: &SmallEvent) {
     let pid = event.pid;
+    let thread_id = event.thread_id;
     let fd = event.arg0 as i32;
 
     let Some(etype) = event_type_from_u16(event.event_type) else {
@@ -77,22 +78,28 @@ fn process_small_event(state: &mut TracerState, event: &SmallEvent) {
     match etype {
         EventType::Read => {
             if event.ret_val > 0 {
-                state.handle_read(pid, fd, event.ret_val as u64);
+                state.handle_read_with_thread(pid, fd, event.ret_val as u64, thread_id);
             }
         }
         EventType::Write => {
             if event.ret_val > 0 {
-                state.handle_write(pid, fd, event.ret_val as u64);
+                state.handle_write_with_thread(pid, fd, event.ret_val as u64, thread_id);
             }
         }
         EventType::PRead => {
             if event.ret_val > 0 {
-                state.handle_pread(pid, fd, event.arg1, event.ret_val as u64);
+                state.handle_pread_with_thread(pid, fd, event.arg1, event.ret_val as u64, thread_id);
             }
         }
         EventType::PWrite => {
             if event.ret_val > 0 {
-                state.handle_pwrite(pid, fd, event.arg1, event.ret_val as u64);
+                state.handle_pwrite_with_thread(
+                    pid,
+                    fd,
+                    event.arg1,
+                    event.ret_val as u64,
+                    thread_id,
+                );
             }
         }
         EventType::Close => {
@@ -114,12 +121,12 @@ fn process_small_event(state: &mut TracerState, event: &SmallEvent) {
         EventType::MmapRead => {
             let length = event.ret_val as u64;
             let offset = event.arg1;
-            state.handle_pread(pid, fd, offset, length);
+            state.handle_pread_with_thread(pid, fd, offset, length, thread_id);
         }
         EventType::MmapWrite => {
             let length = event.ret_val as u64;
             let offset = event.arg1;
-            state.handle_pwrite(pid, fd, offset, length);
+            state.handle_pwrite_with_thread(pid, fd, offset, length, thread_id);
         }
         EventType::Sendfile => {
             // arg0 = in_fd, arg1 = out_fd, ret_val = bytes
@@ -127,8 +134,8 @@ fn process_small_event(state: &mut TracerState, event: &SmallEvent) {
                 let in_fd = event.arg0 as i32;
                 let out_fd = event.arg1 as i32;
                 let bytes = event.ret_val as u64;
-                state.handle_read(pid, in_fd, bytes);
-                state.handle_write(pid, out_fd, bytes);
+                state.handle_read_with_thread(pid, in_fd, bytes, thread_id);
+                state.handle_write_with_thread(pid, out_fd, bytes, thread_id);
             }
         }
         EventType::CopyFileRange => {
@@ -139,8 +146,8 @@ fn process_small_event(state: &mut TracerState, event: &SmallEvent) {
                 let in_fd = event.arg0 as i32;
                 let out_fd = event.arg1 as i32;
                 let bytes = event.ret_val as u64;
-                state.handle_read(pid, in_fd, bytes);
-                state.handle_write(pid, out_fd, bytes);
+                state.handle_read_with_thread(pid, in_fd, bytes, thread_id);
+                state.handle_write_with_thread(pid, out_fd, bytes, thread_id);
             }
         }
         _ => {
@@ -245,6 +252,7 @@ mod tests {
 
         let event = SmallEvent {
             pid: 1,
+            thread_id: 11,
             event_type: EventType::Read as u16,
             _pad: 0,
             ret_val: 100,
@@ -260,12 +268,35 @@ mod tests {
     }
 
     #[test]
+    fn test_process_small_event_tracks_thread_ids_in_summary() {
+        let mut state = TracerState::new(None);
+        state.handle_open(1, 3, "/tmp/test.txt".to_string(), 0);
+
+        let event = SmallEvent {
+            pid: 1,
+            thread_id: 77,
+            event_type: EventType::Write as u16,
+            _pad: 0,
+            ret_val: 12,
+            arg0: 3,
+            arg1: 0,
+        };
+
+        process_small_event(&mut state, &event);
+
+        let report = state.build_report();
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].written_threads, Some(vec![77]));
+    }
+
+    #[test]
     fn test_process_small_event_write_zero_bytes_ignored() {
         let mut state = TracerState::new(None);
         state.handle_open(1, 3, "/tmp/test.txt".to_string(), 0);
 
         let event = SmallEvent {
             pid: 1,
+            thread_id: 11,
             event_type: EventType::Write as u16,
             _pad: 0,
             ret_val: 0, // zero bytes
@@ -286,6 +317,7 @@ mod tests {
 
         let event = SmallEvent {
             pid: 1,
+            thread_id: 11,
             event_type: EventType::Write as u16,
             _pad: 0,
             ret_val: -1, // error
@@ -355,6 +387,7 @@ mod tests {
 
         let event = SmallEvent {
             pid: 1,
+            thread_id: 11,
             event_type: EventType::Read as u16,
             _pad: 0,
             ret_val: 42,
@@ -396,6 +429,7 @@ mod tests {
 
         let event = SmallEvent {
             pid: 1,
+            thread_id: 11,
             event_type: EventType::Sendfile as u16,
             _pad: 0,
             ret_val: 1024,
@@ -416,6 +450,7 @@ mod tests {
 
         let event = SmallEvent {
             pid: 1,
+            thread_id: 11,
             event_type: EventType::Dup as u16,
             _pad: 0,
             ret_val: 7, // new_fd
@@ -438,6 +473,7 @@ mod tests {
 
         let event = SmallEvent {
             pid: 1,
+            thread_id: 11,
             event_type: EventType::Close as u16,
             _pad: 0,
             ret_val: 0,
@@ -457,6 +493,7 @@ mod tests {
 
         let event = SmallEvent {
             pid: 1,
+            thread_id: 11,
             event_type: EventType::Lseek as u16,
             _pad: 0,
             ret_val: 4096, // new offset

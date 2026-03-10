@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "roar-cli"
-version = "0.2.8"
+version = "0.2.9"
 description = "Reproducibility and provenance tracker for ML training pipelines"
 authors = [
     { name="TReqs Team", email="info@treqs.ai" }
@@ -81,6 +81,7 @@ include = [
     { path = "LICENSE", format = "wheel" },
     { path = "roar/bin/*", format = "sdist" },
     { path = "roar/bin/*", format = "wheel" },
+    { path = "roar_inject.pth", format = "wheel" },
 ]
 
 [tool.pytest.ini_options]
@@ -97,6 +98,8 @@ markers = [
     "cloud: Tests for cloud storage operations",
     "happy_path: Happy path tests for core functionality",
     "ray_e2e: Ray end-to-end tests requiring a running Docker cluster",
+    "ray_contract: User-facing Ray contract tests using `roar run ray job submit ...`",
+    "ray_diagnostic: Diagnostic Ray tests that intentionally inspect internal runtime details",
 ]
 addopts = "-v --strict-markers -n auto --dist loadfile --ignore=tests/ebpf --ignore=tests/live_glaas --ignore=tests/benchmarks --ignore=tests/integration --ignore=tests/e2e"
 timeout = 60

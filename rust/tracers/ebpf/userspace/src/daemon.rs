@@ -469,6 +469,7 @@ mod tests {
         // Simulate a write event for pid=100 (run 1) using raw bytes
         let event = roar_ebpf_common::SmallEvent {
             pid: 100,
+            thread_id: 100,
             event_type: roar_ebpf_common::EventType::Write as u16,
             _pad: 0,
             ret_val: 512,
