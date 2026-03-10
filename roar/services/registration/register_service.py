@@ -12,6 +12,7 @@ Orchestrates the workflow:
 """
 
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -46,6 +47,9 @@ else:
     _blake3_constructor = _blake3_import
 
 boto3 = None
+
+_STEP_REFERENCE_RE = re.compile(r"^@(?:B)?\d+$", re.IGNORECASE)
+_SESSION_HASH_RE = re.compile(r"^[a-f0-9]{8,64}$")
 
 
 def _ensure_boto3():
@@ -151,6 +155,145 @@ class RegisterService:
         """Get or create session service."""
         return self._session_service or SessionRegistrationService()
 
+    def register_lineage_target(
+        self,
+        target: str,
+        roar_dir: Path,
+        cwd: Path,
+        dry_run: bool = False,
+        as_blake3: bool = False,
+        skip_confirmation: bool = False,
+        confirm_callback: Callable[[list[str]], bool] | None = None,
+    ) -> RegisterResult:
+        """Register lineage for an artifact path, step reference, or session hash."""
+        normalized_target = target.strip()
+        if self._is_step_reference(normalized_target):
+            return self.register_step_lineage(
+                step_reference=normalized_target,
+                roar_dir=roar_dir,
+                cwd=cwd,
+                dry_run=dry_run,
+                as_blake3=as_blake3,
+                skip_confirmation=skip_confirmation,
+                confirm_callback=confirm_callback,
+            )
+
+        resolved_path = self._resolve_path(normalized_target, cwd)
+        if resolved_path and (self._is_s3_url(normalized_target) or os.path.exists(resolved_path)):
+            return self.register_artifact_lineage(
+                artifact_path=normalized_target,
+                roar_dir=roar_dir,
+                cwd=cwd,
+                dry_run=dry_run,
+                as_blake3=as_blake3,
+                skip_confirmation=skip_confirmation,
+                confirm_callback=confirm_callback,
+            )
+
+        if self._looks_like_session_hash(normalized_target):
+            return self.register_session_lineage(
+                session_hash=normalized_target,
+                roar_dir=roar_dir,
+                cwd=cwd,
+                dry_run=dry_run,
+                as_blake3=as_blake3,
+                skip_confirmation=skip_confirmation,
+                confirm_callback=confirm_callback,
+            )
+
+        return self.register_artifact_lineage(
+            artifact_path=normalized_target,
+            roar_dir=roar_dir,
+            cwd=cwd,
+            dry_run=dry_run,
+            as_blake3=as_blake3,
+            skip_confirmation=skip_confirmation,
+            confirm_callback=confirm_callback,
+        )
+
+    def register_step_lineage(
+        self,
+        step_reference: str,
+        roar_dir: Path,
+        cwd: Path,
+        dry_run: bool = False,
+        as_blake3: bool = False,
+        skip_confirmation: bool = False,
+        confirm_callback: Callable[[list[str]], bool] | None = None,
+    ) -> RegisterResult:
+        """Register lineage for a local DAG step reference like ``@4``."""
+        parsed = self._parse_step_reference(step_reference)
+        if parsed is None:
+            return RegisterResult(success=False, error=f"Invalid DAG reference: {step_reference}")
+        step_number, is_build = parsed
+
+        with create_database_context(roar_dir) as db_ctx:
+            session = db_ctx.sessions.get_active()
+            if not session:
+                return RegisterResult(
+                    success=False,
+                    error="No active session. Run 'roar run' to create a session first.",
+                )
+            lineage = self.lineage_collector.collect_step(
+                session_id=int(session["id"]),
+                step_number=step_number,
+                roar_dir=roar_dir,
+                job_type="build" if is_build else None,
+            )
+
+        if not lineage.jobs:
+            return RegisterResult(
+                success=False,
+                error=f"No tracked jobs found for DAG reference {step_reference}.",
+            )
+
+        representative_hash = self._select_representative_hash(lineage)
+        return self._register_collected_lineage(
+            lineage=lineage,
+            roar_dir=roar_dir,
+            cwd=cwd,
+            session_id=int(lineage.pipeline["id"]) if lineage.pipeline else None,
+            artifact_hash=representative_hash,
+            dry_run=dry_run,
+            as_blake3=as_blake3,
+            skip_confirmation=skip_confirmation,
+            confirm_callback=confirm_callback,
+        )
+
+    def register_session_lineage(
+        self,
+        session_hash: str,
+        roar_dir: Path,
+        cwd: Path,
+        dry_run: bool = False,
+        as_blake3: bool = False,
+        skip_confirmation: bool = False,
+        confirm_callback: Callable[[list[str]], bool] | None = None,
+    ) -> RegisterResult:
+        """Register the complete local session identified by a GLaaS session hash or prefix."""
+        with create_database_context(roar_dir) as db_ctx:
+            session, resolved_hash, error = self._resolve_session_target(
+                db_ctx=db_ctx,
+                roar_dir=roar_dir,
+                session_hash=session_hash,
+            )
+            if session is None:
+                return RegisterResult(success=False, error=error or "Session not found.")
+            lineage = self.lineage_collector.collect_session(int(session["id"]), roar_dir)
+
+        return self._register_collected_lineage(
+            lineage=lineage,
+            roar_dir=roar_dir,
+            cwd=cwd,
+            session_id=int(session["id"]),
+            artifact_hash="",
+            dry_run=dry_run,
+            as_blake3=as_blake3,
+            skip_confirmation=skip_confirmation,
+            confirm_callback=confirm_callback,
+            session_hash_override=resolved_hash,
+        )
+
     def register_artifact_lineage(
         self,
         artifact_path: str,
@@ -237,6 +380,39 @@ class RegisterService:
                 )
 
             self._logger.debug("Active session: %d", session["id"])
+            lineage = self.lineage_collector.collect([artifact_hash], roar_dir)
+
+        return self._register_collected_lineage(
+            lineage=lineage,
+            roar_dir=roar_dir,
+            cwd=cwd,
+            session_id=int(session["id"]),
+            artifact_hash=artifact_hash,
+            dry_run=dry_run,
+            as_blake3=as_blake3,
+            skip_confirmation=skip_confirmation,
+            confirm_callback=confirm_callback,
+        )
+
+    def _register_collected_lineage(
+        self,
+        *,
+        lineage: LineageData,
+        roar_dir: Path,
+        cwd: Path,
+        session_id: int | None,
+        artifact_hash: str,
+        dry_run: bool,
+        as_blake3: bool,
+        skip_confirmation: bool,
+        confirm_callback: Callable[[list[str]], bool] | None,
+        session_hash_override: str | None = None,
+    ) -> RegisterResult:
+        self._logger.debug(
+            "Collected lineage: %d jobs, %d artifacts",
+            len(lineage.jobs),
+            len(lineage.artifacts),
+        )
 
         # Step 5: Get git context
         git_context = self._get_git_context(cwd)
@@ -248,7 +424,7 @@ class RegisterService:
         # Step 5.5: Check for uncommitted changes (required for tagging)
         tagging_enabled = config_get("registration.tagging.enabled")
         if tagging_enabled is None:
-            tagging_enabled = True  # Default to enabled
+            tagging_enabled = True
         if tagging_enabled and git_context.commit:
             vcs = GitVCSProvider()
             repo_root = vcs.get_repo_root(str(cwd))
@@ -261,31 +437,19 @@ class RegisterService:
                         error="Cannot register with uncommitted changes. Commit your changes first.",
                     )
 
-        # Step 6: Collect lineage
-        lineage: LineageData = self.lineage_collector.collect([artifact_hash], roar_dir)
-        self._logger.debug(
-            "Collected lineage: %d jobs, %d artifacts",
-            len(lineage.jobs),
-            len(lineage.artifacts),
-        )
-
-        # Step 7: Compute session hash
-        session_hash = self.session_service.compute_session_hash(
+        session_hash = session_hash_override or self.session_service.compute_session_hash(
             roar_dir=str(roar_dir),
-            session_id=session["id"],
+            session_id=session_id,
         )
         self._logger.debug("Session hash: %s", session_hash[:12])
 
-        # Step 7.5: Detect secrets in lineage data
         detected_secrets: list[str] = []
         if self.omit_filter:
             detected_secrets = self._detect_secrets_in_lineage(lineage, git_context)
             self._logger.debug("Detected %d potential secret types", len(detected_secrets))
 
             if detected_secrets and not skip_confirmation:
-                # Need confirmation from user
                 if confirm_callback is None:
-                    # No callback provided, abort
                     return RegisterResult(
                         success=False,
                         session_hash=session_hash,
@@ -294,7 +458,6 @@ class RegisterService:
                         aborted_by_user=True,
                     )
 
-                # Ask user for confirmation
                 if not confirm_callback(detected_secrets):
                     return RegisterResult(
                         success=False,
@@ -304,11 +467,9 @@ class RegisterService:
                         aborted_by_user=True,
                     )
 
-            # Filter secrets from jobs before registration
             if detected_secrets or self.omit_filter.enabled:
                 lineage = self._filter_lineage_secrets(lineage, git_context)
 
-        # Step 8: Dry-run mode - return counts without calling API
         if dry_run:
             return RegisterResult(
                 success=True,
@@ -321,18 +482,15 @@ class RegisterService:
                 secrets_redacted=bool(detected_secrets),
             )
 
-        # Step 8.5: Upgrade S3 etag-only artifact hashes to blake3 (optional)
         if as_blake3:
             self.upgrade_s3_etags_to_blake3(roar_dir=roar_dir, lineage=lineage)
 
-        # Step 9: Check GLaaS configuration
         if not self.glaas_client.is_configured():
             return RegisterResult(
                 success=False,
                 error="GLaaS not configured. Run 'roar config set glaas.url <url>' first.",
             )
 
-        # Step 10: Health check
         try:
             self.glaas_client.health_check()
         except Exception as e:
@@ -341,7 +499,6 @@ class RegisterService:
                 error=f"GLaaS health check failed: {e}",
             )
 
-        # Step 11: Register session
         session_result = self.session_service.register(session_hash, git_context)
         if not session_result.success:
             return RegisterResult(
@@ -350,15 +507,15 @@ class RegisterService:
                 error=f"Session registration failed: {session_result.error}",
             )
 
-        # Step 12: Register lineage via coordinator
         batch_result: BatchRegistrationResult = self.coordinator.register_lineage(
             session_hash=session_hash,
             git_context=git_context,
-            jobs=lineage.jobs,
+            jobs=self._order_jobs_for_registration(
+                self._normalize_jobs_for_registration(lineage.jobs)
+            ),
             artifacts=self._prepare_artifacts(lineage.artifacts, session_hash),
         )
 
-        # Step 13: Create git tag if enabled
         if tagging_enabled and git_context.commit:
             tag_name = f"roar/{git_context.commit[:8]}"
             vcs = GitVCSProvider()
@@ -368,7 +525,6 @@ class RegisterService:
                 if not success:
                     self._logger.debug("Failed to create git tag: %s", tag_error)
 
-        # Build result
         if batch_result.errors:
             self._logger.warning("Registration completed with errors: %s", batch_result.errors)
 
@@ -383,6 +539,159 @@ class RegisterService:
             secrets_detected=detected_secrets,
             secrets_redacted=bool(detected_secrets),
         )
+
+    def _resolve_session_target(
+        self,
+        *,
+        db_ctx,
+        roar_dir: Path,
+        session_hash: str,
+    ) -> tuple[dict | None, str | None, str | None]:
+        candidates: list[tuple[dict, str]] = []
+        for session in db_ctx.sessions.get_all():
+            resolved_hash = self.session_service.compute_session_hash(
+                roar_dir=str(roar_dir),
+                session_id=int(session["id"]),
+            )
+            if resolved_hash.startswith(session_hash):
+                candidates.append((session, resolved_hash))
+
+        if len(candidates) == 1:
+            return candidates[0][0], candidates[0][1], None
+        if len(candidates) > 1:
+            return (
+                None,
+                None,
+                (
+                    f"Ambiguous session hash prefix '{session_hash}'. "
+                    "Provide more characters to select a single local session."
+                ),
+            )
+
+        local_session = db_ctx.sessions.get_by_hash_prefix(session_hash)
+        if local_session:
+            resolved_hash = self.session_service.compute_session_hash(
+                roar_dir=str(roar_dir),
+                session_id=int(local_session["id"]),
+            )
+            return local_session, resolved_hash, None
+
+        return None, None, f"No local session matches '{session_hash}'."
+
+    def _select_representative_hash(self, lineage: LineageData) -> str:
+        hashes = sorted(str(hash_value) for hash_value in lineage.artifact_hashes if hash_value)
+        if len(hashes) == 1:
+            return hashes[0]
+        return ""
+
+    def _normalize_jobs_for_registration(self, jobs: list[dict]) -> list[dict]:
+        normalized = [dict(job) for job in jobs]
+        known_job_uids = {
+            str(job["job_uid"]) for job in normalized if isinstance(job.get("job_uid"), str)
+        }
+        root_candidates = [job for job in normalized if self._is_local_parent_candidate(job)]
+        if not root_candidates:
+            root_candidates = [
+                job for job in normalized if not str(job.get("command", "")).startswith("ray_task:")
+            ]
+
+        for job in normalized:
+            parent_uid = str(job.get("parent_job_uid") or "").strip()
+            if not parent_uid or parent_uid in known_job_uids:
+                continue
+
+            inferred_parent_uid = self._infer_local_parent_uid(job, root_candidates)
+            if inferred_parent_uid:
+                job["parent_job_uid"] = inferred_parent_uid
+            else:
+                job["parent_job_uid"] = None
+
+        return normalized
+
+    def _order_jobs_for_registration(self, jobs: list[dict]) -> list[dict]:
+        jobs_by_uid = {
+            str(job["job_uid"]): job for job in jobs if isinstance(job.get("job_uid"), str)
+        }
+        ordered: list[dict] = []
+        seen: set[str] = set()
+
+        def visit(job: dict) -> None:
+            parent_uid = job.get("parent_job_uid")
+            if isinstance(parent_uid, str) and parent_uid:
+                parent = jobs_by_uid.get(parent_uid)
+                if parent is not None:
+                    visit(parent)
+
+            visit_key = str(job.get("job_uid") or f"id:{job.get('id')}")
+            if visit_key in seen:
+                return
+            seen.add(visit_key)
+            ordered.append(job)
+
+        for job in sorted(
+            jobs,
+            key=lambda item: (
+                int(item.get("step_number") or 0),
+                float(item.get("timestamp") or 0.0),
+                int(item.get("id") or 0),
+            ),
+        ):
+            visit(job)
+
+        return ordered
+
+    def _infer_local_parent_uid(self, job: dict, candidates: list[dict]) -> str | None:
+        job_step = int(job.get("step_number") or 0)
+        job_timestamp = float(job.get("timestamp") or 0.0)
+
+        eligible = [
+            candidate
+            for candidate in candidates
+            if (
+                int(candidate.get("step_number") or 0) < job_step
+                or (
+                    int(candidate.get("step_number") or 0) == job_step
+                    and float(candidate.get("timestamp") or 0.0) <= job_timestamp
+                )
+            )
+        ]
+        if not eligible:
+            return None
+
+        preferred = max(eligible, key=self._parent_candidate_sort_key)
+        inferred_uid = preferred.get("job_uid")
+        return str(inferred_uid) if inferred_uid else None
+
+    def _is_local_parent_candidate(self, job: dict) -> bool:
+        command = str(job.get("command", "") or "")
+        job_type = str(job.get("job_type", "") or "")
+        return not command.startswith("ray_task:") and job_type != "build"
+
+    def _parent_candidate_sort_key(self, job: dict) -> tuple[int, int, float, int]:
+        command = str(job.get("command", "") or "")
+        return (
+            1 if "ray job submit" in command else 0,
+            int(job.get("step_number") or 0),
+            float(job.get("timestamp") or 0.0),
+            int(job.get("id") or 0),
+        )
+
+    def _is_step_reference(self, target: str) -> bool:
+        return bool(_STEP_REFERENCE_RE.match(target))
+
+    def _looks_like_session_hash(self, target: str) -> bool:
+        return bool(_SESSION_HASH_RE.match(target))
+
+    def _parse_step_reference(self, reference: str) -> tuple[int, bool] | None:
+        if not self._is_step_reference(reference):
+            return None
+        step_ref = reference[1:]
+        is_build = step_ref.upper().startswith("B")
+        if is_build:
+            step_ref = step_ref[1:]
+        if not step_ref.isdigit():
+            return None
+        return int(step_ref), is_build
 
     def _resolve_path(self, path: str, cwd: Path) -> str | None:
         """Resolve artifact path to absolute path."""

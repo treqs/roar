@@ -56,17 +56,13 @@ def test_minio_is_accessible(ray_cluster: dict[str, str]) -> None:
     assert "test-bucket" in buckets
 
 
-def test_shared_volume_accessible(ray_connection) -> None:
+def test_worker_local_filesystem_accessible(ray_connection) -> None:
     @ray.remote
-    def write_shared(path: str, content: str) -> str:
+    def write_and_read_local_file() -> str:
+        path = "/tmp/roar_smoke_test.txt"
         with open(path, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        return path
-
-    @ray.remote
-    def read_shared(path: str) -> str:
+            handle.write("local-data-ok")
         with open(path, encoding="utf-8") as handle:
             return handle.read()
 
-    shared_path = ray.get(write_shared.remote("/shared/smoke_test.txt", "shared-data-ok"))
-    assert ray.get(read_shared.remote(shared_path)) == "shared-data-ok"
+    assert ray.get(write_and_read_local_file.remote()) == "local-data-ok"

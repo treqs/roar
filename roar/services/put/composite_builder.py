@@ -43,6 +43,7 @@ class CompositeLeaf:
     size: int
     component_type: str | None
     leaf_kind: str = "file"
+    component_algorithm: str = "blake3"
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,22 @@ class CompositeArtifactBuilder:
         Returns None when no hashable leaf components are available.
         """
         leaves = self._collect_leaves(root_path, resolved_sources, hashes_by_path)
+        return self.build_for_leaves(
+            root_path=str(root_path),
+            leaves=leaves,
+            session_hash=session_hash,
+            source_type=source_type,
+        )
+
+    def build_for_leaves(
+        self,
+        *,
+        root_path: str,
+        leaves: list[CompositeLeaf],
+        session_hash: str,
+        source_type: str | None,
+    ) -> CompositeBuildResult | None:
+        """Build a composite payload from already-resolved leaf components."""
         if not leaves:
             return None
 
@@ -183,6 +200,7 @@ class CompositeArtifactBuilder:
                     size=component_size,
                     component_type=component_type,
                     leaf_kind=leaf_kind,
+                    component_algorithm="blake3",
                 )
             )
 
@@ -229,7 +247,7 @@ class CompositeArtifactBuilder:
         return {
             "relative_path": leaf.relative_path,
             "leaf_kind": leaf.leaf_kind,
-            "component_algorithm": "blake3",
+            "component_algorithm": leaf.component_algorithm,
             "component_digest": leaf.digest,
             "component_size": leaf.size,
             "component_type": leaf.component_type,

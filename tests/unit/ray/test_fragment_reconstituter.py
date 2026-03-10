@@ -43,6 +43,169 @@ def _fragments_payload(items: list[dict[str, object]]) -> bytes:
     return json.dumps({"fragments": items}, separators=(",", ":")).encode("utf-8")
 
 
+def _wrapped_fragments_payload(items: list[dict[str, object]]) -> bytes:
+    return json.dumps(
+        {"success": True, "data": {"fragments": items}, "meta": {"page": 1}},
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def test_fetch_batches_reads_wrapped_glaas_response(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    response_body = _wrapped_fragments_payload(
+        [
+            {"sequence": 1, "encrypted_batch": "batch-1"},
+            {"sequence": 0, "encrypted_batch": "batch-0"},
+        ]
+    )
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del request
+        assert timeout == 5
+        return _FakeHttpResponse(response_body)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    reconstituter = module.FragmentReconstituter(
+        session_id="session-fetch-wrapped",
+        token="ab" * 32,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    )
+
+    assert reconstituter._fetch_batches() == [
+        {"sequence": 0, "encrypted_batch": "batch-0"},
+        {"sequence": 1, "encrypted_batch": "batch-1"},
+    ]
+
+
+def test_fetch_batches_supports_flat_response_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    response_body = _fragments_payload(
+        [
+            {"sequence": 1, "encrypted_batch": "batch-1"},
+            {"sequence": 0, "encrypted_batch": "batch-0"},
+        ]
+    )
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del request
+        assert timeout == 5
+        return _FakeHttpResponse(response_body)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    reconstituter = module.FragmentReconstituter(
+        session_id="session-fetch-flat",
+        token="ab" * 32,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    )
+
+    assert reconstituter._fetch_batches() == [
+        {"sequence": 0, "encrypted_batch": "batch-0"},
+        {"sequence": 1, "encrypted_batch": "batch-1"},
+    ]
+
+
+def test_fetch_batches_returns_empty_list_for_empty_wrapped_fragments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    response_body = _wrapped_fragments_payload([])
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del request, timeout
+        return _FakeHttpResponse(response_body)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    reconstituter = module.FragmentReconstituter(
+        session_id="session-fetch-empty",
+        token="ab" * 32,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    )
+
+    assert reconstituter._fetch_batches() == []
+
+
+def test_fetch_batches_warns_and_returns_empty_when_fragments_are_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    response_body = json.dumps({"success": True}, separators=(",", ":")).encode("utf-8")
+
+    warnings: list[str] = []
+
+    class _FakeLogger:
+        def warning(self, message: str, *args: object) -> None:
+            warnings.append(message % args if args else message)
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del request, timeout
+        return _FakeHttpResponse(response_body)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(module, "_get_logger", lambda: _FakeLogger())
+    reconstituter = module.FragmentReconstituter(
+        session_id="session-fetch-missing",
+        token="ab" * 32,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    )
+
+    assert reconstituter._fetch_batches() == []
+    assert warnings
+    assert "missing fragments list" in warnings[0]
+
+
+def test_reconstitute_decrypts_wrapped_glaas_response_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    token = "0f" * 32
+    fragment = {
+        "job_uid": "job-glaas",
+        "ray_task_id": "task-glaas",
+        "command": "echo wrapped",
+    }
+    response_body = _wrapped_fragments_payload(
+        [{"sequence": 0, "encrypted_batch": _encrypt_batch(token, [fragment], 9)}]
+    )
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del request, timeout
+        return _FakeHttpResponse(response_body)
+
+    merged_fragments: list[list[dict]] = []
+
+    def _fake_collect_fragments(*args, **kwargs) -> None:
+        if args:
+            merged_fragments.append(list(args[0]))
+            return
+        merged_fragments.append(list(kwargs["fragments"]))
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(module, "collect_fragments", _fake_collect_fragments)
+
+    result = module.FragmentReconstituter(
+        session_id="session-reconstitute-wrapped",
+        token=token,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    ).reconstitute()
+
+    assert merged_fragments == [[fragment]]
+    assert result.fragments_processed == 1
+
+
 def test_reconstitute_fetches_decrypts_and_merges_fragments(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -93,6 +256,116 @@ def test_reconstitute_fetches_decrypts_and_merges_fragments(
 
     assert merged_fragments == [[{"job_uid": "job-a"}, {"job_uid": "job-b"}]]
     assert result.fragments_processed == 2
+
+
+def test_shard_cluster_candidates_get_lower_reconstitution_confidence_floor() -> None:
+    module = _module()
+
+    config = type("Config", (), {"min_confidence": 0.8})()
+    candidate = {"evidence": ["high_cardinality", "payload_ext", "shard_cluster"]}
+
+    assert module.FragmentReconstituter._composite_confidence_floor(candidate, config) == 0.5
+    assert (
+        module.FragmentReconstituter._composite_confidence_floor(
+            {"evidence": ["payload_ext"]},
+            config,
+        )
+        == 0.8
+    )
+
+
+def test_resolve_s3_key_placeholders_rewrites_paths_when_concrete_match_exists() -> None:
+    module = _module()
+    fragments = [
+        {
+            "job_uid": "phase-training",
+            "writes": [
+                {
+                    "path": "roar+s3key://S3_MODELS_BUCKET/models/run-1/model.json",
+                    "capture_method": "python",
+                }
+            ],
+            "reads": [
+                {
+                    "path": "roar+s3key://S3_DATA_BUCKET/sensor_data/shard_000001.parquet",
+                    "capture_method": "python",
+                }
+            ],
+        },
+        {
+            "job_uid": "worker-train",
+            "writes": [
+                {
+                    "path": "s3://output-bucket/models/run-1/model.json",
+                    "capture_method": "proxy",
+                }
+            ],
+            "reads": [
+                {
+                    "path": "s3://test-bucket/sensor_data/shard_000001.parquet",
+                    "capture_method": "proxy",
+                }
+            ],
+        },
+    ]
+
+    resolved = module.FragmentReconstituter._resolve_s3_key_placeholders(fragments)
+
+    assert resolved[0]["writes"][0]["path"] == "s3://output-bucket/models/run-1/model.json"
+    assert resolved[0]["reads"][0]["path"] == "s3://test-bucket/sensor_data/shard_000001.parquet"
+
+
+def test_resolve_s3_key_placeholders_keeps_ambiguous_key_unresolved() -> None:
+    module = _module()
+    fragments = [
+        {
+            "job_uid": "phase",
+            "writes": [
+                {
+                    "path": "roar+s3key://S3_RESULTS_BUCKET/shared/output.json",
+                    "capture_method": "python",
+                }
+            ],
+        },
+        {
+            "job_uid": "worker-a",
+            "writes": [{"path": "s3://bucket-a/shared/output.json", "capture_method": "proxy"}],
+        },
+        {
+            "job_uid": "worker-b",
+            "writes": [{"path": "s3://bucket-b/shared/output.json", "capture_method": "proxy"}],
+        },
+    ]
+
+    resolved = module.FragmentReconstituter._resolve_s3_key_placeholders(fragments)
+
+    assert resolved[0]["writes"][0]["path"] == "roar+s3key://S3_RESULTS_BUCKET/shared/output.json"
+
+
+def test_drop_proxy_fallback_duplicates_removes_driver_proxy_refs_owned_elsewhere() -> None:
+    module = _module()
+    fragments = [
+        {
+            "job_uid": "phase-eval",
+            "function_name": "evaluation",
+            "reads": [{"path": "s3://bucket/model.json"}],
+            "writes": [{"path": "s3://bucket/metrics.json"}],
+        },
+        {
+            "job_uid": "driver-proxy",
+            "function_name": "s3_driver_proxy",
+            "reads": [{"path": "s3://bucket/model.json"}],
+            "writes": [
+                {"path": "s3://bucket/metrics.json"},
+                {"path": "s3://bucket/other.json"},
+            ],
+        },
+    ]
+
+    filtered = module.FragmentReconstituter._drop_proxy_fallback_duplicates(fragments)
+
+    assert filtered[1]["reads"] == []
+    assert filtered[1]["writes"] == [{"path": "s3://bucket/other.json"}]
 
 
 def test_reconstitute_is_idempotent_for_same_session(

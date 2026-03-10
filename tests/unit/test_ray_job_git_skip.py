@@ -20,9 +20,9 @@ def _ctx(base_dir: Path) -> MagicMock:
 
 def _invoke_run(base_dir: Path, ray_job_id: str | None, monkeypatch):
     if ray_job_id is None:
-        monkeypatch.delenv("RAY_JOB_CONFIG_JSON_ENV_VAR", raising=False)
+        monkeypatch.delenv("RAY_JOB_ID", raising=False)
     else:
-        monkeypatch.setenv("RAY_JOB_CONFIG_JSON_ENV_VAR", ray_job_id)
+        monkeypatch.setenv("RAY_JOB_ID", ray_job_id)
 
     runner = CliRunner()
     with (
@@ -37,7 +37,7 @@ def _invoke_run(base_dir: Path, ray_job_id: str | None, monkeypatch):
 
 def test_run_non_git_without_ray_job_id_exits_with_git_error(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("RAY_JOB_CONFIG_JSON_ENV_VAR", raising=False)
+    monkeypatch.delenv("RAY_JOB_ID", raising=False)
 
     runner = CliRunner()
     result = runner.invoke(run, ["python", "main.py"], obj=_ctx(tmp_path))

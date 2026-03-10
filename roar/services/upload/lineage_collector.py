@@ -113,6 +113,95 @@ class LineageCollector:
             pipeline=pipeline,
         )
 
+    def collect_step(
+        self,
+        session_id: int,
+        step_number: int,
+        roar_dir: Path,
+        job_type: str | None = None,
+    ) -> LineageData:
+        """Collect lineage for a visible DAG step within a session."""
+        with create_database_context(roar_dir) as ctx_db:
+            session = ctx_db.sessions.get(session_id)
+            if not session:
+                return LineageData()
+
+            step_jobs = self._get_step_jobs(ctx_db, session_id, step_number, job_type=job_type)
+            if not step_jobs:
+                return LineageData(pipeline=session)
+
+            hydrated_step_jobs = [self._hydrate_job(ctx_db, job) for job in step_jobs]
+            target_hashes = sorted(
+                {
+                    digest
+                    for job in hydrated_step_jobs
+                    for digest in job.get("_output_hashes", [])
+                    if digest
+                }
+            )
+            if not target_hashes:
+                target_hashes = sorted(
+                    {
+                        digest
+                        for job in hydrated_step_jobs
+                        for digest in job.get("_input_hashes", [])
+                        if digest
+                    }
+                )
+
+            if target_hashes:
+                lineage_jobs = ctx_db.lineage.get_lineage_jobs(target_hashes)
+                if session:
+                    lineage_jobs = self._add_build_jobs(
+                        ctx_db, session, lineage_jobs, set(target_hashes)
+                    )
+                lineage_jobs = self._add_parent_jobs(ctx_db, lineage_jobs)
+                lineage_jobs = self._add_parent_linked_ray_tasks(ctx_db, lineage_jobs)
+            else:
+                lineage_jobs = []
+
+            seen_ids = {job["id"] for job in lineage_jobs}
+            for job in hydrated_step_jobs:
+                if job["id"] not in seen_ids:
+                    lineage_jobs.append(job)
+                    seen_ids.add(job["id"])
+
+            lineage_jobs.sort(key=lambda job: job["timestamp"])
+            all_hashes = self._collect_all_hashes(lineage_jobs)
+            artifacts = self._get_artifact_info(ctx_db, all_hashes)
+
+        return LineageData(
+            jobs=lineage_jobs,
+            artifacts=artifacts,
+            artifact_hashes=all_hashes,
+            pipeline=session,
+        )
+
+    def collect_session(
+        self,
+        session_id: int,
+        roar_dir: Path,
+    ) -> LineageData:
+        """Collect all jobs and artifacts recorded in a local session."""
+        with create_database_context(roar_dir) as ctx_db:
+            session = ctx_db.sessions.get(session_id)
+            if not session:
+                return LineageData()
+
+            jobs = [self._hydrate_job(ctx_db, job) for job in ctx_db.sessions.get_steps(session_id)]
+            jobs = self._add_parent_jobs(ctx_db, jobs)
+            jobs = self._add_parent_linked_ray_tasks(ctx_db, jobs)
+            jobs.sort(key=lambda job: job["timestamp"])
+            all_hashes = self._collect_all_hashes(jobs)
+            artifacts = self._get_artifact_info(ctx_db, all_hashes)
+
+        return LineageData(
+            jobs=jobs,
+            artifacts=artifacts,
+            artifact_hashes=all_hashes,
+            pipeline=session,
+        )
+
     def _add_build_jobs(
         self,
         ctx_db,
@@ -328,3 +417,55 @@ class LineageCollector:
                 artifact["hash"] = h  # Add the hash we looked up
                 artifacts.append(artifact)
         return artifacts
+
+    def _get_step_jobs(
+        self,
+        ctx_db,
+        session_id: int,
+        step_number: int,
+        job_type: str | None = None,
+    ) -> list[dict]:
+        jobs = []
+        for job in ctx_db.sessions.get_steps(session_id):
+            if int(job.get("step_number") or 0) != step_number:
+                continue
+            normalized_job_type = job.get("job_type")
+            if job_type == "build":
+                if normalized_job_type != "build":
+                    continue
+            elif normalized_job_type == "build":
+                continue
+            jobs.append(job)
+        return jobs
+
+    def _hydrate_job(self, ctx_db, job: dict) -> dict:
+        job_dict = dict(job)
+        job_id = job_dict["id"]
+        inputs = ctx_db.jobs.get_inputs(job_id)
+        outputs = ctx_db.jobs.get_outputs(job_id)
+
+        job_dict["_input_hashes"] = [
+            h for h in (_extract_primary_digest(inp) for inp in inputs) if h
+        ]
+        job_dict["_output_hashes"] = [
+            h for h in (_extract_primary_digest(out) for out in outputs) if h
+        ]
+        job_dict["_inputs"] = [
+            {
+                "hash": h,
+                "path": inp.get("path") or inp.get("first_seen_path", ""),
+                "byte_ranges": inp.get("byte_ranges"),
+            }
+            for inp in inputs
+            if (h := _extract_primary_digest(inp))
+        ]
+        job_dict["_outputs"] = [
+            {
+                "hash": h,
+                "path": out.get("path") or out.get("first_seen_path", ""),
+                "byte_ranges": out.get("byte_ranges"),
+            }
+            for out in outputs
+            if (h := _extract_primary_digest(out))
+        ]
+        return job_dict

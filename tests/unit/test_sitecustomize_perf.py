@@ -18,8 +18,6 @@ def _roar_env(*, log_file: str | None = None) -> dict:
         env["ROAR_LOG_FILE"] = log_file
     else:
         env.pop("ROAR_LOG_FILE", None)
-    # Point ROAR_LOG_DIR at a non-existent dir to trigger the fast-path.
-    env["ROAR_LOG_DIR"] = "/tmp/roar_perf_test_nonexistent_dir"
     return env
 
 
@@ -62,14 +60,12 @@ def test_sitecustomize_import_overhead_under_threshold():
 
 def test_atexit_overhead_without_ray_logs_under_threshold(tmp_path):
     """
-    _collect_ray_io should skip the heavy collector import when ROAR_LOG_DIR
-    is empty/absent. Total overhead with LOG_FILE but no Ray logs should be
-    less than 600ms over baseline.
+    _collect_ray_io should remain lightweight when no Ray collector actor is
+    present. Total overhead with LOG_FILE should be less than 600ms over baseline.
     Previously ~2160ms; target after optimizations is <600ms.
     """
     log_file = str(tmp_path / "test_inject.json")
     env = _roar_env(log_file=log_file)
-    # ROAR_LOG_DIR is set to non-existent dir in _roar_env(), so collector is skipped.
     baseline_ms = _run_pass(_no_roar_env(), n=5)
     roar_ms = _run_pass(env, n=5)
     overhead_ms = roar_ms - baseline_ms
@@ -81,8 +77,7 @@ def test_atexit_overhead_without_ray_logs_under_threshold(tmp_path):
 
 def test_collect_ray_io_skips_import_when_no_logs(tmp_path, monkeypatch):
     """
-    _collect_ray_io should return early without importing roar.ray.collector
-    when ROAR_LOG_DIR is empty/absent and proxy_logs is empty.
+    _collect_ray_io should not import roar.ray.collector in fragments-only mode.
     """
     # Remove collector from sys.modules if present.
     sys.modules.pop("roar.ray.collector", None)
@@ -99,8 +94,6 @@ def test_collect_ray_io_skips_import_when_no_logs(tmp_path, monkeypatch):
 
     # Patch environment.
     monkeypatch.setenv("ROAR_WRAP", "1")
-    monkeypatch.setenv("ROAR_LOG_DIR", str(tmp_path / "nonexistent"))
-
     spec.loader.exec_module(sc)
 
     before_modules = set(sys.modules.keys())

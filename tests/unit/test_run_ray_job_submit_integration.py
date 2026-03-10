@@ -44,8 +44,6 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
         "--runtime-env-json",
         '{"pip":["roar-cli==1.2.3"]}',
         "--",
-        "roar",
-        "run",
         "python",
         "main.py",
     ]
@@ -110,8 +108,6 @@ def test_run_with_ray_job_submit_triggers_auto_reconstitution() -> None:
         "--runtime-env-json",
         '{"pip":["roar-cli==1.2.3"]}',
         "--",
-        "roar",
-        "run",
         "python",
         "main.py",
     ]

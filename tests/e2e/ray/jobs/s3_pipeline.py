@@ -23,7 +23,7 @@ import sys
 import time
 import uuid
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 import boto3
 
@@ -34,50 +34,14 @@ TEST_BUCKET = "test-bucket"
 OUT_BUCKET = "output-bucket"
 
 
-def _running_in_ray_worker() -> bool:
-    return os.getenv("ROAR_WORKER") == "1"
-
-
-def _resolve_endpoint_url() -> str:
-    endpoint = os.getenv("AWS_ENDPOINT_URL")
-    if not endpoint:
-        return "http://minio:9000" if _running_in_ray_worker() else "http://localhost:9000"
-
-    parsed = urlparse(endpoint)
-    if (
-        _running_in_ray_worker()
-        and parsed.hostname in {"localhost", "127.0.0.1"}
-        and parsed.scheme in {"http", "https"}
-    ):
-        port = parsed.port or 9000
-        patched = parsed._replace(netloc=f"minio:{port}")
-        return urlunparse(patched)
-    return endpoint
-
-
 def _s3():
     return boto3.client(
         "s3",
-        endpoint_url=_resolve_endpoint_url(),
+        endpoint_url=os.getenv("AWS_ENDPOINT_URL"),
         aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", "minioadmin"),
         aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "minioadmin"),
         region_name="us-east-1",
     )
-
-
-def _ensure_roar_worker_startup() -> None:
-    """
-    Best-effort worker startup for Ray Client mode.
-
-    Some Ray client execution paths do not trigger worker setup hooks reliably.
-    Calling this inside remote tasks keeps S3/open capture active for live tests.
-    """
-    try:
-        import roar.ray.roar_worker as roar_worker
-
-        roar_worker._startup()
-    except Exception:
-        return
 
 
 def _parse_s3_uri(uri: str) -> tuple[str, str]:
@@ -90,7 +54,6 @@ def _parse_s3_uri(uri: str) -> tuple[str, str]:
 @ray.remote
 def ingest_shard(shard_id: int, run_id: str) -> dict[str, Any]:
     """Read raw CSV from S3, transform, write processed JSON back to S3."""
-    _ensure_roar_worker_startup()
     s3 = _s3()
     raw_key = f"raw/{run_id}/shard_{shard_id}.csv"
     body = s3.get_object(Bucket=TEST_BUCKET, Key=raw_key)["Body"].read().decode("utf-8")
@@ -111,7 +74,6 @@ def ingest_shard(shard_id: int, run_id: str) -> dict[str, Any]:
 @ray.remote
 def train_shard(ingest_result: dict[str, Any], run_id: str) -> dict[str, Any]:
     """Read processed JSON and produce a minimal model artifact."""
-    _ensure_roar_worker_startup()
     s3 = _s3()
     bucket, key = _parse_s3_uri(str(ingest_result["processed_key"]))
     data = json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
@@ -130,7 +92,6 @@ def train_shard(ingest_result: dict[str, Any], run_id: str) -> dict[str, Any]:
 @ray.remote
 def eval_model(train_result: dict[str, Any], run_id: str) -> dict[str, Any]:
     """Read model and produce metrics."""
-    _ensure_roar_worker_startup()
     s3 = _s3()
     bucket, key = _parse_s3_uri(str(train_result["model_key"]))
     model = json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read())

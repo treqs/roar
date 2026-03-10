@@ -3,7 +3,7 @@ from __future__ import annotations
 import builtins
 import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -48,10 +48,8 @@ def test_patch_ray_init_skips_pip_dependency_by_default(
         return "ok"
 
     fake_ray = SimpleNamespace(init=fake_ray_init)
-    monkeypatch.setattr(sitecustomize, "_ensure_collector_actor", lambda *_args, **_kwargs: None)
     monkeypatch.chdir(tmp_path)
 
-    monkeypatch.setenv("ROAR_LOG_DIR", "/tmp/roar-ray")
     monkeypatch.delenv("ROAR_JOB_ID", raising=False)
     import importlib.metadata as importlib_metadata
 
@@ -63,7 +61,7 @@ def test_patch_ray_init_skips_pip_dependency_by_default(
     assert result == "ok"
     runtime_env = calls[-1]["runtime_env"]
     assert "pip" not in runtime_env
-    assert runtime_env["env_vars"]["ROAR_LOG_BACKEND"] == "actor"
+    assert {"USER_KEY", "ROAR_JOB_ID", "ROAR_DRIVER_JOB_UID"}.issubset(runtime_env["env_vars"])
     assert runtime_env["env_vars"]["ROAR_JOB_ID"]
 
 
@@ -77,7 +75,6 @@ def test_patch_ray_init_skips_injection_when_ray_disabled(
         return "ok"
 
     fake_ray = SimpleNamespace(init=fake_ray_init)
-    monkeypatch.setattr(sitecustomize, "_ensure_collector_actor", lambda *_args, **_kwargs: None)
     config_path = tmp_path / ".roar" / "config.toml"
     config_path.parent.mkdir(parents=True)
     config_path.write_text("""
@@ -93,7 +90,7 @@ enabled = false
     assert runtime_env == {"env_vars": {"USER_KEY": "value"}}
 
 
-def test_patch_ray_init_honors_ray_config_log_dir_and_pip_toggle(
+def test_patch_ray_init_honors_ray_config_pip_toggle(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     calls: list[dict] = []
@@ -103,13 +100,11 @@ def test_patch_ray_init_honors_ray_config_log_dir_and_pip_toggle(
         return "ok"
 
     fake_ray = SimpleNamespace(init=fake_ray_init)
-    monkeypatch.setattr(sitecustomize, "_ensure_collector_actor", lambda *_args, **_kwargs: None)
     config_path = tmp_path / ".roar" / "config.toml"
     config_path.parent.mkdir(parents=True)
     config_path.write_text("""
 [ray]
 pip_install = false
-log_dir = "/tmp/roar-ray-config"
 """)
     monkeypatch.chdir(tmp_path)
 
@@ -118,7 +113,6 @@ log_dir = "/tmp/roar-ray-config"
 
     runtime_env = calls[-1]["runtime_env"]
     assert "pip" not in runtime_env
-    assert runtime_env["env_vars"]["ROAR_LOG_DIR"] == "/tmp/roar-ray-config"
 
 
 def test_patch_ray_shutdown_collects_before_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -140,120 +134,23 @@ def test_patch_ray_shutdown_collects_before_shutdown(monkeypatch: pytest.MonkeyP
     assert call_order == ["collect", "shutdown"]
 
 
-def test_ensure_collector_actor_creates_named_actor_when_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _FakeRay:
-        def __init__(self) -> None:
-            self.get_actor_calls: list[tuple[str, str | None]] = []
-            self.get_calls: list[tuple[object, int | None]] = []
+def test_shutdown_ray_at_exit_prefers_ray_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    call_order: list[str] = []
 
-        def get_actor(self, name: str, namespace: str | None = None):
-            self.get_actor_calls.append((name, namespace))
-            raise ValueError("missing")
-
-        def get(self, value, timeout: int | None = None):
-            self.get_calls.append((value, timeout))
-            return value
-
-    created: dict[str, object] = {}
-
-    class _FakeCollectorActor:
-        class _FakeRemoteMethod:
-            @staticmethod
-            def remote():
-                return "ready"
-
-        @classmethod
-        def options(cls, **kwargs):
-            created["options"] = kwargs
-            return SimpleNamespace(
-                remote=lambda: SimpleNamespace(get_all=cls._FakeRemoteMethod()),
-            )
-
-    fake_actor_module = ModuleType("roar.ray.actor")
-    fake_actor_module.RoarLogCollectorActor = _FakeCollectorActor
-    monkeypatch.setitem(
-        sys.modules,
-        "roar.ray.actor",
-        fake_actor_module,
+    fake_ray = SimpleNamespace(
+        is_initialized=lambda: True,
+        shutdown=lambda: call_order.append("shutdown"),
+    )
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    monkeypatch.setattr(
+        sitecustomize,
+        "_collect_ray_io",
+        lambda *args, **kwargs: call_order.append("collect"),
     )
 
-    fake_ray = _FakeRay()
-    sitecustomize._ensure_collector_actor(fake_ray, "job1234")
+    sitecustomize._shutdown_ray_at_exit()
 
-    assert fake_ray.get_actor_calls == [("roar-log-collector-job1234", "roar")]
-    assert created["options"] == {
-        "name": "roar-log-collector-job1234",
-        "namespace": "roar",
-        "lifetime": "detached",
-        "num_cpus": 0,
-    }
-    assert fake_ray.get_calls == [("ready", 10)]
-
-
-def test_ensure_collector_actor_passes_fragment_streaming_args_when_env_present(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _FakeRay:
-        def __init__(self) -> None:
-            self.get_actor_calls: list[tuple[str, str | None]] = []
-            self.get_calls: list[tuple[object, int | None]] = []
-
-        def get_actor(self, name: str, namespace: str | None = None):
-            self.get_actor_calls.append((name, namespace))
-            raise ValueError("missing")
-
-        def get(self, value, timeout: int | None = None):
-            self.get_calls.append((value, timeout))
-            return value
-
-    created: dict[str, object] = {}
-    remote_kwargs: dict[str, object] = {}
-
-    class _FakeCollectorActor:
-        class _FakeRemoteMethod:
-            @staticmethod
-            def remote():
-                return "ready"
-
-        @classmethod
-        def options(cls, **kwargs):
-            created["options"] = kwargs
-
-            def _remote(**actor_kwargs):
-                remote_kwargs.update(actor_kwargs)
-                return SimpleNamespace(get_all=cls._FakeRemoteMethod())
-
-            return SimpleNamespace(remote=_remote)
-
-    fake_actor_module = ModuleType("roar.ray.actor")
-    fake_actor_module.RoarLogCollectorActor = _FakeCollectorActor
-    monkeypatch.setitem(
-        sys.modules,
-        "roar.ray.actor",
-        fake_actor_module,
-    )
-
-    monkeypatch.setenv("ROAR_SESSION_ID", "sess-123")
-    monkeypatch.setenv("ROAR_FRAGMENT_TOKEN", "ab" * 32)
-    monkeypatch.setenv("GLAAS_URL", "http://localhost:3001")
-
-    fake_ray = _FakeRay()
-    sitecustomize._ensure_collector_actor(fake_ray, "job1234")
-
-    assert created["options"] == {
-        "name": "roar-log-collector-job1234",
-        "namespace": "roar",
-        "lifetime": "detached",
-        "num_cpus": 0,
-    }
-    assert remote_kwargs == {
-        "session_id": "sess-123",
-        "token": "ab" * 32,
-        "glaas_url": "http://localhost:3001",
-    }
-    assert fake_ray.get_calls == [("ready", 10)]
+    assert call_order == ["shutdown"]
 
 
 def test_patch_ray_init_starts_node_agent_spawn_in_background_thread(
@@ -266,12 +163,11 @@ def test_patch_ray_init_starts_node_agent_spawn_in_background_thread(
         return "ok"
 
     fake_ray = SimpleNamespace(init=fake_ray_init)
-    monkeypatch.setattr(sitecustomize, "_ensure_collector_actor", lambda *_args, **_kwargs: None)
     monkeypatch.setenv("ROAR_RAY_NODE_AGENTS", "1")
     monkeypatch.setattr(
         sitecustomize,
         "_load_ray_config",
-        lambda: {"enabled": True, "pip_install": False, "log_dir": "/tmp/roar-ray"},
+        lambda: {"enabled": True, "pip_install": False},
     )
     monkeypatch.setattr(sitecustomize, "_start_ray_node_poller", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -309,11 +205,10 @@ def test_patch_ray_init_skips_node_agent_spawn_by_default(
         return "ok"
 
     fake_ray = SimpleNamespace(init=fake_ray_init)
-    monkeypatch.setattr(sitecustomize, "_ensure_collector_actor", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         sitecustomize,
         "_load_ray_config",
-        lambda: {"enabled": True, "pip_install": False, "log_dir": "/tmp/roar-ray"},
+        lambda: {"enabled": True, "pip_install": False},
     )
     spawn_node_agents = MagicMock()
     start_node_poller = MagicMock()
@@ -414,6 +309,7 @@ def test_prepare_worker_runtime_env_suppresses_internal_copy_operations(
 def test_prepare_worker_runtime_env_warns_when_working_dir_is_not_local(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    non_local_working_dir = "s3://bucket/path"
     warnings: list[str] = []
     monkeypatch.setattr(
         sitecustomize,
@@ -426,14 +322,34 @@ def test_prepare_worker_runtime_env_warns_when_working_dir_is_not_local(
     )
 
     prepared = sitecustomize._prepare_worker_runtime_env(
-        {"working_dir": "s3://bucket/path"},
+        {"working_dir": non_local_working_dir},
         "job5678",
     )
 
     assert warnings
     assert prepared["py_executable"] == "roar-worker"
     assert prepared["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
-    assert Path(str(prepared["working_dir"])).exists()
+    assert prepared["working_dir"] == non_local_working_dir
+
+
+def test_prepare_worker_runtime_env_preserves_non_local_job_working_dir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_working_dir = "s3://bucket/cloud-demo"
+    monkeypatch.setattr(
+        "roar.services.execution.tracer_backends.find_preload_library",
+        lambda _package_path: None,
+    )
+
+    prepared = sitecustomize._prepare_worker_runtime_env(
+        {"working_dir": job_working_dir},
+        "jobraywd",
+    )
+
+    assert prepared["working_dir"] == job_working_dir, (
+        "Expected _prepare_worker_runtime_env() to preserve the job-provided non-local "
+        "working_dir so Ray workers keep access to modules from ray job submit packaging."
+    )
 
 
 def test_prepare_worker_runtime_env_bundles_roar_worker_hook(
@@ -447,7 +363,7 @@ def test_prepare_worker_runtime_env_bundles_roar_worker_hook(
     prepared = sitecustomize._prepare_worker_runtime_env({}, "job9999")
     working_dir = Path(str(prepared["working_dir"]))
 
-    assert (working_dir / "roar" / "ray" / "worker.py").exists()
+    assert (working_dir / "roar" / "ray" / "roar_worker.py").exists()
 
 
 def test_prepare_worker_runtime_env_uses_roar_worker_entrypoint(
@@ -494,6 +410,35 @@ def test_prepare_worker_runtime_env_ignores_existing_worker_setup_hook(
     assert prepared["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
 
 
+def test_patch_ray_init_propagates_fragment_streaming_env_to_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    def fake_ray_init(*_args, **kwargs):
+        calls.append(kwargs)
+        return "ok"
+
+    fake_ray = SimpleNamespace(init=fake_ray_init)
+    monkeypatch.setattr(
+        sitecustomize,
+        "_load_ray_config",
+        lambda: {"enabled": True, "pip_install": False},
+    )
+    monkeypatch.setenv("ROAR_CLUSTER_GLAAS_URL", "http://host.docker.internal:3001")
+    monkeypatch.setenv("ROAR_SESSION_ID", "session-123")
+    monkeypatch.setenv("ROAR_FRAGMENT_TOKEN", "ab" * 32)
+    monkeypatch.setenv("ROAR_JOB_ID", "driver-uid-1234")
+
+    sitecustomize._patch_ray_init(fake_ray)
+    fake_ray.init(runtime_env={})
+
+    runtime_env = calls[-1]["runtime_env"]
+    assert runtime_env["env_vars"]["GLAAS_URL"] == "http://host.docker.internal:3001"
+    assert runtime_env["env_vars"]["ROAR_SESSION_ID"] == "session-123"
+    assert runtime_env["env_vars"]["ROAR_FRAGMENT_TOKEN"] == "ab" * 32
+
+
 def test_patch_ray_init_sets_driver_job_uid_for_workers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -504,11 +449,10 @@ def test_patch_ray_init_sets_driver_job_uid_for_workers(
         return "ok"
 
     fake_ray = SimpleNamespace(init=fake_ray_init)
-    monkeypatch.setattr(sitecustomize, "_ensure_collector_actor", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         sitecustomize,
         "_load_ray_config",
-        lambda: {"enabled": True, "pip_install": False, "log_dir": "/tmp/roar-ray"},
+        lambda: {"enabled": True, "pip_install": False},
     )
     monkeypatch.setenv("ROAR_JOB_ID", "driver-uid-1234")
 

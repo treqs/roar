@@ -2,9 +2,9 @@
 roar Ray log collector.
 
 Called from the driver process atexit handler (when ROAR_WRAP=1).
-Collects worker events from a Ray actor aggregator when available, with
-filesystem JSONL logs as a fallback. De-duplicates paths and inserts
-artifact + job_input/output rows into ROAR_PROJECT_DIR/.roar/roar.db.
+In Phase 2, Ray lineage is fragments-only:
+FragmentReconstituter fetches encrypted fragment batches from GLaaS and this
+module merges those fragments into ROAR_PROJECT_DIR/.roar/roar.db.
 """
 
 from __future__ import annotations
@@ -12,19 +12,14 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
 import time
 import uuid
 from collections import deque
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 from roar.ray.fragment import ArtifactRef, TaskFragment
-from roar.services.execution.proxy import parse_log_line
-
-_READ_OPS = frozenset({"GetObject"})
-_WRITE_OPS = frozenset({"PutObject", "CompleteMultipartUpload"})
-_CAPTURE_PRIORITY = {"python": 0, "proxy": 1, "tracer": 2}
 
 
 def _get_logger():
@@ -33,134 +28,172 @@ def _get_logger():
     return get_logger()
 
 
+def _apply_reconstitution_filters(
+    fragments: list[TaskFragment],
+    *,
+    project_dir: str,
+) -> list[TaskFragment]:
+    try:
+        from roar.config import load_config
+        from roar.services.execution.provenance.file_filter import (
+            FileFilterService,
+            _get_editable_install_dirs,
+        )
+    except Exception:
+        return [fragment for fragment in fragments if _should_keep_fragment(fragment)]
+
+    config = load_config(start_dir=project_dir)
+    filters_config = config.get("filters", {}) if isinstance(config, dict) else {}
+    cleanup_config = config.get("cleanup", {}) if isinstance(config, dict) else {}
+    ignore_system_reads = bool(filters_config.get("ignore_system_reads", True))
+    ignore_package_reads = bool(filters_config.get("ignore_package_reads", True))
+    ignore_torch_cache = bool(filters_config.get("ignore_torch_cache", True))
+    ignore_tmp_files = bool(filters_config.get("ignore_tmp_files", True))
+    if bool(cleanup_config.get("delete_tmp_writes", False)):
+        ignore_tmp_files = False
+
+    filter_service = FileFilterService()
+    editable_dirs = _get_editable_install_dirs()
+    sys_prefix = sys.prefix
+    sys_base_prefix = sys.base_prefix
+
+    filtered: list[TaskFragment] = []
+    for fragment in fragments:
+        for ref in [*fragment.reads, *fragment.writes]:
+            ref.path = _normalize_reconstituted_path(str(ref.path or ""), project_dir=project_dir)
+        fragment.reads = [
+            ref
+            for ref in fragment.reads
+            if _should_include_ref(
+                ref,
+                kind="read",
+                filter_service=filter_service,
+                ignore_system_reads=ignore_system_reads,
+                ignore_package_reads=ignore_package_reads,
+                ignore_torch_cache=ignore_torch_cache,
+                ignore_tmp_files=ignore_tmp_files,
+                sys_prefix=sys_prefix,
+                sys_base_prefix=sys_base_prefix,
+                editable_dirs=editable_dirs,
+            )
+        ]
+        fragment.writes = [
+            ref
+            for ref in fragment.writes
+            if _should_include_ref(
+                ref,
+                kind="write",
+                filter_service=filter_service,
+                ignore_system_reads=ignore_system_reads,
+                ignore_package_reads=ignore_package_reads,
+                ignore_torch_cache=ignore_torch_cache,
+                ignore_tmp_files=ignore_tmp_files,
+                sys_prefix=sys_prefix,
+                sys_base_prefix=sys_base_prefix,
+                editable_dirs=editable_dirs,
+            )
+        ]
+        if _should_keep_fragment(fragment):
+            filtered.append(fragment)
+    return filtered
+
+
+def _should_keep_fragment(fragment: TaskFragment) -> bool:
+    if fragment.reads or fragment.writes:
+        return True
+    try:
+        return float(fragment.ended_at) > float(fragment.started_at)
+    except (TypeError, ValueError):
+        return False
+
+
+def _normalize_reconstituted_path(path: str, *, project_dir: str) -> str:
+    if not path or path.startswith("s3://"):
+        return path
+
+    normalized = os.path.normpath(path)
+    marker = f"{os.sep}runtime_resources{os.sep}working_dir_files{os.sep}"
+    if marker not in normalized:
+        return path
+
+    packaged_suffix = normalized.split(marker, 1)[1]
+    packaged_parts = Path(packaged_suffix).parts
+    if len(packaged_parts) < 2 or not packaged_parts[0].startswith("_ray_pkg_"):
+        return path
+
+    restored = Path(project_dir).joinpath(*packaged_parts[1:])
+    return str(restored.resolve(strict=False))
+
+
+def _should_include_ref(
+    ref: ArtifactRef,
+    *,
+    kind: str,
+    filter_service,
+    ignore_system_reads: bool,
+    ignore_package_reads: bool,
+    ignore_torch_cache: bool,
+    ignore_tmp_files: bool,
+    sys_prefix: str,
+    sys_base_prefix: str,
+    editable_dirs,
+) -> bool:
+    path = str(ref.path or "")
+    if not path or path.startswith("s3://"):
+        return bool(path)
+
+    if kind == "read":
+        if filter_service._is_roar_internal(path) or filter_service._is_git_metadata(path):
+            return False
+        if ignore_system_reads and filter_service._is_system_read(path):
+            return False
+        if ignore_torch_cache and filter_service._is_torch_cache(path):
+            return False
+        if ignore_package_reads and filter_service._is_package_file(
+            path,
+            sys_prefix,
+            sys_base_prefix,
+            editable_dirs=editable_dirs,
+        ):
+            return False
+        return not (ignore_tmp_files and filter_service._is_tmp_path(path))
+
+    if filter_service._is_write_noise(path):
+        return False
+    if ignore_torch_cache and filter_service._is_torch_cache(path):
+        return False
+    return not (ignore_tmp_files and filter_service._is_tmp_path(path))
+
+
 def collect(
     project_dir: str | None = None,
     log_dir: str | None = None,
     proxy_logs: dict[str, dict[str, Any]] | None = None,
+    fragments: list[dict] | None = None,
 ) -> None:
     """
-    Collect Ray worker I/O logs and write to the roar SQLite database.
-
-    Args:
-        project_dir: Directory containing the .roar/ subdirectory.
-                     Defaults to ROAR_PROJECT_DIR env var, then "/app".
-        log_dir:     Directory where worker JSONL logs were written.
-                     Defaults to ROAR_LOG_DIR env var, then "/shared/.roar-logs".
+    Compatibility entrypoint that now only accepts explicit fragments.
     """
+    del log_dir
+
+    if not fragments:
+        return
+
     if project_dir is None:
         project_dir = os.environ.get("ROAR_PROJECT_DIR", "/app")
-    if log_dir is None:
-        log_dir = os.environ.get("ROAR_LOG_DIR", "/shared/.roar-logs")
 
     db_path = os.path.join(project_dir, ".roar", "roar.db")
-    log_path = Path(log_dir)
-
     if not os.path.exists(db_path):
         return  # roar not initialised; nothing to do
 
-    actor_events: list[dict[str, Any]] | None = None
-    actor_fragments: list[dict[str, Any]] = []
-    actor_payload = _collect_actor_payload()
-    if actor_payload is not None:
-        actor_events, actor_fragments = actor_payload
-
-    if actor_fragments:
-        session_id, base_step = _resolve_active_session_context(db_path)
-        collect_fragments(
-            actor_fragments,
-            project_dir=project_dir,
-            driver_job_uid=os.environ.get("ROAR_JOB_ID"),
-            session_id=session_id,
-            step_number=base_step,
-        )
-        _consume_filesystem_logs(log_path)
-        return
-
-    task_events = _collect_events(log_path, actor_events=actor_events)
-    _merge_proxy_logs(task_events, proxy_logs or {})
-    if not task_events:
-        return
-
-    path_info = _aggregate_paths(task_events)
-    if not path_info:
-        return
-
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-
-    try:
-        now = time.time()
-        job_id = _create_ray_job(conn, now)
-        artifact_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(artifacts)").fetchall()
-        }
-
-        for path, info in path_info.items():
-            task_id = info["writer_task_id"] or info["task_id"]
-            node_id = info["writer_node_id"] or info["node_id"]
-            metadata_payload = {"ray_task_id": task_id}
-            if node_id:
-                metadata_payload["ray_node_id"] = node_id
-            metadata = json.dumps(metadata_payload)
-
-            _insert_artifact(
-                conn,
-                columns=artifact_columns,
-                artifact_id=str(uuid.uuid4()),
-                now=now,
-                path=path,
-                source_type=info["source_type"],
-                capture_method=info["capture_method"],
-                hash_value=info["hash"],
-                size=info["size"],
-                metadata=metadata,
-            )
-
-            row = conn.execute(
-                "SELECT id FROM artifacts WHERE first_seen_path = ? ORDER BY first_seen_at DESC LIMIT 1",
-                (path,),
-            ).fetchone()
-            if row is None:
-                continue
-            actual_artifact_id = row["id"]
-
-            if info["hash"] and info["hash_algorithm"]:
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO artifact_hashes
-                        (artifact_id, algorithm, digest)
-                    VALUES (?, ?, ?)
-                    """,
-                    (actual_artifact_id, info["hash_algorithm"], info["hash"]),
-                )
-
-            if info["saw_write"]:
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO job_outputs
-                        (job_id, artifact_id, path)
-                    VALUES (?, ?, ?)
-                    """,
-                    (job_id, actual_artifact_id, path),
-                )
-            if info["saw_read"]:
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO job_inputs
-                        (job_id, artifact_id, path)
-                    VALUES (?, ?, ?)
-                    """,
-                    (job_id, actual_artifact_id, path),
-                )
-
-        conn.commit()
-        # Consume logs once to keep collection idempotent if collect() is called
-        # multiple times during shutdown.
-        _consume_filesystem_logs(log_path)
-    finally:
-        conn.close()
+    session_id, base_step = _resolve_active_session_context(db_path)
+    collect_fragments(
+        fragments=fragments,
+        project_dir=project_dir,
+        driver_job_uid=os.environ.get("ROAR_JOB_ID"),
+        session_id=session_id,
+        step_number=base_step,
+    )
 
 
 def collect_fragments(
@@ -200,6 +233,14 @@ def collect_fragments(
                 continue
             parsed_fragments.append(fragment)
 
+        parsed_fragments = _apply_reconstitution_filters(
+            parsed_fragments,
+            project_dir=project_dir,
+        )
+        if not parsed_fragments:
+            conn.commit()
+            return
+
         step_by_job_uid = _assign_step_numbers(parsed_fragments, base_step=step_number)
 
         for fragment in parsed_fragments:
@@ -223,21 +264,7 @@ def collect_fragments(
                 continue
             job_id = int(row["id"])
 
-            for ref in fragment.reads:
-                artifact_id = _upsert_artifact_for_ref(
-                    conn,
-                    columns=artifact_columns,
-                    ref=ref,
-                    now=now,
-                )
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO job_inputs
-                        (job_id, artifact_id, path)
-                    VALUES (?, ?, ?)
-                    """,
-                    (job_id, artifact_id, ref.path),
-                )
+            written_artifact_ids: dict[str, str] = {}
 
             for ref in fragment.writes:
                 artifact_id = _upsert_artifact_for_ref(
@@ -246,6 +273,7 @@ def collect_fragments(
                     ref=ref,
                     now=now,
                 )
+                written_artifact_ids[str(ref.path)] = artifact_id
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO job_outputs
@@ -255,73 +283,27 @@ def collect_fragments(
                     (job_id, artifact_id, ref.path),
                 )
 
+            for ref in fragment.reads:
+                artifact_id = written_artifact_ids.get(str(ref.path), "")
+                if not artifact_id:
+                    artifact_id = _upsert_artifact_for_ref(
+                        conn,
+                        columns=artifact_columns,
+                        ref=ref,
+                        now=now,
+                    )
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO job_inputs
+                        (job_id, artifact_id, path)
+                    VALUES (?, ?, ?)
+                    """,
+                    (job_id, artifact_id, ref.path),
+                )
+
         conn.commit()
     finally:
         conn.close()
-
-
-def _events_from_fragments(fragments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-
-    for payload in fragments:
-        if not isinstance(payload, dict):
-            continue
-
-        try:
-            fragment = TaskFragment.from_dict(payload)
-        except Exception:
-            continue
-
-        task_id = _to_text(fragment.ray_task_id) or _to_text(fragment.job_uid) or "unknown"
-        node_id = _to_text(fragment.ray_node_id)
-
-        for ref in fragment.reads:
-            event: dict[str, Any] = {
-                "path": ref.path,
-                "mode": "r",
-                "task_id": task_id,
-                "capture_method": _normalize_capture_method(_to_text(ref.capture_method)),
-                "size": _normalize_size(ref.size),
-            }
-            if node_id:
-                event["node_id"] = node_id
-            hash_value = _normalize_hash(_to_text(ref.hash))
-            hash_algorithm = _normalize_hash_algorithm(
-                _to_text(ref.hash_algorithm),
-                hash_value,
-                _normalize_source_type(None, ref.path),
-                ref.path,
-            )
-            if hash_value:
-                event["hash"] = hash_value
-            if hash_algorithm:
-                event["hash_algorithm"] = hash_algorithm
-            events.append(event)
-
-        for ref in fragment.writes:
-            event = {
-                "path": ref.path,
-                "mode": "w",
-                "task_id": task_id,
-                "capture_method": _normalize_capture_method(_to_text(ref.capture_method)),
-                "size": _normalize_size(ref.size),
-            }
-            if node_id:
-                event["node_id"] = node_id
-            hash_value = _normalize_hash(_to_text(ref.hash))
-            hash_algorithm = _normalize_hash_algorithm(
-                _to_text(ref.hash_algorithm),
-                hash_value,
-                _normalize_source_type(None, ref.path),
-                ref.path,
-            )
-            if hash_value:
-                event["hash"] = hash_value
-            if hash_algorithm:
-                event["hash_algorithm"] = hash_algorithm
-            events.append(event)
-
-    return events
 
 
 def _assign_step_numbers(
@@ -357,14 +339,10 @@ def _assign_step_numbers(
             writes_by_job.append(set())
 
         for ref in fragment.reads:
-            hash_value = _normalize_hash(_to_text(ref.hash))
-            if hash_value:
-                reads_by_job[job_index].add(hash_value)
+            reads_by_job[job_index].update(_dependency_tokens_for_ref(ref))
 
         for ref in fragment.writes:
-            hash_value = _normalize_hash(_to_text(ref.hash))
-            if hash_value:
-                writes_by_job[job_index].add(hash_value)
+            writes_by_job[job_index].update(_dependency_tokens_for_ref(ref))
 
     # hash -> producer job indices
     producers_by_hash: dict[str, set[int]] = {}
@@ -416,7 +394,8 @@ def _insert_fragment_job(
     step_number: int,
     now: float,
 ) -> None:
-    command = f"ray_task:{fragment.function_name}" if fragment.function_name else "ray_task"
+    command_name = _task_command_name(fragment.function_name)
+    command = f"ray_task:{command_name}" if command_name else "ray_task"
     timestamp = fragment.started_at or now
     duration = max(0.0, float(fragment.ended_at - fragment.started_at))
     parent_job_uid = fragment.parent_job_uid or driver_job_uid
@@ -463,10 +442,104 @@ def _insert_fragment_job(
         values.append(json.dumps(metadata))
 
     placeholders = ", ".join("?" for _ in fields)
+    field_list = ", ".join(fields)
     conn.execute(
-        f"INSERT OR IGNORE INTO jobs ({', '.join(fields)}) VALUES ({placeholders})",
+        f"INSERT OR IGNORE INTO jobs ({field_list}) VALUES ({placeholders})",
         values,
     )
+    _update_fragment_job(
+        conn=conn,
+        job_columns=job_columns,
+        fragment=fragment,
+        parent_job_uid=parent_job_uid,
+        session_id=session_id,
+        step_number=step_number,
+        timestamp=timestamp,
+        duration=duration,
+        command=command,
+    )
+
+
+def _update_fragment_job(
+    conn: sqlite3.Connection,
+    *,
+    job_columns: set[str],
+    fragment: TaskFragment,
+    parent_job_uid: str | None,
+    session_id: int | None,
+    step_number: int,
+    timestamp: float,
+    duration: float,
+    command: str,
+) -> None:
+    metadata_json = ""
+    if "metadata" in job_columns:
+        metadata: dict[str, Any] = {
+            "ray_task_id": fragment.ray_task_id,
+            "ray_worker_id": fragment.ray_worker_id,
+            "ray_node_id": fragment.ray_node_id,
+        }
+        if fragment.ray_actor_id:
+            metadata["ray_actor_id"] = fragment.ray_actor_id
+        metadata_json = json.dumps(metadata)
+
+    updates = [
+        "timestamp = CASE WHEN timestamp > ? THEN ? ELSE timestamp END",
+        "duration_seconds = CASE WHEN duration_seconds IS NULL OR duration_seconds < ? THEN ? ELSE duration_seconds END",
+        "exit_code = CASE WHEN ? != 0 THEN ? ELSE COALESCE(exit_code, 0) END",
+        "command = CASE WHEN command IS NULL OR command = '' THEN ? ELSE command END",
+        "script = CASE WHEN script IS NULL OR script = '' THEN ? ELSE script END",
+        "status = COALESCE(status, 'completed')",
+        "job_type = COALESCE(job_type, 'ray_task')",
+    ]
+    params: list[Any] = [
+        timestamp,
+        timestamp,
+        duration,
+        duration,
+        fragment.exit_code,
+        fragment.exit_code,
+        command,
+        fragment.function_name,
+    ]
+
+    if "parent_job_uid" in job_columns:
+        updates.append(
+            "parent_job_uid = CASE WHEN (parent_job_uid IS NULL OR parent_job_uid = '') AND ? IS NOT NULL AND ? != '' THEN ? ELSE parent_job_uid END"
+        )
+        params.extend([parent_job_uid, parent_job_uid, parent_job_uid])
+    if "session_id" in job_columns and session_id is not None:
+        updates.append("session_id = COALESCE(session_id, ?)")
+        params.append(session_id)
+    if "step_number" in job_columns:
+        updates.append(
+            "step_number = CASE WHEN step_number IS NULL OR step_number < ? THEN ? ELSE step_number END"
+        )
+        params.extend([step_number, step_number])
+    if "metadata" in job_columns:
+        updates.append(
+            "metadata = CASE WHEN (metadata IS NULL OR metadata = '') AND ? != '' THEN ? ELSE metadata END"
+        )
+        params.extend([metadata_json, metadata_json])
+
+    params.append(fragment.job_uid)
+    conn.execute(
+        f"UPDATE jobs SET {', '.join(updates)} WHERE job_uid = ?",
+        params,
+    )
+
+
+def _task_command_name(function_name: str) -> str:
+    text = str(function_name or "").strip()
+    if not text:
+        return ""
+
+    parts = [part for part in text.split(".") if part and part != "<locals>"]
+    if not parts:
+        return text
+    if len(parts) >= 2 and parts[-2][:1].isupper():
+        return ".".join(parts[-2:])
+    return parts[-1]
 
 
 def _upsert_artifact_for_ref(
@@ -478,9 +551,13 @@ def _upsert_artifact_for_ref(
 ) -> str:
     digest = _normalize_hash(_to_text(ref.hash))
     algorithm = _to_text(ref.hash_algorithm)
+    existing_by_path = conn.execute(
+        "SELECT id, hash FROM artifacts WHERE first_seen_path = ? ORDER BY first_seen_at DESC LIMIT 1",
+        (ref.path,),
+    ).fetchone()
 
     if digest and algorithm:
-        row = conn.execute(
+        existing_by_hash = conn.execute(
             """
             SELECT artifact_id
             FROM artifact_hashes
@@ -489,16 +566,39 @@ def _upsert_artifact_for_ref(
             """,
             (algorithm, digest),
         ).fetchone()
-        if row is not None:
-            return str(row["artifact_id"])
+        if existing_by_path is not None:
+            path_artifact_id = str(existing_by_path["id"])
+            path_digest_row = conn.execute(
+                """
+                SELECT digest
+                FROM artifact_hashes
+                WHERE artifact_id = ? AND algorithm = ?
+                LIMIT 1
+                """,
+                (path_artifact_id, algorithm),
+            ).fetchone()
+            path_digest = _normalize_hash(
+                _to_text(path_digest_row["digest"])
+                if path_digest_row is not None
+                else existing_by_path["hash"]
+            )
 
-    if not digest:
-        existing = conn.execute(
-            "SELECT id FROM artifacts WHERE first_seen_path = ? ORDER BY first_seen_at DESC LIMIT 1",
-            (ref.path,),
-        ).fetchone()
-        if existing is not None:
-            return str(existing["id"])
+            if path_digest in (None, digest):
+                _backfill_artifact_for_ref(
+                    conn,
+                    columns=columns,
+                    artifact_id=path_artifact_id,
+                    ref=ref,
+                    digest=digest,
+                    algorithm=algorithm,
+                )
+                return path_artifact_id
+
+        if existing_by_hash is not None:
+            return str(existing_by_hash["artifact_id"])
+
+    if not digest and existing_by_path is not None:
+        return str(existing_by_path["id"])
 
     artifact_id = str(uuid.uuid4())
     metadata_payload = {"capture_method": ref.capture_method}
@@ -539,309 +639,74 @@ def _upsert_artifact_for_ref(
     return artifact_id
 
 
-def _collect_actor_payload() -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]]] | None:
-    try:
-        import ray
-    except Exception:
-        return None
+def _backfill_artifact_for_ref(
+    conn: sqlite3.Connection,
+    *,
+    columns: set[str],
+    artifact_id: str,
+    ref: ArtifactRef,
+    digest: str,
+    algorithm: str,
+) -> None:
+    updates: list[str] = []
+    params: list[Any] = []
 
-    is_initialized = getattr(ray, "is_initialized", None)
-    if callable(is_initialized) and not is_initialized():
-        return None
+    if "hash" in columns:
+        updates.append("hash = COALESCE(NULLIF(hash, ''), ?)")
+        params.append(digest)
+    if "capture_method" in columns:
+        updates.append("capture_method = COALESCE(NULLIF(capture_method, ''), ?)")
+        params.append(_normalize_capture_method(ref.capture_method))
+    if ref.size > 0:
+        updates.append("size = CASE WHEN size <= 0 THEN ? ELSE size END")
+        params.append(ref.size)
 
-    job_id = os.environ.get("ROAR_JOB_ID", "default")
-    actor_name = f"roar-log-collector-{job_id}"
-
-    try:
-        actor = ray.get_actor(actor_name, namespace="roar")
-    except Exception:
-        return None
-
-    try:
-        events: list[dict[str, Any]] | None = None
-        get_all = getattr(actor, "get_all", None)
-        get_all_remote = getattr(get_all, "remote", None) if get_all is not None else None
-        if callable(get_all_remote):
-            raw_events = ray.get(get_all_remote(), timeout=30)
-            if isinstance(raw_events, list):
-                events = [event for event in raw_events if isinstance(event, dict)]
-            else:
-                events = []
-
-        fragments: list[dict[str, Any]] = []
-        get_all_fragments = getattr(actor, "get_all_fragments", None)
-        get_fragments_remote = (
-            getattr(get_all_fragments, "remote", None) if get_all_fragments is not None else None
+    if updates:
+        params.append(artifact_id)
+        conn.execute(
+            f"UPDATE artifacts SET {', '.join(updates)} WHERE id = ?",
+            params,
         )
-        if callable(get_fragments_remote):
-            raw_fragments = ray.get(get_fragments_remote(), timeout=30)
-            if isinstance(raw_fragments, list):
-                fragments = [fragment for fragment in raw_fragments if isinstance(fragment, dict)]
 
-        return events, fragments
-    except Exception:
-        return None
-    finally:
-        _flush_actor_stream(ray, actor)
-        with suppress(Exception):
-            ray.kill(actor)
-
-
-def _collect_events(
-    log_path: Path,
-    actor_events: list[dict[str, Any]] | None = None,
-) -> dict[str, list[dict[str, Any]]]:
-    if actor_events is not None:
-        return _group_events_by_task(actor_events)
-
-    try:
-        import ray
-
-        if ray.is_initialized():
-            actor_events = _collect_from_actor()
-            if actor_events is not None:
-                return _group_events_by_task(actor_events)
-    except Exception:
-        pass
-
-    if not log_path.exists():
-        return {}
-    return _read_events(log_path)
-
-
-def _consume_filesystem_logs(log_path: Path) -> None:
-    if not log_path.exists():
-        return
-    for log_file in log_path.glob("*.jsonl"):
-        with suppress(OSError):
-            log_file.unlink()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO artifact_hashes
+            (artifact_id, algorithm, digest)
+        VALUES (?, ?, ?)
+        """,
+        (artifact_id, algorithm, digest),
+    )
 
 
 def _resolve_active_session_context(db_path: str) -> tuple[int | None, int]:
-    conn = sqlite3.connect(db_path)
+    if not db_path or not os.path.exists(db_path):
+        return None, 1
+
+    try:
+        conn = sqlite3.connect(db_path)
+    except sqlite3.Error:
+        return None, 1
+
     conn.row_factory = sqlite3.Row
     try:
-        row = conn.execute(
-            """
-            SELECT id, current_step
-            FROM sessions
-            WHERE is_active = 1
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
+        try:
+            row = conn.execute(
+                """
+                SELECT id, current_step
+                FROM sessions
+                WHERE is_active = 1
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        except sqlite3.Error:
+            return None, 1
         if row is None:
             return None, 1
         current_step = int(row["current_step"] or 1)
         return int(row["id"]), max(1, current_step)
     finally:
         conn.close()
-
-
-def _collect_from_actor() -> list[dict[str, Any]] | None:
-    try:
-        import ray
-    except Exception:
-        return None
-
-    job_id = os.environ.get("ROAR_JOB_ID", "default")
-    actor_name = f"roar-log-collector-{job_id}"
-
-    try:
-        actor = ray.get_actor(actor_name, namespace="roar")
-    except Exception:
-        return None
-
-    try:
-        events = ray.get(actor.get_all.remote(), timeout=30)
-        if not isinstance(events, list):
-            return []
-        return [event for event in events if isinstance(event, dict)]
-    except Exception:
-        return None
-    finally:
-        _flush_actor_stream(ray, actor)
-        with suppress(Exception):
-            ray.kill(actor)
-
-
-def _flush_actor_stream(ray_module: Any, actor: Any) -> None:
-    get_fn = getattr(ray_module, "get", None)
-    if not callable(get_fn):
-        return
-
-    flush_to_glaas = getattr(actor, "flush_to_glaas", None)
-    flush_remote = getattr(flush_to_glaas, "remote", None) if flush_to_glaas is not None else None
-    if not callable(flush_remote):
-        return
-
-    with suppress(Exception):
-        get_fn(flush_remote(), timeout=5)
-
-
-def _group_events_by_task(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    task_events: dict[str, list[dict[str, Any]]] = {}
-    for event in events:
-        task_id = _to_text(event.get("task_id")) or "unknown"
-        task_events.setdefault(task_id, []).append(event)
-    return task_events
-
-
-def _read_events(log_path: Path) -> dict[str, list[dict[str, Any]]]:
-    # task_id -> list of event dicts
-    task_events: dict[str, list[dict[str, Any]]] = {}
-    logger = _get_logger()
-
-    for log_file in sorted(log_path.glob("*.jsonl")):
-        task_id = log_file.stem
-        events: list[dict[str, Any]] = []
-        try:
-            for line_number, line in enumerate(
-                log_file.read_text(encoding="utf-8").splitlines(), start=1
-            ):
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    payload = json.loads(stripped)
-                    if isinstance(payload, dict):
-                        events.append(payload)
-                    else:
-                        logger.warning(
-                            "Skipping non-object JSON payload in Ray log %s line %d",
-                            log_file,
-                            line_number,
-                        )
-                except json.JSONDecodeError:
-                    logger.warning(
-                        "Skipping malformed JSON line in Ray log %s line %d",
-                        log_file,
-                        line_number,
-                    )
-        except OSError as exc:
-            logger.warning("Skipping unreadable Ray log %s: %s", log_file, exc)
-
-        if events:
-            task_events[task_id] = task_events.get(task_id, []) + events
-
-    return task_events
-
-
-def _merge_proxy_logs(
-    task_events: dict[str, list[dict[str, Any]]],
-    proxy_logs: dict[str, dict[str, Any]],
-) -> None:
-    for fallback_node_id, payload in proxy_logs.items():
-        if not isinstance(payload, dict):
-            continue
-
-        node_id = _to_text(payload.get("node_id")) or _to_text(fallback_node_id)
-        lines = payload.get("proxy_log_lines")
-        if not isinstance(lines, list):
-            continue
-
-        task_id = f"proxy-{node_id or 'unknown'}"
-        events = task_events.setdefault(task_id, [])
-        for line in lines:
-            if not isinstance(line, str):
-                continue
-
-            parsed = parse_log_line(line)
-            if parsed is None:
-                continue
-
-            mode = "r" if parsed.operation in _READ_OPS else "w"
-            event: dict[str, Any] = {
-                "path": f"s3://{parsed.bucket}/{parsed.key}",
-                "mode": mode,
-                "task_id": task_id,
-                "source_type": "s3",
-                "capture_method": "proxy",
-                "operation": parsed.operation,
-            }
-            if node_id:
-                event["node_id"] = node_id
-            if parsed.etag:
-                event["hash"] = parsed.etag
-                event["hash_algorithm"] = "etag"
-            if parsed.size_bytes is not None:
-                event["size"] = _normalize_size(parsed.size_bytes)
-
-            events.append(event)
-
-
-def _aggregate_paths(task_events: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
-    # path -> rollup info
-    path_info: dict[str, dict[str, Any]] = {}
-
-    for fallback_task_id, events in task_events.items():
-        for event in events:
-            raw_path = event.get("path")
-            path = _to_text(raw_path)
-            if not path:
-                continue
-
-            event_task_id = _to_text(event.get("task_id")) or fallback_task_id
-            event_node_id = _to_text(event.get("node_id"))
-            operation = _to_text(event.get("operation"))
-            mode = _to_text(event.get("mode")) or "r"
-
-            is_read, is_write = _infer_direction(mode, operation)
-            source_type = _normalize_source_type(_to_text(event.get("source_type")), path)
-            capture_method = _normalize_capture_method(_to_text(event.get("capture_method")))
-            hash_value = _normalize_hash(_to_text(event.get("hash")))
-            hash_algorithm = _normalize_hash_algorithm(
-                _to_text(event.get("hash_algorithm")),
-                hash_value,
-                source_type,
-                path,
-            )
-            event_size = _normalize_size(event.get("size"))
-
-            if path not in path_info:
-                path_info[path] = {
-                    "task_id": event_task_id,
-                    "node_id": event_node_id,
-                    "writer_task_id": None,
-                    "writer_node_id": None,
-                    "saw_read": False,
-                    "saw_write": False,
-                    "source_type": source_type,
-                    "capture_method": capture_method,
-                    "hash": hash_value,
-                    "hash_algorithm": hash_algorithm,
-                    "size": event_size,
-                }
-
-            info = path_info[path]
-
-            if event_node_id and not info["node_id"]:
-                info["node_id"] = event_node_id
-
-            if source_type and not info["source_type"]:
-                info["source_type"] = source_type
-
-            info["capture_method"] = _choose_capture_method(info["capture_method"], capture_method)
-
-            if hash_value and not info["hash"]:
-                info["hash"] = hash_value
-                if hash_algorithm:
-                    info["hash_algorithm"] = hash_algorithm
-            elif hash_value and hash_algorithm and not info["hash_algorithm"]:
-                info["hash_algorithm"] = hash_algorithm
-            if event_size > info["size"]:
-                info["size"] = event_size
-
-            if is_write:
-                info["saw_write"] = True
-                if info["writer_task_id"] is None:
-                    info["writer_task_id"] = event_task_id
-                    info["writer_node_id"] = event_node_id
-
-            if is_read:
-                info["saw_read"] = True
-
-    return path_info
 
 
 def _create_ray_job(conn: sqlite3.Connection, now: float) -> int:
@@ -933,17 +798,6 @@ def _insert_artifact(
     )
 
 
-def _infer_direction(mode: str, operation: str | None) -> tuple[bool, bool]:
-    if operation in _WRITE_OPS:
-        return False, True
-    if operation in _READ_OPS:
-        return True, False
-
-    is_write = any(flag in mode for flag in ("w", "a", "x", "+"))
-    is_read = "r" in mode or "+" in mode or not is_write
-    return is_read, is_write
-
-
 def _normalize_source_type(source_type: str | None, path: str) -> str | None:
     if source_type:
         lowered = source_type.strip().lower()
@@ -960,14 +814,18 @@ def _normalize_capture_method(capture_method: str | None) -> str | None:
     return method or None
 
 
-def _choose_capture_method(existing: str | None, incoming: str | None) -> str | None:
-    if not incoming:
-        return existing
-    if not existing:
-        return incoming
-    existing_rank = _CAPTURE_PRIORITY.get(existing, -1)
-    incoming_rank = _CAPTURE_PRIORITY.get(incoming, -1)
-    return incoming if incoming_rank >= existing_rank else existing
+def _dependency_tokens_for_ref(ref: ArtifactRef) -> set[str]:
+    tokens: set[str] = set()
+
+    hash_value = _normalize_hash(_to_text(ref.hash))
+    if hash_value:
+        tokens.add(f"hash:{hash_value}")
+
+    path = _to_text(ref.path)
+    if path:
+        tokens.add(f"path:{path}")
+
+    return tokens
 
 
 def _normalize_hash(value: str | None) -> str | None:
@@ -977,30 +835,6 @@ def _normalize_hash(value: str | None) -> str | None:
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
         text = text[1:-1]
     return text or None
-
-
-def _normalize_hash_algorithm(
-    algorithm: str | None,
-    hash_value: str | None,
-    source_type: str | None,
-    path: str,
-) -> str | None:
-    if not hash_value:
-        return None
-    if algorithm:
-        normalized = algorithm.strip().lower()
-        if normalized:
-            return normalized
-    if source_type == "s3" or path.startswith("s3://"):
-        return "etag"
-    return None
-
-
-def _normalize_size(value: Any) -> int:
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return 0
 
 
 def _to_text(value: Any) -> str | None:

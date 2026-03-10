@@ -54,21 +54,29 @@ impl CollectorState {
 
     fn ingest(&mut self, event: TraceEvent) {
         match event {
-            TraceEvent::Read { pid, path } => {
+            TraceEvent::Read {
+                pid,
+                thread_id,
+                path,
+            } => {
                 if path.is_empty() {
                     return;
                 }
                 self.ensure_process(pid);
                 self.fd.mark_path_open(path.clone());
-                self.fd.mark_path_read(path);
+                self.fd.mark_path_read_with_thread(path, thread_id);
             }
-            TraceEvent::Write { pid, path } => {
+            TraceEvent::Write {
+                pid,
+                thread_id,
+                path,
+            } => {
                 if path.is_empty() {
                     return;
                 }
                 self.ensure_process(pid);
                 self.fd.mark_path_open(path.clone());
-                self.fd.mark_path_written(path);
+                self.fd.mark_path_written_with_thread(path, thread_id);
             }
         }
     }

@@ -119,8 +119,6 @@ fallback_enabled = true
 enabled = true
 # Inject roar-cli into runtime_env.pip for remote workers
 pip_install = true
-# Shared log directory for Ray worker I/O capture
-log_dir = "/shared/.roar-logs"
 # Actor attribution mode for Ray actor methods (per_call | per_actor)
 actor_attribution = "per_call"
 

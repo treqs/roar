@@ -149,6 +149,10 @@ class SessionRepository(Protocol):
         """Get session by ID."""
         ...
 
+    def get_all(self) -> list[dict[str, Any]]:
+        """Get all sessions."""
+        ...
+
     def get_by_hash_prefix(self, hash_prefix: str) -> dict[str, Any] | None:
         """Get first session matching a hash prefix."""
         ...

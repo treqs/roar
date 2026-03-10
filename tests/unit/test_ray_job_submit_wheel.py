@@ -1,7 +1,6 @@
 import importlib
 import importlib.metadata as importlib_metadata
 import json
-import os
 
 
 def _module():
@@ -32,63 +31,67 @@ def _runtime_env_json(command: list[str]) -> dict:
     raise AssertionError("expected --runtime-env-json in rewritten command")
 
 
-def test_resolve_roar_requirement_returns_none_when_vendor_wheel_exists(
+def _entrypoint(command: list[str]) -> list[str]:
+    separator_index = command.index("--")
+    return command[separator_index + 1 :]
+
+
+def test_resolve_roar_requirement_ignores_vendor_wheel_and_uses_installed_version(
     tmp_path, monkeypatch
 ) -> None:
-    """Vendor wheel = local dev mode: cluster has roar pre-installed, skip pip injection."""
     module = _module()
 
     wheel_path = tmp_path / "vendor" / "roar-cli.whl"
     wheel_path.parent.mkdir(parents=True)
     wheel_path.write_bytes(b"wheel")
 
-    monkeypatch.setattr(os, "getcwd", lambda: str(tmp_path))
-
-    requirement = module._resolve_roar_requirement()
-
-    assert requirement is None
-
-
-def test_resolve_roar_requirement_falls_back_to_pypi_when_no_wheel(tmp_path, monkeypatch) -> None:
-    module = _module()
-
-    monkeypatch.setattr(os, "getcwd", lambda: str(tmp_path))
-
-    def _fake_version(package_name: str) -> str:
-        if package_name == "roar-cli":
-            return "9.9.9"
-        raise importlib_metadata.PackageNotFoundError(package_name)
-
-    monkeypatch.setattr(importlib_metadata, "version", _fake_version)
+    monkeypatch.setattr(
+        importlib_metadata,
+        "version",
+        lambda package_name: "9.9.9" if package_name == "roar-cli" else "0.0.0",
+    )
 
     requirement = module._resolve_roar_requirement()
 
     assert requirement == "roar-cli==9.9.9"
 
 
-def test_maybe_rewrite_skips_pip_injection_when_vendor_wheel_exists(tmp_path, monkeypatch) -> None:
-    """When vendor wheel is present, no pip key should appear in runtime_env."""
+def test_resolve_roar_requirement_falls_back_to_unpinned_package_when_version_missing(
+    monkeypatch,
+) -> None:
+    module = _module()
+
+    def _fake_version(package_name: str) -> str:
+        raise importlib_metadata.PackageNotFoundError(package_name)
+
+    monkeypatch.setattr(importlib_metadata, "version", _fake_version)
+
+    requirement = module._resolve_roar_requirement()
+
+    assert requirement == "roar-cli"
+
+
+def test_maybe_rewrite_injects_pip_even_when_vendor_wheel_exists(tmp_path, monkeypatch) -> None:
     module = _module()
 
     wheel_path = tmp_path / "vendor" / "roar-cli.whl"
     wheel_path.parent.mkdir(parents=True)
     wheel_path.write_bytes(b"wheel")
 
-    monkeypatch.setattr(os, "getcwd", lambda: str(tmp_path))
+    monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==1.2.3")
     monkeypatch.setattr(module, "_resolve_glaas_url", lambda: None)
 
     rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
 
-    # Entrypoint still wrapped with roar run
-    assert "roar" in rewritten.command and "run" in rewritten.command
-    # pip must NOT be in runtime_env (cluster has roar pre-installed)
-    for i, arg in enumerate(rewritten.command):
-        if arg == "--runtime-env-json" and i + 1 < len(rewritten.command):
-            env = json.loads(rewritten.command[i + 1])
-            assert "pip" not in env
-            break
-        if arg.startswith("--runtime-env-json="):
-            env = json.loads(arg.split("=", 1)[1])
-            assert "pip" not in env
-            break
+    assert _entrypoint(rewritten.command) == [
+        "python",
+        "-m",
+        "roar.ray.driver_entrypoint",
+        "--",
+        "python",
+        "main.py",
+    ]
+    env = _runtime_env_json(rewritten.command)
+    assert env["pip"] == ["roar-cli==1.2.3"]
+    assert env["env_vars"]["ROAR_JOB_INSTRUMENTED"] == "1"
     assert rewritten.session_id is None

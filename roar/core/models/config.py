@@ -184,7 +184,6 @@ class RayConfig(ConfigBaseModel):
 
     enabled: bool = True
     pip_install: bool = True
-    log_dir: str = "/shared/.roar-logs"
     actor_attribution: Literal["per_call", "per_actor"] = "per_call"
 
 

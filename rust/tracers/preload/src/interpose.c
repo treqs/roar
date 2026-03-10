@@ -50,3 +50,141 @@ DYLD_INTERPOSE(roar_interpose_ftruncate, ftruncate);
 int roar_preload_interpose_keep(void) { return 0; }
 
 #endif
+
+#ifndef __APPLE__
+#define _GNU_SOURCE
+
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+extern void roar_preload_emit_path_flags(const char *path, int flags);
+extern void roar_preload_emit_at_path_flags(int dirfd, const char *path, int flags);
+
+static int (*resolve_open_symbol(const char *name))(const char *, int, ...) {
+  return (int (*)(const char *, int, ...))dlsym(RTLD_NEXT, name);
+}
+
+static int (*resolve_openat_symbol(const char *name))(int, const char *, int, ...) {
+  return (int (*)(int, const char *, int, ...))dlsym(RTLD_NEXT, name);
+}
+
+int open(const char *path, int flags, ...) {
+  static int (*real_open)(const char *, int, ...) = NULL;
+  if (real_open == NULL) {
+    real_open = resolve_open_symbol("open");
+  }
+  if (real_open == NULL) {
+    return -1;
+  }
+
+  mode_t mode = 0;
+  int has_mode = (flags & O_CREAT) || (flags & O_TMPFILE);
+  if (has_mode) {
+    va_list args;
+    va_start(args, flags);
+    mode = va_arg(args, int);
+    va_end(args);
+  }
+
+  int ret = has_mode ? real_open(path, flags, mode) : real_open(path, flags);
+  if (ret >= 0) {
+    roar_preload_emit_path_flags(path, flags);
+  }
+  return ret;
+}
+
+int open64(const char *path, int flags, ...) {
+  static int (*real_open64)(const char *, int, ...) = NULL;
+  if (real_open64 == NULL) {
+    real_open64 = resolve_open_symbol("open64");
+  }
+  if (real_open64 == NULL) {
+    return open(path, flags);
+  }
+
+  mode_t mode = 0;
+  int has_mode = (flags & O_CREAT) || (flags & O_TMPFILE);
+  if (has_mode) {
+    va_list args;
+    va_start(args, flags);
+    mode = va_arg(args, int);
+    va_end(args);
+  }
+
+  int ret = has_mode ? real_open64(path, flags, mode) : real_open64(path, flags);
+  if (ret >= 0) {
+    roar_preload_emit_path_flags(path, flags);
+  }
+  return ret;
+}
+
+int openat(int dirfd, const char *path, int flags, ...) {
+  static int (*real_openat)(int, const char *, int, ...) = NULL;
+  if (real_openat == NULL) {
+    real_openat = resolve_openat_symbol("openat");
+  }
+  if (real_openat == NULL) {
+    return -1;
+  }
+
+  mode_t mode = 0;
+  int has_mode = (flags & O_CREAT) || (flags & O_TMPFILE);
+  if (has_mode) {
+    va_list args;
+    va_start(args, flags);
+    mode = va_arg(args, int);
+    va_end(args);
+  }
+
+  int ret = has_mode ? real_openat(dirfd, path, flags, mode) : real_openat(dirfd, path, flags);
+  if (ret >= 0) {
+    roar_preload_emit_at_path_flags(dirfd, path, flags);
+  }
+  return ret;
+}
+
+int openat64(int dirfd, const char *path, int flags, ...) {
+  static int (*real_openat64)(int, const char *, int, ...) = NULL;
+  if (real_openat64 == NULL) {
+    real_openat64 = resolve_openat_symbol("openat64");
+  }
+  if (real_openat64 == NULL) {
+    return openat(dirfd, path, flags);
+  }
+
+  mode_t mode = 0;
+  int has_mode = (flags & O_CREAT) || (flags & O_TMPFILE);
+  if (has_mode) {
+    va_list args;
+    va_start(args, flags);
+    mode = va_arg(args, int);
+    va_end(args);
+  }
+
+  int ret = has_mode ? real_openat64(dirfd, path, flags, mode) : real_openat64(dirfd, path, flags);
+  if (ret >= 0) {
+    roar_preload_emit_at_path_flags(dirfd, path, flags);
+  }
+  return ret;
+}
+
+int creat(const char *path, mode_t mode) {
+  static int (*real_creat)(const char *, mode_t) = NULL;
+  if (real_creat == NULL) {
+    real_creat = (int (*)(const char *, mode_t))dlsym(RTLD_NEXT, "creat");
+  }
+  if (real_creat == NULL) {
+    return -1;
+  }
+
+  int ret = real_creat(path, mode);
+  if (ret >= 0) {
+    roar_preload_emit_path_flags(path, O_WRONLY | O_CREAT | O_TRUNC);
+  }
+  return ret;
+}
+#endif

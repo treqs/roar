@@ -61,16 +61,48 @@ impl TracerState {
         self.fd.handle_read(pid, fd, bytes);
     }
 
+    pub fn handle_read_with_thread(&mut self, pid: u32, fd: i32, bytes: u64, thread_id: u32) {
+        self.fd.handle_read_with_thread(pid, fd, bytes, thread_id);
+    }
+
     pub fn handle_pread(&mut self, pid: u32, fd: i32, offset: u64, bytes: u64) {
         self.fd.handle_pread(pid, fd, offset, bytes);
+    }
+
+    pub fn handle_pread_with_thread(
+        &mut self,
+        pid: u32,
+        fd: i32,
+        offset: u64,
+        bytes: u64,
+        thread_id: u32,
+    ) {
+        self.fd
+            .handle_pread_with_thread(pid, fd, offset, bytes, thread_id);
     }
 
     pub fn handle_write(&mut self, pid: u32, fd: i32, bytes: u64) {
         self.fd.handle_write(pid, fd, bytes);
     }
 
+    pub fn handle_write_with_thread(&mut self, pid: u32, fd: i32, bytes: u64, thread_id: u32) {
+        self.fd.handle_write_with_thread(pid, fd, bytes, thread_id);
+    }
+
     pub fn handle_pwrite(&mut self, pid: u32, fd: i32, offset: u64, bytes: u64) {
         self.fd.handle_pwrite(pid, fd, offset, bytes);
+    }
+
+    pub fn handle_pwrite_with_thread(
+        &mut self,
+        pid: u32,
+        fd: i32,
+        offset: u64,
+        bytes: u64,
+        thread_id: u32,
+    ) {
+        self.fd
+            .handle_pwrite_with_thread(pid, fd, offset, bytes, thread_id);
     }
 
     pub fn handle_lseek(&mut self, pid: u32, fd: i32, new_offset: u64) {
@@ -106,6 +138,10 @@ impl TracerState {
     /// Mark a path as written even if there is no fd context (e.g. rename).
     pub fn mark_path_written(&mut self, path: String) {
         self.fd.mark_path_written(path);
+    }
+
+    pub fn mark_path_written_with_thread(&mut self, path: String, thread_id: u32) {
+        self.fd.mark_path_written_with_thread(path, thread_id);
     }
 
     // -- Report generation ------------------------------------------------

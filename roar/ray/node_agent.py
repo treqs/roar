@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import os
 import socket
 import subprocess
 import threading
@@ -17,17 +19,19 @@ _DEFAULT_PROXY_START_TIMEOUT_SECONDS = 10.0
 __all__ = ["RoarNodeAgent", "build_node_agent_name"]
 
 
-def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+_ROAR_PROXY_PORT = 19191
+
+
+def _can_connect_to_local_proxy(port: int) -> bool:
+    with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", port), timeout=0.25):
+        return True
+    return False
 
 
 @ray.remote(num_cpus=0)
 class RoarNodeAgent:
-    def __init__(self, job_id: str, log_dir: str) -> None:
+    def __init__(self, job_id: str) -> None:
         self._job_id = str(job_id)
-        self._log_dir = str(log_dir)
         self._proxy_process: subprocess.Popen | None = None
         self._proxy_port: int | None = None
         self._proxy_log_lines: list[str] = []
@@ -61,11 +65,30 @@ class RoarNodeAgent:
         package_path = Path(__file__).resolve().parents[1]
         proxy_binary = tracer_backends.find_proxy_binary(package_path)
         if not proxy_binary:
+            print(f"[roar-agent] roar-proxy binary not found in {package_path}")
+            return
+        print(f"[roar-agent] found proxy binary: {proxy_binary}")
+
+        port = _ROAR_PROXY_PORT
+        if _can_connect_to_local_proxy(port):
+            self._proxy_port = port
+            print(f"[roar-agent] reusing existing local proxy on port {port}")
             return
 
-        port = _find_free_port()
         cmd = [proxy_binary, "--port", str(port), "--job-id", self._job_id]
 
+        # Only use ROAR_UPSTREAM_S3_ENDPOINT — never fall back to AWS_ENDPOINT_URL.
+        # By the time the node agent runs on a worker, AWS_ENDPOINT_URL has been
+        # overwritten to http://127.0.0.1:19191 (the proxy itself) by _ray_job_submit.py.
+        # Using it as --upstream would make the proxy forward to itself → 502.
+        upstream = os.environ.get("ROAR_UPSTREAM_S3_ENDPOINT")
+        if upstream:
+            cmd.extend(["--upstream", upstream])
+            print(f"[roar-agent] upstream: {upstream}")
+        else:
+            print("[roar-agent] no upstream set, proxy will use default AWS")
+
+        print(f"[roar-agent] starting proxy: {' '.join(cmd)}")
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -99,6 +122,11 @@ class RoarNodeAgent:
                 return
 
             if process.poll() is not None:
+                with self._log_lock:
+                    output = "\n".join(self._proxy_log_lines[-20:])
+                print(f"[roar-agent] proxy process exited early (rc={process.returncode})")
+                print(f"[roar-agent] proxy cmd: {' '.join(cmd)}")
+                print(f"[roar-agent] proxy output:\n{output}")
                 return
 
             time.sleep(0.05)
@@ -133,6 +161,18 @@ class RoarNodeAgent:
             "node_id": self._node_id,
             "proxy_port": self._proxy_port,
             "proxy_log_lines": log_lines,
+        }
+
+    def get_log_entries_since(self, since_index: int) -> dict[str, Any]:
+        """Return proxy log entries added after since_index."""
+        with self._log_lock:
+            new_lines = self._proxy_log_lines[since_index:]
+            current_index = len(self._proxy_log_lines)
+        return {
+            "entries": new_lines,
+            "current_index": current_index,
+            "node_id": self._node_id,
+            "proxy_port": self._proxy_port,
         }
 
     def shutdown(self) -> None:

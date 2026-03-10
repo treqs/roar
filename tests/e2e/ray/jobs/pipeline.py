@@ -2,41 +2,19 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
 import ray
 
 
 @ray.remote
-def extract(input_path: str) -> list[dict[str, object]]:
-    frame = pd.read_csv(input_path)
-    return frame.to_dict(orient="records")
-
-
-@ray.remote
-def transform(records: list[dict[str, object]]) -> list[dict[str, object]]:
-    transformed: list[dict[str, object]] = []
-    for record in records:
-        updated = dict(record)
-        value = updated.get("value")
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            updated["value"] = value * 2
-        transformed.append(updated)
-    return transformed
-
-
-@ray.remote
-def load(records: list[dict[str, object]], output_path: str) -> str:
-    frame = pd.DataFrame.from_records(records)
-    frame.to_parquet(output_path, index=False)
-    return output_path
-
-
-def main() -> None:
-    ray.init(address="auto")
-
-    input_path = "/shared/pipeline_input.csv"
-    output_path = "/shared/pipeline_output.parquet"
+def run_pipeline(base_dir: str) -> dict[str, str]:
+    base_path = Path(base_dir)
+    base_path.mkdir(parents=True, exist_ok=True)
+    input_path = base_path / "pipeline_input.csv"
+    output_path = base_path / "pipeline_output.parquet"
 
     pd.DataFrame(
         [
@@ -46,11 +24,23 @@ def main() -> None:
         ]
     ).to_csv(input_path, index=False)
 
-    records = ray.get(extract.remote(input_path))
-    transformed = ray.get(transform.remote(records))
-    result = ray.get(load.remote(transformed, output_path))
+    frame = pd.read_csv(input_path)
+    transformed: list[dict[str, object]] = []
+    for record in frame.to_dict(orient="records"):
+        updated = dict(record)
+        value = updated.get("value")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            updated["value"] = value * 2
+        transformed.append(updated)
+    frame = pd.DataFrame.from_records(transformed)
+    frame.to_parquet(output_path, index=False)
+    return {"input_path": str(input_path), "output_path": str(output_path)}
 
-    print(result)
+
+def main() -> None:
+    ray.init(address="auto")
+    result = ray.get(run_pipeline.remote(str(Path.cwd() / "artifacts" / "pipeline")))
+    print(result["output_path"])
 
 
 if __name__ == "__main__":

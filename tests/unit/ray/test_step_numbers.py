@@ -14,6 +14,16 @@ def _artifact(hash_value: str | None) -> ArtifactRef:
     )
 
 
+def _artifact_with_path(path: str, hash_value: str | None = None) -> ArtifactRef:
+    return ArtifactRef(
+        path=path,
+        hash=hash_value,
+        hash_algorithm="blake3" if hash_value else "",
+        size=0,
+        capture_method="python",
+    )
+
+
 def _frag(
     uid: str,
     reads: tuple[str, ...] = (),
@@ -190,3 +200,34 @@ def test_no_regression_independent_same_function_tasks() -> None:
 
     steps = _assign_step_numbers([ingest_0, ingest_1, ingest_2])
     assert steps["ingest_0"] == steps["ingest_1"] == steps["ingest_2"]
+
+
+def test_assign_step_numbers_matches_on_path_when_only_producer_has_hash() -> None:
+    producer = TaskFragment(
+        job_uid="train",
+        parent_job_uid="driver",
+        ray_task_id="train",
+        ray_worker_id="w",
+        ray_node_id="n",
+        ray_actor_id=None,
+        function_name="training",
+        started_at=1.0,
+        ended_at=1.1,
+        exit_code=0,
+        writes=[_artifact_with_path("s3://bucket/model.json", "etag-model")],
+    )
+    consumer = TaskFragment(
+        job_uid="eval",
+        parent_job_uid="driver",
+        ray_task_id="eval",
+        ray_worker_id="w",
+        ray_node_id="n",
+        ray_actor_id=None,
+        function_name="evaluation",
+        started_at=2.0,
+        ended_at=2.1,
+        exit_code=0,
+        reads=[_artifact_with_path("s3://bucket/model.json")],
+    )
+
+    assert _assign_step_numbers([producer, consumer]) == {"train": 2, "eval": 3}

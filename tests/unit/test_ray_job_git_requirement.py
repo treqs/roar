@@ -24,9 +24,9 @@ def _invoke_run(
     monkeypatch,
 ):
     if ray_job_id is None:
-        monkeypatch.delenv("RAY_JOB_CONFIG_JSON_ENV_VAR", raising=False)
+        monkeypatch.delenv("RAY_JOB_ID", raising=False)
     else:
-        monkeypatch.setenv("RAY_JOB_CONFIG_JSON_ENV_VAR", ray_job_id)
+        monkeypatch.setenv("RAY_JOB_ID", ray_job_id)
 
     runner = CliRunner()
     with (
@@ -41,7 +41,7 @@ def _invoke_run(
 
 def test_run_in_non_git_dir_without_ray_job_id_exits_with_git_error(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("RAY_JOB_CONFIG_JSON_ENV_VAR", raising=False)
+    monkeypatch.delenv("RAY_JOB_ID", raising=False)
 
     runner = CliRunner()
     result = runner.invoke(run, ["python", "main.py"], obj=_ctx(tmp_path))
