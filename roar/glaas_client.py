@@ -426,6 +426,15 @@ class GlaasClient:
         result, error = self._request("POST", "/api/v1/sessions", body)
         return result, error
 
+    def sync_labels(
+        self,
+        labels: list[dict[str, Any]],
+    ) -> tuple[dict | None, str | None]:
+        """Sync current local label documents for lineage entities."""
+        if not labels:
+            return {"created": 0, "updated": 0, "unchanged": 0}, None
+        return self._request("POST", "/api/v1/labels/sync", {"labels": labels})
+
     def register_job_inputs(
         self,
         session_hash: str,

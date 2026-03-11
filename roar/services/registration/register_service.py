@@ -33,6 +33,7 @@ from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
 from ...plugins.vcs.git import GitVCSProvider
 from ..put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
+from ...services.labels import collect_label_sync_payloads
 from ..transfer.common import resolve_repo_url_or_local_uri
 from ..upload.lineage_collector import LineageCollector
 from . import _artifact_ref
@@ -644,6 +645,19 @@ class RegisterService:
             ),
             artifacts=self._prepare_artifacts(lineage.artifacts, session_hash),
         )
+
+        with create_database_context(roar_dir) as db_ctx:
+            label_payloads = collect_label_sync_payloads(
+                db_ctx,
+                session_id=session_id,
+                session_hash=session_hash,
+                jobs=lineage.jobs,
+                artifacts=lineage.artifacts,
+            )
+        if label_payloads:
+            _label_result, label_error = self.glaas_client.sync_labels(label_payloads)
+            if label_error:
+                batch_result.errors.append(f"Label sync failed: {label_error}")
 
         if tagging_enabled and git_context.commit:
             tag_name = f"roar/{git_context.commit[:8]}"

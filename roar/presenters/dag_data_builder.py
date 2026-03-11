@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
+from ..db.context import optional_repo
 
 _STEP_NOISE_COMMANDS = {
     "ray_task:unknown",
@@ -31,14 +33,15 @@ class DagDataBuilder:
         Args:
             expanded: Whether to include superseded job executions.
             show_artifacts: Whether to include intermediate artifacts.
-            stale_only: Whether to filter to only stale steps and artifacts.
+        stale_only: Whether to filter to only stale steps and artifacts.
 
         Returns:
             Dictionary with DAG visualization data.
         """
+        session_labels = self._current_labels("dag", session_id=self._session_id)
         steps = self._fetch_steps()
         if not steps:
-            return self._empty_result(expanded)
+            return self._empty_result(expanded, session_labels)
 
         stale_steps = self._fetch_stale_steps()
         steps_by_number = self._group_by_step_number(steps)
@@ -80,6 +83,7 @@ class DagDataBuilder:
         return {
             "nodes": nodes,
             "artifacts": artifacts,
+            "labels": session_labels,
             "stale_count": len(stale_steps),
             "total_steps": len(steps_by_number),
             "is_expanded": expanded,
@@ -88,11 +92,12 @@ class DagDataBuilder:
             "superseded_artifact_count": superseded_artifact_count,
         }
 
-    def _empty_result(self, expanded: bool) -> dict[str, Any]:
+    def _empty_result(self, expanded: bool, session_labels: dict[str, Any]) -> dict[str, Any]:
         """Return empty DAG data when there are no steps."""
         return {
             "nodes": [],
             "artifacts": [],
+            "labels": session_labels,
             "stale_count": 0,
             "total_steps": 0,
             "is_expanded": expanded,
@@ -303,6 +308,7 @@ class DagDataBuilder:
                     "consumed": consumed,
                 },
                 "dependencies": sorted(dependencies),
+                "labels": self._current_labels("job", job_id=int(job_id)),
             }
             nodes.append(node)
 
@@ -397,7 +403,31 @@ class DagDataBuilder:
                 "consumer_steps": sorted(consumers),
                 "is_terminal": is_terminal,
                 "superseded_by": superseded_by,
+                "labels": self._current_labels("artifact", artifact_id=artifact_id),
             }
             artifacts.append(artifact_entry)
 
         return artifacts, stale_artifact_count, superseded_artifact_count
+
+    def _current_labels(
+        self,
+        entity_type: str,
+        *,
+        session_id: int | None = None,
+        job_id: int | None = None,
+        artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        labels_repo = optional_repo(self._db_ctx, "labels")
+        if labels_repo is None:
+            return {}
+
+        current = cast(Any, labels_repo).get_current(
+            entity_type,
+            session_id=session_id,
+            job_id=job_id,
+            artifact_id=artifact_id,
+        )
+        if not isinstance(current, dict):
+            return {}
+        metadata = current.get("metadata")
+        return metadata if isinstance(metadata, dict) else {}

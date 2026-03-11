@@ -8,6 +8,7 @@ used by the `roar dag` command.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
 from pydantic import Field
 
@@ -55,6 +56,7 @@ class DagNodeInfo(ImmutableModel):
     step_name: str | None = Field(default=None, description="User-assigned step name")
     job_uid: str | None = Field(default=None, description="Unique job identifier")
     exit_code: int | None = Field(default=None, description="Exit code of the job")
+    labels: dict[str, Any] = Field(default_factory=dict, description="Current local labels")
 
 
 class DagArtifactInfo(ImmutableModel):
@@ -75,6 +77,7 @@ class DagArtifactInfo(ImmutableModel):
     )
     is_terminal: bool = Field(default=True, description="True if no downstream consumers")
     superseded_by: str | None = Field(default=None, description="Hash of replacing artifact")
+    labels: dict[str, Any] = Field(default_factory=dict, description="Current local labels")
 
 
 class DagVisualization(ImmutableModel):
@@ -94,3 +97,4 @@ class DagVisualization(ImmutableModel):
     superseded_artifact_count: int = Field(
         ge=0, default=0, description="Number of superseded artifacts"
     )
+    labels: dict[str, Any] = Field(default_factory=dict, description="Session/DAG labels")

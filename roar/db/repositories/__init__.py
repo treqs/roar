@@ -10,6 +10,7 @@ from .collection import SQLAlchemyCollectionRepository, SQLiteCollectionReposito
 from .composite import SQLAlchemyCompositeRepository
 from .hash_cache import SQLAlchemyHashCacheRepository, SQLiteHashCacheRepository
 from .job import SQLAlchemyJobRepository, SQLiteJobRepository
+from .label import SQLAlchemyLabelRepository, SQLiteLabelRepository
 from .session import SQLAlchemySessionRepository, SQLiteSessionRepository
 
 __all__ = [
@@ -19,11 +20,13 @@ __all__ = [
     # SQLAlchemy implementations (primary)
     "SQLAlchemyHashCacheRepository",
     "SQLAlchemyJobRepository",
+    "SQLAlchemyLabelRepository",
     "SQLAlchemySessionRepository",
     "SQLiteArtifactRepository",
     "SQLiteCollectionRepository",
     # Backward compatibility aliases
     "SQLiteHashCacheRepository",
     "SQLiteJobRepository",
+    "SQLiteLabelRepository",
     "SQLiteSessionRepository",
 ]

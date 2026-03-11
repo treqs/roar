@@ -18,6 +18,7 @@ from .repositories import (
     SQLAlchemyCompositeRepository,
     SQLAlchemyHashCacheRepository,
     SQLAlchemyJobRepository,
+    SQLAlchemyLabelRepository,
     SQLAlchemySessionRepository,
 )
 from .schema import run_migrations
@@ -66,6 +67,7 @@ class DatabaseContext:
         self._session_repo: SQLAlchemySessionRepository | None = None
         self._collection_repo: SQLAlchemyCollectionRepository | None = None
         self._composite_repo: SQLAlchemyCompositeRepository | None = None
+        self._label_repo: SQLAlchemyLabelRepository | None = None
 
         # Services (initialized on connect)
         self._hashing_service: DefaultHashingService | None = None
@@ -94,6 +96,7 @@ class DatabaseContext:
         self._session_repo = SQLAlchemySessionRepository(self._session)
         self._collection_repo = SQLAlchemyCollectionRepository(self._session)
         self._composite_repo = SQLAlchemyCompositeRepository(self._session)
+        self._label_repo = SQLAlchemyLabelRepository(self._session)
 
         # Initialize services
         self._hashing_service = DefaultHashingService(self._hash_cache_repo)
@@ -223,6 +226,16 @@ class DatabaseContext:
                 db_path=str(self.db_path),
             )
         return self._composite_repo
+
+    @property
+    def labels(self) -> SQLAlchemyLabelRepository:
+        """Label repository for versioned local label documents."""
+        if self._label_repo is None:
+            raise DatabaseConnectionError(
+                "DatabaseContext not connected. Use as context manager.",
+                db_path=str(self.db_path),
+            )
+        return self._label_repo
 
     # -------------------------------------------------------------------------
     # Service properties
