@@ -52,6 +52,7 @@ boto3 = None
 
 _STEP_REFERENCE_RE = re.compile(r"^@(?:B)?\d+$", re.IGNORECASE)
 _SESSION_HASH_RE = re.compile(r"^[a-f0-9]{8,64}$")
+_HEX_IDENTIFIER_RE = re.compile(r"^[a-f0-9]{4,64}$", re.IGNORECASE)
 _VALID_REMOTE_SOURCE_TYPES = {"s3", "gs", "https"}
 
 
@@ -170,7 +171,7 @@ class RegisterService:
         skip_confirmation: bool = False,
         confirm_callback: Callable[[list[str]], bool] | None = None,
     ) -> RegisterResult:
-        """Register lineage for an artifact path, step reference, or session hash."""
+        """Register lineage for an artifact path/hash, step reference, job UID, or session hash."""
         normalized_target = target.strip()
         if self._is_step_reference(normalized_target):
             return self.register_step_lineage(
@@ -187,6 +188,30 @@ class RegisterService:
         if resolved_path and (self._is_s3_url(normalized_target) or os.path.exists(resolved_path)):
             return self.register_artifact_lineage(
                 artifact_path=normalized_target,
+                roar_dir=roar_dir,
+                cwd=cwd,
+                dry_run=dry_run,
+                as_blake3=as_blake3,
+                skip_confirmation=skip_confirmation,
+                confirm_callback=confirm_callback,
+            )
+
+        resolved_job_uid = self._resolve_job_target(normalized_target, roar_dir)
+        if resolved_job_uid is not None:
+            return self.register_job_lineage(
+                job_uid=resolved_job_uid,
+                roar_dir=roar_dir,
+                cwd=cwd,
+                dry_run=dry_run,
+                as_blake3=as_blake3,
+                skip_confirmation=skip_confirmation,
+                confirm_callback=confirm_callback,
+            )
+
+        resolved_artifact_hash = self._resolve_artifact_hash_target(normalized_target, roar_dir)
+        if resolved_artifact_hash is not None:
+            return self.register_artifact_hash_lineage(
+                artifact_hash=resolved_artifact_hash,
                 roar_dir=roar_dir,
                 cwd=cwd,
                 dry_run=dry_run,
@@ -299,6 +324,35 @@ class RegisterService:
             session_hash_override=resolved_hash,
         )
 
+    def register_job_lineage(
+        self,
+        job_uid: str,
+        roar_dir: Path,
+        cwd: Path,
+        dry_run: bool = False,
+        as_blake3: bool = False,
+        skip_confirmation: bool = False,
+        confirm_callback: Callable[[list[str]], bool] | None = None,
+    ) -> RegisterResult:
+        """Register lineage for a local job identified by job UID or prefix."""
+        lineage = self.lineage_collector.collect_job(job_uid, roar_dir)
+        if not lineage.jobs:
+            return RegisterResult(success=False, error=f"No local job matches '{job_uid}'.")
+
+        representative_hash = self._select_representative_hash(lineage)
+        pipeline_id = lineage.pipeline.get("id") if isinstance(lineage.pipeline, dict) else None
+        return self._register_collected_lineage(
+            lineage=lineage,
+            roar_dir=roar_dir,
+            cwd=cwd,
+            session_id=int(pipeline_id) if pipeline_id is not None else None,
+            artifact_hash=representative_hash,
+            dry_run=dry_run,
+            as_blake3=as_blake3,
+            skip_confirmation=skip_confirmation,
+            confirm_callback=confirm_callback,
+        )
+
     def register_artifact_lineage(
         self,
         artifact_path: str,
@@ -393,6 +447,53 @@ class RegisterService:
             cwd=cwd,
             session_id=int(session["id"]),
             artifact_hash=artifact_hash,
+            dry_run=dry_run,
+            as_blake3=as_blake3,
+            skip_confirmation=skip_confirmation,
+            confirm_callback=confirm_callback,
+        )
+
+    def register_artifact_hash_lineage(
+        self,
+        artifact_hash: str,
+        roar_dir: Path,
+        cwd: Path,
+        dry_run: bool = False,
+        as_blake3: bool = False,
+        skip_confirmation: bool = False,
+        confirm_callback: Callable[[list[str]], bool] | None = None,
+    ) -> RegisterResult:
+        """Register lineage for a tracked local artifact identified by hash."""
+        with create_database_context(roar_dir) as db_ctx:
+            db_artifact = db_ctx.artifacts.get_by_prefix(artifact_hash)
+            if not db_artifact:
+                return RegisterResult(
+                    success=False,
+                    error=f"No tracked local artifact matches '{artifact_hash}'.",
+                )
+
+            resolved_hash = self._select_primary_hash(db_artifact)
+            if not resolved_hash:
+                return RegisterResult(
+                    success=False,
+                    error=f"Artifact has no registered hash: {artifact_hash}",
+                )
+
+            session = db_ctx.sessions.get_active()
+            if not session:
+                return RegisterResult(
+                    success=False,
+                    error="No active session. Run 'roar run' to create a session first.",
+                )
+
+            lineage = self.lineage_collector.collect([resolved_hash], roar_dir)
+
+        return self._register_collected_lineage(
+            lineage=lineage,
+            roar_dir=roar_dir,
+            cwd=cwd,
+            session_id=int(session["id"]),
+            artifact_hash=resolved_hash,
             dry_run=dry_run,
             as_blake3=as_blake3,
             skip_confirmation=skip_confirmation,
@@ -715,6 +816,32 @@ class RegisterService:
 
     def _looks_like_session_hash(self, target: str) -> bool:
         return bool(_SESSION_HASH_RE.match(target))
+
+    def _looks_like_hex_identifier(self, target: str) -> bool:
+        return bool(_HEX_IDENTIFIER_RE.match(target))
+
+    def _resolve_job_target(self, target: str, roar_dir: Path) -> str | None:
+        if not self._looks_like_hex_identifier(target) or len(target) > 12:
+            return None
+
+        with create_database_context(roar_dir) as db_ctx:
+            job = db_ctx.jobs.get_by_uid(target)
+        if not job:
+            return None
+
+        job_uid = job.get("job_uid")
+        return str(job_uid) if isinstance(job_uid, str) and job_uid else None
+
+    def _resolve_artifact_hash_target(self, target: str, roar_dir: Path) -> str | None:
+        if not self._looks_like_hex_identifier(target) or len(target) < 64:
+            return None
+
+        with create_database_context(roar_dir) as db_ctx:
+            artifact = db_ctx.artifacts.get_by_prefix(target)
+        if not artifact:
+            return None
+
+        return self._select_primary_hash(artifact)
 
     def _parse_step_reference(self, reference: str) -> tuple[int, bool] | None:
         if not self._is_step_reference(reference):

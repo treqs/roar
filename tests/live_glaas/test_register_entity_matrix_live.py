@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
 import subprocess
 import sys
@@ -61,6 +62,31 @@ def _active_session_id(repo: Path) -> int:
     if row is None or row[0] is None:
         raise AssertionError("Expected an active local roar session")
     return int(row[0])
+
+
+def _parse_session_hash(output: str) -> str:
+    match = re.search(r"/dag/([a-f0-9]{64})", output)
+    if not match:
+        raise AssertionError(f"Unable to parse session hash from output:\n{output}")
+    return match.group(1)
+
+
+def _job_row_for_script(repo: Path, script_name: str) -> dict[str, Any]:
+    with sqlite3.connect(repo / ".roar" / "roar.db") as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT job_uid, step_number, command
+            FROM jobs
+            WHERE script = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (script_name,),
+        ).fetchone()
+    if row is None:
+        raise AssertionError(f"Expected a tracked job for script {script_name}")
+    return dict(row)
 
 
 def _artifact_hash_for_output(repo: Path, path: str, algorithm: str) -> str:
@@ -184,6 +210,56 @@ def _seed_composite_output(repo: Path, *, root_path: str) -> str:
         )
         db.jobs.add_output(job_id, artifact_id, root_path)
     return composite_hash
+
+
+def _setup_local_target_matrix(
+    repo: Path,
+    *,
+    roar_cli,
+    git_commit,
+    script_name: str,
+    output_name: str,
+    output_payload: str,
+) -> dict[str, Any]:
+    script_path = repo / script_name
+    script_path.write_text(
+        f"""
+from pathlib import Path
+
+Path("artifacts").mkdir(exist_ok=True)
+Path("artifacts/{output_name}").write_text({output_payload!r} + "\\n", encoding="utf-8")
+print("built {output_name}")
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    git_commit(f"Add {script_name}")
+
+    run_result = roar_cli("run", sys.executable, script_name)
+    assert run_result.returncode == 0, run_result.stderr
+    git_commit(f"After {script_name}")
+
+    local_output_path = str((repo / "artifacts" / output_name).resolve())
+    local_hash = _artifact_hash_for_output(repo, local_output_path, "blake3")
+    job_row = _job_row_for_script(repo, script_name)
+    composite_root = str((repo / "exports" / "bundle").resolve())
+    composite_hash = _seed_composite_output(repo, root_path=composite_root)
+    session_id = _active_session_id(repo)
+    session_hash = SessionRegistrationService().compute_session_hash(
+        roar_dir=str(repo / ".roar"),
+        session_id=session_id,
+    )
+
+    return {
+        "local_output_path": local_output_path,
+        "local_hash": local_hash,
+        "job_uid": str(job_row["job_uid"]),
+        "step_number": int(job_row["step_number"]),
+        "command": str(job_row["command"]),
+        "composite_root": composite_root,
+        "composite_hash": composite_hash,
+        "session_hash": session_hash,
+    }
 
 
 def test_register_session_hash_publishes_local_remote_and_composite_entities(
@@ -325,6 +401,119 @@ print("built local_model.json")
         "part-000.json",
         "part-001.json",
     ]
+
+
+def test_register_artifact_hash_targets_publish_primitive_and_composite_artifacts(
+    glaas_configured: Path,
+    glaas_db_queryable,
+    glaas_url: str,
+    roar_cli,
+    git_commit,
+) -> None:
+    del glaas_db_queryable
+    repo = glaas_configured
+    targets = _setup_local_target_matrix(
+        repo,
+        roar_cli=roar_cli,
+        git_commit=git_commit,
+        script_name="build_hash_targets.py",
+        output_name="hash_target_model.json",
+        output_payload='{"status":"hash"}',
+    )
+
+    primitive_result = roar_cli("register", targets["local_hash"], "--yes")
+    assert primitive_result.returncode == 0, primitive_result.stderr or primitive_result.stdout
+    assert _parse_session_hash(primitive_result.stdout) == targets["session_hash"], (
+        primitive_result.stdout
+    )
+
+    primitive_public = _api_get(glaas_url, f"/api/v1/public/artifacts/{targets['local_hash']}")
+    assert primitive_public.get("success") is True, primitive_public
+    assert primitive_public["data"]["hash"] == targets["local_hash"], primitive_public
+
+    composite_result = roar_cli("register", targets["composite_hash"], "--yes")
+    assert composite_result.returncode == 0, composite_result.stderr or composite_result.stdout
+    assert _parse_session_hash(composite_result.stdout) == targets["session_hash"], (
+        composite_result.stdout
+    )
+
+    composite_public = _api_get(glaas_url, f"/api/v1/public/artifacts/{targets['composite_hash']}")
+    assert composite_public.get("success") is True, composite_public
+    assert composite_public["data"]["isComposite"] is True, composite_public
+
+    composite_metadata_rows = _db_query_rows(
+        """
+        SELECT component_count_total, component_count_stored
+        FROM composite_metadata
+        WHERE artifact_hash = $1
+        """,
+        [targets["composite_hash"]],
+    )
+    assert len(composite_metadata_rows) == 1, composite_metadata_rows
+    assert int(composite_metadata_rows[0]["component_count_total"]) == 2, composite_metadata_rows
+    assert int(composite_metadata_rows[0]["component_count_stored"]) == 2, composite_metadata_rows
+
+
+def test_register_job_uid_and_local_path_targets_publish_local_lineage(
+    glaas_configured: Path,
+    glaas_db_queryable,
+    glaas_url: str,
+    roar_cli,
+    git_commit,
+) -> None:
+    del glaas_db_queryable
+    repo = glaas_configured
+    targets = _setup_local_target_matrix(
+        repo,
+        roar_cli=roar_cli,
+        git_commit=git_commit,
+        script_name="build_job_target.py",
+        output_name="job_target_model.json",
+        output_payload='{"status":"job"}',
+    )
+
+    job_result = roar_cli("register", targets["job_uid"], "--yes")
+    assert job_result.returncode == 0, job_result.stderr or job_result.stdout
+    job_session_hash = _parse_session_hash(job_result.stdout)
+    assert job_session_hash == targets["session_hash"], job_result.stdout
+
+    job_rows = _db_query_rows(
+        """
+        SELECT command
+        FROM jobs
+        WHERE session_hash = $1
+        ORDER BY command ASC
+        """,
+        [job_session_hash],
+    )
+    assert any(targets["command"] == str(row["command"]) for row in job_rows), job_rows
+
+    local_path_result = roar_cli("register", targets["local_output_path"], "--yes")
+    assert local_path_result.returncode == 0, local_path_result.stderr or local_path_result.stdout
+    assert _parse_session_hash(local_path_result.stdout) == targets["session_hash"], (
+        local_path_result.stdout
+    )
+
+    published_paths = _db_query_rows(
+        """
+        SELECT jo.path, jo.artifact_hash
+        FROM job_outputs jo
+        JOIN jobs j ON j.id = jo.job_id
+        WHERE j.session_hash = $1
+        ORDER BY jo.path ASC
+        """,
+        [targets["session_hash"]],
+    )
+    assert any(str(row["path"]) == targets["local_output_path"] for row in published_paths), (
+        published_paths
+    )
+    assert any(str(row["artifact_hash"]) == targets["local_hash"] for row in published_paths), (
+        published_paths
+    )
+
+    local_public = _api_get(glaas_url, f"/api/v1/public/artifacts/{targets['local_hash']}")
+    assert local_public.get("success") is True, local_public
+    assert local_public["data"]["hash"] == targets["local_hash"], local_public
 
 
 def test_register_session_hash_prefix_publishes_session_lineage(

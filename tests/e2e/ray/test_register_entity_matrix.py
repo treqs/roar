@@ -1,10 +1,10 @@
-"""Ray host-submit register coverage for publishable entity types."""
+"""Ray host-submit register coverage for step references and remote S3 targets."""
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 
@@ -29,14 +29,12 @@ pytestmark = [
     pytest.mark.timeout(300),
 ]
 
-
-def _cluster_visible_glaas_url(host_url: str) -> str:
-    parts = urlsplit(host_url)
-    host = parts.hostname or "127.0.0.1"
-    if host in {"127.0.0.1", "localhost"}:
-        host = "host.docker.internal"
-    netloc = host if parts.port is None else f"{host}:{parts.port}"
-    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+EXPECTED_REGISTERED_STEP_COMMANDS = {
+    "ray_task:extract_dataset",
+    "ray_task:train_model",
+    "ray_task:evaluation",
+    "ray_task:evaluate_model",
+}
 
 
 def _parse_session_hash(output: str) -> str:
@@ -44,6 +42,22 @@ def _parse_session_hash(output: str) -> str:
     if not match:
         raise AssertionError(f"Unable to parse session hash from output:\n{output}")
     return match.group(1)
+
+
+def _parse_run_info(stdout: str) -> dict[str, str]:
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        run_id = payload.get("run_id")
+        report_key = payload.get("report_key")
+        if isinstance(run_id, str) and isinstance(report_key, str):
+            return {"run_id": run_id, "report_key": report_key}
+    raise AssertionError(f"Unable to parse run info from output:\n{stdout}")
 
 
 def _active_session_id(project_dir: Path) -> int:
@@ -77,7 +91,7 @@ def _step_number_for_command(project_dir: Path, command: str) -> int:
     return int(rows[0]["step_number"])
 
 
-def _composite_hash_for_output(project_dir: Path, path: str) -> str:
+def _artifact_hash_for_output(project_dir: Path, path: str) -> str:
     rows = query_roar_db(
         project_dir,
         """
@@ -86,53 +100,109 @@ def _composite_hash_for_output(project_dir: Path, path: str) -> str:
         JOIN artifacts a ON a.id = jo.artifact_id
         JOIN artifact_hashes ah ON ah.artifact_id = a.id
         WHERE jo.path = ?
-          AND ah.algorithm = 'composite-blake3'
-        ORDER BY a.first_seen_at DESC
+        ORDER BY
+            CASE ah.algorithm
+                WHEN 'blake3' THEN 0
+                WHEN 'etag' THEN 1
+                WHEN 'sha256' THEN 2
+                ELSE 99
+            END,
+            a.first_seen_at DESC
         LIMIT 1
         """,
         (path,),
     )
-    assert rows, f"Expected composite artifact hash for {path}"
+    assert rows, f"Expected tracked artifact hash for {path}"
     return str(rows[0]["digest"])
 
 
-def test_register_step_reference_after_ray_submit_publishes_ray_remote_files_and_composites(
-    ray_cluster: dict[str, str],
-    managed_glaas_url: str,
-) -> None:
-    project_dir = make_host_project_dir("register-entity-matrix")
+@pytest.fixture(scope="module")
+def phase_register_project(ray_cluster: dict[str, str], managed_glaas_url: str) -> Path:
+    project_dir = make_host_project_dir("register-step-reference")
     init_host_project(project_dir, glaas_url=managed_glaas_url)
 
     result = run_roar_ray_job_from_host(
         project_dir,
         ray_cluster,
-        "cloud_demo_emulated/main.py",
+        "phase_lineage_contract/main.py",
         use_fragment_store=True,
-        extra_env={
-            "GLAAS_URL": managed_glaas_url,
-            "ROAR_CLUSTER_GLAAS_URL": _cluster_visible_glaas_url(managed_glaas_url),
-            "S3_DATA_BUCKET": "test-bucket",
-            "S3_MODELS_BUCKET": "output-bucket",
-            "S3_RESULTS_BUCKET": "output-bucket",
-        },
-        timeout=300,
+        timeout=240,
     )
     assert result.returncode == 0, result.stderr or result.stdout
+    return project_dir
 
-    extraction_step = _step_number_for_command(project_dir, "ray_task:extraction")
-    composite_hash = _composite_hash_for_output(project_dir, "s3://test-bucket/sensor_data")
 
+@pytest.fixture(scope="module")
+def s3_register_project(
+    ray_cluster: dict[str, str], managed_glaas_url: str
+) -> dict[str, str | Path]:
+    project_dir = make_host_project_dir("register-s3-target")
+    init_host_project(project_dir, glaas_url=managed_glaas_url)
+
+    result = run_roar_ray_job_from_host(
+        project_dir,
+        ray_cluster,
+        "s3_pipeline.py",
+        use_fragment_store=True,
+        timeout=240,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    run_info = _parse_run_info(result.stdout)
+    return {
+        "project_dir": project_dir,
+        "run_id": run_info["run_id"],
+        "report_key": run_info["report_key"],
+    }
+
+
+def test_register_step_reference_after_ray_submit_publishes_phase_session(
+    phase_register_project: Path,
+) -> None:
+    evaluation_step = _step_number_for_command(phase_register_project, "ray_task:evaluation")
+
+    register_result = run_roar_cli_from_host(
+        phase_register_project,
+        "register",
+        f"@{evaluation_step}",
+        "--yes",
+        timeout=60,
+    )
+    assert register_result.returncode == 0, register_result.stderr or register_result.stdout
+    session_hash = _parse_session_hash(register_result.stdout)
+
+    expected_session_hash = SessionRegistrationService().compute_session_hash(
+        roar_dir=str(phase_register_project / ".roar"),
+        session_id=_active_session_id(phase_register_project),
+    )
+    assert session_hash == expected_session_hash, register_result.stdout
+
+    job_rows = _db_query_rows(
+        """
+        SELECT command
+        FROM jobs
+        WHERE session_hash = $1
+        ORDER BY command ASC
+        """,
+        [session_hash],
+    )
+    commands = {str(row["command"]) for row in job_rows}
+    assert EXPECTED_REGISTERED_STEP_COMMANDS.issubset(commands), job_rows
+
+
+def test_register_s3_path_after_ray_submit_publishes_remote_artifact(
+    s3_register_project: dict[str, str | Path],
+    managed_glaas_url: str,
+) -> None:
+    project_dir = s3_register_project["project_dir"]
+    assert isinstance(project_dir, Path)
+    report_key = str(s3_register_project["report_key"])
+
+    artifact_hash = _artifact_hash_for_output(project_dir, report_key)
     register_result = run_roar_cli_from_host(
         project_dir,
         "register",
-        f"@{extraction_step}",
+        report_key,
         "--yes",
-        extra_env={
-            "AWS_ACCESS_KEY_ID": "minioadmin",
-            "AWS_SECRET_ACCESS_KEY": "minioadmin",
-            "AWS_DEFAULT_REGION": "us-east-1",
-            "AWS_ENDPOINT_URL": ray_cluster["minio_endpoint"],
-        },
         timeout=60,
     )
     assert register_result.returncode == 0, register_result.stderr or register_result.stdout
@@ -144,58 +214,18 @@ def test_register_step_reference_after_ray_submit_publishes_ray_remote_files_and
     )
     assert session_hash == expected_session_hash, register_result.stdout
 
-    job_rows = _db_query_rows(
+    output_rows = _db_query_rows(
         """
-        SELECT command, job_type
-        FROM jobs
-        WHERE session_hash = $1
-        ORDER BY command ASC
-        """,
-        [session_hash],
-    )
-    ray_task_commands = {
-        str(row["command"]) for row in job_rows if str(row.get("job_type") or "") == "ray_task"
-    }
-    assert "ray_task:extraction" in ray_task_commands, job_rows
-
-    published_paths = _db_query_rows(
-        """
-        SELECT jo.path, j.command
+        SELECT jo.path
         FROM job_outputs jo
         JOIN jobs j ON j.id = jo.job_id
         WHERE j.session_hash = $1
-        ORDER BY j.command ASC, jo.path ASC
+        ORDER BY jo.path ASC
         """,
         [session_hash],
     )
-    path_set = {str(row["path"]) for row in published_paths}
-    assert "s3://test-bucket/sensor_data" in path_set, published_paths
-    assert any(path.startswith("s3://test-bucket/sensor_data/shard_") for path in path_set), (
-        published_paths
-    )
+    assert any(str(row["path"]) == report_key for row in output_rows), output_rows
 
-    composite_public = _api_get(managed_glaas_url, f"/api/v1/public/artifacts/{composite_hash}")
-    assert composite_public.get("success") is True, composite_public
-    assert composite_public["data"]["isComposite"] is True, composite_public
-
-    metadata_rows = _db_query_rows(
-        """
-        SELECT component_count_total, component_count_stored
-        FROM composite_metadata
-        WHERE artifact_hash = $1
-        """,
-        [composite_hash],
-    )
-    assert len(metadata_rows) == 1, metadata_rows
-    assert int(metadata_rows[0]["component_count_total"]) == 25, metadata_rows
-    assert int(metadata_rows[0]["component_count_stored"]) == 25, metadata_rows
-
-    component_rows = _db_query_rows(
-        """
-        SELECT COUNT(*)::int AS component_count
-        FROM composite_components
-        WHERE composite_hash = $1
-        """,
-        [composite_hash],
-    )
-    assert int(component_rows[0]["component_count"]) == 25, component_rows
+    public_artifact = _api_get(managed_glaas_url, f"/api/v1/public/artifacts/{artifact_hash}")
+    assert public_artifact.get("success") is True, public_artifact
+    assert public_artifact["data"]["hash"] == artifact_hash, public_artifact

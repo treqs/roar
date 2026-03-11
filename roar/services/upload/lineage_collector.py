@@ -202,6 +202,63 @@ class LineageCollector:
             pipeline=session,
         )
 
+    def collect_job(
+        self,
+        job_uid: str,
+        roar_dir: Path,
+    ) -> LineageData:
+        """Collect lineage for a single job identified by local job UID or prefix."""
+        with create_database_context(roar_dir) as ctx_db:
+            job = ctx_db.jobs.get_by_uid(job_uid)
+            if not job:
+                return LineageData()
+
+            session_id = int(job.get("session_id") or 0)
+            session = ctx_db.sessions.get(session_id) if session_id else None
+
+            hydrated_job = self._hydrate_job(ctx_db, job)
+            target_hashes = sorted(
+                {
+                    digest
+                    for digest in hydrated_job.get("_output_hashes", [])
+                    if isinstance(digest, str) and digest
+                }
+            )
+            if not target_hashes:
+                target_hashes = sorted(
+                    {
+                        digest
+                        for digest in hydrated_job.get("_input_hashes", [])
+                        if isinstance(digest, str) and digest
+                    }
+                )
+
+            if target_hashes:
+                lineage_jobs = ctx_db.lineage.get_lineage_jobs(target_hashes)
+                if session:
+                    lineage_jobs = self._add_build_jobs(
+                        ctx_db, session, lineage_jobs, set(target_hashes)
+                    )
+                lineage_jobs = self._add_parent_jobs(ctx_db, lineage_jobs)
+                lineage_jobs = self._add_parent_linked_ray_tasks(ctx_db, lineage_jobs)
+            else:
+                lineage_jobs = []
+
+            seen_ids = {job["id"] for job in lineage_jobs}
+            if hydrated_job["id"] not in seen_ids:
+                lineage_jobs.append(hydrated_job)
+
+            lineage_jobs.sort(key=lambda candidate: candidate["timestamp"])
+            all_hashes = self._collect_all_hashes(lineage_jobs)
+            artifacts = self._get_artifact_info(ctx_db, all_hashes)
+
+        return LineageData(
+            jobs=lineage_jobs,
+            artifacts=artifacts,
+            artifact_hashes=all_hashes,
+            pipeline=session,
+        )
+
     def _add_build_jobs(
         self,
         ctx_db,
