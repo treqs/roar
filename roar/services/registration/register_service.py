@@ -32,8 +32,8 @@ from ...db.hashing.backend import compute_hashes_batch
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
 from ...plugins.vcs.git import GitVCSProvider
-from ..put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
 from ...services.labels import collect_label_sync_payloads
+from ..put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
 from ..transfer.common import resolve_repo_url_or_local_uri
 from ..upload.lineage_collector import LineageCollector
 from . import _artifact_ref

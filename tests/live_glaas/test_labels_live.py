@@ -65,7 +65,9 @@ with open(sys.argv[2], "w", encoding="utf-8") as dst:
     )
     _commit_all(repo, "Add preprocess inputs")
 
-    _assert_ok(_run_roar(repo, "run", sys.executable, "preprocess.py", "input.csv", "processed.csv"))
+    _assert_ok(
+        _run_roar(repo, "run", sys.executable, "preprocess.py", "input.csv", "processed.csv")
+    )
     _commit_all(repo, "Add preprocess output")
 
     lineage = json.loads(_assert_ok(_run_roar(repo, "lineage", "processed.csv")))
@@ -149,10 +151,7 @@ def _remote_artifact_label_rows(artifact_hash: str) -> list[tuple[int, dict[str,
         """,
         [artifact_hash],
     )
-    return [
-        (int(row["version"]), json.loads(str(row["metadata_json"])))
-        for row in rows
-    ]
+    return [(int(row["version"]), json.loads(str(row["metadata_json"]))) for row in rows]
 
 
 def _remote_session_label_rows(session_hash: str) -> list[tuple[int, dict[str, object]]]:
@@ -165,13 +164,12 @@ def _remote_session_label_rows(session_hash: str) -> list[tuple[int, dict[str, o
         """,
         [session_hash],
     )
-    return [
-        (int(row["version"]), json.loads(str(row["metadata_json"])))
-        for row in rows
-    ]
+    return [(int(row["version"]), json.loads(str(row["metadata_json"]))) for row in rows]
 
 
-def _remote_job_label_rows(session_hash: str, step_number: int) -> list[tuple[int, dict[str, object]]]:
+def _remote_job_label_rows(
+    session_hash: str, step_number: int
+) -> list[tuple[int, dict[str, object]]]:
     rows = composite_live._db_query_rows(
         """
         SELECT l.version, l.metadata::text AS metadata_json
@@ -183,10 +181,7 @@ def _remote_job_label_rows(session_hash: str, step_number: int) -> list[tuple[in
         """,
         [session_hash, step_number],
     )
-    return [
-        (int(row["version"]), json.loads(str(row["metadata_json"])))
-        for row in rows
-    ]
+    return [(int(row["version"]), json.loads(str(row["metadata_json"]))) for row in rows]
 
 
 def test_register_syncs_current_local_labels_only_when_register_called(
@@ -210,9 +205,7 @@ def test_register_syncs_current_local_labels_only_when_register_called(
             "project=forecasting",
         )
     )
-    _assert_ok(
-        _run_roar(repo, "label", "set", "job", f"@{step_number}", "phase=preprocess")
-    )
+    _assert_ok(_run_roar(repo, "label", "set", "job", f"@{step_number}", "phase=preprocess"))
     _assert_ok(
         _run_roar(repo, "label", "set", "artifact", "processed.csv", "owner=ml", "stage=gold")
     )
@@ -226,12 +219,8 @@ def test_register_syncs_current_local_labels_only_when_register_called(
     assert _remote_session_label_rows(session_hash) == [
         (1, {"experiment": "ablation-7", "project": "forecasting"})
     ]
-    assert _remote_job_label_rows(session_hash, step_number) == [
-        (1, {"phase": "preprocess"})
-    ]
-    assert _remote_artifact_label_rows(artifact_hash) == [
-        (1, {"owner": "ml", "stage": "gold"})
-    ]
+    assert _remote_job_label_rows(session_hash, step_number) == [(1, {"phase": "preprocess"})]
+    assert _remote_artifact_label_rows(artifact_hash) == [(1, {"owner": "ml", "stage": "gold"})]
 
 
 def test_register_after_local_label_change_creates_new_remote_version(
@@ -242,7 +231,9 @@ def test_register_after_local_label_change_creates_new_remote_version(
     refs = _prepare_processed_artifact(repo)
     artifact_hash = str(refs["artifact_hash"])
 
-    _assert_ok(_run_roar(repo, "label", "set", "artifact", "processed.csv", "owner=ml", "stage=raw"))
+    _assert_ok(
+        _run_roar(repo, "label", "set", "artifact", "processed.csv", "owner=ml", "stage=raw")
+    )
     _assert_ok(_run_roar(repo, "register", "processed.csv"))
 
     _assert_ok(_run_roar(repo, "label", "set", "artifact", "processed.csv", "stage=gold"))
@@ -354,9 +345,7 @@ def test_register_updates_are_visible_via_label_history_and_search_api(
     )
     _assert_ok(_run_roar(repo, "register", "processed.csv"))
 
-    _assert_ok(
-        _run_roar(repo, "label", "set", "artifact", "processed.csv", "stage=api-history-v2")
-    )
+    _assert_ok(_run_roar(repo, "label", "set", "artifact", "processed.csv", "stage=api-history-v2"))
     _assert_ok(_run_roar(repo, "register", "processed.csv"))
 
     history = _label_api_get(
@@ -426,7 +415,9 @@ def test_put_syncs_current_artifact_labels_for_tracked_file(
     refs = _prepare_model_artifact(repo)
     artifact_hash = str(refs["artifact_hash"])
 
-    _assert_ok(_run_roar(repo, "label", "set", "artifact", "model.pt", "owner=ml", "stage=candidate"))
+    _assert_ok(
+        _run_roar(repo, "label", "set", "artifact", "model.pt", "owner=ml", "stage=candidate")
+    )
 
     assert _remote_artifact_label_rows(artifact_hash) == []
 
@@ -469,7 +460,9 @@ def test_register_syncs_copied_labels_for_new_artifact_version_only_after_regist
     (repo / "input.csv").write_text("id,value\n1,baz\n2,qux\n3,quux\n", encoding="utf-8")
     _commit_all(repo, "Update input.csv for processed v2")
 
-    _assert_ok(_run_roar(repo, "run", sys.executable, "preprocess.py", "input.csv", "processed.csv"))
+    _assert_ok(
+        _run_roar(repo, "run", sys.executable, "preprocess.py", "input.csv", "processed.csv")
+    )
     _commit_all(repo, "Track processed.csv v2")
 
     destination_hash = json.loads(_assert_ok(_run_roar(repo, "lineage", "processed.csv")))[

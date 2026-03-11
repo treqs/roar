@@ -365,7 +365,10 @@ class PutService:
             session_id=int(session_id),
             session_hash=session_hash or "",
             jobs=lineage.jobs,
-            artifacts=[*lineage.artifacts, *[{"id": u.artifact_id, "hash": u.hash} for u in uploads]],
+            artifacts=[
+                *lineage.artifacts,
+                *[{"id": u.artifact_id, "hash": u.hash} for u in uploads],
+            ],
         )
         if label_payloads:
             _label_result, label_error = client.sync_labels(label_payloads)

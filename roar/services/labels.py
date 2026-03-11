@@ -298,7 +298,11 @@ def collect_label_sync_payloads(
     for artifact in artifacts:
         artifact_id = artifact.get("id")
         artifact_hash = artifact.get("hash")
-        if not isinstance(artifact_id, str) or not isinstance(artifact_hash, str) or not artifact_hash:
+        if (
+            not isinstance(artifact_id, str)
+            or not isinstance(artifact_hash, str)
+            or not artifact_hash
+        ):
             continue
         if artifact_hash in seen_artifacts:
             continue

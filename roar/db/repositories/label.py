@@ -96,7 +96,9 @@ class SQLAlchemyLabelRepository(LabelRepository):
     ):
         return and_(
             Label.entity_type == entity_type,
-            Label.session_id.is_(session_id) if session_id is None else Label.session_id == session_id,
+            Label.session_id.is_(session_id)
+            if session_id is None
+            else Label.session_id == session_id,
             Label.job_id.is_(job_id) if job_id is None else Label.job_id == job_id,
             Label.artifact_id.is_(artifact_id)
             if artifact_id is None

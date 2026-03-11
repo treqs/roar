@@ -31,7 +31,9 @@ def _artifact_label_rows(repo: Path, artifact_path: Path) -> list[tuple[int, dic
     return [(int(version), json.loads(metadata)) for version, metadata in rows]
 
 
-def _artifact_label_rows_by_hash(repo: Path, artifact_hash: str) -> list[tuple[int, dict[str, object]]]:
+def _artifact_label_rows_by_hash(
+    repo: Path, artifact_hash: str
+) -> list[tuple[int, dict[str, object]]]:
     db_path = repo / ".roar" / "roar.db"
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
@@ -88,9 +90,7 @@ class TestLabelCommand:
             )
         )
 
-        label_show = _assert_ok(
-            roar_cli("label", "show", "artifact", "processed.csv", check=False)
-        )
+        label_show = _assert_ok(roar_cli("label", "show", "artifact", "processed.csv", check=False))
         assert "stage=gold" in label_show
         assert "owner=ml" in label_show
 
@@ -219,13 +219,13 @@ class TestLabelCommand:
 
         assert dag_data["labels"] == {"experiment": "ablation-7", "project": "forecasting"}
 
-        preprocess_node = next(node for node in dag_data["nodes"] if "preprocess.py" in node["command"])
+        preprocess_node = next(
+            node for node in dag_data["nodes"] if "preprocess.py" in node["command"]
+        )
         assert preprocess_node["labels"] == {"phase": "preprocess", "tool": "python"}
 
         processed_artifact = next(
-            artifact
-            for artifact in dag_data["artifacts"]
-            if "processed.csv" in artifact["path"]
+            artifact for artifact in dag_data["artifacts"] if "processed.csv" in artifact["path"]
         )
         assert processed_artifact["labels"] == {"owner": "ml", "stage": "gold"}
 
@@ -242,9 +242,9 @@ class TestLabelCommand:
         assert result.returncode == 0
         git_commit("Track processed.csv v1")
 
-        source_hash = json.loads(
-            _assert_ok(roar_cli("lineage", "processed.csv", check=False))
-        )["artifact"]["hash"]
+        source_hash = json.loads(_assert_ok(roar_cli("lineage", "processed.csv", check=False)))[
+            "artifact"
+        ]["hash"]
 
         _assert_ok(
             roar_cli(
@@ -293,9 +293,7 @@ class TestLabelCommand:
             )
         )
 
-        label_show = _assert_ok(
-            roar_cli("label", "show", "artifact", "processed.csv", check=False)
-        )
+        label_show = _assert_ok(roar_cli("label", "show", "artifact", "processed.csv", check=False))
         assert "owner=ml" in label_show
         assert "note=current" in label_show
         assert "stage=baseline" in label_show
@@ -328,9 +326,9 @@ class TestLabelCommand:
         assert result.returncode == 0
         git_commit("Track processed.csv v1")
 
-        source_hash = json.loads(
-            _assert_ok(roar_cli("lineage", "processed.csv", check=False))
-        )["artifact"]["hash"]
+        source_hash = json.loads(_assert_ok(roar_cli("lineage", "processed.csv", check=False)))[
+            "artifact"
+        ]["hash"]
         _assert_ok(
             roar_cli(
                 "label",
