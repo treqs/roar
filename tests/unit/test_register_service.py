@@ -1049,17 +1049,19 @@ class TestRegisterService:
             errors=[],
         )
 
-        with patch(
-            "roar.services.registration.register_service.create_database_context"
-        ) as mock_ctx, patch(
-            "roar.services.registration.register_service.config_get", return_value=False
-        ), patch.object(
-            service,
-            "_get_git_context",
-            return_value=GitContext(
-                repo="https://github.com/test/repo",
-                commit="abc123def456",
-                branch="main",
+        with (
+            patch(
+                "roar.services.registration.register_service.create_database_context"
+            ) as mock_ctx,
+            patch("roar.services.registration.register_service.config_get", return_value=False),
+            patch.object(
+                service,
+                "_get_git_context",
+                return_value=GitContext(
+                    repo="https://github.com/test/repo",
+                    commit="abc123def456",
+                    branch="main",
+                ),
             ),
         ):
             mock_db = MagicMock()

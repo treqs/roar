@@ -1025,8 +1025,12 @@ class RegisterService:
                     preferred_hash_by_digest[digest] = preferred_hash
 
         for job in jobs:
-            self._refresh_job_io_refs(job, "_inputs", "_input_hashes", preferred_hash_by_path, preferred_hash_by_digest)
-            self._refresh_job_io_refs(job, "_outputs", "_output_hashes", preferred_hash_by_path, preferred_hash_by_digest)
+            self._refresh_job_io_refs(
+                job, "_inputs", "_input_hashes", preferred_hash_by_path, preferred_hash_by_digest
+            )
+            self._refresh_job_io_refs(
+                job, "_outputs", "_output_hashes", preferred_hash_by_path, preferred_hash_by_digest
+            )
 
     def _refresh_job_io_refs(
         self,

@@ -154,9 +154,7 @@ def test_register_step_reference_after_ray_submit_publishes_ray_remote_files_and
         [session_hash],
     )
     ray_task_commands = {
-        str(row["command"])
-        for row in job_rows
-        if str(row.get("job_type") or "") == "ray_task"
+        str(row["command"]) for row in job_rows if str(row.get("job_type") or "") == "ray_task"
     }
     assert "ray_task:extraction" in ray_task_commands, job_rows
 
@@ -172,7 +170,9 @@ def test_register_step_reference_after_ray_submit_publishes_ray_remote_files_and
     )
     path_set = {str(row["path"]) for row in published_paths}
     assert "s3://test-bucket/sensor_data" in path_set, published_paths
-    assert any(path.startswith("s3://test-bucket/sensor_data/shard_") for path in path_set), published_paths
+    assert any(path.startswith("s3://test-bucket/sensor_data/shard_") for path in path_set), (
+        published_paths
+    )
 
     composite_public = _api_get(managed_glaas_url, f"/api/v1/public/artifacts/{composite_hash}")
     assert composite_public.get("success") is True, composite_public

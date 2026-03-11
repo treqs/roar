@@ -288,7 +288,9 @@ print("built local_model.json")
     assert artifact_by_hash[local_hash]["source_type"] is None, artifact_by_hash
     assert artifact_by_hash[s3_hash]["source_type"] == "s3", artifact_by_hash
     assert artifact_by_hash[gs_hash]["source_type"] == "gs", artifact_by_hash
-    assert artifact_by_hash[composite_hash]["original_session_hash"] == session_hash, artifact_by_hash
+    assert artifact_by_hash[composite_hash]["original_session_hash"] == session_hash, (
+        artifact_by_hash
+    )
 
     local_public = _api_get(glaas_url, f"/api/v1/public/artifacts/{local_hash}")
     assert local_public.get("success") is True, local_public
