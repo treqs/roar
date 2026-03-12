@@ -9,7 +9,11 @@ from roar.backends.ray.constants import RAY_STEP_NOISE_COMMANDS, RAY_TASK_COMMAN
 from roar.backends.ray.fragment_reconstituter import FragmentReconstituter
 from roar.backends.ray.proxy_fragments import build_proxy_fragment
 from roar.backends.ray.roar_worker import _run_worker_entrypoint, _startup
-from roar.backends.ray.runtime_import import patch_tracked_ray_module
+from roar.backends.ray.runtime_hooks import (
+    initialize_runtime_process,
+    observe_runtime_import,
+    patch_imported_ray_module,
+)
 from roar.backends.ray.submit import (
     maybe_rewrite_ray_job_submit,
     ray_submit_matches_command,
@@ -36,15 +40,7 @@ def ray_prepare_worker_runtime_env(
 ) -> dict[str, Any]:
     del source_environ
 
-    from roar.services.execution.inject import sitecustomize
-
-    return build_packaged_worker_runtime_env(
-        runtime_env,
-        job_id,
-        merge_working_dir=sitecustomize._merge_working_dir,
-        warn=sitecustomize._warn_roar,
-        suppress_tracking_factory=sitecustomize._SuppressTracking,
-    )
+    return build_packaged_worker_runtime_env(runtime_env, job_id)
 
 
 def ray_should_start_driver_proxy(environ: Mapping[str, str]) -> bool:
@@ -116,7 +112,9 @@ RAY_EXECUTION_BACKEND = DistributedExecutionBackend(
     ),
     runtime_import=RuntimeImportAdapter(
         module_prefixes=("ray",),
-        patch_module=patch_tracked_ray_module,
+        initialize_process=initialize_runtime_process,
+        observe_import=observe_runtime_import,
+        patch_module=patch_imported_ray_module,
     ),
 )
 

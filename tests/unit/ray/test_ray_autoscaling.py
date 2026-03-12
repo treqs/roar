@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from roar.services.execution.inject import sitecustomize
+from roar.backends.ray import runtime_hooks
 
 
 def test_prime_new_ray_nodes_primes_only_new_alive_nodes(monkeypatch) -> None:
@@ -16,13 +16,13 @@ def test_prime_new_ray_nodes_primes_only_new_alive_nodes(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        sitecustomize,
+        runtime_hooks,
         "_prime_ray_node",
         lambda _ray_module, node_id: primed_nodes.append(node_id),
     )
 
     seen_nodes = {"node-head"}
-    sitecustomize._prime_new_ray_nodes(fake_ray, seen_nodes)
+    runtime_hooks._prime_new_ray_nodes(fake_ray, seen_nodes)
 
     assert primed_nodes == ["node-worker-new"]
     assert seen_nodes == {"node-head", "node-worker-new"}

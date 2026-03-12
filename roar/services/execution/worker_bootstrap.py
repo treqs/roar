@@ -14,6 +14,13 @@ from roar.execution.framework.contract import (
 from roar.execution.framework.registry import (
     get_execution_backend,
 )
+from roar.services.execution.inject.support import (
+    SuppressTracking,
+    warn_runtime,
+)
+from roar.services.execution.inject.support import (
+    merge_working_dir as default_merge_working_dir,
+)
 
 WORKER_SETUP_HOOK = "roar.services.execution.worker_bootstrap.startup"
 WORKER_PY_EXECUTABLE = "roar-worker"
@@ -37,12 +44,13 @@ def build_packaged_worker_runtime_env(
 ) -> dict[str, Any]:
     runtime_env_out = dict(runtime_env or {})
     prepared_working_dir: str | None = None
-    working_dir_merger = merge_working_dir or _merge_working_dir
+    working_dir_merger = merge_working_dir or default_merge_working_dir
     suppress_tracking = (
         suppress_tracking_factory
         if suppress_tracking_factory is not None
-        else contextlib.nullcontext
+        else SuppressTracking
     )
+    warn_user = warn or warn_runtime
 
     existing_working_dir = runtime_env_out.get("working_dir")
     if isinstance(existing_working_dir, str) and existing_working_dir.strip():
@@ -51,8 +59,8 @@ def build_packaged_worker_runtime_env(
             with suppress_tracking():
                 working_dir_merger(existing_working_dir, prepared_working_dir)
         else:
-            if warn is not None:
-                warn(
+            if warn_user is not None:
+                warn_user(
                     "Skipping working_dir merge for non-local path %s while preparing Ray worker wrapper",
                     existing_working_dir,
                 )
@@ -125,16 +133,3 @@ def run_worker_entrypoint(argv: list[str] | None = None) -> None:
 def main() -> None:
     startup()
     run_worker_entrypoint()
-
-
-def _merge_working_dir(source_dir: str, target_dir: str) -> None:
-    for entry in os.listdir(source_dir):
-        src = os.path.join(source_dir, entry)
-        dst = os.path.join(target_dir, entry)
-        try:
-            if os.path.isdir(src):
-                shutil.copytree(src, dst, dirs_exist_ok=True)
-            else:
-                shutil.copy2(src, dst)
-        except Exception:
-            continue

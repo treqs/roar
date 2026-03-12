@@ -32,6 +32,7 @@ WorkerBootstrapStartup = Callable[[], None]
 WorkerEntrypointRunner = Callable[[list[str]], None]
 ReconstituterFactory = Callable[[str, str, str, Path], FragmentReconstituterProtocol]
 TrackedModulePatcher = Callable[[str, Any], None]
+RuntimeProcessInitializer = Callable[[], None]
 
 ROAR_EXECUTION_BACKEND_ENV = "ROAR_EXECUTION_BACKEND"
 
@@ -73,7 +74,9 @@ class ExecutionPolicyAdapter:
 @dataclass(frozen=True)
 class RuntimeImportAdapter:
     module_prefixes: tuple[str, ...]
-    patch_module: TrackedModulePatcher
+    initialize_process: RuntimeProcessInitializer | None = None
+    observe_import: TrackedModulePatcher | None = None
+    patch_module: TrackedModulePatcher | None = None
 
 
 @dataclass(frozen=True)

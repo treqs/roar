@@ -75,29 +75,19 @@ def test_atexit_overhead_without_ray_logs_under_threshold(tmp_path):
     )
 
 
-def test_collect_ray_io_skips_import_when_no_logs(tmp_path, monkeypatch):
+def test_collect_ray_io_skips_import_when_no_logs(monkeypatch):
     """
-    _collect_ray_io should not import roar.backends.ray.collector in fragments-only mode.
+    Ray runtime collection should stay lightweight when there are no proxy logs.
     """
     # Remove collector from sys.modules if present.
     sys.modules.pop("roar.backends.ray.collector", None)
 
-    # Import the function under test.
-    import importlib
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "sitecustomize_test",
-        str(INJECT_DIR / "sitecustomize.py"),
-    )
-    sc = importlib.util.module_from_spec(spec)
-
     # Patch environment.
     monkeypatch.setenv("ROAR_WRAP", "1")
-    spec.loader.exec_module(sc)
+    from roar.backends.ray import runtime_hooks
 
     before_modules = set(sys.modules.keys())
-    sc._collect_ray_io(proxy_logs=None)
+    runtime_hooks.collect_ray_io(proxy_logs=None)
     after_modules = set(sys.modules.keys())
 
     new_modules = after_modules - before_modules
