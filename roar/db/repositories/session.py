@@ -14,8 +14,8 @@ import blake3
 from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.orm import Session as SASession
 
-from ...backends.ray.constants import RAY_STEP_NOISE_COMMANDS
 from ...core.interfaces.repositories import SessionRepository
+from ...execution.framework.registry import iter_execution_noise_commands
 from ..models import Job, Session
 
 
@@ -308,6 +308,7 @@ class SQLAlchemySessionRepository(SessionRepository):
         Returns:
             Job dict or None if not found.
         """
+        execution_noise_commands = iter_execution_noise_commands()
         if job_type == "build":
             query = (
                 select(Job)
@@ -333,17 +334,17 @@ class SQLAlchemySessionRepository(SessionRepository):
                         (Job.job_type == "run", 6),
                         (
                             Job.command.is_not(None)
-                            & (~Job.command.in_(RAY_STEP_NOISE_COMMANDS))
+                            & (~Job.command.in_(execution_noise_commands))
                             & Job.parent_job_uid.is_not(None)
                             & Job.script.is_not(None)
                             & (~Job.script.like("%.%")),
                             5,
                         ),
                         (
-                            Job.command.is_not(None) & (~Job.command.in_(RAY_STEP_NOISE_COMMANDS)),
+                            Job.command.is_not(None) & (~Job.command.in_(execution_noise_commands)),
                             4,
                         ),
-                        (Job.command.in_(RAY_STEP_NOISE_COMMANDS), 1),
+                        (Job.command.in_(execution_noise_commands), 1),
                         else_=2,
                     ).desc()
                 )

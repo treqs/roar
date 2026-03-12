@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from ..backends.ray.constants import is_ray_noise_command
 from ..db.context import optional_repo
+from ..execution.framework.registry import (
+    is_execution_noise_command,
+    is_execution_task_command,
+)
 
 
 class DagDataBuilder:
@@ -127,8 +130,8 @@ class DagDataBuilder:
         script = str(step.get("script") or "")
         parent_job_uid = str(step.get("parent_job_uid") or "")
         is_phase_wrapper = (
-            command.startswith("ray_task:")
-            and not is_ray_noise_command(command)
+            is_execution_task_command(command)
+            and not is_execution_noise_command(command)
             and bool(parent_job_uid)
             and bool(script)
             and "." not in script
@@ -137,9 +140,9 @@ class DagDataBuilder:
             priority = 6
         elif is_phase_wrapper:
             priority = 5
-        elif command and not is_ray_noise_command(command):
+        elif command and not is_execution_noise_command(command):
             priority = 4
-        elif is_ray_noise_command(command):
+        elif is_execution_noise_command(command):
             priority = 1
         else:
             priority = 2

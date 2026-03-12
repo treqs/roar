@@ -56,6 +56,40 @@ def match_execution_backend_for_module(module_name: str) -> DistributedExecution
     return None
 
 
+def iter_execution_noise_commands() -> tuple[str, ...]:
+    _ensure_execution_backends_discovered()
+    commands: list[str] = []
+    for backend in _registered_execution_backends:
+        policy = backend.policy
+        if policy is None:
+            continue
+        commands.extend(str(command) for command in policy.noise_commands if str(command))
+    return tuple(dict.fromkeys(commands))
+
+
+def is_execution_noise_command(command: str | None) -> bool:
+    text = str(command or "")
+    return bool(text) and text in iter_execution_noise_commands()
+
+
+def iter_execution_task_command_prefixes() -> tuple[str, ...]:
+    _ensure_execution_backends_discovered()
+    prefixes: list[str] = []
+    for backend in _registered_execution_backends:
+        policy = backend.policy
+        if policy is None:
+            continue
+        prefixes.extend(str(prefix) for prefix in policy.task_command_prefixes if str(prefix))
+    return tuple(dict.fromkeys(prefixes))
+
+
+def is_execution_task_command(command: str | None) -> bool:
+    text = str(command or "")
+    if not text:
+        return False
+    return any(text.startswith(prefix) for prefix in iter_execution_task_command_prefixes())
+
+
 def _ensure_execution_backends_discovered() -> None:
     global _execution_backends_discovered, _execution_backends_discovering
 
@@ -128,7 +162,11 @@ def _register_entrypoint_payload(payload: object) -> None:
 
 __all__ = [
     "get_execution_backend",
+    "is_execution_noise_command",
+    "is_execution_task_command",
     "iter_execution_backends",
+    "iter_execution_noise_commands",
+    "iter_execution_task_command_prefixes",
     "match_execution_backend_for_module",
     "register_execution_backend",
 ]

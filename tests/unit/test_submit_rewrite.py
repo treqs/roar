@@ -135,6 +135,8 @@ def test_maybe_rewrite_submit_command_accepts_finalizer_without_command_change(
 
 def test_execution_backends_registers_ray_backend() -> None:
     from roar.execution.framework.registry import (
+        is_execution_noise_command,
+        is_execution_task_command,
         iter_execution_backends,
         match_execution_backend_for_module,
     )
@@ -145,6 +147,9 @@ def test_execution_backends_registers_ray_backend() -> None:
     assert match_execution_backend_for_module("ray") is not None
     assert match_execution_backend_for_module("ray.data").name == "ray"
     assert match_execution_backend_for_module("numpy") is None
+    assert is_execution_noise_command("ray_task:s3_proxy")
+    assert is_execution_task_command("ray_task:my_task")
+    assert not is_execution_noise_command("python train.py")
 
 
 def test_iter_execution_backends_loads_builtin_modules_once(monkeypatch) -> None:

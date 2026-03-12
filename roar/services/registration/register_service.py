@@ -22,7 +22,6 @@ from urllib.parse import urlparse
 
 from sqlalchemy import text
 
-from ...backends.ray.constants import is_ray_noise_command
 from ...config import config_get
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
@@ -30,6 +29,10 @@ from ...core.interfaces.upload import LineageData
 from ...core.logging import get_logger
 from ...db.context import create_database_context, optional_repo
 from ...db.hashing.backend import compute_hashes_batch
+from ...execution.framework.registry import (
+    is_execution_noise_command,
+    is_execution_task_command,
+)
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
 from ...plugins.vcs.git import GitVCSProvider
@@ -745,7 +748,9 @@ class RegisterService:
         root_candidates = [job for job in normalized if self._is_local_parent_candidate(job)]
         if not root_candidates:
             root_candidates = [
-                job for job in normalized if not str(job.get("command", "")).startswith("ray_task:")
+                job
+                for job in normalized
+                if not is_execution_task_command(job.get("command"))
             ]
 
         for job in normalized:
@@ -762,7 +767,7 @@ class RegisterService:
         return normalized
 
     def _is_registration_noise_job(self, job: dict) -> bool:
-        return is_ray_noise_command(job.get("command"))
+        return is_execution_noise_command(job.get("command"))
 
     def _order_jobs_for_registration(self, jobs: list[dict]) -> list[dict]:
         jobs_by_uid = {
@@ -821,7 +826,7 @@ class RegisterService:
     def _is_local_parent_candidate(self, job: dict) -> bool:
         command = str(job.get("command", "") or "")
         job_type = str(job.get("job_type", "") or "")
-        return not command.startswith("ray_task:") and job_type != "build"
+        return not is_execution_task_command(command) and job_type != "build"
 
     def _parent_candidate_sort_key(self, job: dict) -> tuple[int, int, float, int]:
         command = str(job.get("command", "") or "")

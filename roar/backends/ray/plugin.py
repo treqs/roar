@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from roar.backends.ray.collector import collect_fragments
+from roar.backends.ray.constants import RAY_STEP_NOISE_COMMANDS, RAY_TASK_COMMAND_PREFIXES
 from roar.backends.ray.fragment_reconstituter import FragmentReconstituter
 from roar.backends.ray.proxy_fragments import build_proxy_fragment
 from roar.backends.ray.roar_worker import _run_worker_entrypoint, _startup
@@ -16,6 +17,7 @@ from roar.backends.ray.submit import (
 from roar.execution.framework.contract import (
     DistributedExecutionBackend,
     DriverBootstrapAdapter,
+    ExecutionPolicyAdapter,
     FragmentReconstitutionAdapter,
     RuntimeImportAdapter,
     WorkerBootstrapAdapter,
@@ -107,6 +109,10 @@ RAY_EXECUTION_BACKEND = DistributedExecutionBackend(
     ),
     fragment_reconstitution=FragmentReconstitutionAdapter(
         create_reconstituter=ray_reconstituter_factory,
+    ),
+    policy=ExecutionPolicyAdapter(
+        noise_commands=RAY_STEP_NOISE_COMMANDS,
+        task_command_prefixes=RAY_TASK_COMMAND_PREFIXES,
     ),
     runtime_import=RuntimeImportAdapter(
         module_prefixes=("ray",),

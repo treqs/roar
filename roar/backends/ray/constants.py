@@ -1,5 +1,7 @@
 """Shared constants for Ray lineage capture and presentation."""
 
+RAY_TASK_COMMAND_PREFIXES = ("ray_task:",)
+
 RAY_STEP_NOISE_COMMANDS = (
     "ray_task:unknown",
     "ray_task:__init__",

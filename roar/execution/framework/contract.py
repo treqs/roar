@@ -65,6 +65,12 @@ class FragmentReconstitutionAdapter:
 
 
 @dataclass(frozen=True)
+class ExecutionPolicyAdapter:
+    noise_commands: tuple[str, ...] = ()
+    task_command_prefixes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class RuntimeImportAdapter:
     module_prefixes: tuple[str, ...]
     patch_module: TrackedModulePatcher
@@ -78,6 +84,7 @@ class DistributedExecutionBackend:
     driver_bootstrap: DriverBootstrapAdapter
     worker_bootstrap: WorkerBootstrapAdapter
     fragment_reconstitution: FragmentReconstitutionAdapter | None = None
+    policy: ExecutionPolicyAdapter | None = None
     runtime_import: RuntimeImportAdapter | None = None
 
 
@@ -85,6 +92,7 @@ __all__ = [
     "ROAR_EXECUTION_BACKEND_ENV",
     "DistributedExecutionBackend",
     "DriverBootstrapAdapter",
+    "ExecutionPolicyAdapter",
     "FragmentReconstitutionAdapter",
     "RuntimeImportAdapter",
     "SubmitCommandRewrite",
