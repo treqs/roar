@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from roar.ray.submit_context import (
+from roar.backends.ray.submit_context import (
     build_submit_instrumentation_context,
     build_submit_source_environ,
     derive_submit_proxy_port,

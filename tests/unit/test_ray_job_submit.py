@@ -1,7 +1,7 @@
 import importlib
 import json
 
-from roar.ray.submit_context import derive_submit_proxy_port
+from roar.backends.ray.submit_context import derive_submit_proxy_port
 
 
 def _module():

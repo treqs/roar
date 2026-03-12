@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import blake2s
 
-from roar.ray.env_contract import (
+from roar.backends.ray.env_contract import (
     ROAR_CLUSTER_AWS_ENDPOINT_URL_ENV,
     ROAR_CLUSTER_GLAAS_URL_ENV,
     resolve_cluster_glaas_url,

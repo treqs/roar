@@ -1,4 +1,4 @@
-"""Shared environment contract for Ray submit, driver, and worker bootstrap."""
+"""Ray backend environment contract for submit, driver, and worker bootstrap."""
 
 from __future__ import annotations
 

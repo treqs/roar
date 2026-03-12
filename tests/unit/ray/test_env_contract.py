@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from roar.ray.env_contract import (
+from roar.backends.ray.env_contract import (
     ROAR_CLUSTER_GLAAS_URL_ENV,
     merge_worker_bootstrap_env,
     resolve_cluster_glaas_url,

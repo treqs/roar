@@ -13,8 +13,8 @@ try:
 except ImportError:  # pragma: no cover
     import tomli as tomllib
 
+from roar.backends.ray.env_contract import merge_worker_bootstrap_env
 from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV
-from roar.ray.env_contract import merge_worker_bootstrap_env
 from roar.services.execution.worker_bootstrap import (
     WORKER_PY_EXECUTABLE,
     WORKER_SETUP_HOOK,
