@@ -31,6 +31,7 @@ from ...db.context import create_database_context, optional_repo
 from ...db.hashing.backend import compute_hashes_batch
 from ...execution.framework.registry import (
     is_execution_noise_command,
+    is_execution_submit_command,
     is_execution_task_command,
 )
 from ...filters.omit import OmitFilter, OmitMatch
@@ -831,7 +832,7 @@ class RegisterService:
     def _parent_candidate_sort_key(self, job: dict) -> tuple[int, int, float, int]:
         command = str(job.get("command", "") or "")
         return (
-            1 if "ray job submit" in command else 0,
+            1 if is_execution_submit_command(command) else 0,
             int(job.get("step_number") or 0),
             float(job.get("timestamp") or 0.0),
             int(job.get("id") or 0),

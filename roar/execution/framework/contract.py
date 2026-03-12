@@ -69,6 +69,7 @@ class FragmentReconstitutionAdapter:
 class ExecutionPolicyAdapter:
     noise_commands: tuple[str, ...] = ()
     task_command_prefixes: tuple[str, ...] = ()
+    job_environment_markers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

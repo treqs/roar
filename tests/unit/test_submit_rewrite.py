@@ -5,6 +5,7 @@ import types
 from roar.execution.framework.contract import (
     DistributedExecutionBackend,
     DriverBootstrapAdapter,
+    ExecutionPolicyAdapter,
     FragmentReconstitutionAdapter,
     SubmitCommandRewrite,
     WorkerBootstrapAdapter,
@@ -18,6 +19,7 @@ def _backend(
     matches_command,
     rewrite_submit_command,
     with_reconstitution: bool = False,
+    policy: ExecutionPolicyAdapter | None = None,
 ) -> DistributedExecutionBackend:
     reconstitution = None
     if with_reconstitution:
@@ -42,6 +44,7 @@ def _backend(
             run_entrypoint=lambda _argv: None,
         ),
         fragment_reconstitution=reconstitution,
+        policy=policy,
     )
 
 
@@ -135,7 +138,9 @@ def test_maybe_rewrite_submit_command_accepts_finalizer_without_command_change(
 
 def test_execution_backends_registers_ray_backend() -> None:
     from roar.execution.framework.registry import (
+        is_execution_backend_job_environment,
         is_execution_noise_command,
+        is_execution_submit_command,
         is_execution_task_command,
         iter_execution_backends,
         match_execution_backend_for_module,
@@ -147,9 +152,32 @@ def test_execution_backends_registers_ray_backend() -> None:
     assert match_execution_backend_for_module("ray") is not None
     assert match_execution_backend_for_module("ray.data").name == "ray"
     assert match_execution_backend_for_module("numpy") is None
+    assert is_execution_backend_job_environment({"RAY_JOB_ID": "job-123"})
+    assert is_execution_submit_command("ray job submit -- python main.py")
     assert is_execution_noise_command("ray_task:s3_proxy")
     assert is_execution_task_command("ray_task:my_task")
     assert not is_execution_noise_command("python train.py")
+
+
+def test_execution_policy_helpers_use_registered_backend_policy(monkeypatch) -> None:
+    import roar.execution.framework.registry as module
+
+    fake_backend = _backend(
+        name="fake",
+        matches_command=lambda command: command[:2] == ["fake", "submit"],
+        rewrite_submit_command=lambda command: SubmitCommandRewrite(command=["fake", *command]),
+        policy=ExecutionPolicyAdapter(
+            job_environment_markers=("FAKE_JOB_ID",),
+            task_command_prefixes=("fake_task:",),
+        ),
+    )
+
+    monkeypatch.setattr(module, "_registered_execution_backends", [fake_backend])
+    monkeypatch.setattr(module, "_execution_backends_discovered", True)
+
+    assert module.is_execution_backend_job_environment({"FAKE_JOB_ID": "job-123"})
+    assert module.is_execution_submit_command(["fake", "submit", "--", "python", "main.py"])
+    assert module.is_execution_task_command("fake_task:train")
 
 
 def test_iter_execution_backends_loads_builtin_modules_once(monkeypatch) -> None:

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import importlib
+import os
+import shlex
+from collections.abc import Mapping, Sequence
 from importlib import metadata as importlib_metadata
 
 from roar.execution.framework.contract import DistributedExecutionBackend
@@ -90,6 +93,31 @@ def is_execution_task_command(command: str | None) -> bool:
     return any(text.startswith(prefix) for prefix in iter_execution_task_command_prefixes())
 
 
+def iter_execution_job_environment_markers() -> tuple[str, ...]:
+    _ensure_execution_backends_discovered()
+    markers: list[str] = []
+    for backend in _registered_execution_backends:
+        policy = backend.policy
+        if policy is None:
+            continue
+        markers.extend(str(marker) for marker in policy.job_environment_markers if str(marker))
+    return tuple(dict.fromkeys(markers))
+
+
+def is_execution_backend_job_environment(environ: Mapping[str, str] | None = None) -> bool:
+    resolved_env = os.environ if environ is None else environ
+    if _truthy_env_value(resolved_env.get("ROAR_JOB_INSTRUMENTED")):
+        return True
+    return any(marker in resolved_env for marker in iter_execution_job_environment_markers())
+
+
+def is_execution_submit_command(command: str | Sequence[str] | None) -> bool:
+    tokens = _normalize_command_tokens(command)
+    if not tokens:
+        return False
+    return any(backend.matches_submit_command(list(tokens)) for backend in iter_execution_backends())
+
+
 def _ensure_execution_backends_discovered() -> None:
     global _execution_backends_discovered, _execution_backends_discovering
 
@@ -160,11 +188,32 @@ def _register_entrypoint_payload(payload: object) -> None:
     )
 
 
+def _normalize_command_tokens(command: str | Sequence[str] | None) -> tuple[str, ...]:
+    if command is None:
+        return ()
+    if isinstance(command, str):
+        text = command.strip()
+        if not text:
+            return ()
+        try:
+            return tuple(shlex.split(text))
+        except ValueError:
+            return tuple(part for part in text.split() if part)
+    return tuple(str(part) for part in command if str(part))
+
+
+def _truthy_env_value(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 __all__ = [
     "get_execution_backend",
+    "is_execution_backend_job_environment",
     "is_execution_noise_command",
+    "is_execution_submit_command",
     "is_execution_task_command",
     "iter_execution_backends",
+    "iter_execution_job_environment_markers",
     "iter_execution_noise_commands",
     "iter_execution_task_command_prefixes",
     "match_execution_backend_for_module",

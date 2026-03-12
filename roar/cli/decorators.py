@@ -30,8 +30,8 @@ def _has_roar_dir(ctx: Any) -> bool:
     return isinstance(roar_dir, Path) and roar_dir.exists()
 
 
-def _auto_init_for_ray_job(ctx: RoarContext) -> None:
-    """Create a minimal .roar project for Ray job drivers."""
+def _auto_init_for_backend_job(ctx: RoarContext) -> None:
+    """Create a minimal .roar project for distributed backend job drivers."""
     from .commands.init import init_project
 
     cwd = getattr(ctx, "cwd", None)
@@ -79,14 +79,19 @@ def require_init(f: F) -> F:
 
         initialized = bool(ctx.is_initialized) or _has_roar_dir(ctx)
 
-        if not initialized and (
-            "RAY_JOB_ID" in os.environ or os.environ.get("ROAR_JOB_INSTRUMENTED") == "1"
-        ):
+        if not initialized:
+            from ..execution.framework.registry import is_execution_backend_job_environment
+
+            should_auto_init = is_execution_backend_job_environment(os.environ)
+        else:
+            should_auto_init = False
+
+        if should_auto_init:
             try:
-                _auto_init_for_ray_job(ctx)
+                _auto_init_for_backend_job(ctx)
             except Exception as e:
                 raise click.ClickException(
-                    f"Failed to auto-initialize roar project in Ray job: {e}"
+                    f"Failed to auto-initialize roar project in backend job: {e}"
                 ) from e
             initialized = bool(ctx.is_initialized) or _has_roar_dir(ctx)
 

@@ -38,7 +38,7 @@ def proxy_claim_root(env: Mapping[str, str] | None = None) -> Path:
     configured = str(resolved_env.get("ROAR_PROXY_CLAIM_DIR", "")).strip()
     if configured:
         return Path(configured)
-    return Path(tempfile.gettempdir()) / "roar-ray-proxy-claims"
+    return Path(tempfile.gettempdir()) / "roar-proxy-claims"
 
 
 def proxy_claim_path(port: int, env: Mapping[str, str] | None = None) -> Path:

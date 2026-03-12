@@ -15,6 +15,7 @@ from roar.backends.ray.node_agent import RoarNodeAgent, _local_proxy_port  # noq
 from roar.services.execution.cluster_bridge import (  # noqa: E402
     LocalProxyClusterBridge,
     proxy_claim_path,
+    proxy_claim_root,
 )
 
 
@@ -71,6 +72,11 @@ def test_local_proxy_port_prefers_roar_proxy_port_env(monkeypatch) -> None:
 def test_local_proxy_port_falls_back_for_invalid_values(monkeypatch) -> None:
     monkeypatch.setenv("ROAR_PROXY_PORT", "invalid")
     assert _local_proxy_port() == 19191
+
+
+def test_proxy_claim_root_uses_generic_default_name(monkeypatch) -> None:
+    monkeypatch.delenv("ROAR_PROXY_CLAIM_DIR", raising=False)
+    assert proxy_claim_root().name == "roar-proxy-claims"
 
 
 def test_cluster_bridge_refuses_reuse_when_existing_listener_claim_upstream_differs(

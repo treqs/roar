@@ -109,6 +109,7 @@ RAY_EXECUTION_BACKEND = DistributedExecutionBackend(
     policy=ExecutionPolicyAdapter(
         noise_commands=RAY_STEP_NOISE_COMMANDS,
         task_command_prefixes=RAY_TASK_COMMAND_PREFIXES,
+        job_environment_markers=("RAY_JOB_ID",),
     ),
     runtime_import=RuntimeImportAdapter(
         module_prefixes=("ray",),
