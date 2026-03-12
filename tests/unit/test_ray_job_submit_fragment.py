@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def _module():
-    return importlib.import_module("roar.cli.commands._ray_job_submit")
+    return importlib.import_module("roar.backends.ray.submit")
 
 
 def _base_ray_job_submit_command() -> list[str]:

@@ -1,4 +1,4 @@
-"""Unit tests: _merge_roar_runtime_env_pip() must not produce duplicate pip entries.
+"""Unit tests: Ray submit pip merge must not produce duplicate pip entries.
 
 BUG: when ROAR_CLUSTER_PIP_REQ is a URL-based requirement (e.g. a presigned S3 URL),
 _requirement_name() returns the full URL rather than a canonical package name like
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from roar.cli.commands._ray_job_submit import _merge_roar_runtime_env_pip
+from roar.backends.ray.submit import _merge_roar_runtime_env_pip
 
 FAKE_WHEEL_URL = (
     "https://example.com/wheels/roar_cli-0.2.12-cp312-cp312-linux_x86_64.whl"

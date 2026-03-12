@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from roar.cli.commands._ray_job_submit import (
+from roar.backends.ray.submit import (
     maybe_rewrite_ray_job_submit,
     ray_submit_matches_command,
 )

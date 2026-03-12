@@ -8,7 +8,7 @@ This test file reproduces the cloud topology exactly:
 These tests cover host-submit behavior that only shows up in the cloud/remote-cluster topology:
 
   BUG 1 — Worker proxy endpoint unreachable (502 Bad Gateway):
-    _ray_job_submit.py hardcodes AWS_ENDPOINT_URL=http://127.0.0.1:19191 into
+    the Ray submit rewrite used to hardcode AWS_ENDPOINT_URL=http://127.0.0.1:19191 into
     the worker runtime env. Workers inside Docker containers or on remote EC2s
     cannot connect to the host's local proxy → all S3 calls fail with 502.
 

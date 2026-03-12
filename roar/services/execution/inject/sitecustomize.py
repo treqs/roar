@@ -304,7 +304,7 @@ def _patch_ray_init(ray_module) -> None:
             result = _real_ray_init(*args, **kwargs)
             _register_pre_shutdown_ray_collection()
 
-            # ROAR_JOB_ID is injected by _ray_job_submit.py into runtime_env env_vars,
+            # ROAR_JOB_ID is injected by the Ray submit adapter into runtime_env env_vars,
             # so both the driver and all workers see the same value.
             if _node_agents_enabled():
                 # Spawn node agents synchronously so proxies are ready before
