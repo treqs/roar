@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import importlib
 import os
-import pkgutil
 import shlex
 from collections.abc import Mapping, Sequence
 from importlib import metadata as importlib_metadata
 from typing import Any
 
-import roar.backends
 from roar.execution.framework.contract import BackendConfigAdapter, ExecutionBackend
 
 _ENTRYPOINT_GROUP = "roar.execution_backends"
+_BUILTIN_EXECUTION_BACKEND_MODULES = (
+    "roar.backends.ray.plugin",
+    "roar.backends.local.plugin",
+)
 _registered_execution_backends: list[ExecutionBackend] = []
 _execution_backends_discovered = False
 _execution_backends_discovering = False
@@ -253,8 +255,15 @@ def _ensure_execution_backends_discovered() -> None:
 
 
 def _load_builtin_execution_backends() -> None:
-    for module_name in _iter_builtin_execution_backend_modules():
-        importlib.import_module(module_name)
+    for module_name in _BUILTIN_EXECUTION_BACKEND_MODULES:
+        module = importlib.import_module(module_name)
+        register = getattr(module, "register", None)
+        if not callable(register):
+            raise TypeError(
+                "builtin execution backend module must export a callable register(), "
+                f"missing on {module_name}"
+            )
+        _register_entrypoint_payload(register)
 
 
 def _load_entrypoint_execution_backends() -> None:
@@ -322,15 +331,6 @@ def _normalize_command_tokens(command: str | Sequence[str] | None) -> tuple[str,
 
 def _truthy_env_value(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _iter_builtin_execution_backend_modules() -> tuple[str, ...]:
-    modules: list[str] = []
-    for module_info in pkgutil.iter_modules(roar.backends.__path__, prefix="roar.backends."):
-        if not module_info.ispkg:
-            continue
-        modules.append(f"{module_info.name}.plugin")
-    return tuple(sorted(modules))
 
 
 __all__ = [

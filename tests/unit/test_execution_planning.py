@@ -263,17 +263,12 @@ def test_iter_execution_backends_loads_builtin_modules_once(monkeypatch) -> None
 
     monkeypatch.setattr(module, "_registered_execution_backends", [])
     monkeypatch.setattr(module, "_execution_backends_discovered", False)
-    monkeypatch.setattr(
-        module,
-        "_iter_builtin_execution_backend_modules",
-        lambda: ("roar.backends.fake.plugin",),
-    )
+    monkeypatch.setattr(module, "_BUILTIN_EXECUTION_BACKEND_MODULES", ("roar.backends.fake.plugin",))
     monkeypatch.setattr(module, "_iter_execution_backend_entrypoints", lambda: ())
 
     def _fake_import_module(name: str):
         imports.append(name)
-        module.register_execution_backend(fake_backend)
-        return types.SimpleNamespace()
+        return types.SimpleNamespace(register=lambda: fake_backend)
 
     monkeypatch.setattr(module.importlib, "import_module", _fake_import_module)
 
@@ -301,7 +296,7 @@ def test_iter_execution_backends_loads_entrypoint_callable_once(monkeypatch) -> 
 
     monkeypatch.setattr(module, "_registered_execution_backends", [])
     monkeypatch.setattr(module, "_execution_backends_discovered", False)
-    monkeypatch.setattr(module, "_iter_builtin_execution_backend_modules", lambda: ())
+    monkeypatch.setattr(module, "_BUILTIN_EXECUTION_BACKEND_MODULES", ())
 
     class _FakeEntryPoint:
         name = "plugin"

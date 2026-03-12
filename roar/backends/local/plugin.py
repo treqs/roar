@@ -38,9 +38,6 @@ def register() -> ExecutionBackend:
     register_execution_backend(LOCAL_EXECUTION_BACKEND)
     return LOCAL_EXECUTION_BACKEND
 
-
-register()
-
 __all__ = [
     "LOCAL_EXECUTION_BACKEND",
     "local_matches_command",
