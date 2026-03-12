@@ -55,7 +55,8 @@ def test_worker_process_setup_hook_job_succeeds(ray_cluster: dict[str, str]) -> 
 
     assert status == "SUCCEEDED", (
         "Expected the submitted Ray job to succeed when "
-        "`roar.ray.roar_worker._startup` runs as `worker_process_setup_hook`.\n"
+        "`roar.services.execution.worker_bootstrap.startup` runs as "
+        "`worker_process_setup_hook`.\n"
         f"payload={json.dumps(payload, sort_keys=True)}\n"
         f"stdout:\n{stdout}\n"
         f"stderr:\n{stderr}"

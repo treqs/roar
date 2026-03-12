@@ -225,14 +225,14 @@ def test_configure_local_proxy_endpoint_preserves_upstream(monkeypatch: pytest.M
     import roar.ray.roar_worker as roar_worker
 
     monkeypatch.setenv("ROAR_UPSTREAM_S3_ENDPOINT", "http://minio:9000")
-    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:19191")
-    monkeypatch.setenv("ROAR_PROXY_PORT", "19191")
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:24567")
+    monkeypatch.setenv("ROAR_PROXY_PORT", "24567")
 
     roar_worker._configure_local_proxy_endpoint()
 
     assert roar_worker.os.environ["ROAR_UPSTREAM_S3_ENDPOINT"] == "http://minio:9000"
-    assert roar_worker.os.environ["AWS_ENDPOINT_URL"] == "http://127.0.0.1:19191"
-    assert roar_worker.os.environ["ROAR_PROXY_PORT"] == "19191"
+    assert roar_worker.os.environ["AWS_ENDPOINT_URL"] == "http://127.0.0.1:24567"
+    assert roar_worker.os.environ["ROAR_PROXY_PORT"] == "24567"
     assert roar_worker._proxy_configured is True
 
 

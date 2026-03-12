@@ -38,6 +38,7 @@ classifiers = [
 dependencies = [
     "blake3>=0.3.0",
     "click>=8.1.0",
+    "cryptography>=42.0.0",
     "dependency-injector>=4.40.0",
     "msgpack>=1.0.0",
     "sqlalchemy>=2.0.0",
@@ -69,7 +70,10 @@ dev = [
 [project.scripts]
 # This registers `roar` on PATH after pip install
 roar = "roar.__main__:main"
-roar-worker = "roar.ray.roar_worker:main"
+roar-worker = "roar.services.execution.worker_bootstrap:main"
+
+[project.entry-points."roar.execution_backends"]
+ray = "roar.backends.ray.plugin:register"
 
 [tool.maturin]
 manifest-path = "rust/crates/artifact-hash-py/Cargo.toml"

@@ -63,28 +63,45 @@ def _node_id() -> str:
 
 
 @ray.remote
-def _node_s3_write(run_id: str, bucket: str, index: int) -> dict[str, Any]:
+def _node_s3_write(
+    run_id: str,
+    bucket: str,
+    index: int,
+    operations_per_node: int,
+    sleep_seconds: float,
+) -> dict[str, Any]:
     node_id = _node_id()
-    key = f"multi-node-affinity/{run_id}/{str(node_id)[:8]}/item-{index:03d}.txt"
-    payload = f"{run_id}|{node_id}|{index}|{time.time_ns()}"
     s3 = _s3_client()
-    put_resp = s3.put_object(Bucket=bucket, Key=key, Body=payload.encode("utf-8"))
-    get_resp = s3.get_object(Bucket=bucket, Key=key)
-    body = get_resp["Body"].read().decode("utf-8")
+    paths: list[str] = []
+    payload_matches: list[bool] = []
+    etags: list[str] = []
+    for op_index in range(operations_per_node):
+        key = f"multi-node-affinity/{run_id}/{str(node_id)[:8]}/item-{index:03d}-op-{op_index:03d}.txt"
+        payload = f"{run_id}|{node_id}|{index}|{op_index}|{time.time_ns()}"
+        put_resp = s3.put_object(Bucket=bucket, Key=key, Body=payload.encode("utf-8"))
+        get_resp = s3.get_object(Bucket=bucket, Key=key)
+        body = get_resp["Body"].read().decode("utf-8")
+        paths.append(f"s3://{bucket}/{key}")
+        etags.append(str((put_resp or {}).get("ETag", "")))
+        payload_matches.append(body == payload)
+        if sleep_seconds > 0 and op_index + 1 < operations_per_node:
+            time.sleep(sleep_seconds)
     return {
         "node_id": node_id,
         "index": index,
         "bucket": bucket,
-        "key": key,
-        "path": f"s3://{bucket}/{key}",
-        "etag": str((put_resp or {}).get("ETag", "")),
-        "payload_match": body == payload,
+        "path": paths[-1],
+        "paths": paths,
+        "etags": etags,
+        "payload_match": all(payload_matches),
     }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bucket", default="test-bucket")
+    parser.add_argument("--operations-per-node", type=int, default=1)
+    parser.add_argument("--sleep-seconds", type=float, default=0.0)
     args = parser.parse_args(argv)
 
     run_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
@@ -107,7 +124,13 @@ def main(argv: list[str] | None = None) -> int:
             if node_resource:
                 options["resources"] = {node_resource: 0.001}
             scheduled.append(
-                _node_s3_write.options(**options).remote(run_id, str(args.bucket), index)
+                _node_s3_write.options(**options).remote(
+                    run_id,
+                    str(args.bucket),
+                    index,
+                    int(args.operations_per_node),
+                    float(args.sleep_seconds),
+                )
             )
 
         for ref in scheduled:
@@ -121,10 +144,15 @@ def main(argv: list[str] | None = None) -> int:
             if not isinstance(item, dict):
                 continue
             node_id = str(item.get("node_id") or "")
-            path = str(item.get("path") or "")
-            if not node_id or not path:
+            raw_paths = item.get("paths")
+            if isinstance(raw_paths, list):
+                paths = [str(path) for path in raw_paths if str(path)]
+            else:
+                path = str(item.get("path") or "")
+                paths = [path] if path else []
+            if not node_id or not paths:
                 continue
-            node_to_keys.setdefault(node_id, []).append(path)
+            node_to_keys.setdefault(node_id, []).extend(paths)
         report["node_to_keys"] = node_to_keys
 
         print(json.dumps(report, sort_keys=True))

@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from roar.db.context import create_database_context
 
 from .collector import _resolve_active_session_context, collect_fragments
+from .fragment import derive_fragment_fallback_identity, derive_task_identity
 from .s3_key_paths import parse_s3_key_placeholder, s3_object_key
 
 
@@ -222,11 +223,7 @@ class FragmentReconstituter:
         winners: dict[tuple[str, str, str], tuple[int, dict[str, Any]]] = {}
 
         for fragment_index, fragment in enumerate(fragments):
-            task_key = str(
-                fragment.get("job_uid")
-                or fragment.get("ray_task_id")
-                or f"fragment:{fragment_index}"
-            )
+            task_key = FragmentReconstituter._fragment_task_key(fragment, fragment_index)
             for list_key in ("reads", "writes"):
                 items = fragment.get(list_key, [])
                 if not isinstance(items, list):
@@ -250,11 +247,7 @@ class FragmentReconstituter:
                         FragmentReconstituter._merge_ref_metadata(existing[1], item)
 
         for fragment_index, fragment in enumerate(fragments):
-            task_key = str(
-                fragment.get("job_uid")
-                or fragment.get("ray_task_id")
-                or f"fragment:{fragment_index}"
-            )
+            task_key = FragmentReconstituter._fragment_task_key(fragment, fragment_index)
             for list_key in ("reads", "writes"):
                 if list_key not in fragment:
                     continue
@@ -276,6 +269,26 @@ class FragmentReconstituter:
                 fragment[list_key] = deduplicated_items
 
         return fragments
+
+    @staticmethod
+    def _fragment_task_key(fragment: dict[str, Any], fragment_index: int) -> str:
+        task_identity = str(fragment.get("task_identity") or "").strip()
+        if task_identity:
+            return task_identity
+
+        derived = derive_task_identity(
+            str(fragment.get("parent_job_uid") or ""),
+            str(fragment.get("ray_task_id") or ""),
+            str(fragment.get("job_uid") or ""),
+        )
+        if derived:
+            return derived
+
+        fallback = derive_fragment_fallback_identity(fragment)
+        if fallback:
+            return fallback
+
+        return f"fragment:{fragment_index}"
 
     @staticmethod
     def _drop_proxy_fallback_duplicates(fragments: list[dict[str, Any]]) -> list[dict[str, Any]]:

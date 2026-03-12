@@ -274,6 +274,51 @@ class TestRegisterService:
         jobs_by_uid = {job["job_uid"]: job for job in normalized}
         assert jobs_by_uid["phase-job"]["parent_job_uid"] == "local-submit"
 
+    def test_normalize_jobs_for_registration_filters_known_ray_noise_jobs(self, service):
+        submit_job = {
+            "id": 1,
+            "job_uid": "local-submit",
+            "step_number": 1,
+            "timestamp": 10.0,
+            "command": "ray job submit --address http://localhost:8265 -- python main.py",
+            "job_type": None,
+        }
+        noise_job = {
+            "id": 2,
+            "job_uid": "noise-job",
+            "parent_job_uid": "local-submit",
+            "step_number": 2,
+            "timestamp": 20.0,
+            "command": "ray_task:unknown",
+            "job_type": "ray_task",
+        }
+        phase_job = {
+            "id": 3,
+            "job_uid": "phase-job",
+            "parent_job_uid": "noise-job",
+            "step_number": 3,
+            "timestamp": 30.0,
+            "command": "ray_task:process_shard",
+            "job_type": "ray_task",
+        }
+        shutdown_job = {
+            "id": 4,
+            "job_uid": "shutdown-job",
+            "parent_job_uid": "local-submit",
+            "step_number": 4,
+            "timestamp": 40.0,
+            "command": "ray_task:shutdown",
+            "job_type": "ray_task",
+        }
+
+        normalized = service._normalize_jobs_for_registration(
+            [submit_job, noise_job, phase_job, shutdown_job]
+        )
+
+        assert [job["job_uid"] for job in normalized] == ["local-submit", "phase-job"]
+        jobs_by_uid = {job["job_uid"]: job for job in normalized}
+        assert jobs_by_uid["phase-job"]["parent_job_uid"] == "local-submit"
+
     def test_register_artifact_lineage_file_not_found(self, service):
         """Test error when artifact file doesn't exist."""
         result = service.register_artifact_lineage(
@@ -451,6 +496,100 @@ class TestRegisterService:
         assert result.jobs_registered == 2
         assert result.artifacts_registered == 3
         # In dry-run mode, no actual API calls should be made
+        service._coordinator.register_lineage.assert_not_called()
+
+    def test_register_artifact_lineage_dry_run_filters_known_ray_noise_jobs(
+        self,
+        service,
+        tmp_path,
+        mock_lineage_collector,
+        mock_session_service,
+    ):
+        """Dry-run counts should exclude known internal Ray/bootstrap jobs."""
+        artifact_file = tmp_path / "file.csv"
+        artifact_file.write_text("data")
+
+        from roar.core.interfaces.upload import LineageData
+
+        mock_lineage = LineageData(
+            jobs=[
+                {
+                    "id": 1,
+                    "job_uid": "local-submit",
+                    "step_number": 1,
+                    "timestamp": 10.0,
+                    "command": "ray job submit --address http://localhost:8265 -- python main.py",
+                    "job_type": None,
+                    "_outputs": [{"artifact_id": "driver-output"}],
+                },
+                {
+                    "id": 2,
+                    "job_uid": "noise-job",
+                    "parent_job_uid": "local-submit",
+                    "step_number": 2,
+                    "timestamp": 20.0,
+                    "command": "ray_task:unknown",
+                    "job_type": "ray_task",
+                    "_outputs": [{"artifact_id": "noise-output"}],
+                },
+                {
+                    "id": 3,
+                    "job_uid": "phase-job",
+                    "parent_job_uid": "noise-job",
+                    "step_number": 3,
+                    "timestamp": 30.0,
+                    "command": "ray_task:process_shard",
+                    "job_type": "ray_task",
+                    "_inputs": [{"artifact_id": "driver-output"}],
+                    "_outputs": [{"artifact_id": "task-output"}],
+                },
+            ],
+            artifacts=[{"id": "a1"}],
+            artifact_hashes={"hash1"},
+            pipeline={"id": 1},
+        )
+        mock_lineage_collector.collect.return_value = mock_lineage
+        mock_session_service.compute_session_hash.return_value = "session-hash-1"
+
+        with patch(
+            "roar.services.registration.register_service.create_database_context"
+        ) as mock_ctx:
+            mock_db = MagicMock()
+            mock_db.__enter__ = MagicMock(return_value=mock_db)
+            mock_db.__exit__ = MagicMock(return_value=None)
+            mock_db.artifacts.get_by_hash.return_value = {
+                "id": "1",
+                "hashes": [{"algorithm": "blake3", "digest": "abc123"}],
+            }
+            mock_db.sessions.get_active.return_value = {
+                "id": 1,
+                "git_commit": "abc",
+                "git_branch": "main",
+            }
+            mock_ctx.return_value = mock_db
+
+            with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
+                mock_vcs = MagicMock()
+                mock_vcs.get_repo_root.return_value = str(tmp_path)
+                mock_vcs.get_remote_url.return_value = "https://github.com/test/repo"
+                mock_vcs.get_commit_hash.return_value = "abc123"
+                mock_vcs.get_branch.return_value = "main"
+                mock_vcs.get_status.return_value = (True, [])
+                mock_git.return_value = mock_vcs
+
+                with patch("roar.services.registration.register_service.config_get") as mock_config:
+                    mock_config.return_value = False
+
+                    result = service.register_artifact_lineage(
+                        artifact_path=str(artifact_file),
+                        roar_dir=tmp_path / ".roar",
+                        cwd=tmp_path,
+                        dry_run=True,
+                    )
+
+        assert result.success is True
+        assert result.jobs_registered == 2
+        assert result.links_created == 3
         service._coordinator.register_lineage.assert_not_called()
 
     def test_register_artifact_lineage_glaas_health_check_fails(

@@ -32,6 +32,7 @@ from ...db.hashing.backend import compute_hashes_batch
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
 from ...plugins.vcs.git import GitVCSProvider
+from ...ray.constants import is_ray_noise_command
 from ...services.labels import collect_label_sync_payloads
 from ..put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
 from ..transfer.common import resolve_repo_url_or_local_uri
@@ -550,8 +551,9 @@ class RegisterService:
         )
         self._logger.debug("Session hash: %s", session_hash[:12])
 
+        omit_filter = self.omit_filter
         detected_secrets: list[str] = []
-        if self.omit_filter:
+        if omit_filter:
             detected_secrets = self._detect_secrets_in_lineage(lineage, git_context)
             self._logger.debug("Detected %d potential secret types", len(detected_secrets))
 
@@ -574,17 +576,21 @@ class RegisterService:
                         aborted_by_user=True,
                     )
 
-            if detected_secrets or self.omit_filter.enabled:
-                lineage = self._filter_lineage_secrets(lineage, git_context)
+        if detected_secrets or (omit_filter is not None and omit_filter.enabled):
+            lineage = self._filter_lineage_secrets(lineage, git_context)
+
+        registration_jobs = self._order_jobs_for_registration(
+            self._normalize_jobs_for_registration(lineage.jobs)
+        )
 
         if dry_run:
             return RegisterResult(
                 success=True,
                 session_hash=session_hash,
                 artifact_hash=artifact_hash,
-                jobs_registered=len(lineage.jobs),
+                jobs_registered=len(registration_jobs),
                 artifacts_registered=len(lineage.artifacts),
-                links_created=self._estimate_links(lineage.jobs),
+                links_created=self._estimate_links(registration_jobs),
                 secrets_detected=detected_secrets,
                 secrets_redacted=bool(detected_secrets),
             )
@@ -640,9 +646,7 @@ class RegisterService:
         batch_result: BatchRegistrationResult = self.coordinator.register_lineage(
             session_hash=session_hash,
             git_context=git_context,
-            jobs=self._order_jobs_for_registration(
-                self._normalize_jobs_for_registration(lineage.jobs)
-            ),
+            jobs=registration_jobs,
             artifacts=self._prepare_artifacts(lineage.artifacts, session_hash),
         )
 
@@ -734,7 +738,7 @@ class RegisterService:
         return ""
 
     def _normalize_jobs_for_registration(self, jobs: list[dict]) -> list[dict]:
-        normalized = [dict(job) for job in jobs]
+        normalized = [dict(job) for job in jobs if not self._is_registration_noise_job(job)]
         known_job_uids = {
             str(job["job_uid"]) for job in normalized if isinstance(job.get("job_uid"), str)
         }
@@ -756,6 +760,9 @@ class RegisterService:
                 job["parent_job_uid"] = None
 
         return normalized
+
+    def _is_registration_noise_job(self, job: dict) -> bool:
+        return is_ray_noise_command(job.get("command"))
 
     def _order_jobs_for_registration(self, jobs: list[dict]) -> list[dict]:
         jobs_by_uid = {

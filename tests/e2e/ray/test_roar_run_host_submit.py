@@ -37,6 +37,7 @@ COMPOSE_FILE = Path(__file__).resolve().parent / "docker-compose.yml"
 JOBS_DIR = Path(__file__).resolve().parent / "jobs"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ROAR_BIN = REPO_ROOT / ".venv" / "bin" / "roar"
+PYTHON_ENV_ROAR_BIN = Path(sys.executable).with_name("roar")
 HOST_GLAAS_URL = "http://localhost:3001"
 CLUSTER_GLAAS_URL = "http://host.docker.internal:3001"
 
@@ -49,8 +50,9 @@ pytestmark = [pytest.mark.e2e, pytest.mark.ray_contract]
 
 def _roar_bin() -> str:
     """Return path to the local roar binary."""
-    if ROAR_BIN.exists():
-        return str(ROAR_BIN)
+    for candidate in (ROAR_BIN, PYTHON_ENV_ROAR_BIN):
+        if candidate.exists():
+            return str(candidate)
     # Fallback: rely on PATH (conftest prepends .venv/bin)
     return "roar"
 

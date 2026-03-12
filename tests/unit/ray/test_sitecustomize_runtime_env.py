@@ -256,7 +256,9 @@ def test_prepare_worker_runtime_env_sets_roar_worker_and_preload(
 
     working_dir = Path(str(prepared["working_dir"]))
     assert prepared["py_executable"] == "roar-worker"
-    assert prepared["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
+    assert (
+        prepared["worker_process_setup_hook"] == "roar.services.execution.worker_bootstrap.startup"
+    )
     assert (working_dir / "user-file.txt").read_text(encoding="utf-8") == "hello"
     assert (working_dir / "libroar_tracer_preload.so").read_text(encoding="utf-8") == "preload"
     assert not (working_dir / "sitecustomize.py").exists()
@@ -328,7 +330,9 @@ def test_prepare_worker_runtime_env_warns_when_working_dir_is_not_local(
 
     assert warnings
     assert prepared["py_executable"] == "roar-worker"
-    assert prepared["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
+    assert (
+        prepared["worker_process_setup_hook"] == "roar.services.execution.worker_bootstrap.startup"
+    )
     assert prepared["working_dir"] == non_local_working_dir
 
 
@@ -376,7 +380,9 @@ def test_prepare_worker_runtime_env_uses_roar_worker_entrypoint(
 
     prepared = sitecustomize._prepare_worker_runtime_env({}, "jobworker")
     assert prepared["py_executable"] == "roar-worker"
-    assert prepared["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
+    assert (
+        prepared["worker_process_setup_hook"] == "roar.services.execution.worker_bootstrap.startup"
+    )
 
 
 def test_prepare_worker_runtime_env_does_not_write_worker_sitecustomize(
@@ -407,7 +413,9 @@ def test_prepare_worker_runtime_env_ignores_existing_worker_setup_hook(
     )
 
     assert prepared["py_executable"] == "roar-worker"
-    assert prepared["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
+    assert (
+        prepared["worker_process_setup_hook"] == "roar.services.execution.worker_bootstrap.startup"
+    )
 
 
 def test_patch_ray_init_propagates_fragment_streaming_env_to_workers(
@@ -439,6 +447,35 @@ def test_patch_ray_init_propagates_fragment_streaming_env_to_workers(
     assert runtime_env["env_vars"]["ROAR_FRAGMENT_TOKEN"] == "ab" * 32
 
 
+def test_prepare_worker_env_vars_preserves_existing_cluster_visible_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ROAR_CLUSTER_GLAAS_URL", "http://host.docker.internal:3001")
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:24567")
+    monkeypatch.setenv("ROAR_PROXY_PORT", "24567")
+    monkeypatch.setenv("ROAR_UPSTREAM_S3_ENDPOINT", "http://minio:9000")
+    monkeypatch.setenv("ROAR_SESSION_ID", "session-123")
+    monkeypatch.setenv("ROAR_FRAGMENT_TOKEN", "ab" * 32)
+
+    env_vars = sitecustomize._prepare_worker_env_vars(
+        {
+            "GLAAS_URL": "http://user-configured:3001",
+            "AWS_ENDPOINT_URL": "http://user-endpoint:9000",
+        },
+        job_id="job-worker-1",
+        driver_job_uid="driver-1234",
+    )
+
+    assert env_vars["ROAR_JOB_ID"] == "job-worker-1"
+    assert env_vars["ROAR_DRIVER_JOB_UID"] == "driver-1234"
+    assert env_vars["GLAAS_URL"] == "http://user-configured:3001"
+    assert env_vars["AWS_ENDPOINT_URL"] == "http://user-endpoint:9000"
+    assert env_vars["ROAR_PROXY_PORT"] == "24567"
+    assert env_vars["ROAR_UPSTREAM_S3_ENDPOINT"] == "http://minio:9000"
+    assert env_vars["ROAR_SESSION_ID"] == "session-123"
+    assert env_vars["ROAR_FRAGMENT_TOKEN"] == "ab" * 32
+
+
 def test_patch_ray_init_sets_driver_job_uid_for_workers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -461,5 +498,8 @@ def test_patch_ray_init_sets_driver_job_uid_for_workers(
 
     runtime_env = calls[-1]["runtime_env"]
     assert runtime_env["py_executable"] == "roar-worker"
-    assert runtime_env["worker_process_setup_hook"] == "roar.ray.roar_worker._startup"
+    assert (
+        runtime_env["worker_process_setup_hook"]
+        == "roar.services.execution.worker_bootstrap.startup"
+    )
     assert runtime_env["env_vars"]["ROAR_DRIVER_JOB_UID"] == "driver-uid-1234"

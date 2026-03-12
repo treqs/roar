@@ -1,0 +1,107 @@
+"""Canonical registry surface for distributed execution backends."""
+
+from __future__ import annotations
+
+import importlib
+from importlib import metadata as importlib_metadata
+
+from roar.execution.framework.contract import DistributedExecutionBackend
+
+_ENTRYPOINT_GROUP = "roar.execution_backends"
+_BUILTIN_EXECUTION_BACKEND_MODULES = ("roar.backends.ray.plugin",)
+_registered_execution_backends: list[DistributedExecutionBackend] = []
+_execution_backends_discovered = False
+
+
+def register_execution_backend(backend: DistributedExecutionBackend) -> None:
+    for existing in _registered_execution_backends:
+        if existing.name == backend.name:
+            return
+    _registered_execution_backends.append(backend)
+
+
+def iter_execution_backends() -> tuple[DistributedExecutionBackend, ...]:
+    _ensure_execution_backends_discovered()
+    return tuple(_registered_execution_backends)
+
+
+def get_execution_backend(name: str) -> DistributedExecutionBackend:
+    _ensure_execution_backends_discovered()
+    normalized_name = str(name or "").strip()
+    for backend in _registered_execution_backends:
+        if backend.name == normalized_name:
+            return backend
+    raise LookupError(f"unknown execution backend: {normalized_name or '<empty>'}")
+
+
+def _ensure_execution_backends_discovered() -> None:
+    global _execution_backends_discovered
+
+    if _execution_backends_discovered:
+        return
+
+    _load_builtin_execution_backends()
+    _load_entrypoint_execution_backends()
+    _execution_backends_discovered = True
+
+
+def _load_builtin_execution_backends() -> None:
+    for module_name in _BUILTIN_EXECUTION_BACKEND_MODULES:
+        importlib.import_module(module_name)
+
+
+def _load_entrypoint_execution_backends() -> None:
+    for entry_point in _iter_execution_backend_entrypoints():
+        payload = entry_point.load()
+        _register_entrypoint_payload(payload)
+
+
+def _iter_execution_backend_entrypoints():
+    try:
+        return tuple(importlib_metadata.entry_points(group=_ENTRYPOINT_GROUP))
+    except TypeError:
+        entry_points = importlib_metadata.entry_points()
+        select = getattr(entry_points, "select", None)
+        if callable(select):
+            return tuple(select(group=_ENTRYPOINT_GROUP))
+        return tuple(entry_points.get(_ENTRYPOINT_GROUP, ()))
+
+
+def _register_entrypoint_payload(payload: object) -> None:
+    if isinstance(payload, DistributedExecutionBackend):
+        register_execution_backend(payload)
+        return
+
+    if not callable(payload):
+        raise TypeError(
+            "execution backend entry point must load to a DistributedExecutionBackend or callable, "
+            f"got {type(payload).__name__}"
+        )
+
+    result = payload()
+    if result is None:
+        return
+    if isinstance(result, DistributedExecutionBackend):
+        register_execution_backend(result)
+        return
+    if isinstance(result, (list, tuple)):
+        for item in result:
+            if not isinstance(item, DistributedExecutionBackend):
+                raise TypeError(
+                    "execution backend entry point iterable must contain "
+                    "DistributedExecutionBackend items"
+                )
+            register_execution_backend(item)
+        return
+
+    raise TypeError(
+        "execution backend entry point callable must return None, DistributedExecutionBackend, "
+        f"or a list/tuple of backends, got {type(result).__name__}"
+    )
+
+
+__all__ = [
+    "get_execution_backend",
+    "iter_execution_backends",
+    "register_execution_backend",
+]

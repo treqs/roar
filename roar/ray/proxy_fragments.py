@@ -5,7 +5,7 @@ from collections.abc import Sequence
 
 from roar.ray.collector import collect_fragments
 from roar.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
-from roar.ray.glaas_fragment_streamer import GlaasFragmentStreamer
+from roar.services.execution.fragment_transport import emit_fragment_dicts
 from roar.services.execution.proxy import S3LogEntry
 
 _S3_WRITE_OPS = frozenset({"PutObject", "UploadPart", "CompleteMultipartUpload", "DeleteObject"})
@@ -74,26 +74,12 @@ def build_proxy_fragment(
 
 
 def emit_fragment(fragment: TaskFragment) -> None:
-    session_id = str(os.environ.get("ROAR_SESSION_ID", "")).strip()
-    token = str(os.environ.get("ROAR_FRAGMENT_TOKEN", "")).strip()
-    glaas_url = str(os.environ.get("GLAAS_URL") or "").strip()
-
-    if session_id and token and glaas_url:
-        streamer = GlaasFragmentStreamer(
-            session_id=session_id,
-            token=token,
-            glaas_url=glaas_url,
-        )
-        streamer.append_fragment(fragment.to_dict())
-        streamer.close()
-        return
-
-    project_dir = str(os.environ.get("ROAR_PROJECT_DIR", "")).strip()
-    if not project_dir:
-        return
-
-    collect_fragments(
-        fragments=[fragment.to_dict()],
-        project_dir=project_dir,
-        driver_job_uid=os.environ.get("ROAR_JOB_ID"),
+    emit_fragment_dicts(
+        [fragment.to_dict()],
+        env=os.environ,
+        local_merge=lambda fragments, project_dir, driver_job_uid: collect_fragments(
+            fragments=fragments,
+            project_dir=project_dir,
+            driver_job_uid=driver_job_uid,
+        ),
     )

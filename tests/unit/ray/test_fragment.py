@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from roar.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
+from roar.ray.fragment import ArtifactRef, TaskFragment, derive_task_identity, derive_task_uid
 
 
 def _sample_fragment() -> TaskFragment:
@@ -76,8 +76,56 @@ def test_derive_task_uid_changes_with_task_id() -> None:
     assert uid1 != uid2
 
 
-def test_derive_task_uid_is_8_char_hex() -> None:
+def test_derive_task_uid_is_32_char_hex() -> None:
     uid = derive_task_uid("job-a", "task-1")
 
-    assert len(uid) == 8
+    assert len(uid) == 32
     assert int(uid, 16) >= 0
+
+
+def test_derive_task_identity_is_stable_hex() -> None:
+    identity = derive_task_identity("job-a", "task-1")
+
+    assert len(identity) == 32
+    assert int(identity, 16) >= 0
+
+
+def test_derive_task_identity_changes_with_job_uid_when_parent_is_missing() -> None:
+    identity_one = derive_task_identity("", "task-1", "deadbeef")
+    identity_two = derive_task_identity("", "task-1", "feedface")
+
+    assert identity_one != identity_two
+
+
+def test_task_fragment_populates_task_identity_from_parent_and_ray_task_id() -> None:
+    fragment = _sample_fragment()
+
+    assert fragment.task_identity == derive_task_identity("cafebabe", "task-123", "deadbeef")
+
+
+def test_task_fragment_populates_deterministic_identity_when_primary_ids_missing() -> None:
+    fragment_one = TaskFragment(
+        job_uid="",
+        parent_job_uid="",
+        ray_task_id="",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="train_step",
+        started_at=100.0,
+        ended_at=120.0,
+        exit_code=0,
+        writes=[
+            ArtifactRef(
+                path="/tmp/output.parquet",
+                hash="b" * 64,
+                hash_algorithm="blake3",
+                size=84,
+                capture_method="proxy",
+            )
+        ],
+    )
+    fragment_two = TaskFragment.from_dict(fragment_one.to_dict())
+
+    assert fragment_one.task_identity
+    assert fragment_two.task_identity == fragment_one.task_identity

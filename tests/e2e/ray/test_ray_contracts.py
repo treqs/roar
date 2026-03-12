@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -213,6 +215,75 @@ def test_multi_node_lineage_merges_jobs_from_multiple_nodes(
     db_node_ids.discard("")
 
     assert len(db_node_ids) >= 2
+
+
+@pytest.mark.timeout(300)
+def test_overlapping_multi_node_host_submits_keep_proxy_lineage_isolated(
+    ray_cluster: dict[str, str],
+) -> None:
+    first_project_dir = make_host_project_dir("ray-contract-overlap-a")
+    second_project_dir = make_host_project_dir("ray-contract-overlap-b")
+    init_host_project(first_project_dir)
+    init_host_project(second_project_dir)
+
+    start = Event()
+
+    def _run_overlap_submit(project_dir: Path):
+        start.wait(timeout=10)
+        return run_roar_ray_job_from_host(
+            project_dir,
+            ray_cluster,
+            "s3_multi_node_affinity.py",
+            use_fragment_store=True,
+            script_args=["--operations-per-node", "3", "--sleep-seconds", "0.5"],
+            timeout=240,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(_run_overlap_submit, first_project_dir)
+        second_future = executor.submit(_run_overlap_submit, second_project_dir)
+        start.set()
+        first_result = first_future.result(timeout=260)
+        second_result = second_future.result(timeout=260)
+
+    _assert_submit_ok(first_result)
+    _assert_submit_ok(second_result)
+
+    first_payload = _parse_last_json(first_result.stdout)
+    second_payload = _parse_last_json(second_result.stdout)
+    first_run_id = str(first_payload["run_id"])
+    second_run_id = str(second_payload["run_id"])
+    assert first_run_id != second_run_id
+
+    first_runtime_paths = {
+        str(path)
+        for paths in dict(first_payload.get("node_to_keys") or {}).values()
+        if isinstance(paths, list)
+        for path in paths
+        if str(path)
+    }
+    second_runtime_paths = {
+        str(path)
+        for paths in dict(second_payload.get("node_to_keys") or {}).values()
+        if isinstance(paths, list)
+        for path in paths
+        if str(path)
+    }
+    assert len(first_runtime_paths) >= 2
+    assert len(second_runtime_paths) >= 2
+    assert first_runtime_paths.isdisjoint(second_runtime_paths)
+
+    first_db_rows = _output_rows(first_project_dir, f"%multi-node-affinity/{first_run_id}/%")
+    second_db_rows = _output_rows(second_project_dir, f"%multi-node-affinity/{second_run_id}/%")
+    first_db_paths = {str(row["path"]) for row in first_db_rows if row["path"]}
+    second_db_paths = {str(row["path"]) for row in second_db_rows if row["path"]}
+    assert first_runtime_paths <= first_db_paths
+    assert second_runtime_paths <= second_db_paths
+
+    first_foreign_rows = _output_rows(first_project_dir, f"%multi-node-affinity/{second_run_id}/%")
+    second_foreign_rows = _output_rows(second_project_dir, f"%multi-node-affinity/{first_run_id}/%")
+    assert not first_foreign_rows, first_foreign_rows
+    assert not second_foreign_rows, second_foreign_rows
 
 
 def test_fragments_capture_tmp_paths_but_reconstitution_filters_them_by_default(

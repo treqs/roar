@@ -63,65 +63,91 @@ def request_json(
     )
 
     auth_header = auth_header_factory(method, path, body_bytes)
-    req = urllib.request.Request(url, data=body_bytes, method=method)
-    if auth_header:
-        req.add_header("Authorization", auth_header)
-    if body_bytes:
-        req.add_header("Content-Type", "application/json")
 
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            http_status = resp.status
-            response_body = resp.read().decode()
-            _get_logger().debug(
-                "API response: %s %s -> HTTP %d (%d bytes)",
-                method,
-                path,
-                http_status,
-                len(response_body),
-            )
+    def _build_request(auth_value: str | None) -> urllib.request.Request:
+        req = urllib.request.Request(url, data=body_bytes, method=method)
+        if auth_value:
+            req.add_header("Authorization", auth_value)
+        if body_bytes:
+            req.add_header("Content-Type", "application/json")
+        return req
 
-            if not response_body or not response_body.strip():
-                return {}, None
-
-            result, error = parse_json_response(response_body, http_status)
-            if error:
-                return None, error
-
-            if isinstance(result, dict) and result.get("success") and "data" in result:
-                return result["data"], None
-            return result, None
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode() if e.fp else ""
-        error_data, _ = parse_json_response(error_body, e.code)
-        if error_data and isinstance(error_data, dict):
-            detail = error_data.get("detail") or error_data.get("message") or str(e)
-        elif error_body:
-            stripped = error_body.strip()
-            if e.code == 403 and (
-                stripped.startswith("<!") or stripped.lower().startswith("<html")
-            ):
-                detail = (
-                    "Access denied by proxy or firewall (received HTML 403). "
-                    "Check network configuration."
+    def _perform_request(auth_value: str | None) -> tuple[Any | None, str | None, int | None]:
+        req = _build_request(auth_value)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                http_status = resp.status
+                response_body = resp.read().decode()
+                _get_logger().debug(
+                    "API response: %s %s -> HTTP %d (%d bytes)",
+                    method,
+                    path,
+                    http_status,
+                    len(response_body),
                 )
+
+                if not response_body or not response_body.strip():
+                    return {}, None, http_status
+
+                result, error = parse_json_response(response_body, http_status)
+                if error:
+                    return None, error, http_status
+
+                if isinstance(result, dict) and result.get("success") and "data" in result:
+                    return result["data"], None, http_status
+                return result, None, http_status
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else ""
+            error_data, _ = parse_json_response(error_body, e.code)
+            if error_data and isinstance(error_data, dict):
+                detail = error_data.get("detail") or error_data.get("message") or str(e)
+            elif error_body:
+                stripped = error_body.strip()
+                if e.code == 403 and (
+                    stripped.startswith("<!") or stripped.lower().startswith("<html")
+                ):
+                    detail = (
+                        "Access denied by proxy or firewall (received HTML 403). "
+                        "Check network configuration."
+                    )
+                else:
+                    preview = error_body[:100].replace("\n", " ")
+                    detail = (
+                        f"Non-JSON response: '{preview}...'"
+                        if len(error_body) > 100
+                        else error_body
+                    )
             else:
-                preview = error_body[:100].replace("\n", " ")
-                detail = (
-                    f"Non-JSON response: '{preview}...'" if len(error_body) > 100 else error_body
-                )
-        else:
-            detail = str(e)
-        _get_logger().debug("API error: %s %s -> HTTP %d: %s", method, path, e.code, detail[:200])
-        return None, f"HTTP {e.code}: {detail}"
-    except urllib.error.URLError as e:
-        _get_logger().debug("GLaaS connection error to %s: %s", url, e)
-        return None, f"Connection error: {e}"
-    except json.JSONDecodeError as e:
+                detail = str(e)
+            _get_logger().debug(
+                "API error: %s %s -> HTTP %d: %s", method, path, e.code, detail[:200]
+            )
+            return None, f"HTTP {e.code}: {detail}", e.code
+        except urllib.error.URLError as e:
+            _get_logger().debug("GLaaS connection error to %s: %s", url, e)
+            return None, f"Connection error: {e}", None
+        except json.JSONDecodeError as e:
+            _get_logger().debug(
+                "GLaaS invalid JSON response from %s at position %d: %s", url, e.pos, e.msg
+            )
+            return None, f"Invalid JSON response at position {e.pos}: {e.msg}", None
+        except Exception as e:
+            _get_logger().debug("GLaaS request to %s failed: %s", url, e)
+            return None, str(e), None
+
+    result, error, status_code = _perform_request(auth_header)
+    if error is None:
+        return result, None
+
+    if auth_header and status_code == 401:
         _get_logger().debug(
-            "GLaaS invalid JSON response from %s at position %d: %s", url, e.pos, e.msg
+            "GLaaS optional-auth fallback: retrying %s %s without Authorization after 401",
+            method,
+            path,
         )
-        return None, f"Invalid JSON response at position {e.pos}: {e.msg}"
-    except Exception as e:
-        _get_logger().debug("GLaaS request to %s failed: %s", url, e)
-        return None, str(e)
+        retry_result, retry_error, _retry_status = _perform_request(None)
+        if retry_error is None:
+            return retry_result, None
+        return retry_result, retry_error
+
+    return result, error

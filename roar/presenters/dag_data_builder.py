@@ -5,14 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from ..db.context import optional_repo
-
-_STEP_NOISE_COMMANDS = {
-    "ray_task:unknown",
-    "ray_task:__init__",
-    "ray_task:s3_proxy",
-    "ray_task:s3_driver_proxy",
-    "ray_task:RoarNodeAgent.__init__",
-}
+from ..ray.constants import is_ray_noise_command
 
 
 class DagDataBuilder:
@@ -135,7 +128,7 @@ class DagDataBuilder:
         parent_job_uid = str(step.get("parent_job_uid") or "")
         is_phase_wrapper = (
             command.startswith("ray_task:")
-            and command not in _STEP_NOISE_COMMANDS
+            and not is_ray_noise_command(command)
             and bool(parent_job_uid)
             and bool(script)
             and "." not in script
@@ -144,9 +137,9 @@ class DagDataBuilder:
             priority = 6
         elif is_phase_wrapper:
             priority = 5
-        elif command and command not in _STEP_NOISE_COMMANDS:
+        elif command and not is_ray_noise_command(command):
             priority = 4
-        elif command in _STEP_NOISE_COMMANDS:
+        elif is_ray_noise_command(command):
             priority = 1
         else:
             priority = 2

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import fcntl
 import functools
 import importlib
 import json
@@ -25,6 +26,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 COMPOSE_FILE = Path(__file__).resolve().parent / "docker-compose.yml"
 REPO_ROOT = COMPOSE_FILE.parent.parent.parent.parent.resolve()
 ROAR_BIN = REPO_ROOT / ".venv" / "bin" / "roar"
+PYTHON_ENV_ROAR_BIN = Path(sys.executable).with_name("roar")
 HOST_JOBS_DIR = COMPOSE_FILE.parent / "jobs"
 HOST_PROJECTS_DIR = REPO_ROOT.parent / ".tmp-ray-e2e"
 HOST_GLAAS_URL = "http://localhost:3001"
@@ -35,6 +37,7 @@ FRAGMENT_STORE_URL = CLUSTER_GLAAS_URL
 HEAD_TIMEOUT_SECONDS = 120
 WORKERS_TIMEOUT_SECONDS = 60
 POLL_INTERVAL_SECONDS = 3
+RAY_CLUSTER_LOCK_FILE = Path(tempfile.gettempdir()) / "roar-ray-e2e.lock"
 
 
 def _is_compiled_extension(module: object) -> bool:
@@ -84,14 +87,15 @@ def _get_ray():
 def pytest_configure(config: pytest.Config) -> None:
     # Ensure subprocess calls in tests can find tools installed in this repo's
     # virtualenv (for example the `ray` CLI used by infra health checks).
-    venv_bin = REPO_ROOT / ".venv" / "bin"
-    if venv_bin.exists():
-        current_path = os.environ.get("PATH", "")
-        venv_bin_text = str(venv_bin)
-        if venv_bin_text not in current_path.split(":"):
-            os.environ["PATH"] = (
-                f"{venv_bin_text}:{current_path}" if current_path else venv_bin_text
-            )
+    current_path = os.environ.get("PATH", "")
+    path_entries = current_path.split(":") if current_path else []
+    for bin_dir in (PYTHON_ENV_ROAR_BIN.parent, (REPO_ROOT / ".venv" / "bin")):
+        if not bin_dir.exists():
+            continue
+        bin_dir_text = str(bin_dir)
+        if bin_dir_text not in path_entries:
+            os.environ["PATH"] = f"{bin_dir_text}:{current_path}" if current_path else bin_dir_text
+            break
 
     config.option.importmode = "importlib"
     with contextlib.suppress(
@@ -140,6 +144,25 @@ def run_docker(args: Sequence[str], **kwargs):
 
 def _compose_args(compose_file: Path, *args: str) -> list[str]:
     return ["docker", "compose", "-f", str(compose_file), *args]
+
+
+@contextlib.contextmanager
+def _exclusive_ray_cluster_lock():
+    """Serialize the Docker-backed Ray cluster across xdist workers.
+
+    The compose stack uses fixed network and container names, so parallel
+    session fixtures on different workers will race `docker compose up/down`.
+    Holding the lock for the fixture lifetime makes Ray e2e effectively serial,
+    which is acceptable for this harness.
+    """
+
+    RAY_CLUSTER_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with RAY_CLUSTER_LOCK_FILE.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _wait_for_ray_head(compose_file: Path) -> None:
@@ -237,8 +260,9 @@ def exec_on_service(
 
 
 def _roar_bin() -> str:
-    if ROAR_BIN.exists():
-        return str(ROAR_BIN)
+    for candidate in (ROAR_BIN, PYTHON_ENV_ROAR_BIN):
+        if candidate.exists():
+            return str(candidate)
     return "roar"
 
 
@@ -631,31 +655,32 @@ def query_roar_db_on_head(
 
 @pytest.fixture(scope="session")
 def ray_cluster() -> dict[str, str]:
-    run_docker(
-        _compose_args(COMPOSE_FILE, "down", "-v", "--remove-orphans"),
-        check=False,
-    )
-    _sync_packaged_rust_artifacts_for_ray_images()
-    run_docker(
-        _compose_args(COMPOSE_FILE, "up", "-d", "--build"),
-        check=True,
-    )
-    try:
-        _wait_for_ray_head(COMPOSE_FILE)
-        _wait_for_workers(COMPOSE_FILE)
-        _ensure_roar_db(COMPOSE_FILE)
-        yield {
-            "head_address": "ray://localhost:10001",
-            "dashboard_url": "http://localhost:8265",
-            "minio_endpoint": "http://localhost:9000",
-            "cluster_minio_endpoint": "http://minio:9000",
-            "compose_file": str(COMPOSE_FILE),
-        }
-    finally:
+    with _exclusive_ray_cluster_lock():
         run_docker(
-            _compose_args(COMPOSE_FILE, "down", "-v"),
+            _compose_args(COMPOSE_FILE, "down", "-v", "--remove-orphans"),
             check=False,
         )
+        _sync_packaged_rust_artifacts_for_ray_images()
+        run_docker(
+            _compose_args(COMPOSE_FILE, "up", "-d", "--build"),
+            check=True,
+        )
+        try:
+            _wait_for_ray_head(COMPOSE_FILE)
+            _wait_for_workers(COMPOSE_FILE)
+            _ensure_roar_db(COMPOSE_FILE)
+            yield {
+                "head_address": "ray://localhost:10001",
+                "dashboard_url": "http://localhost:8265",
+                "minio_endpoint": "http://localhost:9000",
+                "cluster_minio_endpoint": "http://minio:9000",
+                "compose_file": str(COMPOSE_FILE),
+            }
+        finally:
+            run_docker(
+                _compose_args(COMPOSE_FILE, "down", "-v", "--remove-orphans"),
+                check=False,
+            )
 
 
 @pytest.fixture(scope="function")

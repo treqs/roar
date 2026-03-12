@@ -5,7 +5,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 import uuid
 
@@ -13,6 +12,14 @@ try:
     import tomllib
 except ImportError:  # pragma: no cover
     import tomli as tomllib
+
+from roar.ray.env_contract import merge_worker_bootstrap_env
+from roar.services.execution.distributed_backends import ROAR_EXECUTION_BACKEND_ENV
+from roar.services.execution.worker_bootstrap import (
+    WORKER_PY_EXECUTABLE,
+    WORKER_SETUP_HOOK,
+    prepare_worker_runtime_env,
+)
 
 # ------------------------------------------------------------------------------
 # Data structures the parent will ingest
@@ -259,8 +266,6 @@ def _write_log():
 _DEFAULT_RAY_NODE_POLL_INTERVAL_SECONDS = 5.0
 _NODE_AGENT_RESOURCE_FRACTION = 0.0001
 _WORKER_SETUP_HOOK_ENV_VAR = "__RAY_WORKER_PROCESS_SETUP_HOOK_ENV_VAR"
-_WORKER_SETUP_HOOK = "roar.ray.roar_worker._startup"
-_WORKER_PY_EXECUTABLE = "roar-worker"
 _ray_node_poller_lock = threading.Lock()
 _ray_node_poller_stop = threading.Event()
 _ray_node_poller_thread = None
@@ -365,7 +370,7 @@ def _prepare_instrumented_job_worker_runtime_env(runtime_env, job_id: str):
     """
     del job_id
     runtime_env = dict(runtime_env or {})
-    runtime_env["py_executable"] = _WORKER_PY_EXECUTABLE
+    runtime_env["py_executable"] = WORKER_PY_EXECUTABLE
     return runtime_env
 
 
@@ -781,90 +786,26 @@ def _prepare_worker_env_vars(
     job_id: str,
     driver_job_uid: str,
 ):
-    env_vars = dict(existing_env_vars or {})
-    env_vars["ROAR_JOB_ID"] = job_id
-    env_vars["ROAR_DRIVER_JOB_UID"] = str(driver_job_uid)
-
-    for key in (
-        "AWS_ENDPOINT_URL",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AWS_DEFAULT_REGION",
-        "AWS_REGION",
-        "ROAR_PROXY_PORT",
-        "ROAR_UPSTREAM_S3_ENDPOINT",
-        "ROAR_PROJECT_DIR",
-        "ROAR_JOB_INSTRUMENTED",
-        "ROAR_RAY_NODE_AGENTS",
-    ):
-        value = os.environ.get(key)
-        if value:
-            env_vars.setdefault(key, value)
-
-    cluster_glaas_url = os.environ.get("ROAR_CLUSTER_GLAAS_URL") or os.environ.get("GLAAS_URL")
-    if cluster_glaas_url:
-        env_vars.setdefault("GLAAS_URL", cluster_glaas_url)
-
-    for key in ("ROAR_SESSION_ID", "ROAR_FRAGMENT_TOKEN"):
-        value = os.environ.get(key)
-        if value:
-            env_vars.setdefault(key, value)
-
-    return env_vars
+    return merge_worker_bootstrap_env(
+        existing_env_vars,
+        os.environ,
+        job_id=job_id,
+        driver_job_uid=str(driver_job_uid),
+    )
 
 
 def _prepare_worker_runtime_env(runtime_env, job_id: str):
-    import shutil
-
-    runtime_env = dict(runtime_env or {})
-    prepared_working_dir: str | None = None
-
-    existing_working_dir = runtime_env.get("working_dir")
-    if isinstance(existing_working_dir, str) and existing_working_dir.strip():
-        if os.path.isdir(existing_working_dir):
-            prepared_working_dir = tempfile.mkdtemp(prefix=f"roar-worker-env-{job_id[:8]}-")
-            with _SuppressTracking():
-                _merge_working_dir(existing_working_dir, prepared_working_dir)
-        else:
-            _warn_roar(
-                "Skipping working_dir merge for non-local path %s while preparing Ray worker wrapper",
-                existing_working_dir,
-            )
-            prepared_working_dir = existing_working_dir
-
-    if not prepared_working_dir:
-        prepared_working_dir = tempfile.mkdtemp(prefix=f"roar-worker-env-{job_id[:8]}-")
-
-    if os.path.isdir(prepared_working_dir):
-        try:
-            from pathlib import Path
-
-            import roar
-            from roar.services.execution.tracer_backends import find_preload_library
-
-            roar_package_dir = Path(roar.__file__).resolve().parent
-            with _SuppressTracking():
-                shutil.copytree(
-                    roar_package_dir,
-                    os.path.join(prepared_working_dir, "roar"),
-                    dirs_exist_ok=True,
-                )
-
-                preload_library = find_preload_library(roar_package_dir)
-                if preload_library:
-                    shutil.copy2(
-                        preload_library,
-                        os.path.join(prepared_working_dir, "libroar_tracer_preload.so"),
-                    )
-        except Exception:
-            pass
-
+    backend_name = str(os.environ.get(ROAR_EXECUTION_BACKEND_ENV) or "").strip() or "ray"
+    runtime_env = prepare_worker_runtime_env(
+        backend_name,
+        dict(runtime_env or {}),
+        job_id,
+        source_environ=os.environ,
+    )
     env_vars = dict(runtime_env.get("env_vars", {}) or {})
-    env_vars[_WORKER_SETUP_HOOK_ENV_VAR] = _WORKER_SETUP_HOOK
-    runtime_env["working_dir"] = prepared_working_dir
-    runtime_env["py_executable"] = _WORKER_PY_EXECUTABLE
-    runtime_env["worker_process_setup_hook"] = _WORKER_SETUP_HOOK
+    env_vars[_WORKER_SETUP_HOOK_ENV_VAR] = WORKER_SETUP_HOOK
+    runtime_env["py_executable"] = WORKER_PY_EXECUTABLE
+    runtime_env["worker_process_setup_hook"] = WORKER_SETUP_HOOK
     runtime_env["env_vars"] = env_vars
     return runtime_env
 
@@ -1359,29 +1300,13 @@ def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
     if not fragments:
         return
 
-    # Try GLaaS fragment streaming first, fall back to direct DB write.
-    session_id = os.environ.get("ROAR_SESSION_ID", "")
-    fragment_token = os.environ.get("ROAR_FRAGMENT_TOKEN", "")
-    glaas_url = os.environ.get("GLAAS_URL") or ""
+    from roar.services.execution.fragment_transport import emit_fragment_dicts
 
-    if session_id and fragment_token and glaas_url:
-        try:
-            from roar.ray.glaas_fragment_streamer import GlaasFragmentStreamer
-
-            streamer = GlaasFragmentStreamer(
-                session_id=session_id,
-                token=fragment_token,
-                glaas_url=glaas_url,
-            )
-            for fragment in fragments:
-                streamer.append_fragment(fragment)
-            streamer.close()
-            return
-        except Exception:
-            pass
-
-    # Fallback: write directly to local roar.db (works when driver has project access).
-    _write_proxy_artifacts_to_db(parsed_refs)
+    emit_fragment_dicts(
+        fragments,
+        env=os.environ,
+        local_fallback=lambda: _write_proxy_artifacts_to_db(parsed_refs),
+    )
 
 
 def _write_proxy_artifacts_to_db(parsed: list) -> None:

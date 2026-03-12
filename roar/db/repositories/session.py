@@ -15,15 +15,8 @@ from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.orm import Session as SASession
 
 from ...core.interfaces.repositories import SessionRepository
+from ...ray.constants import RAY_STEP_NOISE_COMMANDS
 from ..models import Job, Session
-
-_STEP_NOISE_COMMANDS = (
-    "ray_task:unknown",
-    "ray_task:__init__",
-    "ray_task:s3_proxy",
-    "ray_task:s3_driver_proxy",
-    "ray_task:RoarNodeAgent.__init__",
-)
 
 
 class SQLAlchemySessionRepository(SessionRepository):
@@ -340,17 +333,17 @@ class SQLAlchemySessionRepository(SessionRepository):
                         (Job.job_type == "run", 6),
                         (
                             Job.command.is_not(None)
-                            & (~Job.command.in_(_STEP_NOISE_COMMANDS))
+                            & (~Job.command.in_(RAY_STEP_NOISE_COMMANDS))
                             & Job.parent_job_uid.is_not(None)
                             & Job.script.is_not(None)
                             & (~Job.script.like("%.%")),
                             5,
                         ),
                         (
-                            Job.command.is_not(None) & (~Job.command.in_(_STEP_NOISE_COMMANDS)),
+                            Job.command.is_not(None) & (~Job.command.in_(RAY_STEP_NOISE_COMMANDS)),
                             4,
                         ),
-                        (Job.command.in_(_STEP_NOISE_COMMANDS), 1),
+                        (Job.command.in_(RAY_STEP_NOISE_COMMANDS), 1),
                         else_=2,
                     ).desc()
                 )

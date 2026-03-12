@@ -21,7 +21,7 @@ def main() -> None:
 
     run_id = uuid.uuid4().hex[:8]
     key = f"driver/{run_id}/driver_proxy_capture.txt"
-    payload = b"driver proxy capture\n"
+    payload = f"driver proxy capture {run_id}\n".encode()
 
     s3.put_object(Bucket="test-bucket", Key=key, Body=payload)
     body = s3.get_object(Bucket="test-bucket", Key=key)["Body"].read().decode("utf-8")
@@ -29,6 +29,7 @@ def main() -> None:
     print(
         json.dumps(
             {
+                "run_id": run_id,
                 "key": key,
                 "body": body,
                 "aws_endpoint_url": os.environ.get("AWS_ENDPOINT_URL", ""),

@@ -54,8 +54,10 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
         patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
         patch.object(
             run_module,
-            "maybe_rewrite_ray_job_submit",
-            return_value=SimpleNamespace(command=rewritten_command, session_id=None),
+            "maybe_rewrite_submit_command",
+            return_value=SimpleNamespace(
+                command=rewritten_command, session_id=None, finalize_run=None
+            ),
         ) as mock_rewrite,
         patch.object(run_module, "execute_and_report", return_value=0) as mock_exec,
     ):
@@ -73,18 +75,25 @@ def test_run_with_non_ray_command_does_not_call_rewrite() -> None:
         patch.object(run_module, "validate_git_clean", return_value="/tmp/repo"),
         patch.object(run_module, "get_quiet_setting", return_value=False),
         patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
-        patch.object(run_module, "maybe_rewrite_ray_job_submit") as mock_rewrite,
+        patch.object(
+            run_module,
+            "maybe_rewrite_submit_command",
+            return_value=SimpleNamespace(
+                command=["python", "main.py"], session_id=None, finalize_run=None
+            ),
+        ) as mock_rewrite,
         patch.object(run_module, "execute_and_report", return_value=0) as mock_exec,
     ):
         result = runner.invoke(run, ["python", "main.py"], obj=_ctx())
 
     assert result.exit_code == 0
-    mock_rewrite.assert_not_called()
+    mock_rewrite.assert_called_once_with(["python", "main.py"])
     assert mock_exec.call_args.kwargs["command"] == ["python", "main.py"]
 
 
-def test_run_with_ray_job_submit_triggers_auto_reconstitution() -> None:
+def test_run_with_ray_job_submit_triggers_post_run_finalizer() -> None:
     runner = CliRunner()
+    ctx = _ctx()
     original_command = [
         "ray",
         "job",
@@ -112,7 +121,7 @@ def test_run_with_ray_job_submit_triggers_auto_reconstitution() -> None:
         "main.py",
     ]
 
-    fake_result = SimpleNamespace(jobs_merged=2, artifacts_merged=3, fragments_processed=4)
+    finalizer = MagicMock()
 
     with (
         patch.object(run_module, "validate_git_clean", return_value="/tmp/repo"),
@@ -120,23 +129,16 @@ def test_run_with_ray_job_submit_triggers_auto_reconstitution() -> None:
         patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
         patch.object(
             run_module,
-            "maybe_rewrite_ray_job_submit",
-            return_value=SimpleNamespace(command=rewritten_command, session_id="session-123"),
+            "maybe_rewrite_submit_command",
+            return_value=SimpleNamespace(
+                command=rewritten_command,
+                session_id="session-123",
+                finalize_run=finalizer,
+            ),
         ),
         patch.object(run_module, "execute_and_report", return_value=0),
-        patch.object(run_module, "get_glaas_url", return_value="http://localhost:3001"),
-        patch.object(run_module, "load_key", return_value={"token": "ab" * 32}),
-        patch.object(run_module, "FragmentReconstituter") as mock_reconstituter_cls,
     ):
-        mock_reconstituter_cls.return_value.reconstitute.return_value = fake_result
-        result = runner.invoke(run, original_command, obj=_ctx())
+        result = runner.invoke(run, original_command, obj=ctx)
 
     assert result.exit_code == 0
-    mock_reconstituter_cls.assert_called_once_with(
-        session_id="session-123",
-        token="ab" * 32,
-        glaas_url="http://localhost:3001",
-        roar_db_path=Path("/tmp/repo/.roar/roar.db"),
-    )
-    mock_reconstituter_cls.return_value.reconstitute.assert_called_once_with()
-    assert "[roar] lineage reconstituted: 2 jobs, 3 artifacts" in result.output
+    finalizer.assert_called_once_with(ctx)

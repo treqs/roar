@@ -368,6 +368,93 @@ def test_drop_proxy_fallback_duplicates_removes_driver_proxy_refs_owned_elsewher
     assert filtered[1]["writes"] == [{"path": "s3://bucket/other.json"}]
 
 
+def test_deduplicate_fragments_keeps_same_path_refs_for_distinct_task_identities() -> None:
+    module = _module()
+    fragments = [
+        {
+            "job_uid": "deadbeef",
+            "parent_job_uid": "driver-main",
+            "ray_task_id": "task-1",
+            "reads": [{"path": "s3://bucket/input.json", "capture_method": "proxy"}],
+        },
+        {
+            "job_uid": "deadbeef",
+            "parent_job_uid": "driver-main",
+            "ray_task_id": "task-2",
+            "reads": [{"path": "s3://bucket/input.json", "capture_method": "python"}],
+        },
+    ]
+
+    deduplicated = module.FragmentReconstituter._deduplicate_fragments(fragments)
+
+    assert deduplicated[0]["reads"] == [
+        {"path": "s3://bucket/input.json", "capture_method": "proxy"}
+    ]
+    assert deduplicated[1]["reads"] == [
+        {"path": "s3://bucket/input.json", "capture_method": "python"}
+    ]
+
+
+def test_deduplicate_fragments_keeps_same_path_refs_for_distinct_legacy_job_uids() -> None:
+    module = _module()
+    fragments = [
+        {
+            "job_uid": "deadbeef",
+            "ray_task_id": "task-1",
+            "reads": [{"path": "s3://bucket/input.json", "capture_method": "proxy"}],
+        },
+        {
+            "job_uid": "feedface",
+            "ray_task_id": "task-1",
+            "reads": [{"path": "s3://bucket/input.json", "capture_method": "python"}],
+        },
+    ]
+
+    deduplicated = module.FragmentReconstituter._deduplicate_fragments(fragments)
+
+    assert deduplicated[0]["reads"] == [
+        {"path": "s3://bucket/input.json", "capture_method": "proxy"}
+    ]
+    assert deduplicated[1]["reads"] == [
+        {"path": "s3://bucket/input.json", "capture_method": "python"}
+    ]
+
+
+def test_deduplicate_fragments_prefers_proxy_for_identity_less_duplicate_fragments() -> None:
+    module = _module()
+    fragments = [
+        {
+            "job_uid": "",
+            "ray_task_id": "",
+            "ray_worker_id": "worker-1",
+            "ray_node_id": "node-1",
+            "function_name": "process",
+            "started_at": 1.0,
+            "ended_at": 2.0,
+            "exit_code": 0,
+            "reads": [{"path": "s3://bucket/input.json", "capture_method": "proxy"}],
+        },
+        {
+            "job_uid": "",
+            "ray_task_id": "",
+            "ray_worker_id": "worker-1",
+            "ray_node_id": "node-1",
+            "function_name": "process",
+            "started_at": 1.0,
+            "ended_at": 2.0,
+            "exit_code": 0,
+            "reads": [{"path": "s3://bucket/input.json", "capture_method": "python"}],
+        },
+    ]
+
+    deduplicated = module.FragmentReconstituter._deduplicate_fragments(fragments)
+
+    assert deduplicated[0]["reads"] == [
+        {"path": "s3://bucket/input.json", "capture_method": "proxy"}
+    ]
+    assert deduplicated[1]["reads"] == []
+
+
 def test_reconstitute_is_idempotent_for_same_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -15,8 +18,11 @@ import pytest
 
 pytestmark = pytest.mark.live_glaas
 
+HOST_SUBMIT_JOBS_DIR = Path(__file__).resolve().parents[1] / "e2e" / "ray" / "jobs"
+RAY_JOB_ADDRESS = "http://localhost:8265"
 
-@pytest.fixture
+
+@pytest.fixture(scope="module")
 def glaas_url() -> str:
     """Get GLaaS server URL from environment or default."""
     return os.environ.get("GLAAS_URL", "http://localhost:3001")
@@ -74,11 +80,49 @@ def ray_cluster_available() -> bool:
         return False
 
 
+@pytest.fixture(scope="module")
+def ray_job_submit_available() -> bool:
+    try:
+        req = urllib.request.Request(f"{RAY_JOB_ADDRESS}/api/version")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 @pytest.fixture
 def glaas_client(glaas_url: str):
     from roar.glaas_client import GlaasClient
 
     return GlaasClient(glaas_url)
+
+
+@pytest.fixture(scope="module")
+def glaas_session_read_available(glaas_url: str) -> bool:
+    from roar.glaas_client import make_auth_header
+
+    session_hash = "0" * 64
+    api_path = f"/api/v1/sessions/{session_hash}"
+    headers = [None]
+
+    auth_header = make_auth_header("GET", api_path)
+    if auth_header:
+        headers.append(auth_header)
+
+    for header in headers:
+        req = urllib.request.Request(f"{glaas_url}{api_path}")
+        if header:
+            req.add_header("Authorization", header)
+        try:
+            with urllib.request.urlopen(req, timeout=5):
+                return True
+        except urllib.error.HTTPError as exc:
+            if exc.code != 401:
+                return True
+        except Exception:
+            return False
+
+    return False
 
 
 @pytest.fixture
@@ -105,7 +149,7 @@ def process_shard(shard_id: int, data: str) -> dict:
         json.dump(payload, handle)
     return {"checkpoint": os.path.abspath(out), "payload": payload}
 
-ray.init("ray://localhost:10001")
+ray.init(address="auto")
 shards = ["alpha data", "beta data", "gamma data"]
 results = ray.get([process_shard.remote(i, s) for i, s in enumerate(shards)])
 
@@ -141,17 +185,29 @@ def _require_live_services(glaas_available: bool, ray_cluster_available: bool) -
         pytest.skip("Ray cluster not available")
 
 
-def _register_model(roar_cli, git_commit) -> str:
-    run_result = roar_cli("run", sys.executable, "ray_train.py")
-    assert run_result.returncode == 0, run_result.stderr
-    git_commit("After ray train")
+def _require_host_submit_services(
+    glaas_available: bool,
+    ray_cluster_available: bool,
+    ray_job_submit_available: bool,
+) -> None:
+    _require_live_services(glaas_available, ray_cluster_available)
+    if not ray_job_submit_available:
+        pytest.skip("Ray dashboard job submit API not available")
 
-    reg = roar_cli("register", "model.json")
-    assert reg.returncode == 0, reg.stderr
 
-    session_hash = _parse_session_hash(reg.stdout)
-    assert session_hash, f"Could not parse session hash from: {reg.stdout}"
-    return session_hash
+def _require_live_session_read(glaas_session_read_available: bool) -> None:
+    if not glaas_session_read_available:
+        pytest.skip("GLaaS session read endpoint currently requires unavailable authorization")
+
+
+def _query_roar_db(repo: Path, query: str, params: tuple[object, ...] = ()) -> list[sqlite3.Row]:
+    conn = sqlite3.connect(repo / ".roar" / "roar.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(query, params)
+        return cur.fetchall()
+    finally:
+        conn.close()
 
 
 def _get_session_jobs(glaas_client, session_hash: str) -> list[dict]:
@@ -170,18 +226,168 @@ def _get_artifact_dag(glaas_client, artifact_hash: str) -> dict:
     return dag
 
 
+def _active_session_id(repo: Path) -> int:
+    rows = _query_roar_db(
+        repo,
+        """
+        SELECT id
+        FROM sessions
+        WHERE is_active = 1
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+    )
+    row = rows[0] if rows else None
+    assert row is not None, "Expected an active local roar session after host submit"
+    return int(row[0])
+
+
+def _compute_active_session_hash(repo: Path) -> str:
+    from roar.services.registration.session import SessionRegistrationService
+
+    session_id = _active_session_id(repo)
+    return SessionRegistrationService().compute_session_hash(
+        roar_dir=str(repo / ".roar"),
+        session_id=session_id,
+    )
+
+
+def _register_active_session_hash(repo: Path, roar_cli) -> str:
+    session_hash = _compute_active_session_hash(repo)
+    register_result = roar_cli("register", session_hash, "--yes")
+    assert register_result.returncode == 0, register_result.stderr
+    assert _parse_session_hash(register_result.stdout) == session_hash
+    return session_hash
+
+
+def _latest_artifact_hash(repo: Path, path_pattern: str, *, algorithm: str = "blake3") -> str:
+    rows = _query_roar_db(
+        repo,
+        """
+        SELECT ah.digest
+        FROM artifacts a
+        JOIN artifact_hashes ah ON ah.artifact_id = a.id
+        WHERE ah.algorithm = ?
+          AND COALESCE(a.path, a.first_seen_path) LIKE ?
+        ORDER BY a.first_seen_at DESC
+        LIMIT 1
+        """,
+        (algorithm, path_pattern),
+    )
+    assert rows, f"Expected artifact matching {path_pattern!r} in local roar.db"
+    return str(rows[0]["digest"])
+
+
+def _run_host_submit(
+    repo: Path,
+    *,
+    glaas_url: str,
+    working_dir: Path,
+    entrypoint: list[str],
+    runtime_env: dict[str, object] | None = None,
+    timeout: int = 180,
+) -> subprocess.CompletedProcess[str]:
+    candidate = Path(sys.executable).with_name("ray")
+    ray_binary = str(candidate) if candidate.exists() else shutil.which("ray")
+    if not ray_binary:
+        pytest.skip("ray CLI is not available in PATH")
+
+    env = dict(os.environ)
+    env.update(
+        {
+            "GLAAS_URL": glaas_url,
+            "ROAR_CLUSTER_GLAAS_URL": os.environ.get(
+                "ROAR_CLUSTER_GLAAS_URL",
+                "http://host.docker.internal:3001",
+            ),
+        }
+    )
+
+    command = [
+        sys.executable,
+        "-m",
+        "roar",
+        "run",
+        "--tracer",
+        "ptrace",
+        ray_binary,
+        "job",
+        "submit",
+        "--address",
+        RAY_JOB_ADDRESS,
+        "--working-dir",
+        str(working_dir),
+    ]
+    if runtime_env is not None:
+        command.extend(["--runtime-env-json", json.dumps(runtime_env)])
+    command.extend(["--", *entrypoint])
+
+    return subprocess.run(
+        command,
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+        env=env,
+    )
+
+
+def _run_host_submit_basic_file_io(
+    repo: Path, *, glaas_url: str
+) -> subprocess.CompletedProcess[str]:
+    return _run_host_submit(
+        repo,
+        glaas_url=glaas_url,
+        working_dir=HOST_SUBMIT_JOBS_DIR,
+        entrypoint=["python", "basic_file_io.py"],
+        runtime_env={"pip": ["pydantic==2.12.5", "pydantic-settings==2.12.0"]},
+    )
+
+
+def _run_host_submit_training(repo: Path, *, glaas_url: str) -> subprocess.CompletedProcess[str]:
+    return _run_host_submit(
+        repo,
+        glaas_url=glaas_url,
+        working_dir=repo,
+        entrypoint=["python", "ray_train.py"],
+        timeout=240,
+    )
+
+
+def _submit_and_register_training_session(repo: Path, roar_cli, *, glaas_url: str) -> str:
+    run_result = _run_host_submit_training(repo, glaas_url=glaas_url)
+    assert run_result.returncode == 0, (
+        "Expected host-submit Ray training job to succeed.\n"
+        f"stdout:\n{run_result.stdout}\n\nstderr:\n{run_result.stderr}"
+    )
+    return _register_active_session_hash(repo, roar_cli)
+
+
 def test_ray_jobs_registered(
     glaas_configured,
     glaas_available,
     ray_cluster_available,
+    ray_job_submit_available,
+    glaas_session_read_available,
     roar_cli,
-    git_commit,
+    glaas_url,
     ray_script,
     glaas_client,
 ):
-    _require_live_services(glaas_available, ray_cluster_available)
+    _require_host_submit_services(
+        glaas_available,
+        ray_cluster_available,
+        ray_job_submit_available,
+    )
+    _require_live_session_read(glaas_session_read_available)
 
-    session_hash = _register_model(roar_cli, git_commit)
+    del ray_script
+    session_hash = _submit_and_register_training_session(
+        glaas_configured,
+        roar_cli,
+        glaas_url=glaas_url,
+    )
     jobs = _get_session_jobs(glaas_client, session_hash)
 
     assert len(jobs) == 4, f"Expected 4 jobs, got {len(jobs)}: {[j.get('command') for j in jobs]}"
@@ -196,14 +402,26 @@ def test_ray_parent_job_uid_linked(
     glaas_configured,
     glaas_available,
     ray_cluster_available,
+    ray_job_submit_available,
+    glaas_session_read_available,
     roar_cli,
-    git_commit,
+    glaas_url,
     ray_script,
     glaas_client,
 ):
-    _require_live_services(glaas_available, ray_cluster_available)
+    _require_host_submit_services(
+        glaas_available,
+        ray_cluster_available,
+        ray_job_submit_available,
+    )
+    _require_live_session_read(glaas_session_read_available)
 
-    session_hash = _register_model(roar_cli, git_commit)
+    del ray_script
+    session_hash = _submit_and_register_training_session(
+        glaas_configured,
+        roar_cli,
+        glaas_url=glaas_url,
+    )
     jobs = _get_session_jobs(glaas_client, session_hash)
 
     driver = next(j for j in jobs if j.get("jobType") != "ray_task")
@@ -222,18 +440,27 @@ def test_ray_dag_nested_children(
     glaas_configured,
     glaas_available,
     ray_cluster_available,
+    ray_job_submit_available,
+    glaas_session_read_available,
     roar_cli,
-    git_commit,
+    glaas_url,
     ray_script,
     glaas_client,
 ):
-    _require_live_services(glaas_available, ray_cluster_available)
+    _require_host_submit_services(
+        glaas_available,
+        ray_cluster_available,
+        ray_job_submit_available,
+    )
+    _require_live_session_read(glaas_session_read_available)
 
-    _register_model(roar_cli, git_commit)
-
-    lineage = roar_cli("lineage", "model.json")
-    assert lineage.returncode == 0, lineage.stderr
-    model_hash = json.loads(lineage.stdout)["artifact"]["hash"]
+    del ray_script
+    _submit_and_register_training_session(
+        glaas_configured,
+        roar_cli,
+        glaas_url=glaas_url,
+    )
+    model_hash = _latest_artifact_hash(glaas_configured, "%model.json")
 
     dag = _get_artifact_dag(glaas_client, model_hash)
 
@@ -253,18 +480,27 @@ def test_ray_intermediate_artifacts_in_dag(
     glaas_configured,
     glaas_available,
     ray_cluster_available,
+    ray_job_submit_available,
+    glaas_session_read_available,
     roar_cli,
-    git_commit,
+    glaas_url,
     ray_script,
     glaas_client,
 ):
-    _require_live_services(glaas_available, ray_cluster_available)
+    _require_host_submit_services(
+        glaas_available,
+        ray_cluster_available,
+        ray_job_submit_available,
+    )
+    _require_live_session_read(glaas_session_read_available)
 
-    _register_model(roar_cli, git_commit)
-
-    lineage = roar_cli("lineage", "model.json")
-    assert lineage.returncode == 0, lineage.stderr
-    model_hash = json.loads(lineage.stdout)["artifact"]["hash"]
+    del ray_script
+    _submit_and_register_training_session(
+        glaas_configured,
+        roar_cli,
+        glaas_url=glaas_url,
+    )
+    model_hash = _latest_artifact_hash(glaas_configured, "%model.json")
 
     dag = _get_artifact_dag(glaas_client, model_hash)
 
@@ -291,23 +527,31 @@ def test_ray_register_idempotent(
     glaas_configured,
     glaas_available,
     ray_cluster_available,
+    ray_job_submit_available,
+    glaas_session_read_available,
     roar_cli,
-    git_commit,
+    glaas_url,
     ray_script,
     glaas_client,
 ):
-    _require_live_services(glaas_available, ray_cluster_available)
+    _require_host_submit_services(
+        glaas_available,
+        ray_cluster_available,
+        ray_job_submit_available,
+    )
+    _require_live_session_read(glaas_session_read_available)
 
-    run_result = roar_cli("run", sys.executable, "ray_train.py")
+    del ray_script
+    run_result = _run_host_submit_training(glaas_configured, glaas_url=glaas_url)
     assert run_result.returncode == 0, run_result.stderr
-    git_commit("After ray train")
+    session_hash = _compute_active_session_hash(glaas_configured)
 
-    reg1 = roar_cli("register", "model.json")
+    reg1 = roar_cli("register", session_hash, "--yes")
     assert reg1.returncode == 0, reg1.stderr
     session_hash_1 = _parse_session_hash(reg1.stdout)
     assert session_hash_1
 
-    reg2 = roar_cli("register", "model.json")
+    reg2 = roar_cli("register", session_hash, "--yes")
     assert reg2.returncode == 0, reg2.stderr
     session_hash_2 = _parse_session_hash(reg2.stdout)
     assert session_hash_2
@@ -324,17 +568,23 @@ def test_ray_dry_run_shows_counts(
     glaas_configured,
     glaas_available,
     ray_cluster_available,
+    ray_job_submit_available,
     roar_cli,
-    git_commit,
+    glaas_url,
     ray_script,
 ):
-    _require_live_services(glaas_available, ray_cluster_available)
+    _require_host_submit_services(
+        glaas_available,
+        ray_cluster_available,
+        ray_job_submit_available,
+    )
 
-    run_result = roar_cli("run", sys.executable, "ray_train.py")
+    del ray_script
+    run_result = _run_host_submit_training(glaas_configured, glaas_url=glaas_url)
     assert run_result.returncode == 0, run_result.stderr
-    git_commit("After ray train")
+    session_hash = _compute_active_session_hash(glaas_configured)
 
-    dry = roar_cli("register", "--dry-run", "model.json")
+    dry = roar_cli("register", "--dry-run", session_hash)
     assert dry.returncode == 0, dry.stderr
 
     output = dry.stdout
@@ -350,3 +600,61 @@ def test_ray_dry_run_shows_counts(
             break
 
     assert count == 4, f"Expected 4 jobs in dry-run, got {count!r}. Output:\n{output}"
+
+
+def test_ray_host_submit_registers_without_runtime_env_override_when_pip_install_disabled(
+    glaas_configured,
+    glaas_available,
+    ray_cluster_available,
+    ray_job_submit_available,
+    glaas_session_read_available,
+    roar_cli,
+    glaas_client,
+):
+    _require_host_submit_services(
+        glaas_available,
+        ray_cluster_available,
+        ray_job_submit_available,
+    )
+    _require_live_session_read(glaas_session_read_available)
+
+    run_result = _run_host_submit_basic_file_io(
+        glaas_configured,
+        glaas_url=os.environ.get("GLAAS_URL", "http://localhost:3001"),
+    )
+    assert run_result.returncode == 0, (
+        "Expected host-submit `roar run ray job submit` to succeed with user-provided "
+        "runtime_env.pip when ray.pip_install=false.\n"
+        f"stdout:\n{run_result.stdout}\n\nstderr:\n{run_result.stderr}"
+    )
+
+    session_hash = _register_active_session_hash(glaas_configured, roar_cli)
+    jobs = _get_session_jobs(glaas_client, session_hash)
+    task_jobs = [job for job in jobs if job.get("jobType") == "ray_task"]
+    assert task_jobs, f"Expected at least one registered ray_task job, got: {jobs}"
+
+
+def test_ray_host_submit_register_command_succeeds_when_pip_install_disabled(
+    glaas_configured,
+    glaas_available,
+    ray_cluster_available,
+    ray_job_submit_available,
+    roar_cli,
+):
+    _require_host_submit_services(
+        glaas_available,
+        ray_cluster_available,
+        ray_job_submit_available,
+    )
+
+    run_result = _run_host_submit_basic_file_io(
+        glaas_configured,
+        glaas_url=os.environ.get("GLAAS_URL", "http://localhost:3001"),
+    )
+    assert run_result.returncode == 0, (
+        "Expected host-submit `roar run ray job submit` to succeed with user-provided "
+        "runtime_env.pip when ray.pip_install=false.\n"
+        f"stdout:\n{run_result.stdout}\n\nstderr:\n{run_result.stderr}"
+    )
+    session_hash = _register_active_session_hash(glaas_configured, roar_cli)
+    assert len(session_hash) == 64

@@ -81,6 +81,7 @@ def test_maybe_rewrite_injects_roar_session_id_into_runtime_env(
     runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["env_vars"]["ROAR_SESSION_ID"] == _fixed_fragment_key()["session_id"]
     assert rewritten.session_id == _fixed_fragment_key()["session_id"]
+    assert rewritten.finalize_run is None
 
 
 def test_maybe_rewrite_injects_roar_fragment_token_into_runtime_env(
@@ -130,3 +131,4 @@ def test_maybe_rewrite_skips_fragment_session_when_no_glaas_url(
     assert register_calls == []
     assert not (tmp_path / ".roar" / "fragment-sessions").exists()
     assert rewritten.session_id is None
+    assert rewritten.finalize_run is None

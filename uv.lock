@@ -1298,6 +1298,7 @@ source = { editable = "." }
 dependencies = [
     { name = "blake3" },
     { name = "click" },
+    { name = "cryptography" },
     { name = "dependency-injector" },
     { name = "msgpack" },
     { name = "pydantic" },
@@ -1325,6 +1326,7 @@ requires-dist = [
     { name = "blake3", specifier = ">=0.3.0" },
     { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.28.0" },
     { name = "click", specifier = ">=8.1.0" },
+    { name = "cryptography", specifier = ">=42.0.0" },
     { name = "dependency-injector", specifier = ">=4.40.0" },
     { name = "google-cloud-storage", marker = "extra == 'dev'", specifier = ">=2.10.0" },
     { name = "msgpack", specifier = ">=1.0.0" },

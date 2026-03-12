@@ -170,6 +170,75 @@ class TestOptionalAuth:
             req = mock_urlopen.call_args[0][0]
             assert req.get_header("Authorization") == "SSH-SIG test-signature"
 
+    def test_request_retries_without_auth_after_401(self):
+        """Optional-auth endpoints should fall back to anonymous access after 401."""
+        client = GlaasClient(base_url="http://localhost:9999")
+
+        unauthorized = urllib.error.HTTPError(
+            url="http://localhost:9999/api/v1/test",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=None,
+        )
+        unauthorized.read = MagicMock(return_value=b'{"detail":"Unauthorized"}')
+
+        with (
+            patch("roar.glaas_client.make_auth_header", return_value="SSH-SIG test-signature"),
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_response = MagicMock()
+            mock_response.status = 200
+            mock_response.read.return_value = b'{"success": true, "data": {"id": 1}}'
+            mock_response.__enter__ = MagicMock(return_value=mock_response)
+            mock_response.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.side_effect = [unauthorized, mock_response]
+
+            result, error = client._request("GET", "/api/v1/test", None)
+
+            assert error is None
+            assert result == {"id": 1}
+            assert mock_urlopen.call_count == 2
+
+            first_request = mock_urlopen.call_args_list[0][0][0]
+            second_request = mock_urlopen.call_args_list[1][0][0]
+            assert first_request.get_header("Authorization") == "SSH-SIG test-signature"
+            assert second_request.get_header("Authorization") is None
+
+    def test_request_returns_original_401_when_anonymous_retry_also_fails(self):
+        """If optional-auth fallback still fails, surface the original auth failure."""
+        client = GlaasClient(base_url="http://localhost:9999")
+
+        unauthorized = urllib.error.HTTPError(
+            url="http://localhost:9999/api/v1/test",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=None,
+        )
+        unauthorized.read = MagicMock(return_value=b'{"detail":"Unauthorized"}')
+
+        forbidden = urllib.error.HTTPError(
+            url="http://localhost:9999/api/v1/test",
+            code=403,
+            msg="Forbidden",
+            hdrs=None,
+            fp=None,
+        )
+        forbidden.read = MagicMock(return_value=b'{"detail":"Forbidden"}')
+
+        with (
+            patch("roar.glaas_client.make_auth_header", return_value="SSH-SIG test-signature"),
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_urlopen.side_effect = [unauthorized, forbidden]
+
+            result, error = client._request("GET", "/api/v1/test", None)
+
+            assert result is None
+            assert error == "HTTP 403: Forbidden"
+            assert mock_urlopen.call_count == 2
+
 
 class TestRegisterJobsBatch:
     """Test register_jobs_batch client method."""

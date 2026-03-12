@@ -4,52 +4,58 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
 from pathlib import Path
 
 from ...glaas_client import GlaasClient
-from ...ray.fragment_key import generate_fragment_key, save_key
+from ...ray.env_contract import merge_worker_bootstrap_env
+from ...ray.submit_context import (
+    RayInstrumentationContext,
+    build_submit_instrumentation_context,
+    build_submit_source_environ,
+)
+from ...services.execution.distributed_backends import (
+    ROAR_EXECUTION_BACKEND_ENV,
+    SubmitCommandRewrite,
+)
+from ...services.execution.fragment_sessions import (
+    generate_fragment_session as generate_fragment_key,
+)
+from ...services.execution.fragment_sessions import (
+    save_fragment_session as save_key,
+)
 
-_ROAR_WORKER_PY_EXECUTABLE = "roar-worker"
-_ROAR_WORKER_SETUP_HOOK = "roar.ray.roar_worker._startup"
-_ROAR_DRIVER_ENTRYPOINT_MODULE = "roar.ray.driver_entrypoint"
-_ROAR_JOB_INSTRUMENTED_ENV_VAR = "ROAR_JOB_INSTRUMENTED"
-_ROAR_CLUSTER_GLAAS_URL_ENV = "ROAR_CLUSTER_GLAAS_URL"
-_ROAR_CLUSTER_AWS_ENDPOINT_URL_ENV = "ROAR_CLUSTER_AWS_ENDPOINT_URL"
+_ROAR_WORKER_SETUP_HOOK = "roar.services.execution.worker_bootstrap.startup"
+_ROAR_DRIVER_ENTRYPOINT_MODULE = "roar.services.execution.driver_entrypoint"
+_LEGACY_DRIVER_ENTRYPOINT_MODULE = "roar.ray.driver_entrypoint"
 
 
-@dataclass(frozen=True)
-class RayJobSubmitRewrite:
-    command: list[str]
-    session_id: str | None = None
-
-
-def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
+def maybe_rewrite_ray_job_submit(command: list[str]) -> SubmitCommandRewrite:
     """Rewrite ray jobs submit commands for roar instrumentation."""
-    if not _is_ray_job_submit(command):
-        return RayJobSubmitRewrite(command=command)
+    if not ray_submit_matches_command(command):
+        return SubmitCommandRewrite(command=command)
 
     if "--" not in command:
-        return RayJobSubmitRewrite(command=command)
+        return SubmitCommandRewrite(command=command)
 
     separator_index = command.index("--")
     before_separator = list(command[:separator_index])
     entrypoint = list(command[separator_index + 1 :])
     if not entrypoint:
-        return RayJobSubmitRewrite(command=command)
+        return SubmitCommandRewrite(command=command)
     entrypoint = _wrap_entrypoint_for_driver_proxy(entrypoint)
 
     runtime_env_json_arg = _find_runtime_env_json(before_separator)
     runtime_env = _load_runtime_env(before_separator, runtime_env_json_arg)
     if runtime_env is None:
         # Invalid user-provided JSON - leave command untouched.
-        return RayJobSubmitRewrite(command=command)
+        return SubmitCommandRewrite(command=command)
 
-    merged_pip = _merge_roar_runtime_env_pip(runtime_env.get("pip"))
-    if merged_pip:
-        runtime_env["pip"] = merged_pip
-    else:
-        runtime_env.pop("pip", None)
+    if _ray_pip_install_enabled():
+        merged_pip = _merge_roar_runtime_env_pip(runtime_env.get("pip"))
+        if merged_pip:
+            runtime_env["pip"] = merged_pip
+        else:
+            runtime_env.pop("pip", None)
 
     # py_executable is intentionally NOT set at job level — it would apply to the
     # JobSupervisor/driver process which doesn't have roar installed yet (pip runs after
@@ -57,47 +63,24 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
     # each worker process after the runtime env (and pip) is ready.
     runtime_env["worker_process_setup_hook"] = _ROAR_WORKER_SETUP_HOOK
 
-    env_vars = dict(runtime_env.get("env_vars", {}) or {})
-    env_vars[_ROAR_JOB_INSTRUMENTED_ENV_VAR] = "1"
-    env_vars["ROAR_WRAP"] = "1"
-    env_vars["ROAR_RAY_NODE_AGENTS"] = "1"
-    # Stable job_id shared by driver + workers for node agent name resolution.
-    import uuid as _uuid
-
-    env_vars["ROAR_JOB_ID"] = _uuid.uuid4().hex[:8]
-
-    # Tell the job driver where roar.db lives (CWD inside the Ray job is the
-    # extracted working_dir, not the original project directory).
-    roar_dir = os.environ.get("ROAR_PROJECT_DIR", "")
-    if not roar_dir:
-        # Use CWD — `roar run` is invoked from the project root.
-        roar_dir = os.getcwd()
-    if roar_dir and os.path.isfile(os.path.join(roar_dir, ".roar", "roar.db")):
-        env_vars["ROAR_PROJECT_DIR"] = roar_dir
-
-    # Route S3 traffic through the per-node proxy (port 19191) for I/O capture.
-    # Save the REAL upstream endpoint (not the roar-run local proxy) so the
-    # cluster-side proxy can forward to the actual S3 service.
-    original_endpoint = (
-        os.environ.get("ROAR_UPSTREAM_S3_ENDPOINT") or os.environ.get("AWS_ENDPOINT_URL") or ""
+    context = build_submit_instrumentation_context(
+        os.environ,
+        cwd=os.getcwd(),
+        host_glaas_url=_resolve_glaas_url(),
     )
-    cluster_upstream_endpoint = _resolve_cluster_upstream_s3_endpoint(original_endpoint)
-    if cluster_upstream_endpoint:
-        env_vars["ROAR_UPSTREAM_S3_ENDPOINT"] = cluster_upstream_endpoint
-    env_vars["ROAR_PROXY_PORT"] = "19191"
-    env_vars["AWS_ENDPOINT_URL"] = "http://127.0.0.1:19191"
-
+    env_vars = _build_instrumented_env_vars(
+        existing_env_vars=dict(runtime_env.get("env_vars", {}) or {}),
+        context=context,
+    )
     fragment_session_id: str | None = None
-
-    glaas_url = _resolve_glaas_url()
-    if glaas_url:
-        cluster_glaas_url = _resolve_cluster_glaas_url(glaas_url)
-        if cluster_glaas_url:
-            env_vars["GLAAS_URL"] = cluster_glaas_url
-
+    if context.endpoints.host_glaas_url:
         key = generate_fragment_key()
         try:
-            _register_fragment_session(glaas_url, key["session_id"], key["token_hash"])
+            _register_fragment_session(
+                context.endpoints.host_glaas_url,
+                key["session_id"],
+                key["token_hash"],
+            )
         except Exception:
             # Keep existing behavior when fragment preregistration is unavailable.
             pass
@@ -113,13 +96,29 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> RayJobSubmitRewrite:
         runtime_env.pop("env_vars", None)
 
     before_separator = _store_runtime_env(before_separator, runtime_env, runtime_env_json_arg)
-    return RayJobSubmitRewrite(
+    return SubmitCommandRewrite(
         command=[*before_separator, "--", *entrypoint],
         session_id=fragment_session_id,
     )
 
 
-def _is_ray_job_submit(command: list[str]) -> bool:
+def _build_instrumented_env_vars(
+    *,
+    existing_env_vars: dict[str, str],
+    context: RayInstrumentationContext,
+) -> dict[str, str]:
+    env_vars = merge_worker_bootstrap_env(
+        existing_env_vars,
+        build_submit_source_environ(context),
+        job_id=context.job_id,
+        overwrite_existing=True,
+    )
+    env_vars[ROAR_EXECUTION_BACKEND_ENV] = "ray"
+    env_vars["ROAR_WRAP"] = "1"
+    return env_vars
+
+
+def ray_submit_matches_command(command: list[str]) -> bool:
     if len(command) < 3:
         return False
 
@@ -133,7 +132,7 @@ def _wrap_entrypoint_for_driver_proxy(entrypoint: list[str]) -> list[str]:
     if (
         len(entrypoint) >= 3
         and entrypoint[1] == "-m"
-        and entrypoint[2] == _ROAR_DRIVER_ENTRYPOINT_MODULE
+        and entrypoint[2] in {_ROAR_DRIVER_ENTRYPOINT_MODULE, _LEGACY_DRIVER_ENTRYPOINT_MODULE}
     ):
         return entrypoint
 
@@ -212,6 +211,23 @@ def _merge_roar_runtime_env_pip(existing_pip: object) -> list[str] | None:
     return dependencies if dependencies else None
 
 
+def _ray_pip_install_enabled() -> bool:
+    start_dir = os.environ.get("ROAR_PROJECT_DIR") or os.getcwd()
+    try:
+        from ...config import load_config
+
+        config = load_config(start_dir=start_dir)
+    except Exception:
+        return True
+
+    if not isinstance(config, dict):
+        return True
+    ray_section = config.get("ray", {})
+    if not isinstance(ray_section, dict):
+        return True
+    return bool(ray_section.get("pip_install", True))
+
+
 def _coerce_runtime_env_pip(value: object) -> list[str]:
     if value is None:
         return []
@@ -259,27 +275,11 @@ def _resolve_glaas_url() -> str | None:
     from ...glaas_client import get_glaas_url
 
     url = get_glaas_url()
-    if not url:
-        return "https://api.glaas.ai"
-    return str(url)
-
-
-def _resolve_cluster_glaas_url(host_glaas_url: str | None) -> str | None:
-    override = os.environ.get(_ROAR_CLUSTER_GLAAS_URL_ENV, "").strip()
-    if override:
-        return override
-    if not host_glaas_url:
+    if url is None:
         return None
-    return str(host_glaas_url)
 
-
-def _resolve_cluster_upstream_s3_endpoint(host_endpoint: str | None) -> str | None:
-    override = os.environ.get(_ROAR_CLUSTER_AWS_ENDPOINT_URL_ENV, "").strip()
-    if override:
-        return override
-    if not host_endpoint:
-        return None
-    return str(host_endpoint)
+    text = str(url).strip()
+    return text or None
 
 
 def _register_fragment_session(

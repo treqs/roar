@@ -439,6 +439,305 @@ def test_collect_fragments_is_idempotent_when_fragment_reads_and_writes_same_pat
     assert int(counts["count"]) == 1
 
 
+def test_collect_fragments_keeps_distinct_tasks_when_job_uid_collides(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "project"
+    db_path = _init_db(project_dir)
+
+    fragment_one = TaskFragment(
+        job_uid="deadbeef",
+        parent_job_uid="driver-main",
+        ray_task_id="task-1",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="process",
+        started_at=1.0,
+        ended_at=2.0,
+        exit_code=0,
+        writes=[_ref("a" * 64)],
+    )
+    fragment_two = TaskFragment(
+        job_uid="deadbeef",
+        parent_job_uid="driver-main",
+        ray_task_id="task-2",
+        ray_worker_id="worker-2",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="process",
+        started_at=3.0,
+        ended_at=4.0,
+        exit_code=0,
+        writes=[_ref("b" * 64)],
+    )
+
+    collect_fragments(
+        fragments=[fragment_one.to_dict(), fragment_two.to_dict()],
+        project_dir=str(project_dir),
+        driver_job_uid="driver-main",
+    )
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                job_uid,
+                json_extract(metadata, '$.ray_task_id') AS ray_task_id,
+                json_extract(metadata, '$.task_identity') AS task_identity
+            FROM jobs
+            WHERE job_type = 'ray_task'
+            ORDER BY ray_task_id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert len(rows) == 2
+    assert {row["ray_task_id"] for row in rows} == {"task-1", "task-2"}
+    assert len({row["job_uid"] for row in rows}) == 2
+    assert len({row["task_identity"] for row in rows}) == 2
+
+
+def test_collect_fragments_reuses_existing_task_identity_when_job_uid_changes(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "project"
+    db_path = _init_db(project_dir)
+
+    legacy_fragment = TaskFragment(
+        job_uid="deadbeef",
+        parent_job_uid="driver-main",
+        ray_task_id="task-1",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="process",
+        started_at=1.0,
+        ended_at=2.0,
+        exit_code=0,
+        writes=[_ref("a" * 64)],
+    )
+    stronger_uid_fragment = TaskFragment(
+        job_uid="0123456789abcdef0123456789abcdef",
+        parent_job_uid="driver-main",
+        ray_task_id="task-1",
+        ray_worker_id="worker-2",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="process",
+        started_at=3.0,
+        ended_at=4.0,
+        exit_code=0,
+        writes=[_ref("b" * 64)],
+    )
+
+    collect_fragments(
+        fragments=[legacy_fragment.to_dict()],
+        project_dir=str(project_dir),
+        driver_job_uid="driver-main",
+    )
+    collect_fragments(
+        fragments=[stronger_uid_fragment.to_dict()],
+        project_dir=str(project_dir),
+        driver_job_uid="driver-main",
+    )
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                job_uid,
+                json_extract(metadata, '$.ray_task_id') AS ray_task_id,
+                json_extract(metadata, '$.task_identity') AS task_identity
+            FROM jobs
+            WHERE job_type = 'ray_task'
+            ORDER BY id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert len(rows) == 1
+    assert rows[0]["job_uid"] == "deadbeef"
+    assert rows[0]["ray_task_id"] == "task-1"
+    assert rows[0]["task_identity"] == legacy_fragment.task_identity
+
+
+def test_collect_fragments_keeps_distinct_legacy_tasks_when_parent_job_uid_missing(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "project"
+    db_path = _init_db(project_dir)
+
+    fragment_one = TaskFragment(
+        job_uid="deadbeef",
+        parent_job_uid="",
+        ray_task_id="task-1",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="process",
+        started_at=1.0,
+        ended_at=2.0,
+        exit_code=0,
+        writes=[_ref("a" * 64)],
+    )
+    fragment_two = TaskFragment(
+        job_uid="feedface",
+        parent_job_uid="",
+        ray_task_id="task-1",
+        ray_worker_id="worker-2",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="process",
+        started_at=3.0,
+        ended_at=4.0,
+        exit_code=0,
+        writes=[_ref("b" * 64)],
+    )
+
+    collect_fragments(
+        fragments=[fragment_one.to_dict(), fragment_two.to_dict()],
+        project_dir=str(project_dir),
+    )
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                job_uid,
+                json_extract(metadata, '$.ray_task_id') AS ray_task_id,
+                json_extract(metadata, '$.task_identity') AS task_identity
+            FROM jobs
+            WHERE job_type = 'ray_task'
+            ORDER BY id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert len(rows) == 2
+    assert {row["job_uid"] for row in rows} == {"deadbeef", "feedface"}
+    assert {row["ray_task_id"] for row in rows} == {"task-1"}
+    assert len({row["task_identity"] for row in rows}) == 2
+
+
+def test_collect_fragments_keeps_distinct_tasks_when_identity_is_missing(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "project"
+    db_path = _init_db(project_dir)
+
+    fragment_one = TaskFragment(
+        job_uid="",
+        parent_job_uid="",
+        ray_task_id="",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="process",
+        started_at=1.0,
+        ended_at=2.0,
+        exit_code=0,
+        writes=[_ref("a" * 64)],
+    )
+    fragment_two = TaskFragment(
+        job_uid="",
+        parent_job_uid="",
+        ray_task_id="",
+        ray_worker_id="worker-2",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="process",
+        started_at=3.0,
+        ended_at=4.0,
+        exit_code=0,
+        writes=[_ref("b" * 64)],
+    )
+
+    collect_fragments(
+        fragments=[fragment_one.to_dict(), fragment_two.to_dict()],
+        project_dir=str(project_dir),
+    )
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                job_uid,
+                json_extract(metadata, '$.task_identity') AS task_identity
+            FROM jobs
+            WHERE job_type = 'ray_task'
+            ORDER BY id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert len(rows) == 2
+    assert len({row["job_uid"] for row in rows}) == 2
+    assert len({row["task_identity"] for row in rows}) == 2
+
+
+def test_collect_fragments_reuses_identity_less_fragment_when_payload_repeats(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "project"
+    db_path = _init_db(project_dir)
+
+    fragment = TaskFragment(
+        job_uid="",
+        parent_job_uid="",
+        ray_task_id="",
+        ray_worker_id="worker-1",
+        ray_node_id="node-1",
+        ray_actor_id=None,
+        function_name="process",
+        started_at=1.0,
+        ended_at=2.0,
+        exit_code=0,
+        writes=[_ref("a" * 64)],
+    )
+
+    collect_fragments(
+        fragments=[fragment.to_dict()],
+        project_dir=str(project_dir),
+    )
+    collect_fragments(
+        fragments=[fragment.to_dict()],
+        project_dir=str(project_dir),
+    )
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                job_uid,
+                json_extract(metadata, '$.task_identity') AS task_identity
+            FROM jobs
+            WHERE job_type = 'ray_task'
+            ORDER BY id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert len(rows) == 1
+    assert rows[0]["job_uid"]
+    assert rows[0]["task_identity"]
+
+
 def test_normalize_reconstituted_path_restores_ray_working_dir_to_project_dir(
     tmp_path: Path,
 ) -> None:

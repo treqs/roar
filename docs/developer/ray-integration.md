@@ -2,167 +2,225 @@
 
 ## 1. High-level summary
 
-When `roar run` executes a Ray workload, the driver process patches Ray startup/shutdown and injects worker instrumentation through Ray `runtime_env`. That worker instrumentation emits per-task I/O fragments (local file + S3 touches with task metadata) to a detached in-cluster collector actor.
+The Ray integration now has two distinct layers:
 
-At shutdown, the driver flushes the collector actor's fragment streamer. After `ray job submit` returns, `FragmentReconstituter` fetches/decrypts fragment batches from GLaaS and writes Ray task lineage into `ROAR_PROJECT_DIR/.roar/roar.db`.
+- A shared distributed-execution backend contract that owns submit rewrite, driver bootstrap, worker bootstrap, fragment-session handling, and post-run reconstitution.
+- A Ray backend implementation that plugs Ray-specific runtime behavior into that shared contract while delegating transport, lineage merge, and cluster-bridge lifecycle to shared execution-layer modules.
+
+The canonical extension points now live under:
+
+- `roar.execution.framework.*` for the shared backend framework
+- `roar.backends.ray.*` for the concrete Ray adapter
+
+Legacy import paths still exist as compatibility shims while the codebase converges on those namespaces.
+
+If you want to add another backend on top of this framework, start with `docs/developer/execution-backend-adapter.md`.
+
+For the main product path, fragments no longer flow through a detached collector actor. Workers and the driver stream fragments directly with `GlaasFragmentStreamer`, and `run.py` calls a Ray finalizer after `ray job submit` completes.
 
 ## 2. Architecture overview
 
 ```mermaid
 flowchart TD
-    A[roar run python script.py] --> B[Driver loads sitecustomize.py]
-    B --> C[ROAR_WRAP=1 enables Ray monkey-patch]
-    C --> D[Patched ray.init]
-    D --> E[Inject runtime_env]
-    E --> E1[env_vars: ROAR_* + AWS passthrough]
-    E --> E2[py_executable = roar-worker]
-    E --> E3[worker_process_setup_hook = roar.ray.roar_worker._startup]
-    E --> E4[working_dir bundle via _prepare_worker_runtime_env]
-    D --> F[real ray.init]
-    F --> G[Ensure detached RoarLogCollectorActor]
-    F --> H[Workers boot via roar-worker]
-    H --> I[_startup patches open + boto3 + pandas + atexit]
-    I --> J[TaskFragment snapshots emitted]
-    J --> K[RoarLogCollectorActor.append_fragment]
-    F --> L[Patched ray.shutdown + atexit collection]
-    L --> M[collector.py gathers actor payload first]
-    M --> N[Filesystem JSONL fallback + proxy log merge]
-    N --> O[Dedup + DAG step topology]
-    O --> P[(ROAR_PROJECT_DIR/.roar/roar.db)]
+    A[roar run ...] --> B[execution/framework/submit.py]
+    B --> C[execution/framework/registry.py]
+    C --> D[backends/ray/plugin.py]
+    D --> E[backends/ray/submit.py]
+    E --> F[submit_context.py]
+    E --> G[driver_entrypoint.py]
+    E --> H[worker_bootstrap.py]
+    G --> I[Ray cluster job]
+    I --> J[sitecustomize.py patched ray.init]
+    J --> K[RoarNodeAgent actors per node]
+    J --> L[Workers boot via roar-worker]
+    L --> M[TaskFragment to ExecutionFragment]
+    M --> N[fragment_transport.py]
+    N --> O[glaas.fragment_streamer.py]
+    O --> P[GLaaS fragment batches]
+    A --> Q[fragment_reconstitution.py]
+    Q --> R[fragment_reconstituter.py]
+    R --> S[collector.py adapter]
+    S --> T[fragment_lineage.py]
+    T --> U[(.roar/roar.db)]
+    G --> N
 ```
 
-## 3. Component-by-component breakdown
+## 3. Main components
 
-### a. `sitecustomize.py`
+### a. Generic submit hook
 
-- Patching gate: `tracking_import` patches Ray only when `ROAR_WRAP=1` and `ray` is imported.
-- `ray.init` patch (`_patch_ray_init`):
-  - Loads `[ray]` config (`enabled`, explicit `pip_install`).
-  - Builds `runtime_env` and `env_vars`.
-  - Injects worker env vars:
-    - `ROAR_JOB_ID=<generated or supplied>`
-    - `ROAR_DRIVER_JOB_UID=<driver ROAR_JOB_ID>`
-    - selected AWS vars passed through when present.
-  - Optionally injects a pinned `roar` dependency into `runtime_env.pip` when `ray.pip_install=true`.
-  - Calls `_prepare_worker_runtime_env(runtime_env, job_id)`:
-    - Creates a temp worker bundle dir.
-    - Merges local `working_dir` contents into that bundle (if local path).
-    - Copies the `roar` package into bundle.
-    - Copies `libroar_tracer_preload.so` when available.
-    - Sets `runtime_env["working_dir"]` to bundle.
-    - Sets `runtime_env["py_executable"] = "roar-worker"`.
-    - Sets `runtime_env["worker_process_setup_hook"] = "roar.ray.roar_worker._startup"` and mirrors it via internal env var.
-  - Sanitizes reserved setup-hook env key for Ray versions that reject manual export (`_sanitize_worker_runtime_env_for_ray`).
-  - After real `ray.init`, registers pre-shutdown collection and ensures `RoarLogCollectorActor` exists.
-- `ray.shutdown` patch (`_patch_ray_shutdown`): flushes collector actor fragments first (`_collect_ray_io`), then calls real shutdown.
-- `_collect_ray_io`: looks up `roar-log-collector-<job_id>`, calls `flush_to_glaas()`, then kills the detached actor.
+- `roar/execution/framework/submit.py`
+  - Finds the matching distributed backend and delegates submit-command rewrite to it.
+  - Attaches the shared submit finalizer automatically when the backend returns a fragment session id.
+- `roar/execution/framework/contract.py`
+  - Defines the shared backend contract:
+    - match a submit command
+    - rewrite the command
+    - provide driver bootstrap callbacks
+    - provide worker bootstrap callbacks
+    - provide fragment reconstitution callbacks
+- `roar/execution/framework/registry.py`
+  - Loads built-in backends and optional `roar.execution_backends` entrypoints.
+- `roar/services/execution/fragment_reconstitution.py`
+  - Owns the shared post-run finalizer that loads fragment session credentials and dispatches to the backend reconstituter.
+- `roar/cli/commands/run.py`
+  - Calls the generic rewrite hook before execution.
+  - Calls the shared finalizer after execution.
 
-### b. `roar-worker` entrypoint (`roar/ray/roar_worker.py`)
+This is the generalization seam for future distributed integrations.
 
-- Role: this module is the worker `py_executable` (`roar-worker`).
-- `main()` calls `_startup()` then `execvp("python3", ...)` to run Ray’s normal worker command.
-- `_startup()` installs worker instrumentation once:
-  - `builtins.open` patch (`_tracking_open`)
-  - boto3 S3 client patch (`put_object`, `upload_file`, `get_object`)
-  - pandas `DataFrame.to_parquet` patch
-  - `atexit` flush of active fragment
-  - actor attribution mode from config: `ray.actor_attribution = per_call|per_actor`
-- Task boundary handling:
-  - `_check_task_boundary()` computes boundary from `_get_task_id()` (or actor id in `per_actor` mode).
-  - On boundary change, finalizes previous fragment and starts a new one with `_start_fragment()`.
-- Fragment emission:
-  - `TaskFragment` includes Ray IDs, function name, timing, exit code, and `reads`/`writes` of `ArtifactRef`.
-  - Local write hashing is streaming (`blake3` if installed, otherwise `sha256`) via `_TrackedWriteFile`.
-- Local path capture excludes pseudo-filesystems (`/proc`, `/sys`, `/dev`).
-  - S3 refs use `hash_algorithm="etag"` and size where available.
-  - `_emit_fragment()` sends snapshots to `RoarLogCollectorActor.append_fragment.remote(fragment.to_dict())`.
+### b. Ray execution backend
 
-### c. `RoarLogCollectorActor` (`roar/ray/actor.py`)
+- `roar/backends/ray/plugin.py`
+  - Registers Ray as a `roar.execution_backends` backend.
+  - Supplies Ray-specific callbacks for:
+    - submit rewrite matching
+    - driver proxy fragment construction
+    - worker bootstrap startup and entrypoint execution
+    - fragment reconstituter construction
+- `roar/backends/ray/submit.py`
+  - Detects `ray job submit`.
+  - Rewrites the entrypoint through `python -m roar.services.execution.driver_entrypoint`.
+  - Shapes worker-facing env vars and runtime env.
+  - Pre-registers fragment sessions when GLaaS is configured.
+  - Returns a fragment session id; the shared finalizer handles reconstitution afterward.
 
-- Detached, named actor (`roar-log-collector-<ROAR_JOB_ID>`, namespace `roar`).
-- Thin pass-through to `GlaasFragmentStreamer`:
-  - `append_fragment` forwards fragments into the encrypted GLaaS batch stream.
-  - `flush_to_glaas` flushes any buffered batches.
+### c. Submit context and env contract
 
-### d. `collector.py`
+- `roar/ray/submit_context.py`
+  - Builds job-scoped submit context:
+    - `ROAR_JOB_ID`
+    - job-scoped proxy port
+    - local project dir
+    - host-visible vs cluster-visible endpoints
+- `roar/ray/env_contract.py`
+  - Centralizes worker/bootstrap env propagation:
+    - cluster-visible GLaaS URL
+    - upstream S3 endpoint
+    - fragment session env
+    - proxy env
 
-- Fragments-only merge path.
-- `collect_fragments(...)` inserts Ray task child jobs + artifact inputs/outputs from decrypted fragment batches.
-- Artifact identity prefers `artifact_hashes (algorithm,digest)` and falls back to latest artifact by path when no digest exists.
-- Step-number topology (`_assign_step_numbers`):
-  - Collapses incremental snapshots by `job_uid`.
-  - Builds DAG from artifact hash dependencies (producer writes hash, consumer reads hash).
-  - Topological traversal computes depth; assigns `step_number = base_step + depth`.
-  - Cycles fall back to a deeper bucket.
-- Final write target: `ROAR_PROJECT_DIR/.roar/roar.db` (`jobs`, `artifacts`, `job_inputs`, `job_outputs`, `artifact_hashes`).
+These two modules are the main backend-neutral extraction from the older inline Ray rewrite.
 
-### e. `fragment.py`
+### d. Driver bootstrap
 
-- `ArtifactRef`: normalized artifact record (`path`, `hash`, `hash_algorithm`, `size`, `capture_method`).
-- `TaskFragment`: unit of worker emission containing Ray IDs, function, timing, exit code, and read/write artifact refs.
-- `derive_task_uid(job_id, ray_task_id)`: deterministic 8-char hex task UID for Ray child jobs.
+- `roar/services/execution/driver_entrypoint.py`
+  - Runs inside the distributed job instead of the user entrypoint directly.
+  - Resolves the active execution backend from `ROAR_EXECUTION_BACKEND`.
+  - Starts driver-local proxy capture when needed.
+  - Preserves loopback proxy routing for the child process.
+  - Emits driver proxy fragments through the shared `fragment_transport.py` helper.
+- `roar/ray/driver_entrypoint.py`
+  - Compatibility wrapper over the shared driver entrypoint module.
 
-### f. `worker.py`
+### e. Ray startup patching
 
-- Legacy compatibility worker setup hook (`setup()`) that forwards event payloads to the collector actor only.
-- Extends coverage beyond `open()` with optional SDK/data patches:
-  - boto3 S3 ops
-  - pandas parquet writes
-  - pyarrow filesystem open methods
-  - Ray Data read/write APIs
-- Integrates with S3 proxy path:
-  - `_configure_local_proxy_endpoint()` discovers per-node agent proxy port and sets `AWS_ENDPOINT_URL`.
-  - Captures proxy-attributed S3 operations (`capture_method="proxy"`).
-- Used for deeper capture paths where native/tracer/proxy-level hooks are needed.
+- `roar/services/execution/inject/sitecustomize.py`
+  - Patches `ray.init` and `ray.shutdown` when `ROAR_WRAP=1`.
+  - Applies the shared worker env contract.
+  - Uses the shared worker bootstrap contract to package worker runtime env.
+  - Starts per-node `RoarNodeAgent` spawn in the background for instrumented jobs.
 
-### g. `node_agent.py`
+This path still matters for nested `ray.init(...)` inside already instrumented jobs.
 
-- `RoarNodeAgent` is a per-node detached Ray actor.
-- Starts `roar-proxy` subprocess on that node, watches for `ROAR_PROXY_READY`, stores logs.
-- Exposes:
-  - `get_proxy_port()` for worker-side endpoint wiring.
-  - `collect_logs()` for driver-side merge into collector.
-  - `shutdown()` for process cleanup.
+### f. Worker bootstrap and capture
 
-## 4. Sequence diagram
+- `roar/services/execution/worker_bootstrap.py`
+  - Owns the shared worker bootstrap interface.
+  - Provides the generic `worker_process_setup_hook` path and the `roar-worker` executable entrypoint.
+  - Resolves the active execution backend from `ROAR_EXECUTION_BACKEND` and dispatches startup/entrypoint execution to it.
+- `roar/ray/roar_worker.py`
+  - Implements Ray-specific worker startup and final worker exec behavior.
+  - Installs local file, S3, proxy, pandas, native, and thread attribution hooks.
+  - Builds `TaskFragment` snapshots with deterministic task identity.
+  - Uses the shared fragment transport path for one-shot emissions and the shared GLaaS streamer for buffered direct streaming.
+
+### g. Node agent and proxy isolation
+
+- `roar/ray/node_agent.py`
+  - Runs a per-node detached actor that wraps the shared cluster bridge.
+  - Uses job-scoped proxy ports instead of a fixed global port.
+  - Reuses sidecars only when local ownership claims match the current job and upstream.
+  - Returns proxy logs to the driver for reconstitution.
+
+- `roar/ray/proxy_config.py`
+  - Shared local proxy port parsing and loopback endpoint helpers.
+- `roar/services/execution/cluster_bridge.py`
+  - Shared proxy sidecar lifecycle and ownership-claim logic.
+  - Encapsulates reuse checks, startup, readiness waiting, and teardown.
+
+### h. Fragment transport and reconstitution
+
+- `roar/services/execution/fragment_sessions.py`
+  - Owns fragment-session key generation and on-disk storage.
+- `roar/glaas/fragment_streamer.py`
+  - Buffers fragments, encrypts batches, and posts them to GLaaS.
+- `roar/services/execution/fragment_transport.py`
+  - Centralizes "stream to GLaaS or fall back locally" behavior.
+- `roar/services/execution/fragment_reconstitution.py`
+  - Owns the shared submit finalizer and backend-driven reconstitution dispatch.
+- `roar/services/execution/fragment_models.py`
+  - Defines the backend-neutral `ExecutionFragment` envelope under the Ray compatibility wrapper.
+- `roar/services/execution/fragment_lineage.py`
+  - Owns shared fragment merge, identity resolution, dependency reconstruction, and DB persistence.
+- `roar/ray/fragment_reconstituter.py`
+  - Implements Ray-specific batch fetch, decrypt, dedupe, and composite-materialization behavior.
+- `roar/ray/collector.py`
+  - Adapts Ray fragments into the shared fragment lineage merge engine.
+  - Keeps Ray-specific filtering and metadata shaping out of the shared merge path.
+
+## 4. Current data flow
 
 ```mermaid
 sequenceDiagram
-    participant T as Ray Task
-    participant W as Worker (roar-worker)
-    participant A as RoarLogCollectorActor
-    participant D as Driver
-    participant C as collector.py
+    participant U as User
+    participant R as roar run
+    participant S as Ray backend
+    participant D as driver_entrypoint
+    participant W as roar-worker
+    participant T as fragment_transport
+    participant G as GLaaS
+    participant F as shared finalizer
+    participant C as collector.py adapter
+    participant L as fragment_lineage.py
     participant DB as roar.db
 
-    T->>W: Task starts on worker
-    W->>W: _check_task_boundary() starts/rotates TaskFragment
-    T->>W: File write (open/write/close)
-    W->>W: _TrackedWriteFile updates hash and fragment.writes
-    W->>A: append_fragment(fragment snapshot)
-    D->>D: ray.shutdown() / atexit
-    D->>C: _collect_ray_io() -> collect(...)
-    C->>A: get_all_fragments()/get_all()
-    C->>C: deduplicate + assign step numbers
-    C->>DB: insert jobs/artifacts/job_inputs/job_outputs
+    U->>R: roar run ray job submit ...
+    R->>S: maybe_rewrite_submit_command(...)
+    S->>S: build submit context + fragment session
+    S-->>R: rewritten command + finalize hook
+    R->>D: execute wrapped Ray submit
+    D->>W: instrumented workers start
+    W->>T: fragment snapshots
+    D->>T: driver proxy fragments
+    T->>G: encrypted fragment batches
+    D-->>R: Ray job exits
+    R->>F: finalize_run(...)
+    F->>G: fetch fragment batches
+    F->>C: reconstitute + merge
+    C->>L: shared merge engine
+    L->>DB: write jobs, artifacts, edges, hashes
 ```
 
-## 5. Configuration reference
+## 5. Important config and env
 
-| Key | Type | Where set | Effect |
-|---|---|---|---|
-| `ROAR_WRAP` | env var | driver (`roar run`) | Enables Ray monkey-patching in `sitecustomize.py` when set to `1`. |
-| `ROAR_JOB_ID` | env var | driver + worker env | Ray integration job ID; used in actor naming and task UID derivation. |
-| `ROAR_PROJECT_DIR` | env var | driver | Determines where collector writes (`<project>/.roar/roar.db`) and config lookup start dir. |
-| `ROAR_DRIVER_JOB_UID` | env var | worker env | Parent driver job UID stored in Ray task fragments/jobs. |
-| `ray.enabled` | `roar.toml` | `[ray]` | Turns Ray runtime_env injection on/off. |
-| `ray.pip_install` | `roar.toml` | `[ray]` | When explicitly enabled, injects current `roar` requirement into `runtime_env.pip`. |
-| `ray.actor_attribution` | `roar.toml` | `[ray]` | Fragment boundary mode in worker: `per_call` or `per_actor`. |
+| Key | Source | Purpose |
+|---|---|---|
+| `ROAR_WRAP` | env | Enables `sitecustomize.py` Ray patching. |
+| `ROAR_JOB_ID` | env | Shared Ray job identity for driver, workers, and node agents. |
+| `ROAR_EXECUTION_BACKEND` | env | Selects the active distributed backend contract at runtime. |
+| `ROAR_PROXY_PORT` | env | Job-scoped local proxy port. |
+| `ROAR_PROJECT_DIR` | env | Local repo root that owns the `.roar` database. |
+| `ROAR_CLUSTER_GLAAS_URL` | env | Cluster-visible GLaaS URL override. |
+| `ROAR_CLUSTER_AWS_ENDPOINT_URL` | env | Cluster-visible upstream S3 endpoint override. |
+| `ROAR_SESSION_ID` / `ROAR_FRAGMENT_TOKEN` | env | Fragment session credentials for GLaaS streaming. |
+| `ray.enabled` | `roar.toml` | Enables Ray runtime env injection. |
+| `ray.pip_install` | `roar.toml` | Controls whether Roar injects itself into `runtime_env.pip`. |
 
-## 6. Known limitations / caveats
+## 6. Notes and caveats
 
-- Local read events from `open()` do not include content hashes by default.
-- S3 hash identity uses ETag; multipart/object semantics can make ETag differ from full-content digest.
-- Fragment emission to actor is best-effort; failures are intentionally swallowed to avoid breaking user workloads.
-- Proxy capture requires node agents plus an available `roar-proxy` binary on cluster nodes.
-- Step topology depends on matching read/write hashes; missing hashes reduce inferred dependency edges.
+- Host-visible and cluster-visible endpoints are modeled separately on purpose. Do not collapse them into one URL.
+- Product-path confidence should come from `roar run ray job submit ...` e2e/live tests, not from direct `ray://` client-mode tests.
+- `ray_task:unknown`, `ray_task:__init__`, `ray_task:shutdown`, and proxy/bootstrap commands are treated as internal noise for registration and DAG presentation.
+- The detached collector actor has been removed. Direct fragment streaming plus shared submit finalization is the only supported transport path.
+- The shared execution-layer modules are now the required extension surface for future distributed backends. New backends should register a full `roar.execution_backends` contract rather than wiring new logic directly into `run.py` or Ray-specific modules.

@@ -101,7 +101,8 @@ def test_host_submit_reconstitutes_driver_proxy_fragment(
 
     payload = _parse_json_line(result.stdout)
     assert payload, f"Expected JSON payload in stdout, got:\n{result.stdout}"
-    assert payload.get("body") == "driver proxy capture\n", payload
+    assert payload.get("run_id"), payload
+    assert payload.get("body") == f"driver proxy capture {payload['run_id']}\n", payload
     assert payload.get("aws_endpoint_url", "").startswith("http://127.0.0.1:"), payload
     assert payload.get("roar_proxy_port"), payload
 
@@ -124,3 +125,50 @@ def test_host_submit_reconstitutes_driver_proxy_fragment(
     assert {str(row.get("capture_method") or "") for row in rows} == {"proxy"}, rows
     assert {str(row.get("ray_task_id") or "") for row in rows} == {"proxy:driver"}, rows
     assert {str(row.get("script") or "") for row in rows} == {"s3_driver_proxy"}, rows
+
+
+def test_repeated_host_submit_uses_distinct_driver_proxy_ports_and_captures_both_runs(
+    ray_cluster: dict[str, str],
+) -> None:
+    project_dir = make_host_project_dir("ray-driver-proxy-repeat")
+    init_host_project(project_dir)
+
+    first = run_roar_ray_job_from_host(
+        project_dir,
+        ray_cluster,
+        "driver_proxy_capture.py",
+        use_fragment_store=True,
+    )
+    second = run_roar_ray_job_from_host(
+        project_dir,
+        ray_cluster,
+        "driver_proxy_capture.py",
+        use_fragment_store=True,
+    )
+
+    assert first.returncode == 0, first.stderr or first.stdout
+    assert second.returncode == 0, second.stderr or second.stdout
+
+    first_payload = _parse_json_line(first.stdout)
+    second_payload = _parse_json_line(second.stdout)
+    assert first_payload.get("run_id"), first_payload
+    assert second_payload.get("run_id"), second_payload
+    assert first_payload.get("body") == f"driver proxy capture {first_payload['run_id']}\n", (
+        first_payload
+    )
+    assert second_payload.get("body") == f"driver proxy capture {second_payload['run_id']}\n", (
+        second_payload
+    )
+    assert first_payload.get("roar_proxy_port"), first_payload
+    assert second_payload.get("roar_proxy_port"), second_payload
+    assert first_payload["roar_proxy_port"] != second_payload["roar_proxy_port"], (
+        "Expected repeated host-submit jobs to use job-scoped driver proxy ports, "
+        f"but both runs reported {first_payload['roar_proxy_port']}."
+    )
+
+    first_rows = _proxy_rows_for_key(project_dir, key_suffix=first_payload["key"])
+    second_rows = _proxy_rows_for_key(project_dir, key_suffix=second_payload["key"])
+    assert first_rows, f"Expected reconstituted proxy rows for first run key {first_payload['key']}"
+    assert second_rows, (
+        f"Expected reconstituted proxy rows for second run key {second_payload['key']}"
+    )

@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-_CONFLICT_MARKER = "failed to merge the job's runtime env"
 _SUCCESS_MARKER = "RUNTIME_ENV_CONFLICT_OVERRIDE_OK"
 _RAY_ADDRESS = "http://localhost:8265"
 
@@ -39,18 +38,23 @@ def _init_clean_repo(project_dir: Path) -> None:
     )
 
 
-def _set_project_config(project_dir: Path) -> None:
+def _set_project_config(project_dir: Path, *, pip_install: bool) -> None:
     config_path = project_dir / ".roar" / "config.toml"
     config_text = config_path.read_text(encoding="utf-8")
 
-    if "pip_install = true" not in config_text:
-        config_text = config_text.replace("pip_install = false", "pip_install = true")
+    expected_setting = "true" if pip_install else "false"
+    if f"pip_install = {expected_setting}" not in config_text:
+        replacement = f"pip_install = {expected_setting}"
+        if "pip_install = true" in config_text:
+            config_text = config_text.replace("pip_install = true", replacement)
+        else:
+            config_text = config_text.replace("pip_install = false", replacement)
     if 'default = "ptrace"' not in config_text:
         config_text = config_text.replace('default = "auto"', 'default = "ptrace"')
     config_text = config_text.replace('url = "https://api.glaas.ai"', 'url = ""')
 
     config_path.write_text(config_text, encoding="utf-8")
-    assert "pip_install = true" in config_path.read_text(encoding="utf-8")
+    assert f"pip_install = {expected_setting}" in config_path.read_text(encoding="utf-8")
 
 
 def _maybe_skip_for_environment_errors(result: subprocess.CompletedProcess[str]) -> None:
@@ -127,35 +131,33 @@ def _run_submit(
 
 
 @pytest.mark.e2e
-def test_runtime_env_conflict_without_override(ray_cluster: dict[str, str], tmp_path: Path) -> None:
-    del ray_cluster
-    project_dir = tmp_path / "repo"
-    _init_clean_repo(project_dir)
-    _set_project_config(project_dir)
-
-    result = _run_submit(project_dir, override_job_runtime_env=False)
-    output = f"{result.stdout}\n{result.stderr}"
-    output_lower = output.lower()
-
-    assert result.returncode != 0, (
-        "Expected `roar run ray job submit` to fail without "
-        "RAY_OVERRIDE_JOB_RUNTIME_ENV=1 when ray.pip_install=true.\n"
-        f"output:\n{output}"
-    )
-    assert (
-        _CONFLICT_MARKER in output_lower or "failed to merge the job's runtime_env" in output_lower
-    ), output
-    assert "conflict" in output_lower, output
-
-
-@pytest.mark.e2e
-def test_runtime_env_conflict_succeeds_with_override(
+def test_runtime_env_with_pip_install_enabled_succeeds_without_override(
     ray_cluster: dict[str, str], tmp_path: Path
 ) -> None:
     del ray_cluster
     project_dir = tmp_path / "repo"
     _init_clean_repo(project_dir)
-    _set_project_config(project_dir)
+    _set_project_config(project_dir, pip_install=True)
+
+    result = _run_submit(project_dir, override_job_runtime_env=False)
+    output = f"{result.stdout}\n{result.stderr}"
+
+    assert result.returncode == 0, (
+        "Expected `roar run ray job submit` to succeed without "
+        "RAY_OVERRIDE_JOB_RUNTIME_ENV=1 when ray.pip_install=true.\n"
+        f"output:\n{output}"
+    )
+    assert _SUCCESS_MARKER in output, output
+
+
+@pytest.mark.e2e
+def test_runtime_env_with_pip_install_enabled_also_succeeds_with_override(
+    ray_cluster: dict[str, str], tmp_path: Path
+) -> None:
+    del ray_cluster
+    project_dir = tmp_path / "repo"
+    _init_clean_repo(project_dir)
+    _set_project_config(project_dir, pip_install=True)
 
     result = _run_submit(project_dir, override_job_runtime_env=True)
     output = f"{result.stdout}\n{result.stderr}"
@@ -163,6 +165,26 @@ def test_runtime_env_conflict_succeeds_with_override(
     assert result.returncode == 0, (
         "Expected `roar run ray job submit` to succeed with "
         "RAY_OVERRIDE_JOB_RUNTIME_ENV=1.\n"
+        f"output:\n{output}"
+    )
+    assert _SUCCESS_MARKER in output, output
+
+
+@pytest.mark.e2e
+def test_runtime_env_no_conflict_when_pip_install_disabled(
+    ray_cluster: dict[str, str], tmp_path: Path
+) -> None:
+    del ray_cluster
+    project_dir = tmp_path / "repo"
+    _init_clean_repo(project_dir)
+    _set_project_config(project_dir, pip_install=False)
+
+    result = _run_submit(project_dir, override_job_runtime_env=False)
+    output = f"{result.stdout}\n{result.stderr}"
+
+    assert result.returncode == 0, (
+        "Expected `roar run ray job submit` to succeed without "
+        "RAY_OVERRIDE_JOB_RUNTIME_ENV=1 when ray.pip_install=false.\n"
         f"output:\n{output}"
     )
     assert _SUCCESS_MARKER in output, output

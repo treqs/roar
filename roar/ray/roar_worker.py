@@ -20,9 +20,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from roar.glaas.fragment_streamer import GlaasFragmentStreamer
 from roar.ray.collector import collect_fragments
 from roar.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
-from roar.ray.glaas_fragment_streamer import GlaasFragmentStreamer
+from roar.ray.proxy_config import local_proxy_endpoint, local_proxy_port_from_env
+from roar.services.execution.fragment_transport import emit_fragment_dicts
 
 IOEvent = collections.namedtuple(
     "IOEvent",
@@ -94,7 +96,6 @@ else:
 _startup_complete = False
 _actor_attribution_mode = "per_call"
 _proxy_configured = False
-_DEFAULT_LOCAL_PROXY_PORT = 19191
 _real_subprocess_popen = subprocess.Popen
 _real_thread_start = threading.Thread.start
 
@@ -312,28 +313,14 @@ def _task_function_name(task_id: str) -> str:
 
 
 def _emit_fragment(fragment: TaskFragment) -> None:
-    session_id = str(os.environ.get("ROAR_SESSION_ID", "")).strip()
-    token = str(os.environ.get("ROAR_FRAGMENT_TOKEN", "")).strip()
-    glaas_url = str(os.environ.get("GLAAS_URL") or "").strip()
-
-    if session_id and token and glaas_url:
-        streamer = GlaasFragmentStreamer(
-            session_id=session_id,
-            token=token,
-            glaas_url=glaas_url,
-        )
-        streamer.append_fragment(fragment.to_dict())
-        streamer.close()
-        return
-
-    project_dir = str(os.environ.get("ROAR_PROJECT_DIR", "")).strip()
-    if not project_dir:
-        return
-
-    collect_fragments(
-        fragments=[fragment.to_dict()],
-        project_dir=project_dir,
-        driver_job_uid=os.environ.get("ROAR_JOB_ID"),
+    emit_fragment_dicts(
+        [fragment.to_dict()],
+        env=os.environ,
+        local_merge=lambda fragments, project_dir, driver_job_uid: collect_fragments(
+            fragments=fragments,
+            project_dir=project_dir,
+            driver_job_uid=driver_job_uid,
+        ),
     )
 
 
@@ -873,12 +860,7 @@ def _is_loopback_proxy_endpoint(url: str) -> bool:
 
 
 def _local_proxy_port() -> int:
-    raw_value = str(os.environ.get("ROAR_PROXY_PORT", "")).strip()
-    if raw_value.isdigit():
-        port = int(raw_value)
-        if 1024 < port <= 65535:
-            return port
-    return _DEFAULT_LOCAL_PROXY_PORT
+    return local_proxy_port_from_env(os.environ)
 
 
 def _ensure_direct_streamer() -> GlaasFragmentStreamer | None:
@@ -1579,7 +1561,7 @@ def _patch_boto3() -> None:
 
 
 def _configure_local_proxy_endpoint() -> None:
-    """Point S3 traffic at the local node proxy on the well-known loopback port."""
+    """Point S3 traffic at the local node proxy on the configured loopback port."""
     global _proxy_configured
 
     if _proxy_configured:
@@ -1591,8 +1573,9 @@ def _configure_local_proxy_endpoint() -> None:
     original = str(os.environ.get("AWS_ENDPOINT_URL", "")).strip()
     if not upstream and original and not _is_loopback_proxy_endpoint(original):
         os.environ["ROAR_UPSTREAM_S3_ENDPOINT"] = original
-    os.environ["AWS_ENDPOINT_URL"] = f"http://127.0.0.1:{port}"
-    print(f"[roar-worker] set AWS_ENDPOINT_URL=http://127.0.0.1:{port}")
+    endpoint = local_proxy_endpoint(port)
+    os.environ["AWS_ENDPOINT_URL"] = endpoint
+    print(f"[roar-worker] set AWS_ENDPOINT_URL={endpoint}")
 
     os.environ["ROAR_PROXY_PORT"] = str(port)
     _proxy_configured = True
