@@ -91,6 +91,9 @@ class DagRenderer:
         else:
             header = f"Pipeline: {dag.total_steps} steps"
         lines.append(f"{header}{stale_info}")
+        if dag.labels:
+            summary = ", ".join(f"{key}={value}" for key, value in sorted(dag.labels.items())[:3])
+            lines.append(f"Labels: {summary}")
         lines.append("")
 
         if not dag.nodes:
@@ -194,6 +197,9 @@ class DagRenderer:
         # Format the node line
         node_line = self._format_node(node, prefix, is_last)
         lines.append(node_line)
+        if node.labels:
+            summary = ", ".join(f"{key}={value}" for key, value in sorted(node.labels.items())[:3])
+            lines.append(f"{prefix}    labels: {summary}")
 
         # Get children of this node
         children = sorted(children_by_id.get(job_id, []))
@@ -362,6 +368,7 @@ class DagRenderer:
         """
         return {
             "session_id": dag.session_id,
+            "labels": dag.labels,
             "total_steps": dag.total_steps,
             "stale_count": dag.stale_count,
             "stale_artifact_count": dag.stale_artifact_count,
@@ -384,6 +391,7 @@ class DagRenderer:
                         "consumed": node.metrics.consumed,
                     },
                     "dependencies": node.dependencies,
+                    "labels": node.labels,
                 }
                 for node in dag.nodes
             ],
@@ -400,6 +408,7 @@ class DagRenderer:
                     "consumer_steps": artifact.consumer_steps,
                     "is_terminal": artifact.is_terminal,
                     "superseded_by": artifact.superseded_by,
+                    "labels": artifact.labels,
                 }
                 for artifact in dag.artifacts
             ],

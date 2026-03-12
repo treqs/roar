@@ -22,6 +22,7 @@ from ...core.logging import get_logger
 from ...db.context import optional_repo
 from ...glaas_client import GlaasClient, get_glaas_url
 from ...services.execution.dataset_identifier import DatasetIdentifierInferer
+from ...services.labels import collect_label_sync_payloads
 from ...services.registration import (
     RegistrationCoordinator,
     SessionRegistrationService,
@@ -358,6 +359,22 @@ class PutService:
         )
         if pre_registration_errors:
             registration_result.errors = pre_registration_errors + registration_result.errors
+
+        label_payloads = collect_label_sync_payloads(
+            self._db,
+            session_id=int(session_id),
+            session_hash=session_hash or "",
+            jobs=lineage.jobs,
+            artifacts=[
+                *lineage.artifacts,
+                *[{"id": u.artifact_id, "hash": u.hash} for u in uploads],
+            ],
+        )
+        if label_payloads:
+            _label_result, label_error = client.sync_labels(label_payloads)
+            if label_error:
+                registration_result.errors.append(f"Label sync failed: {label_error}")
+
         self._logger.debug(
             "Registration result: jobs=%d/%d, artifacts=%d/%d, links=%d, errors=%d",
             registration_result.jobs_created,

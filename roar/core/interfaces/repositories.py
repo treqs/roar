@@ -289,3 +289,42 @@ class CollectionRepository(Protocol):
     ) -> dict[str, list[dict[str, Any]]]:
         """Get collection members (artifacts and children)."""
         ...
+
+
+@runtime_checkable
+class LabelRepository(Protocol):
+    """Repository for versioned local label documents."""
+
+    def get_current(
+        self,
+        entity_type: str,
+        *,
+        session_id: int | None = None,
+        job_id: int | None = None,
+        artifact_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Get the latest label version for a target."""
+        ...
+
+    def get_history(
+        self,
+        entity_type: str,
+        *,
+        session_id: int | None = None,
+        job_id: int | None = None,
+        artifact_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get all label versions for a target ordered oldest-first."""
+        ...
+
+    def create_version(
+        self,
+        entity_type: str,
+        metadata: dict[str, Any],
+        *,
+        session_id: int | None = None,
+        job_id: int | None = None,
+        artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Append a new label version for a target."""
+        ...

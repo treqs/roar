@@ -34,6 +34,7 @@ from .models import (
     Job,
     JobInput,
     JobOutput,
+    Label,
     SchemaVersion,
     Session,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "Job",
     "JobInput",
     "JobOutput",
+    "Label",
     "SchemaVersion",
     "Session",
     "create_database_context",

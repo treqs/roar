@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 
+from ..services.labels import render_label_lines
 from .formatting import format_duration, format_size, format_timestamp
 
 
@@ -20,7 +21,14 @@ class ShowRenderer:
     keeping presentation separate from data access.
     """
 
-    def render_session(self, session: dict, jobs: list[dict]) -> str:
+    @staticmethod
+    def _render_labels(lines: list[str], metadata: dict | None) -> None:
+        if not metadata:
+            return
+        lines.append("\nLabels:")
+        lines.extend(render_label_lines(metadata, indent="  "))
+
+    def render_session(self, session: dict, jobs: list[dict], labels: dict | None = None) -> str:
         """Render session overview with job listing.
 
         Args:
@@ -38,6 +46,8 @@ class ShowRenderer:
             lines.append(f"Git: {session['git_repo']}")
         if session.get("git_commit_start"):
             lines.append(f"Commit: {session['git_commit_start']}")
+
+        self._render_labels(lines, labels)
 
         if not jobs:
             lines.append("\nNo jobs in this session.")
@@ -78,6 +88,7 @@ class ShowRenderer:
         job: dict,
         inputs: list[dict],
         outputs: list[dict],
+        labels: dict | None = None,
         composite_details: dict | None = None,
     ) -> str:
         """Render detailed job view with artifacts.
@@ -118,6 +129,8 @@ class ShowRenderer:
         else:
             status = f"Failed (exit {job['exit_code']})"
         lines.append(f"Status: {status}")
+
+        self._render_labels(lines, labels)
 
         lines.append(f"\nCommand: {job['command']}")
 
@@ -251,6 +264,7 @@ class ShowRenderer:
         artifact: dict,
         locations: list,
         jobs: dict,
+        labels: dict | None = None,
         composite_summary: dict | None = None,
         components: list | None = None,
     ) -> str:
@@ -281,6 +295,8 @@ class ShowRenderer:
 
         if artifact.get("first_seen_path"):
             lines.append(f"Original path: {artifact['first_seen_path']}")
+
+        self._render_labels(lines, labels)
 
         # Hashes
         hashes = artifact.get("hashes", [])

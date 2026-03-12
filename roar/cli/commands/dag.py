@@ -133,6 +133,7 @@ def dag(
                 exit_code=n["exit_code"],
                 metrics=DagNodeMetrics(**n["metrics"]),
                 dependencies=n["dependencies"],
+                labels=n.get("labels", {}),
             )
             for n in dag_data["nodes"]
         ]
@@ -148,6 +149,7 @@ def dag(
                 consumer_steps=a["consumer_steps"],
                 is_terminal=a["is_terminal"],
                 superseded_by=a["superseded_by"],
+                labels=a.get("labels", {}),
             )
             for a in dag_data["artifacts"]
         ]
@@ -161,6 +163,7 @@ def dag(
             session_id=dag_data["session_id"],
             stale_artifact_count=dag_data["stale_artifact_count"],
             superseded_artifact_count=dag_data["superseded_artifact_count"],
+            labels=dag_data.get("labels", {}),
         )
 
         # Render output

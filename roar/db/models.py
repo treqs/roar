@@ -124,6 +124,62 @@ class Session(Base):
     )
 
 
+class Label(Base):
+    """Versioned local label document attached to one lineage entity."""
+
+    __tablename__ = "labels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entity_type: Mapped[str] = mapped_column(String, nullable=False)
+    session_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("sessions.id", ondelete="CASCADE")
+    )
+    job_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"))
+    artifact_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("artifacts.id", ondelete="CASCADE")
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    metadata_: Mapped[str] = mapped_column("metadata", Text, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    synced_at: Mapped[float | None] = mapped_column(Float)
+    synced_server_label_id: Mapped[str | None] = mapped_column(String)
+
+    __table_args__ = (
+        CheckConstraint(
+            "entity_type IN ('dag', 'job', 'artifact')",
+            name="ck_labels_entity_type",
+        ),
+        CheckConstraint(
+            "((session_id IS NOT NULL) + (job_id IS NOT NULL) + (artifact_id IS NOT NULL)) = 1",
+            name="ck_labels_one_target",
+        ),
+        Index("idx_labels_session", "session_id"),
+        Index("idx_labels_job", "job_id"),
+        Index("idx_labels_artifact", "artifact_id"),
+        Index(
+            "uq_labels_session_version",
+            "session_id",
+            "version",
+            unique=True,
+            sqlite_where=text("session_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_labels_job_version",
+            "job_id",
+            "version",
+            unique=True,
+            sqlite_where=text("job_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_labels_artifact_version",
+            "artifact_id",
+            "version",
+            unique=True,
+            sqlite_where=text("artifact_id IS NOT NULL"),
+        ),
+    )
+
+
 class Job(Base):
     """Execution record that consumes inputs and produces outputs."""
 

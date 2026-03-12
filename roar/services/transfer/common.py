@@ -24,6 +24,9 @@ class DatabaseContext(Protocol):
     @property
     def sessions(self) -> Any: ...
 
+    @property
+    def labels(self) -> Any: ...
+
 
 def resolve_repo_url_or_local_uri(
     vcs: GitVCSProvider,

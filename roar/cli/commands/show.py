@@ -161,8 +161,9 @@ def _prepare_job_for_render(job: dict) -> dict:
 def _show_session(db_ctx, session: dict) -> None:
     """Fetch data and display session-level view with all jobs."""
     jobs = db_ctx.jobs.get_by_session(session["id"], limit=100)
+    labels = _current_label_metadata(db_ctx, "dag", session_id=int(session["id"]))
     renderer = ShowRenderer()
-    click.echo(renderer.render_session(session, jobs))
+    click.echo(renderer.render_session(session, jobs, labels=labels))
 
 
 def _show_job(db_ctx, job: dict) -> None:
@@ -170,14 +171,16 @@ def _show_job(db_ctx, job: dict) -> None:
     inputs = db_ctx.jobs.get_inputs(job["id"])
     outputs = db_ctx.jobs.get_outputs(job["id"])
     prepared_job = _prepare_job_for_render(job)
+    labels = _current_label_metadata(db_ctx, "job", job_id=int(job["id"]))
     renderer = ShowRenderer()
-    click.echo(renderer.render_job(prepared_job, inputs, outputs))
+    click.echo(renderer.render_job(prepared_job, inputs, outputs, labels=labels))
 
 
 def _show_artifact(db_ctx, artifact: dict) -> None:
     """Fetch data and display detailed artifact view."""
     locations = db_ctx.artifacts.get_locations(artifact["id"])
     jobs = db_ctx.artifacts.get_jobs(artifact["id"])
+    labels = _current_label_metadata(db_ctx, "artifact", artifact_id=str(artifact["id"]))
 
     composite_summary = None
     components = None
@@ -189,7 +192,41 @@ def _show_artifact(db_ctx, artifact: dict) -> None:
             components = composite_repo.get_components(artifact["id"], limit=10) or None
 
     renderer = ShowRenderer()
-    click.echo(renderer.render_artifact(artifact, locations, jobs, composite_summary, components))
+    click.echo(
+        renderer.render_artifact(
+            artifact,
+            locations,
+            jobs,
+            labels=labels,
+            composite_summary=composite_summary,
+            components=components,
+        )
+    )
+
+
+def _current_label_metadata(
+    db_ctx,
+    entity_type: str,
+    *,
+    session_id: int | None = None,
+    job_id: int | None = None,
+    artifact_id: str | None = None,
+) -> dict[str, Any] | None:
+    labels_repo = cast(Any, optional_repo(db_ctx, "labels"))
+    if labels_repo is None:
+        return None
+
+    current = labels_repo.get_current(
+        entity_type,
+        session_id=session_id,
+        job_id=job_id,
+        artifact_id=artifact_id,
+    )
+    if not isinstance(current, dict):
+        return None
+
+    metadata = current.get("metadata")
+    return metadata if isinstance(metadata, dict) else None
 
 
 @click.command("show")
