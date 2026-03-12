@@ -259,13 +259,28 @@ roar log                  # Show recent job history
 
 ### `roar register`
 
-Register artifact lineage with GLaaS.
+Register session, job, step, or artifact lineage with GLaaS.
 
 ```bash
 roar register model.pt              # Register model lineage
 roar register --dry-run model.pt    # Preview without registering
 roar register -y model.pt           # Skip confirmation prompt
+roar register @4                    # Register lineage for DAG step 4
+roar register deadbeef              # Register lineage for a local job UID
+roar register 7f1e...c9a4           # Register lineage for a tracked artifact hash
+roar register 8d7a1f2c...           # Register a whole local session
+roar register s3://bucket/run/out   # Register a tracked remote S3 artifact
 ```
+
+**Supported targets:**
+- Local artifact path: `model.pt`, `./outputs/metrics.json`
+- Tracked artifact hash: primitive or composite
+- Local job UID: full UID or unique prefix
+- Step reference: `@N` or `@BN`
+- Local session hash: full hash or unique prefix
+- Tracked remote path: `s3://...`
+
+For bare 8-character hex targets, `roar register` prefers a matching local job UID before falling back to session-hash-prefix resolution.
 
 ### `roar put`
 
@@ -397,7 +412,7 @@ Add `.roar/` to your `.gitignore` (roar offers to do this during `roar init`).
 
 ## GLaaS Server
 
-Roar can register artifacts and jobs with a GLaaS (Global Lineage-as-a-Service) server using the `roar register` command.
+Roar can register sessions, jobs, steps, and artifacts with a GLaaS (Global Lineage-as-a-Service) server using the `roar register` command.
 
 ### Server Setup
 

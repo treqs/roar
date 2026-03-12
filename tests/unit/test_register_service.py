@@ -105,7 +105,11 @@ class TestRegisterService:
 
     def test_register_lineage_target_dispatches_session_hash(self, service, tmp_path):
         session_hash = "a" * 64
-        with patch.object(service, "register_session_lineage") as register_session:
+        with (
+            patch.object(service, "_resolve_job_target", return_value=None),
+            patch.object(service, "_resolve_artifact_hash_target", return_value=None),
+            patch.object(service, "register_session_lineage") as register_session,
+        ):
             register_session.return_value = RegisterResult(success=True)
 
             result = service.register_lineage_target(
@@ -125,8 +129,35 @@ class TestRegisterService:
             confirm_callback=None,
         )
 
+    def test_register_lineage_target_dispatches_session_hash_prefix(self, service, tmp_path):
+        session_hash_prefix = "a" * 8
+        with (
+            patch.object(service, "_resolve_job_target", return_value=None),
+            patch.object(service, "_resolve_artifact_hash_target", return_value=None),
+            patch.object(service, "register_session_lineage") as register_session,
+        ):
+            register_session.return_value = RegisterResult(success=True)
+
+            result = service.register_lineage_target(
+                target=session_hash_prefix,
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+            )
+
+        assert result.success is True
+        register_session.assert_called_once_with(
+            session_hash=session_hash_prefix,
+            roar_dir=tmp_path / ".roar",
+            cwd=tmp_path,
+            dry_run=False,
+            as_blake3=False,
+            skip_confirmation=False,
+            confirm_callback=None,
+        )
+
     def test_register_lineage_target_dispatches_artifact_path(self, service, tmp_path):
         artifact_path = "metrics.json"
+        (tmp_path / artifact_path).write_text("{}\n", encoding="utf-8")
         with patch.object(service, "register_artifact_lineage") as register_artifact:
             register_artifact.return_value = RegisterResult(success=True)
 
@@ -139,6 +170,57 @@ class TestRegisterService:
         assert result.success is True
         register_artifact.assert_called_once_with(
             artifact_path=artifact_path,
+            roar_dir=tmp_path / ".roar",
+            cwd=tmp_path,
+            dry_run=False,
+            as_blake3=False,
+            skip_confirmation=False,
+            confirm_callback=None,
+        )
+
+    def test_register_lineage_target_dispatches_job_uid(self, service, tmp_path):
+        job_uid = "deadbeef"
+        with (
+            patch.object(service, "_resolve_job_target", return_value=job_uid),
+            patch.object(service, "register_job_lineage") as register_job,
+        ):
+            register_job.return_value = RegisterResult(success=True)
+
+            result = service.register_lineage_target(
+                target=job_uid,
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+            )
+
+        assert result.success is True
+        register_job.assert_called_once_with(
+            job_uid=job_uid,
+            roar_dir=tmp_path / ".roar",
+            cwd=tmp_path,
+            dry_run=False,
+            as_blake3=False,
+            skip_confirmation=False,
+            confirm_callback=None,
+        )
+
+    def test_register_lineage_target_dispatches_artifact_hash(self, service, tmp_path):
+        artifact_hash = "b" * 64
+        with (
+            patch.object(service, "_resolve_job_target", return_value=None),
+            patch.object(service, "_resolve_artifact_hash_target", return_value=artifact_hash),
+            patch.object(service, "register_artifact_hash_lineage") as register_artifact_hash,
+        ):
+            register_artifact_hash.return_value = RegisterResult(success=True)
+
+            result = service.register_lineage_target(
+                target=artifact_hash,
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+            )
+
+        assert result.success is True
+        register_artifact_hash.assert_called_once_with(
+            artifact_hash=artifact_hash,
             roar_dir=tmp_path / ".roar",
             cwd=tmp_path,
             dry_run=False,
@@ -870,6 +952,35 @@ class TestRegisterService:
         assert len(prepared) == 1
         assert prepared[0]["hashes"] == [{"algorithm": "blake3", "digest": blake3_digest}]
 
+    def test_prepare_artifacts_skips_composite_artifacts(self):
+        service = RegisterService()
+        composite_digest = "c" * 64
+        primitive_digest = "a" * 64
+        artifacts = [
+            {
+                "kind": "composite",
+                "hashes": [{"algorithm": "composite-blake3", "digest": composite_digest}],
+                "size": 11,
+                "source_type": "local",
+            },
+            {
+                "hashes": [{"algorithm": "blake3", "digest": primitive_digest}],
+                "size": 9,
+                "source_type": "local",
+            },
+        ]
+
+        prepared = service._prepare_artifacts(artifacts, session_hash="session-1")
+
+        assert prepared == [
+            {
+                "hashes": [{"algorithm": "blake3", "digest": primitive_digest}],
+                "size": 9,
+                "source_type": None,
+                "session_hash": "session-1",
+            }
+        ]
+
     def test_prepare_artifacts_skips_artifacts_without_usable_hash(self):
         service = RegisterService()
         artifacts = [
@@ -887,3 +998,190 @@ class TestRegisterService:
         prepared = service._prepare_artifacts(artifacts, session_hash="session-1")
 
         assert prepared == []
+
+    def test_build_lineage_membership_index_payload_rebuilds_full_component_bloom(self):
+        service = RegisterService()
+
+        payload = service._build_lineage_membership_index_payload(
+            membership_index={
+                "total_components": 2,
+                "stored_components": 2,
+                "bloom_filter_base64": "AQIDBA==",
+                "bloom_bits": 2048,
+                "bloom_hashes": 12,
+                "bloom_version": 1,
+            },
+            component_count_total=2,
+            components=[
+                {
+                    "relative_path": "part-000.json",
+                    "leaf_kind": "file",
+                    "component_algorithm": "blake3",
+                    "component_digest": "d" * 64,
+                    "component_size": 5,
+                    "component_type": "application/json",
+                },
+                {
+                    "relative_path": "part-001.json",
+                    "leaf_kind": "file",
+                    "component_algorithm": "blake3",
+                    "component_digest": "e" * 64,
+                    "component_size": 8,
+                    "component_type": "application/json",
+                },
+            ],
+        )
+
+        assert payload["total_components"] == 2
+        assert payload["stored_components"] == 2
+        assert payload["bloom_filter_base64"] != "AQIDBA=="
+        assert payload["bloom_bits"] > 0
+        assert payload["bloom_hashes"] > 0
+        assert payload["bloom_version"] == 1
+
+    def test_register_collected_lineage_preregisters_composites_before_batch_registration(
+        self,
+        service,
+        tmp_path,
+        mock_glaas_client,
+        mock_coordinator,
+        mock_session_service,
+    ):
+        from roar.core.interfaces.registration import (
+            BatchRegistrationResult,
+            GitContext,
+            SessionRegistrationResult,
+        )
+        from roar.core.interfaces.upload import LineageData
+
+        primitive_digest = "a" * 64
+        composite_digest = "c" * 64
+        composite_root = tmp_path / "exports" / "bundle"
+
+        lineage = LineageData(
+            jobs=[
+                {
+                    "id": 1,
+                    "job_uid": "job-1",
+                    "step_number": 1,
+                    "timestamp": 1.0,
+                }
+            ],
+            artifacts=[
+                {
+                    "id": "primitive-1",
+                    "hashes": [{"algorithm": "blake3", "digest": primitive_digest}],
+                    "size": 7,
+                    "source_type": "local",
+                },
+                {
+                    "id": "composite-1",
+                    "kind": "composite",
+                    "first_seen_path": str(composite_root),
+                    "hashes": [{"algorithm": "composite-blake3", "digest": composite_digest}],
+                    "size": 13,
+                    "component_count": 2,
+                    "source_type": "local",
+                },
+            ],
+            artifact_hashes={primitive_digest, composite_digest},
+            pipeline={"id": 1},
+        )
+
+        mock_session_service.compute_session_hash.return_value = "session-hash-123"
+        mock_session_service.register.return_value = SessionRegistrationResult(
+            success=True,
+            session_hash="session-hash-123",
+            session_url="https://glaas.example/dag/session-hash-123",
+        )
+        mock_glaas_client.register_composite_artifact.return_value = (
+            {"artifact_id": "srv-comp-1", "created": True},
+            None,
+        )
+        mock_coordinator.register_lineage.return_value = BatchRegistrationResult(
+            session_registered=True,
+            jobs_created=1,
+            jobs_failed=0,
+            artifacts_registered=1,
+            artifacts_failed=0,
+            links_created=0,
+            links_failed=0,
+            errors=[],
+        )
+
+        with (
+            patch(
+                "roar.services.registration.register_service.create_database_context"
+            ) as mock_ctx,
+            patch("roar.services.registration.register_service.config_get", return_value=False),
+            patch.object(
+                service,
+                "_get_git_context",
+                return_value=GitContext(
+                    repo="https://github.com/test/repo",
+                    commit="abc123def456",
+                    branch="main",
+                ),
+            ),
+        ):
+            mock_db = MagicMock()
+            mock_db.__enter__ = MagicMock(return_value=mock_db)
+            mock_db.__exit__ = MagicMock(return_value=None)
+            mock_db.composites = MagicMock()
+            mock_db.composites.get_components.return_value = [
+                {
+                    "relative_path": "part-000.json",
+                    "leaf_kind": "file",
+                    "component_algorithm": "blake3",
+                    "component_digest": "d" * 64,
+                    "component_size": 5,
+                    "component_type": "application/json",
+                },
+                {
+                    "relative_path": "part-001.json",
+                    "leaf_kind": "file",
+                    "component_algorithm": "blake3",
+                    "component_digest": "e" * 64,
+                    "component_size": 8,
+                    "component_type": "application/json",
+                },
+            ]
+            mock_db.composites.get_membership_index.return_value = None
+            mock_ctx.return_value = mock_db
+
+            result = service._register_collected_lineage(
+                lineage=lineage,
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                session_id=1,
+                artifact_hash=primitive_digest,
+                dry_run=False,
+                as_blake3=False,
+                skip_confirmation=False,
+                confirm_callback=None,
+            )
+
+        assert result.success is True
+        assert result.artifacts_registered == 2
+
+        composite_payload = mock_glaas_client.register_composite_artifact.call_args.args[0]
+        assert composite_payload["hash"] == composite_digest
+        assert composite_payload["source_type"] is None
+        assert composite_payload["component_count_total"] == 2
+        assert len(composite_payload["components"]) == 2
+        assert composite_payload["membership_index"]["total_components"] == 2
+        assert composite_payload["membership_index"]["stored_components"] == 2
+        assert composite_payload["membership_index"]["bloom_filter_base64"]
+        assert composite_payload["membership_index"]["bloom_bits"] > 0
+        assert composite_payload["membership_index"]["bloom_hashes"] > 0
+        assert composite_payload["membership_index"]["bloom_version"] == 1
+
+        coordinator_artifacts = mock_coordinator.register_lineage.call_args.kwargs["artifacts"]
+        assert coordinator_artifacts == [
+            {
+                "hashes": [{"algorithm": "blake3", "digest": primitive_digest}],
+                "size": 7,
+                "source_type": None,
+                "session_hash": "session-hash-123",
+            }
+        ]

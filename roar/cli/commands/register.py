@@ -3,7 +3,7 @@ Native Click implementation of the register command.
 
 Usage: roar register [options] <target>
 
-Registers artifact, step, or session lineage with GLaaS.
+Registers artifact, job, step, or session lineage with GLaaS.
 """
 
 import click
@@ -48,7 +48,8 @@ def register(ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3:
     """Register lineage with GLaaS.
 
     Submits lineage to the GLaaS server, starting from one of:
-    - an artifact path
+    - an artifact path or tracked artifact hash
+    - a local job UID/hash
     - a DAG step reference like ``@4``
     - a local session hash/prefix previously shown by roar
 
@@ -68,6 +69,10 @@ def register(ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3:
         roar register -y model.pt           # Skip confirmation prompt
 
         roar register @4                    # Register the lineage for DAG step 4
+
+        roar register deadbeef             # Register the lineage for a local job UID
+
+        roar register 7f1e...c9a4          # Register the lineage for a tracked artifact hash
 
         roar register 8d7a1f2c...           # Register a whole local session
 

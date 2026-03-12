@@ -27,13 +27,15 @@ from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
 from ...core.interfaces.upload import LineageData
 from ...core.logging import get_logger
-from ...db.context import create_database_context
+from ...db.context import create_database_context, optional_repo
 from ...db.hashing.backend import compute_hashes_batch
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
 from ...plugins.vcs.git import GitVCSProvider
+from ..put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
 from ..transfer.common import resolve_repo_url_or_local_uri
 from ..upload.lineage_collector import LineageCollector
+from . import _artifact_ref
 from .coordinator import RegistrationCoordinator
 from .session import SessionRegistrationService
 
@@ -50,6 +52,8 @@ boto3 = None
 
 _STEP_REFERENCE_RE = re.compile(r"^@(?:B)?\d+$", re.IGNORECASE)
 _SESSION_HASH_RE = re.compile(r"^[a-f0-9]{8,64}$")
+_HEX_IDENTIFIER_RE = re.compile(r"^[a-f0-9]{4,64}$", re.IGNORECASE)
+_VALID_REMOTE_SOURCE_TYPES = {"s3", "gs", "https"}
 
 
 def _ensure_boto3():
@@ -104,6 +108,7 @@ class RegisterService:
         lineage_collector: LineageCollector | None = None,
         coordinator: RegistrationCoordinator | None = None,
         session_service: SessionRegistrationService | None = None,
+        composite_builder: CompositeArtifactBuilder | None = None,
         omit_filter: OmitFilter | None = None,
         logger: ILogger | None = None,
     ):
@@ -122,6 +127,7 @@ class RegisterService:
         self._lineage_collector = lineage_collector
         self._coordinator = coordinator
         self._session_service = session_service
+        self._composite_builder = composite_builder or CompositeArtifactBuilder()
         self._omit_filter = omit_filter
 
         self._logger = logger or get_logger()
@@ -165,7 +171,7 @@ class RegisterService:
         skip_confirmation: bool = False,
         confirm_callback: Callable[[list[str]], bool] | None = None,
     ) -> RegisterResult:
-        """Register lineage for an artifact path, step reference, or session hash."""
+        """Register lineage for an artifact path/hash, step reference, job UID, or session hash."""
         normalized_target = target.strip()
         if self._is_step_reference(normalized_target):
             return self.register_step_lineage(
@@ -182,6 +188,30 @@ class RegisterService:
         if resolved_path and (self._is_s3_url(normalized_target) or os.path.exists(resolved_path)):
             return self.register_artifact_lineage(
                 artifact_path=normalized_target,
+                roar_dir=roar_dir,
+                cwd=cwd,
+                dry_run=dry_run,
+                as_blake3=as_blake3,
+                skip_confirmation=skip_confirmation,
+                confirm_callback=confirm_callback,
+            )
+
+        resolved_job_uid = self._resolve_job_target(normalized_target, roar_dir)
+        if resolved_job_uid is not None:
+            return self.register_job_lineage(
+                job_uid=resolved_job_uid,
+                roar_dir=roar_dir,
+                cwd=cwd,
+                dry_run=dry_run,
+                as_blake3=as_blake3,
+                skip_confirmation=skip_confirmation,
+                confirm_callback=confirm_callback,
+            )
+
+        resolved_artifact_hash = self._resolve_artifact_hash_target(normalized_target, roar_dir)
+        if resolved_artifact_hash is not None:
+            return self.register_artifact_hash_lineage(
+                artifact_hash=resolved_artifact_hash,
                 roar_dir=roar_dir,
                 cwd=cwd,
                 dry_run=dry_run,
@@ -294,6 +324,35 @@ class RegisterService:
             session_hash_override=resolved_hash,
         )
 
+    def register_job_lineage(
+        self,
+        job_uid: str,
+        roar_dir: Path,
+        cwd: Path,
+        dry_run: bool = False,
+        as_blake3: bool = False,
+        skip_confirmation: bool = False,
+        confirm_callback: Callable[[list[str]], bool] | None = None,
+    ) -> RegisterResult:
+        """Register lineage for a local job identified by job UID or prefix."""
+        lineage = self.lineage_collector.collect_job(job_uid, roar_dir)
+        if not lineage.jobs:
+            return RegisterResult(success=False, error=f"No local job matches '{job_uid}'.")
+
+        representative_hash = self._select_representative_hash(lineage)
+        pipeline_id = lineage.pipeline.get("id") if isinstance(lineage.pipeline, dict) else None
+        return self._register_collected_lineage(
+            lineage=lineage,
+            roar_dir=roar_dir,
+            cwd=cwd,
+            session_id=int(pipeline_id) if pipeline_id is not None else None,
+            artifact_hash=representative_hash,
+            dry_run=dry_run,
+            as_blake3=as_blake3,
+            skip_confirmation=skip_confirmation,
+            confirm_callback=confirm_callback,
+        )
+
     def register_artifact_lineage(
         self,
         artifact_path: str,
@@ -388,6 +447,53 @@ class RegisterService:
             cwd=cwd,
             session_id=int(session["id"]),
             artifact_hash=artifact_hash,
+            dry_run=dry_run,
+            as_blake3=as_blake3,
+            skip_confirmation=skip_confirmation,
+            confirm_callback=confirm_callback,
+        )
+
+    def register_artifact_hash_lineage(
+        self,
+        artifact_hash: str,
+        roar_dir: Path,
+        cwd: Path,
+        dry_run: bool = False,
+        as_blake3: bool = False,
+        skip_confirmation: bool = False,
+        confirm_callback: Callable[[list[str]], bool] | None = None,
+    ) -> RegisterResult:
+        """Register lineage for a tracked local artifact identified by hash."""
+        with create_database_context(roar_dir) as db_ctx:
+            db_artifact = db_ctx.artifacts.get_by_prefix(artifact_hash)
+            if not db_artifact:
+                return RegisterResult(
+                    success=False,
+                    error=f"No tracked local artifact matches '{artifact_hash}'.",
+                )
+
+            resolved_hash = self._select_primary_hash(db_artifact)
+            if not resolved_hash:
+                return RegisterResult(
+                    success=False,
+                    error=f"Artifact has no registered hash: {artifact_hash}",
+                )
+
+            session = db_ctx.sessions.get_active()
+            if not session:
+                return RegisterResult(
+                    success=False,
+                    error="No active session. Run 'roar run' to create a session first.",
+                )
+
+            lineage = self.lineage_collector.collect([resolved_hash], roar_dir)
+
+        return self._register_collected_lineage(
+            lineage=lineage,
+            roar_dir=roar_dir,
+            cwd=cwd,
+            session_id=int(session["id"]),
+            artifact_hash=resolved_hash,
             dry_run=dry_run,
             as_blake3=as_blake3,
             skip_confirmation=skip_confirmation,
@@ -507,6 +613,29 @@ class RegisterService:
                 error=f"Session registration failed: {session_result.error}",
             )
 
+        composite_registrations: list[dict[str, Any]] = []
+        pre_registration_errors: list[str] = []
+        if self._has_lineage_composites(lineage.artifacts):
+            try:
+                with create_database_context(roar_dir) as db_ctx:
+                    composite_registrations = self._register_lineage_composites_with_glaas(
+                        db_ctx=db_ctx,
+                        lineage_artifacts=lineage.artifacts,
+                        session_hash=session_hash,
+                        registration_errors=pre_registration_errors,
+                    )
+            except Exception as e:
+                return RegisterResult(
+                    success=False,
+                    session_hash=session_hash,
+                    artifact_hash=artifact_hash,
+                    error=f"Composite artifact registration failed: {e}",
+                    secrets_detected=detected_secrets,
+                    secrets_redacted=bool(detected_secrets),
+                )
+
+        self._refresh_job_artifact_references(lineage.jobs, lineage.artifacts)
+
         batch_result: BatchRegistrationResult = self.coordinator.register_lineage(
             session_hash=session_hash,
             git_context=git_context,
@@ -525,17 +654,23 @@ class RegisterService:
                 if not success:
                     self._logger.debug("Failed to create git tag: %s", tag_error)
 
-        if batch_result.errors:
-            self._logger.warning("Registration completed with errors: %s", batch_result.errors)
+        composite_registered = sum(1 for item in composite_registrations if item.get("registered"))
+        composite_failed = sum(1 for item in composite_registrations if not item.get("registered"))
+        total_artifacts_registered = batch_result.artifacts_registered + composite_registered
+        total_artifacts_failed = batch_result.artifacts_failed + composite_failed
+        all_errors = pre_registration_errors + batch_result.errors
+
+        if all_errors:
+            self._logger.warning("Registration completed with errors: %s", all_errors)
 
         return RegisterResult(
-            success=batch_result.jobs_failed == 0 and batch_result.artifacts_failed == 0,
+            success=batch_result.jobs_failed == 0 and total_artifacts_failed == 0,
             session_hash=session_hash,
             artifact_hash=artifact_hash,
             jobs_registered=batch_result.jobs_created,
-            artifacts_registered=batch_result.artifacts_registered,
+            artifacts_registered=total_artifacts_registered,
             links_created=batch_result.links_created,
-            error="; ".join(batch_result.errors) if batch_result.errors else None,
+            error="; ".join(all_errors) if all_errors else None,
             secrets_detected=detected_secrets,
             secrets_redacted=bool(detected_secrets),
         )
@@ -682,6 +817,32 @@ class RegisterService:
     def _looks_like_session_hash(self, target: str) -> bool:
         return bool(_SESSION_HASH_RE.match(target))
 
+    def _looks_like_hex_identifier(self, target: str) -> bool:
+        return bool(_HEX_IDENTIFIER_RE.match(target))
+
+    def _resolve_job_target(self, target: str, roar_dir: Path) -> str | None:
+        if not self._looks_like_hex_identifier(target) or len(target) > 12:
+            return None
+
+        with create_database_context(roar_dir) as db_ctx:
+            job = db_ctx.jobs.get_by_uid(target)
+        if not job:
+            return None
+
+        job_uid = job.get("job_uid")
+        return str(job_uid) if isinstance(job_uid, str) and job_uid else None
+
+    def _resolve_artifact_hash_target(self, target: str, roar_dir: Path) -> str | None:
+        if not self._looks_like_hex_identifier(target) or len(target) < 64:
+            return None
+
+        with create_database_context(roar_dir) as db_ctx:
+            artifact = db_ctx.artifacts.get_by_prefix(target)
+        if not artifact:
+            return None
+
+        return self._select_primary_hash(artifact)
+
     def _parse_step_reference(self, reference: str) -> tuple[int, bool] | None:
         if not self._is_step_reference(reference):
             return None
@@ -761,56 +922,16 @@ class RegisterService:
             self._logger.warning("Skipping --as-blake3 upgrade because boto3 is unavailable: %s", e)
             return
 
-        assert boto3 is not None
-        s3_client = boto3.client("s3")
         with create_database_context(roar_dir) as db_ctx:
             for artifact in lineage.artifacts:
                 if not self._needs_blake3_upgrade(artifact):
                     continue
 
-                artifact_id = artifact.get("id")
-                if not isinstance(artifact_id, str) or not artifact_id:
-                    continue
-
-                s3_url = self._extract_s3_url(artifact)
-                if not s3_url:
-                    continue
-
-                parsed = self._parse_s3_url(s3_url)
-                if parsed is None:
-                    continue
-                bucket, key = parsed
-
-                digest = self._compute_s3_blake3_digest(s3_client, bucket, key)
-                if not digest:
-                    continue
-
-                db_ctx.session.execute(
-                    text(
-                        """
-                        INSERT OR IGNORE INTO artifact_hashes (artifact_id, algorithm, digest)
-                        VALUES (:artifact_id, 'blake3', :digest)
-                        """
-                    ),
-                    {"artifact_id": artifact_id, "digest": digest},
+                digest = self._ensure_artifact_blake3_digest(
+                    db_ctx=db_ctx,
+                    artifact=artifact,
                 )
-
-                has_blake3_row = db_ctx.session.execute(
-                    text(
-                        """
-                        SELECT 1
-                        FROM artifact_hashes
-                        WHERE artifact_id = :artifact_id
-                          AND algorithm = 'blake3'
-                          AND digest = :digest
-                        LIMIT 1
-                        """
-                    ),
-                    {"artifact_id": artifact_id, "digest": digest},
-                ).scalar_one_or_none()
-
-                if has_blake3_row:
-                    self._attach_blake3_to_artifact(artifact, digest)
+                if digest:
                     lineage.artifact_hashes.add(digest)
 
     def _needs_blake3_upgrade(self, artifact: dict) -> bool:
@@ -891,6 +1012,98 @@ class RegisterService:
         hashes.append({"algorithm": "blake3", "digest": digest})
         artifact["hash"] = digest
 
+    def _ensure_artifact_blake3_digest(
+        self,
+        *,
+        db_ctx: Any,
+        artifact: dict[str, Any],
+    ) -> str | None:
+        existing_digest = self._select_hash_by_algorithm(artifact, "blake3")
+        if existing_digest is not None:
+            return existing_digest
+
+        if not self._needs_blake3_upgrade(artifact):
+            return None
+
+        artifact_id = artifact.get("id")
+        if not isinstance(artifact_id, str) or not artifact_id:
+            return None
+
+        s3_url = self._extract_s3_url(artifact)
+        if not s3_url:
+            return None
+
+        parsed = self._parse_s3_url(s3_url)
+        if parsed is None:
+            return None
+        bucket, key = parsed
+
+        try:
+            _ensure_boto3()
+        except Exception as e:
+            self._logger.warning(
+                "Skipping blake3 upgrade for %s because boto3 is unavailable: %s",
+                s3_url,
+                e,
+            )
+            return None
+
+        assert boto3 is not None
+        digest = self._compute_s3_blake3_digest(boto3.client("s3"), bucket, key)
+        if not digest:
+            return None
+
+        db_ctx.session.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO artifact_hashes (artifact_id, algorithm, digest)
+                VALUES (:artifact_id, 'blake3', :digest)
+                """
+            ),
+            {"artifact_id": artifact_id, "digest": digest},
+        )
+
+        has_blake3_row = db_ctx.session.execute(
+            text(
+                """
+                SELECT 1
+                FROM artifact_hashes
+                WHERE artifact_id = :artifact_id
+                  AND algorithm = 'blake3'
+                  AND digest = :digest
+                LIMIT 1
+                """
+            ),
+            {"artifact_id": artifact_id, "digest": digest},
+        ).scalar_one_or_none()
+        if not has_blake3_row:
+            return None
+
+        self._attach_blake3_to_artifact(artifact, digest)
+        return digest
+
+    @staticmethod
+    def _select_hash_by_algorithm(artifact: dict[str, Any], algorithm: str) -> str | None:
+        hashes = artifact.get("hashes")
+        if not isinstance(hashes, list):
+            return None
+
+        target = algorithm.strip().lower()
+        for entry in hashes:
+            if not isinstance(entry, dict):
+                continue
+            current_algorithm = entry.get("algorithm")
+            digest = entry.get("digest")
+            if (
+                isinstance(current_algorithm, str)
+                and current_algorithm.strip().lower() == target
+                and isinstance(digest, str)
+                and digest
+            ):
+                return digest.lower()
+
+        return None
+
     def _get_git_context(self, cwd: Path) -> GitContext:
         """Get git context from repository."""
         try:
@@ -916,28 +1129,96 @@ class RegisterService:
             links += len(job.get("_outputs", []))
         return links
 
+    def _refresh_job_artifact_references(
+        self,
+        jobs: list[dict[str, Any]],
+        artifacts: list[dict[str, Any]],
+    ) -> None:
+        preferred_hash_by_path: dict[str, str] = {}
+        preferred_hash_by_digest: dict[str, str] = {}
+
+        for artifact in artifacts:
+            preferred_hash = self._select_preferred_link_hash(artifact)
+            if preferred_hash is None:
+                continue
+
+            artifact_path = _artifact_ref.artifact_path(artifact)
+            if artifact_path:
+                preferred_hash_by_path[artifact_path] = preferred_hash
+
+            for entry in self._extract_registration_hashes(artifact):
+                digest = entry.get("digest")
+                if isinstance(digest, str) and digest:
+                    preferred_hash_by_digest[digest] = preferred_hash
+
+        for job in jobs:
+            self._refresh_job_io_refs(
+                job, "_inputs", "_input_hashes", preferred_hash_by_path, preferred_hash_by_digest
+            )
+            self._refresh_job_io_refs(
+                job, "_outputs", "_output_hashes", preferred_hash_by_path, preferred_hash_by_digest
+            )
+
+    def _refresh_job_io_refs(
+        self,
+        job: dict[str, Any],
+        items_key: str,
+        hashes_key: str,
+        preferred_hash_by_path: dict[str, str],
+        preferred_hash_by_digest: dict[str, str],
+    ) -> None:
+        items = job.get(items_key)
+        if not isinstance(items, list):
+            return
+
+        updated_hashes: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            preferred_hash: str | None = None
+            path = item.get("path")
+            if isinstance(path, str) and path:
+                preferred_hash = preferred_hash_by_path.get(path)
+
+            raw_hash = item.get("hash")
+            if preferred_hash is None and isinstance(raw_hash, str) and raw_hash:
+                preferred_hash = preferred_hash_by_digest.get(raw_hash.lower())
+
+            if preferred_hash is not None:
+                item["hash"] = preferred_hash
+
+            item_hash = item.get("hash")
+            if isinstance(item_hash, str) and item_hash:
+                updated_hashes.append(item_hash)
+
+        job[hashes_key] = updated_hashes
+
+    def _has_lineage_composites(self, artifacts: list[dict[str, Any]]) -> bool:
+        return any(
+            self._extract_composite_digest(self._extract_registration_hashes(artifact))
+            for artifact in artifacts
+        )
+
+    def _select_preferred_link_hash(self, artifact: dict[str, Any]) -> str | None:
+        hashes = self._extract_registration_hashes(artifact)
+        for preferred_algorithm in ("blake3", "composite-blake3"):
+            for entry in hashes:
+                if entry.get("algorithm") == preferred_algorithm:
+                    digest = entry.get("digest")
+                    if isinstance(digest, str) and digest:
+                        return digest
+        if hashes:
+            digest = hashes[0].get("digest")
+            if isinstance(digest, str) and digest:
+                return digest
+        return None
+
     def _prepare_artifacts(self, artifacts: list[dict], session_hash: str) -> list[dict]:
         """Prepare artifacts for registration with required fields."""
         prepared = []
         for art in artifacts:
-            normalized_hashes: list[dict[str, str]] = []
-            seen: set[tuple[str, str]] = set()
-            for h in art.get("hashes", []):
-                if not isinstance(h, dict):
-                    continue
-                algorithm = h.get("algorithm")
-                digest = h.get("digest")
-                if not isinstance(algorithm, str) or not isinstance(digest, str):
-                    continue
-                algorithm_name = algorithm.strip().lower()
-                digest_value = digest.strip()
-                if not algorithm_name or not digest_value:
-                    continue
-                pair = (algorithm_name, digest_value)
-                if pair in seen:
-                    continue
-                seen.add(pair)
-                normalized_hashes.append({"algorithm": algorithm_name, "digest": digest_value})
+            normalized_hashes = self._extract_registration_hashes(art)
 
             # Prefer blake3 first when present while preserving remaining order.
             blake3_hashes = [h for h in normalized_hashes if h["algorithm"] == "blake3"]
@@ -945,27 +1226,470 @@ class RegisterService:
             ordered_hashes = blake3_hashes + other_hashes
 
             if not ordered_hashes:
-                hash_value = art.get("hash")
-                if isinstance(hash_value, str) and hash_value.strip():
-                    ordered_hashes = [
-                        {
-                            "algorithm": "blake3",
-                            "digest": hash_value.strip(),
-                        }
-                    ]
-
-            if not ordered_hashes:
                 continue
+
+            if art.get("kind") == "composite" or any(
+                h.get("algorithm") == "composite-blake3" for h in ordered_hashes
+            ):
+                continue
+
+            try:
+                size = max(0, int(art.get("size", 0)))
+            except (TypeError, ValueError):
+                size = 0
 
             prepared.append(
                 {
                     "hashes": ordered_hashes,
-                    "size": art.get("size", 0),
-                    "source_type": art.get("source_type"),
+                    "size": size,
+                    "source_type": self._normalize_registration_source_type(art.get("source_type")),
                     "session_hash": session_hash,
                 }
             )
         return prepared
+
+    def _register_lineage_composites_with_glaas(
+        self,
+        *,
+        db_ctx: Any,
+        lineage_artifacts: list[dict[str, Any]],
+        session_hash: str,
+        registration_errors: list[str],
+    ) -> list[dict[str, Any]]:
+        payloads = self._build_lineage_composite_payloads(
+            db_ctx=db_ctx,
+            lineage_artifacts=lineage_artifacts,
+            session_hash=session_hash,
+        )
+        registrations: list[dict[str, Any]] = []
+
+        for item in payloads:
+            digest = item["hash"]
+            response = self.glaas_client.register_composite_artifact(item["payload"])
+            result, error = self._parse_composite_registration_response(response)
+
+            registration: dict[str, Any] = {
+                "lineage": True,
+                "hash": digest,
+                "root_path": item["root_path"],
+                "component_count_total": item["component_count_total"],
+                "component_count_stored": item["component_count_stored"],
+            }
+            if error:
+                registration["registered"] = False
+                registration["error"] = error
+                registration_errors.append(f"Lineage composite {digest[:12]}: {error}")
+            else:
+                registration["registered"] = True
+                if isinstance(result, dict):
+                    if "artifact_id" in result:
+                        registration["artifact_id"] = result["artifact_id"]
+                    if "created" in result:
+                        registration["created"] = result["created"]
+
+            registrations.append(registration)
+
+        if registrations:
+            failures = sum(1 for item in registrations if not item.get("registered"))
+            self._logger.debug(
+                "Lineage composite pre-registration complete: %d total, %d failed",
+                len(registrations),
+                failures,
+            )
+
+        return registrations
+
+    def _build_lineage_composite_payloads(
+        self,
+        *,
+        db_ctx: Any,
+        lineage_artifacts: list[dict[str, Any]],
+        session_hash: str,
+    ) -> list[dict[str, Any]]:
+        composites_repo: Any = optional_repo(db_ctx, "composites")
+        lineage_artifacts_by_id = {
+            str(artifact_id): artifact
+            for artifact in lineage_artifacts
+            if isinstance((artifact_id := artifact.get("id")), str) and artifact_id
+        }
+        payloads: list[dict[str, Any]] = []
+        seen_hashes: set[str] = set()
+
+        for artifact in lineage_artifacts:
+            hashes = self._extract_registration_hashes(artifact)
+            composite_digest = self._extract_composite_digest(hashes)
+            if not composite_digest or composite_digest in seen_hashes:
+                continue
+
+            component_rows: list[dict[str, Any]] = []
+            membership_index: dict[str, Any] | None = None
+            artifact_id = artifact.get("id")
+            if composites_repo is not None and isinstance(artifact_id, str) and artifact_id:
+                rows = composites_repo.get_components(artifact_id, limit=5000)
+                if isinstance(rows, list):
+                    component_rows = [row for row in rows if isinstance(row, dict)]
+
+                raw_membership = composites_repo.get_membership_index(artifact_id)
+                if isinstance(raw_membership, dict):
+                    membership_index = raw_membership
+
+            components = self._normalize_lineage_components(
+                component_rows,
+                db_ctx=db_ctx,
+                lineage_artifacts_by_id=lineage_artifacts_by_id,
+            )
+            component_count_total = self._resolve_lineage_component_count_total(
+                artifact_component_count=artifact.get("component_count"),
+                membership_index=membership_index,
+                stored_components=len(components),
+            )
+            if component_count_total <= 0:
+                self._logger.warning(
+                    "Skipping lineage composite %s: missing component_count metadata",
+                    composite_digest[:12],
+                )
+                continue
+
+            membership_payload = self._build_lineage_membership_index_payload(
+                membership_index=membership_index,
+                component_count_total=component_count_total,
+                components=components,
+            )
+            normalized_hashes = self._ensure_composite_hash_entry(hashes, composite_digest)
+            root_path = _artifact_ref.artifact_path(artifact) or ""
+            source_type = self._normalize_registration_source_type(artifact.get("source_type"))
+            try:
+                size = max(0, int(artifact.get("size", 0)))
+            except (TypeError, ValueError):
+                size = 0
+
+            seen_hashes.add(composite_digest)
+            payloads.append(
+                {
+                    "hash": composite_digest,
+                    "root_path": str(root_path),
+                    "component_count_total": component_count_total,
+                    "component_count_stored": len(components),
+                    "payload": {
+                        "hash": composite_digest,
+                        "hashes": normalized_hashes,
+                        "size": size,
+                        "source_type": source_type,
+                        "session_hash": session_hash,
+                        "component_count_total": component_count_total,
+                        "components": components,
+                        "membership_index": membership_payload,
+                    },
+                }
+            )
+
+        return payloads
+
+    @staticmethod
+    def _extract_composite_digest(hashes: list[dict[str, str]]) -> str | None:
+        for item in hashes:
+            if item.get("algorithm") == "composite-blake3":
+                digest = item.get("digest")
+                if isinstance(digest, str) and digest:
+                    return digest
+        return None
+
+    def _normalize_lineage_components(
+        self,
+        component_rows: list[dict[str, Any]],
+        *,
+        db_ctx: Any,
+        lineage_artifacts_by_id: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        components: list[dict[str, Any]] = []
+
+        for row in component_rows:
+            relative_path = row.get("relative_path")
+            if not isinstance(relative_path, str) or not relative_path:
+                continue
+            resolved_component = self._resolve_component_hash_for_registration(
+                row=row,
+                db_ctx=db_ctx,
+                lineage_artifacts_by_id=lineage_artifacts_by_id,
+            )
+            if resolved_component is None:
+                continue
+            component_algorithm, digest = resolved_component
+
+            leaf_kind = row.get("leaf_kind")
+            if not isinstance(leaf_kind, str) or not leaf_kind:
+                leaf_kind = "file"
+
+            component_size = row.get("component_size")
+            try:
+                if isinstance(component_size, bool):
+                    size_value = int(component_size)
+                elif isinstance(component_size, int | float | str):
+                    size_value = max(0, int(component_size))
+                else:
+                    size_value = 0
+            except (TypeError, ValueError):
+                size_value = 0
+
+            component_type = row.get("component_type")
+            if component_type is not None and not isinstance(component_type, str):
+                component_type = None
+
+            components.append(
+                {
+                    "relative_path": relative_path,
+                    "leaf_kind": leaf_kind,
+                    "component_algorithm": component_algorithm,
+                    "component_digest": digest.lower(),
+                    "component_size": size_value,
+                    "component_type": component_type,
+                }
+            )
+
+        return components
+
+    def _resolve_component_hash_for_registration(
+        self,
+        *,
+        row: dict[str, Any],
+        db_ctx: Any,
+        lineage_artifacts_by_id: dict[str, dict[str, Any]],
+    ) -> tuple[str, str] | None:
+        artifact_id = row.get("artifact_id")
+        linked_artifact: dict[str, Any] | None = None
+
+        if isinstance(artifact_id, str) and artifact_id:
+            linked_artifact = lineage_artifacts_by_id.get(artifact_id)
+            if linked_artifact is None:
+                artifacts_repo: Any = optional_repo(db_ctx, "artifacts")
+                if artifacts_repo is not None:
+                    loaded_artifact = artifacts_repo.get(artifact_id)
+                    if isinstance(loaded_artifact, dict):
+                        linked_artifact = loaded_artifact
+                        lineage_artifacts_by_id[artifact_id] = loaded_artifact
+
+        if linked_artifact is not None:
+            blake3_digest = self._select_hash_by_algorithm(linked_artifact, "blake3")
+            if blake3_digest is None:
+                blake3_digest = self._ensure_artifact_blake3_digest(
+                    db_ctx=db_ctx,
+                    artifact=linked_artifact,
+                )
+            if blake3_digest is not None:
+                return "blake3", blake3_digest
+
+        component_algorithm = row.get("component_algorithm")
+        component_digest = row.get("component_digest")
+        if (
+            isinstance(component_algorithm, str)
+            and component_algorithm.strip().lower() == "blake3"
+            and isinstance(component_digest, str)
+            and component_digest
+        ):
+            return "blake3", component_digest.lower()
+
+        self._logger.warning(
+            "Skipping lineage composite component %s: missing resolvable blake3 digest",
+            row.get("relative_path") or "<unknown>",
+        )
+        return None
+
+    @staticmethod
+    def _resolve_lineage_component_count_total(
+        artifact_component_count: Any,
+        membership_index: dict[str, Any] | None,
+        stored_components: int,
+    ) -> int:
+        try:
+            artifact_total = int(artifact_component_count)
+        except (TypeError, ValueError):
+            artifact_total = 0
+
+        membership_total = 0
+        if isinstance(membership_index, dict):
+            try:
+                membership_total = int(membership_index.get("total_components", 0))
+            except (TypeError, ValueError):
+                membership_total = 0
+
+        return max(artifact_total, membership_total, stored_components)
+
+    def _build_lineage_membership_index_payload(
+        self,
+        *,
+        membership_index: dict[str, Any] | None,
+        component_count_total: int,
+        components: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        stored_components = len(components)
+        payload: dict[str, Any] = {
+            "total_components": component_count_total,
+            "stored_components": stored_components,
+        }
+
+        if stored_components == component_count_total and stored_components > 0:
+            leaves: list[CompositeLeaf] = []
+            for component in components:
+                digest = component.get("component_digest")
+                if not isinstance(digest, str) or not digest:
+                    continue
+
+                component_size = component.get("component_size")
+                try:
+                    if isinstance(component_size, bool):
+                        normalized_component_size = int(component_size)
+                    elif isinstance(component_size, int | float | str):
+                        normalized_component_size = max(0, int(component_size))
+                    else:
+                        normalized_component_size = 0
+                except (TypeError, ValueError):
+                    normalized_component_size = 0
+
+                component_type_raw = component.get("component_type")
+                component_type = component_type_raw if isinstance(component_type_raw, str) else None
+                leaf_kind_raw = component.get("leaf_kind")
+                leaf_kind = leaf_kind_raw if isinstance(leaf_kind_raw, str) else "file"
+                leaves.append(
+                    CompositeLeaf(
+                        relative_path=str(component.get("relative_path") or ""),
+                        digest=digest.lower(),
+                        size=normalized_component_size,
+                        component_type=component_type,
+                        leaf_kind=leaf_kind,
+                    )
+                )
+
+            if len(leaves) == stored_components:
+                bloom_payload = self._composite_builder._build_membership_index_base(leaves)
+                payload["bloom_filter_base64"] = bloom_payload.get("bloom_filter_base64")
+                payload["bloom_bits"] = bloom_payload.get("bloom_bits")
+                payload["bloom_hashes"] = bloom_payload.get("bloom_hashes")
+                payload["bloom_version"] = bloom_payload.get("bloom_version")
+                return payload
+
+        for key in ("bloom_filter_base64", "bloom_bits", "bloom_hashes", "bloom_version"):
+            value = membership_index.get(key) if isinstance(membership_index, dict) else None
+            if value is None:
+                continue
+            if key in {"bloom_bits", "bloom_hashes", "bloom_version"}:
+                try:
+                    payload[key] = int(value)
+                except (TypeError, ValueError):
+                    continue
+                continue
+            payload[key] = value
+
+        required_bloom_keys = (
+            "bloom_filter_base64",
+            "bloom_bits",
+            "bloom_hashes",
+            "bloom_version",
+        )
+        if not all(key in payload and payload[key] is not None for key in required_bloom_keys):
+            raise ValueError(
+                "Lineage composite membership_index is missing required bloom fields; "
+                "cannot register composite without a complete membership bloom index."
+            )
+
+        return payload
+
+    @staticmethod
+    def _ensure_composite_hash_entry(
+        hashes: list[dict[str, str]],
+        composite_digest: str,
+    ) -> list[dict[str, str]]:
+        normalized_hashes = [dict(item) for item in hashes]
+        has_composite_digest = any(
+            item.get("algorithm") == "composite-blake3" and item.get("digest") == composite_digest
+            for item in normalized_hashes
+        )
+        if not has_composite_digest:
+            normalized_hashes.insert(
+                0,
+                {"algorithm": "composite-blake3", "digest": composite_digest},
+            )
+        return normalized_hashes
+
+    @staticmethod
+    def _normalize_registration_source_type(source_type: Any) -> str | None:
+        if not isinstance(source_type, str):
+            return None
+        normalized = source_type.strip().lower()
+        if normalized in _VALID_REMOTE_SOURCE_TYPES:
+            return normalized
+        return None
+
+    @staticmethod
+    def _extract_registration_hashes(artifact: dict[str, Any]) -> list[dict[str, str]]:
+        normalized_hashes: list[dict[str, str]] = []
+        seen: set[str] = set()
+
+        raw_hashes = artifact.get("hashes")
+        if isinstance(raw_hashes, list):
+            for entry in raw_hashes:
+                if not isinstance(entry, dict):
+                    continue
+                algorithm = entry.get("algorithm")
+                digest = entry.get("digest")
+                if not isinstance(algorithm, str) or not isinstance(digest, str):
+                    continue
+                algorithm_value = algorithm.strip().lower()
+                digest_value = digest.strip().lower()
+                if not algorithm_value or not digest_value:
+                    continue
+                key = f"{algorithm_value}:{digest_value}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                normalized_hashes.append(
+                    {
+                        "algorithm": algorithm_value,
+                        "digest": digest_value,
+                    }
+                )
+
+        if not normalized_hashes:
+            hash_value = artifact.get("hash")
+            if isinstance(hash_value, str) and hash_value.strip():
+                algorithm = (
+                    "composite-blake3"
+                    if str(artifact.get("kind") or "").strip().lower() == "composite"
+                    else "blake3"
+                )
+                normalized_hashes.append(
+                    {
+                        "algorithm": algorithm,
+                        "digest": hash_value.strip().lower(),
+                    }
+                )
+
+        return normalized_hashes
+
+    @staticmethod
+    def _parse_composite_registration_response(
+        response: Any,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        if isinstance(response, tuple) and len(response) == 2:
+            raw_result, raw_error = response
+            if isinstance(raw_error, str):
+                return (
+                    raw_result if isinstance(raw_result, dict) else None,
+                    raw_error or None,
+                )
+            if raw_error is not None:
+                return None, str(raw_error)
+            if not isinstance(raw_result, dict):
+                return (
+                    None,
+                    "Unexpected response from GLaaS when registering composite artifact: "
+                    f"expected dict payload, got {type(raw_result).__name__}",
+                )
+            return raw_result, None
+
+        if response is None:
+            return None, "Empty response from GLaaS when registering composite artifact"
+
+        return None, "Unexpected response from GLaaS when registering composite artifact"
 
     def _detect_secrets_in_lineage(
         self,
