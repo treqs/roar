@@ -34,6 +34,7 @@ Your backend owns:
 - how its workers start
 - how to adapt its fragments into the shared lineage model
 - any backend-specific reconstitution logic
+- any backend-owned config schema, CLI-settable keys, and init-template sections
 
 ## 2. The Contract
 
@@ -48,6 +49,7 @@ class DistributedExecutionBackend:
     driver_bootstrap: DriverBootstrapAdapter
     worker_bootstrap: WorkerBootstrapAdapter
     fragment_reconstitution: FragmentReconstitutionAdapter | None = None
+    config: BackendConfigAdapter | None = None
 ```
 
 In practice, that means a backend must answer five questions:
@@ -57,6 +59,7 @@ In practice, that means a backend must answer five questions:
 3. How should worker runtime env be prepared?
 4. How do worker and driver fragments get emitted or merged?
 5. If fragments are streamed remotely, how are they reconstituted after the submit command finishes?
+6. What backend-specific config should be exposed without teaching core code about this backend?
 
 ## 3. Minimal Adapter Shape
 
@@ -70,6 +73,8 @@ from pathlib import Path
 from typing import Any
 
 from roar.execution.framework.contract import (
+    BackendConfigAdapter,
+    ConfigurableKeySpec,
     DistributedExecutionBackend,
     DriverBootstrapAdapter,
     FragmentReconstitutionAdapter,
@@ -138,6 +143,24 @@ def demo_create_reconstituter(
     raise NotImplementedError
 
 
+DEMO_BACKEND_CONFIG = BackendConfigAdapter(
+    section_name="demo",
+    default_values={"enabled": True},
+    configurable_keys={
+        "demo.enabled": ConfigurableKeySpec(
+            value_type=bool,
+            default=True,
+            description="Enable demo backend instrumentation",
+        ),
+    },
+    init_template=\"\"\"\
+[demo]
+# Enable demo backend instrumentation
+enabled = true
+\"\"\",
+)
+
+
 DEMO_EXECUTION_BACKEND = DistributedExecutionBackend(
     name="demo",
     matches_submit_command=demo_matches_submit_command,
@@ -157,6 +180,7 @@ DEMO_EXECUTION_BACKEND = DistributedExecutionBackend(
     fragment_reconstitution=FragmentReconstitutionAdapter(
         create_reconstituter=demo_create_reconstituter,
     ),
+    config=DEMO_BACKEND_CONFIG,
 )
 
 
@@ -172,6 +196,7 @@ That skeleton is intentionally small:
 - `driver_bootstrap` is where driver-local proxy capture hooks in if you need it
 - `worker_bootstrap` tells Roar how to package and start workers
 - `fragment_reconstitution` is only needed if fragments are streamed remotely and must be fetched later
+- `config` keeps backend-specific config out of core models and `roar init`
 
 ## 4. The Critical Rewrite Rule
 
@@ -209,7 +234,23 @@ Built-in backends use the same mechanism. The Ray adapter is registered as:
 ray = "roar.backends.ray.plugin:register"
 ```
 
-## 6. Driver And Worker Responsibilities
+Backends that live inside the main repo are also discovered generically from
+`roar.backends.*.plugin`, so core code does not need a hardcoded backend list.
+
+## 6. Backend-Owned Config
+
+If your backend needs config, keep that ownership inside the backend package.
+
+Use `BackendConfigAdapter` for:
+
+- section defaults
+- `roar config list` / `roar config set` metadata
+- `roar init` template fragments
+- validation/normalization of backend config sections
+
+Core config code should not add new backend-specific fields or hardcoded template blocks.
+
+## 7. Driver And Worker Responsibilities
 
 The shared runtime assumes these boundaries:
 
@@ -224,7 +265,7 @@ The shared runtime assumes these boundaries:
 
 Your adapter should not copy these modules. It should supply the callbacks that those shared modules call.
 
-## 7. Simple First Backend Strategy
+## 8. Simple First Backend Strategy
 
 If you are building the next backend from scratch, the safest order is:
 
@@ -236,7 +277,7 @@ If you are building the next backend from scratch, the safest order is:
 
 This keeps the first slice small and avoids recreating the old Ray problem where backend-specific glue owned too much orchestration.
 
-## 8. Recommended Test Shape
+## 9. Recommended Test Shape
 
 Use product-path tests first.
 
@@ -256,7 +297,7 @@ Unit tests are still useful, but they should stay local:
 
 Do not treat mocked unit coverage as the main proof that a backend works.
 
-## 9. A Practical Checklist
+## 10. A Practical Checklist
 
 Before calling a new adapter done, verify:
 
