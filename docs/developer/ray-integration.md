@@ -12,7 +12,8 @@ The canonical extension points now live under:
 - `roar.execution.framework.*` for the shared backend framework
 - `roar.backends.ray.*` for the concrete Ray adapter
 
-Legacy import paths still exist as compatibility shims while the codebase converges on those namespaces.
+The Ray submit path now lives entirely under `roar.backends.ray.*`. The remaining legacy
+imports are limited to compatibility wrappers around older shared-framework module paths.
 
 If you want to add another backend on top of this framework, start with `docs/developer/execution-backend-adapter.md`.
 
