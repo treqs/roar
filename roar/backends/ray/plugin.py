@@ -20,14 +20,17 @@ from roar.backends.ray.submit import (
     ray_submit_matches_command,
 )
 from roar.execution.framework.contract import (
-    DistributedExecutionBackend,
+    DistributedRuntimeAdapter,
     DriverBootstrapAdapter,
+    ExecutionBackend,
     ExecutionPolicyAdapter,
     FragmentReconstitutionAdapter,
+    HostExecutionAdapter,
     RuntimeImportAdapter,
     WorkerBootstrapAdapter,
 )
 from roar.execution.framework.registry import register_execution_backend
+from roar.services.execution.host_execution import execute_host_run
 from roar.services.execution.worker_bootstrap import build_packaged_worker_runtime_env
 
 _GENERIC_WORKER_SETUP_HOOK = "roar.services.execution.worker_bootstrap.startup"
@@ -88,41 +91,47 @@ def ray_reconstituter_factory(
     )
 
 
-RAY_EXECUTION_BACKEND = DistributedExecutionBackend(
+RAY_EXECUTION_BACKEND = ExecutionBackend(
     name="ray",
-    matches_submit_command=ray_submit_matches_command,
-    rewrite_submit_command=maybe_rewrite_ray_job_submit,
-    driver_bootstrap=DriverBootstrapAdapter(
-        build_proxy_fragment=ray_build_driver_proxy_fragment,
-        local_merge=collect_fragments,
-        should_start_local_proxy=ray_should_start_driver_proxy,
+    priority=100,
+    matches_command=ray_submit_matches_command,
+    rewrite_command=maybe_rewrite_ray_job_submit,
+    host_execution=HostExecutionAdapter(
+        execute=execute_host_run,
     ),
-    worker_bootstrap=WorkerBootstrapAdapter(
-        py_executable=_GENERIC_WORKER_PY_EXECUTABLE,
-        setup_hook=_GENERIC_WORKER_SETUP_HOOK,
-        prepare_runtime_env=ray_prepare_worker_runtime_env,
-        startup=_startup,
-        run_entrypoint=_run_worker_entrypoint,
-    ),
-    fragment_reconstitution=FragmentReconstitutionAdapter(
-        create_reconstituter=ray_reconstituter_factory,
+    distributed=DistributedRuntimeAdapter(
+        driver_bootstrap=DriverBootstrapAdapter(
+            build_proxy_fragment=ray_build_driver_proxy_fragment,
+            local_merge=collect_fragments,
+            should_start_local_proxy=ray_should_start_driver_proxy,
+        ),
+        worker_bootstrap=WorkerBootstrapAdapter(
+            py_executable=_GENERIC_WORKER_PY_EXECUTABLE,
+            setup_hook=_GENERIC_WORKER_SETUP_HOOK,
+            prepare_runtime_env=ray_prepare_worker_runtime_env,
+            startup=_startup,
+            run_entrypoint=_run_worker_entrypoint,
+        ),
+        fragment_reconstitution=FragmentReconstitutionAdapter(
+            create_reconstituter=ray_reconstituter_factory,
+        ),
+        runtime_import=RuntimeImportAdapter(
+            module_prefixes=("ray",),
+            initialize_process=initialize_runtime_process,
+            observe_import=observe_runtime_import,
+            patch_module=patch_imported_ray_module,
+        ),
     ),
     policy=ExecutionPolicyAdapter(
         noise_commands=RAY_STEP_NOISE_COMMANDS,
         task_command_prefixes=RAY_TASK_COMMAND_PREFIXES,
         job_environment_markers=("RAY_JOB_ID",),
     ),
-    runtime_import=RuntimeImportAdapter(
-        module_prefixes=("ray",),
-        initialize_process=initialize_runtime_process,
-        observe_import=observe_runtime_import,
-        patch_module=patch_imported_ray_module,
-    ),
     config=RAY_BACKEND_CONFIG,
 )
 
 
-def register() -> DistributedExecutionBackend:
+def register() -> ExecutionBackend:
     register_execution_backend(RAY_EXECUTION_BACKEND)
     return RAY_EXECUTION_BACKEND
 

@@ -131,6 +131,7 @@ def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
 
 def execute_and_report(
     ctx: "RoarContext",
+    backend_name: str,
     command: list[str],
     job_type: str | None,
     step_name: str | None,
@@ -164,28 +165,9 @@ def execute_and_report(
     """
     from typing import Literal, cast
 
-    from ...config import config_get
-    from ...core.bootstrap import bootstrap
     from ...core.interfaces.run import RunContext
-    from ...services.execution.coordinator import RunCoordinator
-
-    # Ensure plugin/provider registries (including VCS=git) are populated.
-    bootstrap(ctx.roar_dir)
-
-    # Check if S3 proxy is enabled
-    proxy_service = None
-    if config_get("proxy.enabled"):
-        from ...services.execution.proxy import ProxyService
-
-        proxy_service = ProxyService()
-        if not proxy_service.find_proxy():
-            click.echo(
-                "Error: S3 proxy is enabled but roar-proxy binary not found.\n"
-                "Build it with: cargo build --release --manifest-path rust/Cargo.toml -p roar-proxy\n"
-                "Or disable: roar proxy disable",
-                err=True,
-            )
-            return 1
+    from ...execution.framework.registry import get_execution_backend
+    from ...services.execution.host_execution import ExecutionSetupError
 
     # Create run context
     hash_algos = cast(list[Literal["blake3", "sha256", "sha512", "md5"]], hash_algorithms)
@@ -194,6 +176,7 @@ def execute_and_report(
         roar_dir=ctx.roar_dir,
         repo_root=repo_root,
         command=command,
+        execution_backend=backend_name,
         job_type=job_type_literal,
         step_name=step_name,
         quiet=quiet,
@@ -202,9 +185,12 @@ def execute_and_report(
         tracer_fallback=tracer_fallback,
     )
 
-    # Execute via coordinator
-    coordinator = RunCoordinator(proxy_service=proxy_service)
-    result = coordinator.execute(run_ctx)
+    backend = get_execution_backend(backend_name)
+    try:
+        result = backend.host_execution.execute(run_ctx)
+    except ExecutionSetupError as exc:
+        click.echo(str(exc), err=True)
+        return 1
 
     # Present report
     from ...presenters.console import ConsolePresenter

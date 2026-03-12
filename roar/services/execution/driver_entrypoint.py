@@ -39,7 +39,10 @@ def _build_driver_proxy_fragment(
     environ: Mapping[str, str],
 ) -> dict[str, object] | None:
     backend = get_execution_backend(_resolve_execution_backend(environ))
-    return backend.driver_bootstrap.build_proxy_fragment(
+    distributed = backend.distributed
+    if distributed is None:
+        raise RuntimeError(f"execution backend {backend.name!r} does not support driver bootstrap")
+    return distributed.driver_bootstrap.build_proxy_fragment(
         entries,
         started_at,
         ended_at,
@@ -50,10 +53,13 @@ def _build_driver_proxy_fragment(
 
 def _emit_driver_proxy_fragment(fragment: dict[str, object], *, environ: Mapping[str, str]) -> None:
     backend = get_execution_backend(_resolve_execution_backend(environ))
+    distributed = backend.distributed
+    if distributed is None:
+        raise RuntimeError(f"execution backend {backend.name!r} does not support driver bootstrap")
     emit_fragment_dicts(
         [fragment],
         env=environ,
-        local_merge=backend.driver_bootstrap.local_merge,
+        local_merge=distributed.driver_bootstrap.local_merge,
     )
 
 
@@ -63,7 +69,10 @@ def _local_proxy_port(environ: Mapping[str, str]) -> int:
 
 def _should_start_driver_proxy(environ: Mapping[str, str]) -> bool:
     backend = get_execution_backend(_resolve_execution_backend(environ))
-    predicate = backend.driver_bootstrap.should_start_local_proxy
+    distributed = backend.distributed
+    if distributed is None:
+        return False
+    predicate = distributed.driver_bootstrap.should_start_local_proxy
     if predicate is None:
         return True
     return bool(predicate(environ))

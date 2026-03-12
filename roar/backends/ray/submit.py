@@ -13,10 +13,7 @@ from roar.backends.ray.submit_context import (
     build_submit_instrumentation_context,
     build_submit_source_environ,
 )
-from roar.execution.framework.contract import (
-    ROAR_EXECUTION_BACKEND_ENV,
-    SubmitCommandRewrite,
-)
+from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV, ExecutionCommandPlan
 from roar.glaas_client import GlaasClient
 from roar.services.execution.fragment_sessions import (
     generate_fragment_session as generate_fragment_key,
@@ -27,25 +24,25 @@ _ROAR_WORKER_SETUP_HOOK = "roar.services.execution.worker_bootstrap.startup"
 _ROAR_DRIVER_ENTRYPOINT_MODULE = "roar.services.execution.driver_entrypoint"
 
 
-def maybe_rewrite_ray_job_submit(command: list[str]) -> SubmitCommandRewrite:
+def maybe_rewrite_ray_job_submit(command: list[str]) -> ExecutionCommandPlan:
     """Rewrite ray jobs submit commands for roar instrumentation."""
     if not ray_submit_matches_command(command):
-        return SubmitCommandRewrite(command=command)
+        return ExecutionCommandPlan(backend_name="ray", command=command)
 
     if "--" not in command:
-        return SubmitCommandRewrite(command=command)
+        return ExecutionCommandPlan(backend_name="ray", command=command)
 
     separator_index = command.index("--")
     before_separator = list(command[:separator_index])
     entrypoint = list(command[separator_index + 1 :])
     if not entrypoint:
-        return SubmitCommandRewrite(command=command)
+        return ExecutionCommandPlan(backend_name="ray", command=command)
     entrypoint = _wrap_entrypoint_for_driver_proxy(entrypoint)
 
     runtime_env_json_arg = _find_runtime_env_json(before_separator)
     runtime_env = _load_runtime_env(before_separator, runtime_env_json_arg)
     if runtime_env is None:
-        return SubmitCommandRewrite(command=command)
+        return ExecutionCommandPlan(backend_name="ray", command=command)
 
     if _ray_pip_install_enabled():
         merged_pip = _merge_roar_runtime_env_pip(runtime_env.get("pip"))
@@ -88,7 +85,8 @@ def maybe_rewrite_ray_job_submit(command: list[str]) -> SubmitCommandRewrite:
         runtime_env.pop("env_vars", None)
 
     before_separator = _store_runtime_env(before_separator, runtime_env, runtime_env_json_arg)
-    return SubmitCommandRewrite(
+    return ExecutionCommandPlan(
+        backend_name="ray",
         command=[*before_separator, "--", *entrypoint],
         session_id=fragment_session_id,
     )

@@ -54,9 +54,12 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
         patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
         patch.object(
             run_module,
-            "maybe_rewrite_submit_command",
+            "plan_execution_command",
             return_value=SimpleNamespace(
-                command=rewritten_command, session_id=None, finalize_run=None
+                backend_name="ray",
+                command=rewritten_command,
+                session_id=None,
+                finalize_run=None,
             ),
         ) as mock_rewrite,
         patch.object(run_module, "execute_and_report", return_value=0) as mock_exec,
@@ -65,6 +68,7 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
 
     assert result.exit_code == 0
     mock_rewrite.assert_called_once_with(original_command)
+    assert mock_exec.call_args.kwargs["backend_name"] == "ray"
     assert mock_exec.call_args.kwargs["command"] == rewritten_command
 
 
@@ -77,9 +81,12 @@ def test_run_with_non_ray_command_does_not_call_rewrite() -> None:
         patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
         patch.object(
             run_module,
-            "maybe_rewrite_submit_command",
+            "plan_execution_command",
             return_value=SimpleNamespace(
-                command=["python", "main.py"], session_id=None, finalize_run=None
+                backend_name="local",
+                command=["python", "main.py"],
+                session_id=None,
+                finalize_run=None,
             ),
         ) as mock_rewrite,
         patch.object(run_module, "execute_and_report", return_value=0) as mock_exec,
@@ -88,6 +95,7 @@ def test_run_with_non_ray_command_does_not_call_rewrite() -> None:
 
     assert result.exit_code == 0
     mock_rewrite.assert_called_once_with(["python", "main.py"])
+    assert mock_exec.call_args.kwargs["backend_name"] == "local"
     assert mock_exec.call_args.kwargs["command"] == ["python", "main.py"]
 
 
@@ -129,8 +137,9 @@ def test_run_with_ray_job_submit_triggers_post_run_finalizer() -> None:
         patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
         patch.object(
             run_module,
-            "maybe_rewrite_submit_command",
+            "plan_execution_command",
             return_value=SimpleNamespace(
+                backend_name="ray",
                 command=rewritten_command,
                 session_id="session-123",
                 finalize_run=finalizer,

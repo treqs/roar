@@ -12,6 +12,7 @@ def _make_ctx():
     """Create a minimal RunContext mock."""
     ctx = MagicMock()
     ctx.command = ["python", "train.py"]
+    ctx.execution_backend = "local"
     ctx.job_type = "run"
     ctx.repo_root = "/tmp/repo"
     ctx.roar_dir = Path("/tmp/repo/.roar")
@@ -109,9 +110,10 @@ class TestProxyLifecycle:
 
         # Execution should succeed despite proxy failure
         assert result.exit_code == 0
-        # Tracer should have been called without extra_env
+        # Tracer still receives the selected execution backend
         call_kwargs = mock_tracer.execute.call_args.kwargs
-        assert call_kwargs.get("extra_env") is None
+        assert call_kwargs["extra_env"]["ROAR_EXECUTION_BACKEND"] == "local"
+        assert "AWS_ENDPOINT_URL" not in call_kwargs["extra_env"]
 
     def test_no_proxy_service_means_no_extra_env(self):
         mock_tracer = MagicMock()
@@ -121,7 +123,7 @@ class TestProxyLifecycle:
         self._run_coord(coord)
 
         call_kwargs = mock_tracer.execute.call_args.kwargs
-        assert call_kwargs.get("extra_env") is None
+        assert call_kwargs["extra_env"] == {"ROAR_EXECUTION_BACKEND": "local"}
 
     def test_run_job_uid_is_forwarded_to_record_job(self):
         mock_tracer = MagicMock()

@@ -28,6 +28,11 @@ class TestRunTracerFlags:
             patch.object(run_module, "validate_git_clean", return_value="/tmp/repo"),
             patch.object(run_module, "get_quiet_setting", return_value=False),
             patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
+            patch.object(
+                run_module,
+                "plan_execution_command",
+                return_value=MagicMock(backend_name="local", command=["python", "train.py"], finalize_run=None),
+            ),
             patch.object(run_module, "execute_and_report", return_value=0) as mock_exec,
         ):
             result = runner.invoke(
@@ -46,6 +51,7 @@ class TestRunTracerFlags:
 
         assert result.exit_code == 0
         kwargs = mock_exec.call_args.kwargs
+        assert kwargs["backend_name"] == "local"
         assert kwargs["tracer_mode"] == "ptrace"
         assert kwargs["tracer_fallback"] is False
         assert kwargs["step_name"] == "preprocess"
@@ -59,6 +65,11 @@ class TestBuildTracerFlags:
             patch.object(build_module, "validate_git_clean", return_value="/tmp/repo"),
             patch.object(build_module, "get_quiet_setting", return_value=False),
             patch.object(build_module, "get_hash_algorithms", return_value=["blake3"]),
+            patch.object(
+                build_module,
+                "plan_execution_command",
+                return_value=MagicMock(backend_name="local", command=["make", "-j4"]),
+            ),
             patch.object(build_module, "execute_and_report", return_value=0) as mock_exec,
         ):
             result = runner.invoke(
@@ -69,6 +80,7 @@ class TestBuildTracerFlags:
 
         assert result.exit_code == 0
         kwargs = mock_exec.call_args.kwargs
+        assert kwargs["backend_name"] == "local"
         assert kwargs["tracer_mode"] == "ebpf"
         assert kwargs["tracer_fallback"] is True
         assert kwargs["step_name"] == "bootstrap"
@@ -80,6 +92,11 @@ class TestBuildTracerFlags:
             patch.object(build_module, "validate_git_clean", return_value="/tmp/repo"),
             patch.object(build_module, "get_quiet_setting", return_value=False),
             patch.object(build_module, "get_hash_algorithms", return_value=["blake3"]),
+            patch.object(
+                build_module,
+                "plan_execution_command",
+                return_value=MagicMock(backend_name="local", command=["make", "-j4"]),
+            ),
             patch.object(build_module, "execute_and_report", return_value=0) as mock_exec,
         ):
             result = runner.invoke(
@@ -90,4 +107,5 @@ class TestBuildTracerFlags:
 
         assert result.exit_code == 0
         kwargs = mock_exec.call_args.kwargs
+        assert kwargs["backend_name"] == "local"
         assert kwargs["tracer_mode"] == "preload"

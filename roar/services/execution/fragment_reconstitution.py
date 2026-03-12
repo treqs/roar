@@ -35,7 +35,8 @@ def _maybe_reconstitute_lineage(ctx: RoarContext, *, backend_name: str, session_
         )
         return
 
-    adapter = backend.fragment_reconstitution
+    distributed = backend.distributed
+    adapter = distributed.fragment_reconstitution if distributed is not None else None
     if adapter is None:
         return
 

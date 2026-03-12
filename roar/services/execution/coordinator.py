@@ -13,6 +13,8 @@ import sys
 import time
 from typing import TYPE_CHECKING, Any
 
+from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV
+
 from .backup import PreviousOutputBackupService
 from .job_recording import ExecutionJobRecorder
 from .tracer import TracerService
@@ -109,7 +111,9 @@ class RunCoordinator:
 
         # Start proxy if configured
         proxy_handle = None
-        extra_env: dict[str, str] | None = None
+        extra_env: dict[str, str] = {
+            ROAR_EXECUTION_BACKEND_ENV: str(ctx.execution_backend),
+        }
         s3_entries: list = []
         proxy_stopped = False
         if self._proxy:
@@ -119,7 +123,7 @@ class RunCoordinator:
                 proxy_handle = self._proxy.start_for_run(
                     upstream_url=existing_endpoint,
                 )
-                extra_env = {"AWS_ENDPOINT_URL": f"http://127.0.0.1:{proxy_handle.port}"}
+                extra_env["AWS_ENDPOINT_URL"] = f"http://127.0.0.1:{proxy_handle.port}"
                 # Preserve the real upstream for cluster-backed submit paths.
                 if existing_endpoint:
                     extra_env["ROAR_UPSTREAM_S3_ENDPOINT"] = existing_endpoint

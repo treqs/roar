@@ -4,8 +4,11 @@ import types
 
 from roar.backends.ray.plugin import ray_build_driver_proxy_fragment
 from roar.execution.framework.contract import (
-    DistributedExecutionBackend,
+    DistributedRuntimeAdapter,
     DriverBootstrapAdapter,
+    ExecutionBackend,
+    ExecutionCommandPlan,
+    HostExecutionAdapter,
     WorkerBootstrapAdapter,
 )
 from roar.services.execution import driver_entrypoint
@@ -70,20 +73,26 @@ def test_emit_driver_proxy_fragment_streams_to_glaas_when_session_is_present(
     monkeypatch.setattr(
         driver_entrypoint,
         "get_execution_backend",
-        lambda _name: DistributedExecutionBackend(
+        lambda _name: ExecutionBackend(
             name="ray",
-            matches_submit_command=lambda _command: False,
-            rewrite_submit_command=lambda command: None,
-            driver_bootstrap=DriverBootstrapAdapter(
-                build_proxy_fragment=lambda *_args, **_kwargs: None,
-                local_merge=lambda *_args, **_kwargs: None,
+            matches_command=lambda _command: False,
+            rewrite_command=lambda command: ExecutionCommandPlan(
+                backend_name="ray",
+                command=list(command),
             ),
-            worker_bootstrap=WorkerBootstrapAdapter(
-                py_executable="roar-worker",
-                setup_hook="roar.services.execution.worker_bootstrap.startup",
-                prepare_runtime_env=lambda runtime_env, _job_id, _env: dict(runtime_env or {}),
-                startup=lambda: None,
-                run_entrypoint=lambda _argv: None,
+            host_execution=HostExecutionAdapter(execute=lambda _ctx: None),  # type: ignore[arg-type]
+            distributed=DistributedRuntimeAdapter(
+                driver_bootstrap=DriverBootstrapAdapter(
+                    build_proxy_fragment=lambda *_args, **_kwargs: None,
+                    local_merge=lambda *_args, **_kwargs: None,
+                ),
+                worker_bootstrap=WorkerBootstrapAdapter(
+                    py_executable="roar-worker",
+                    setup_hook="roar.services.execution.worker_bootstrap.startup",
+                    prepare_runtime_env=lambda runtime_env, _job_id, _env: dict(runtime_env or {}),
+                    startup=lambda: None,
+                    run_entrypoint=lambda _argv: None,
+                ),
             ),
         ),
     )

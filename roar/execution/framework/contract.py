@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from roar.cli.context import RoarContext
+    from roar.core.models.run import RunContext, RunResult
     from roar.services.execution.proxy import S3LogEntry
 
 
@@ -16,9 +17,10 @@ class FragmentReconstituterProtocol(Protocol):
     def reconstitute(self) -> Any: ...
 
 
-SubmitCommandMatcher = Callable[[list[str]], bool]
-SubmitCommandRewriter = Callable[[list[str]], "SubmitCommandRewrite"]
+CommandMatcher = Callable[[list[str]], bool]
+CommandPlanner = Callable[[list[str]], "ExecutionCommandPlan"]
 SubmitRunFinalizer = Callable[["RoarContext"], None]
+HostExecutionRunner = Callable[["RunContext"], "RunResult"]
 DriverLocalMerge = Callable[[list[dict[str, Any]], str, str | None], None]
 DriverProxyFragmentBuilder = Callable[
     [Sequence["S3LogEntry"], float, float, int, Mapping[str, str]],
@@ -38,8 +40,13 @@ BackendConfigNormalizer = Callable[[Mapping[str, Any] | None], dict[str, Any]]
 ROAR_EXECUTION_BACKEND_ENV = "ROAR_EXECUTION_BACKEND"
 
 
+def _missing_host_execution(_ctx: RunContext) -> RunResult:
+    raise RuntimeError("execution backend is missing a host execution adapter")
+
+
 @dataclass(frozen=True)
-class SubmitCommandRewrite:
+class ExecutionCommandPlan:
+    backend_name: str
     command: list[str]
     session_id: str | None = None
     finalize_run: SubmitRunFinalizer | None = None
@@ -67,6 +74,14 @@ class FragmentReconstitutionAdapter:
 
 
 @dataclass(frozen=True)
+class DistributedRuntimeAdapter:
+    driver_bootstrap: DriverBootstrapAdapter
+    worker_bootstrap: WorkerBootstrapAdapter
+    fragment_reconstitution: FragmentReconstitutionAdapter | None = None
+    runtime_import: RuntimeImportAdapter | None = None
+
+
+@dataclass(frozen=True)
 class ExecutionPolicyAdapter:
     noise_commands: tuple[str, ...] = ()
     task_command_prefixes: tuple[str, ...] = ()
@@ -79,6 +94,11 @@ class RuntimeImportAdapter:
     initialize_process: RuntimeProcessInitializer | None = None
     observe_import: TrackedModulePatcher | None = None
     patch_module: TrackedModulePatcher | None = None
+
+
+@dataclass(frozen=True)
+class HostExecutionAdapter:
+    execute: HostExecutionRunner
 
 
 @dataclass(frozen=True)
@@ -98,15 +118,19 @@ class BackendConfigAdapter:
 
 
 @dataclass(frozen=True)
-class DistributedExecutionBackend:
+class ExecutionBackend:
     name: str
-    matches_submit_command: SubmitCommandMatcher
-    rewrite_submit_command: SubmitCommandRewriter
-    driver_bootstrap: DriverBootstrapAdapter
-    worker_bootstrap: WorkerBootstrapAdapter
-    fragment_reconstitution: FragmentReconstitutionAdapter | None = None
+    priority: int = 0
+    matches_command: CommandMatcher = lambda _command: False
+    rewrite_command: CommandPlanner = lambda command: ExecutionCommandPlan(
+        backend_name="",
+        command=list(command),
+    )
+    host_execution: HostExecutionAdapter = field(
+        default_factory=lambda: HostExecutionAdapter(execute=_missing_host_execution)
+    )
+    distributed: DistributedRuntimeAdapter | None = None
     policy: ExecutionPolicyAdapter | None = None
-    runtime_import: RuntimeImportAdapter | None = None
     config: BackendConfigAdapter | None = None
 
 
@@ -114,13 +138,17 @@ __all__ = [
     "ROAR_EXECUTION_BACKEND_ENV",
     "BackendConfigAdapter",
     "BackendConfigNormalizer",
+    "CommandMatcher",
+    "CommandPlanner",
     "ConfigurableKeySpec",
-    "DistributedExecutionBackend",
+    "DistributedRuntimeAdapter",
     "DriverBootstrapAdapter",
+    "ExecutionBackend",
+    "ExecutionCommandPlan",
     "ExecutionPolicyAdapter",
     "FragmentReconstitutionAdapter",
+    "HostExecutionAdapter",
     "RuntimeImportAdapter",
-    "SubmitCommandRewrite",
     "SubmitRunFinalizer",
     "WorkerBootstrapAdapter",
 ]

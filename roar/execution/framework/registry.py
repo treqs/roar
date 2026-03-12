@@ -11,27 +11,33 @@ from importlib import metadata as importlib_metadata
 from typing import Any
 
 import roar.backends
-from roar.execution.framework.contract import BackendConfigAdapter, DistributedExecutionBackend
+from roar.execution.framework.contract import BackendConfigAdapter, ExecutionBackend
 
 _ENTRYPOINT_GROUP = "roar.execution_backends"
-_registered_execution_backends: list[DistributedExecutionBackend] = []
+_registered_execution_backends: list[ExecutionBackend] = []
 _execution_backends_discovered = False
 _execution_backends_discovering = False
 
 
-def register_execution_backend(backend: DistributedExecutionBackend) -> None:
+def register_execution_backend(backend: ExecutionBackend) -> None:
     for existing in _registered_execution_backends:
         if existing.name == backend.name:
             return
     _registered_execution_backends.append(backend)
 
 
-def iter_execution_backends() -> tuple[DistributedExecutionBackend, ...]:
+def iter_execution_backends() -> tuple[ExecutionBackend, ...]:
     _ensure_execution_backends_discovered()
-    return tuple(_registered_execution_backends)
+    return tuple(
+        sorted(
+            _registered_execution_backends,
+            key=lambda backend: backend.priority,
+            reverse=True,
+        )
+    )
 
 
-def get_execution_backend(name: str) -> DistributedExecutionBackend:
+def get_execution_backend(name: str) -> ExecutionBackend:
     _ensure_execution_backends_discovered()
     normalized_name = str(name or "").strip()
     for backend in _registered_execution_backends:
@@ -40,14 +46,15 @@ def get_execution_backend(name: str) -> DistributedExecutionBackend:
     raise LookupError(f"unknown execution backend: {normalized_name or '<empty>'}")
 
 
-def match_execution_backend_for_module(module_name: str) -> DistributedExecutionBackend | None:
+def match_execution_backend_for_module(module_name: str) -> ExecutionBackend | None:
     _ensure_execution_backends_discovered()
     normalized_name = str(module_name or "").strip()
     if not normalized_name:
         return None
 
     for backend in _registered_execution_backends:
-        adapter = backend.runtime_import
+        distributed = backend.distributed
+        adapter = distributed.runtime_import if distributed is not None else None
         if adapter is None:
             continue
         for prefix in adapter.module_prefixes:
@@ -117,7 +124,10 @@ def is_execution_submit_command(command: str | Sequence[str] | None) -> bool:
     tokens = _normalize_command_tokens(command)
     if not tokens:
         return False
-    return any(backend.matches_submit_command(list(tokens)) for backend in iter_execution_backends())
+    return any(
+        backend.distributed is not None and backend.matches_command(list(tokens))
+        for backend in iter_execution_backends()
+    )
 
 
 def iter_execution_backend_config_adapters() -> tuple[BackendConfigAdapter, ...]:
@@ -210,34 +220,33 @@ def _iter_execution_backend_entrypoints():
 
 
 def _register_entrypoint_payload(payload: object) -> None:
-    if isinstance(payload, DistributedExecutionBackend):
+    if isinstance(payload, ExecutionBackend):
         register_execution_backend(payload)
         return
 
     if not callable(payload):
         raise TypeError(
-            "execution backend entry point must load to a DistributedExecutionBackend or callable, "
+            "execution backend entry point must load to an ExecutionBackend or callable, "
             f"got {type(payload).__name__}"
         )
 
     result = payload()
     if result is None:
         return
-    if isinstance(result, DistributedExecutionBackend):
+    if isinstance(result, ExecutionBackend):
         register_execution_backend(result)
         return
     if isinstance(result, (list, tuple)):
         for item in result:
-            if not isinstance(item, DistributedExecutionBackend):
+            if not isinstance(item, ExecutionBackend):
                 raise TypeError(
-                    "execution backend entry point iterable must contain "
-                    "DistributedExecutionBackend items"
+                    "execution backend entry point iterable must contain ExecutionBackend items"
                 )
             register_execution_backend(item)
         return
 
     raise TypeError(
-        "execution backend entry point callable must return None, DistributedExecutionBackend, "
+        "execution backend entry point callable must return None, ExecutionBackend, "
         f"or a list/tuple of backends, got {type(result).__name__}"
     )
 

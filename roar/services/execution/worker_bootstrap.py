@@ -105,8 +105,11 @@ def prepare_worker_runtime_env(
     source_environ: Mapping[str, str],
 ) -> dict[str, Any]:
     backend = get_execution_backend(backend_name)
+    distributed = backend.distributed
+    if distributed is None:
+        raise RuntimeError(f"execution backend {backend.name!r} does not support worker bootstrap")
     prepared = dict(
-        backend.worker_bootstrap.prepare_runtime_env(
+        distributed.worker_bootstrap.prepare_runtime_env(
             runtime_env,
             job_id,
             source_environ,
@@ -115,19 +118,25 @@ def prepare_worker_runtime_env(
     env_vars = dict(prepared.get("env_vars", {}) or {})
     env_vars[ROAR_EXECUTION_BACKEND_ENV] = backend.name
     prepared["env_vars"] = env_vars
-    prepared["py_executable"] = backend.worker_bootstrap.py_executable
-    prepared["worker_process_setup_hook"] = backend.worker_bootstrap.setup_hook
+    prepared["py_executable"] = distributed.worker_bootstrap.py_executable
+    prepared["worker_process_setup_hook"] = distributed.worker_bootstrap.setup_hook
     return prepared
 
 
 def startup() -> None:
     backend = get_execution_backend(_resolve_execution_backend_name(os.environ))
-    backend.worker_bootstrap.startup()
+    distributed = backend.distributed
+    if distributed is None:
+        raise RuntimeError(f"execution backend {backend.name!r} does not support worker bootstrap")
+    distributed.worker_bootstrap.startup()
 
 
 def run_worker_entrypoint(argv: list[str] | None = None) -> None:
     backend = get_execution_backend(_resolve_execution_backend_name(os.environ))
-    backend.worker_bootstrap.run_entrypoint(list(sys.argv[1:] if argv is None else argv))
+    distributed = backend.distributed
+    if distributed is None:
+        raise RuntimeError(f"execution backend {backend.name!r} does not support worker bootstrap")
+    distributed.worker_bootstrap.run_entrypoint(list(sys.argv[1:] if argv is None else argv))
 
 
 def main() -> None:

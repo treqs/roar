@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import builtins
-from types import SimpleNamespace
 
 import pytest
 
-from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV
+from roar.execution.framework.contract import (
+    ROAR_EXECUTION_BACKEND_ENV,
+    DistributedRuntimeAdapter,
+    DriverBootstrapAdapter,
+    ExecutionBackend,
+    ExecutionCommandPlan,
+    HostExecutionAdapter,
+    RuntimeImportAdapter,
+    WorkerBootstrapAdapter,
+)
 from roar.services.execution.inject import sitecustomize
 from roar.services.execution.inject.support import SuppressTracking
 
@@ -40,12 +48,33 @@ def test_tracking_import_initializes_observes_and_patches_matched_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
-    fake_backend = SimpleNamespace(
+    fake_backend = ExecutionBackend(
         name="fake",
-        runtime_import=SimpleNamespace(
-            initialize_process=lambda: calls.append("initialize"),
-            observe_import=lambda module_name, module: calls.append(f"observe:{module_name}"),
-            patch_module=lambda module_name, module: calls.append(f"patch:{module_name}"),
+        priority=10,
+        matches_command=lambda _command: False,
+        rewrite_command=lambda command: ExecutionCommandPlan(
+            backend_name="fake",
+            command=list(command),
+        ),
+        host_execution=HostExecutionAdapter(execute=lambda _ctx: None),  # type: ignore[arg-type]
+        distributed=DistributedRuntimeAdapter(
+            driver_bootstrap=DriverBootstrapAdapter(
+                build_proxy_fragment=lambda *_args, **_kwargs: None,
+                local_merge=lambda *_args, **_kwargs: None,
+            ),
+            worker_bootstrap=WorkerBootstrapAdapter(
+                py_executable="roar-worker",
+                setup_hook="roar.services.execution.worker_bootstrap.startup",
+                prepare_runtime_env=lambda runtime_env, _job_id, _environ: dict(runtime_env or {}),
+                startup=lambda: None,
+                run_entrypoint=lambda _argv: None,
+            ),
+            runtime_import=RuntimeImportAdapter(
+                module_prefixes=("fake",),
+                initialize_process=lambda: calls.append("initialize"),
+                observe_import=lambda module_name, module: calls.append(f"observe:{module_name}"),
+                patch_module=lambda module_name, module: calls.append(f"patch:{module_name}"),
+            ),
         ),
     )
 
@@ -75,12 +104,33 @@ def test_tracking_import_reuses_initialized_backend_for_unrelated_imports(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
-    fake_backend = SimpleNamespace(
+    fake_backend = ExecutionBackend(
         name="fake",
-        runtime_import=SimpleNamespace(
-            initialize_process=lambda: calls.append("initialize"),
-            observe_import=lambda module_name, module: calls.append(f"observe:{module_name}"),
-            patch_module=lambda module_name, module: calls.append(f"patch:{module_name}"),
+        priority=10,
+        matches_command=lambda _command: False,
+        rewrite_command=lambda command: ExecutionCommandPlan(
+            backend_name="fake",
+            command=list(command),
+        ),
+        host_execution=HostExecutionAdapter(execute=lambda _ctx: None),  # type: ignore[arg-type]
+        distributed=DistributedRuntimeAdapter(
+            driver_bootstrap=DriverBootstrapAdapter(
+                build_proxy_fragment=lambda *_args, **_kwargs: None,
+                local_merge=lambda *_args, **_kwargs: None,
+            ),
+            worker_bootstrap=WorkerBootstrapAdapter(
+                py_executable="roar-worker",
+                setup_hook="roar.services.execution.worker_bootstrap.startup",
+                prepare_runtime_env=lambda runtime_env, _job_id, _environ: dict(runtime_env or {}),
+                startup=lambda: None,
+                run_entrypoint=lambda _argv: None,
+            ),
+            runtime_import=RuntimeImportAdapter(
+                module_prefixes=("fake",),
+                initialize_process=lambda: calls.append("initialize"),
+                observe_import=lambda module_name, module: calls.append(f"observe:{module_name}"),
+                patch_module=lambda module_name, module: calls.append(f"patch:{module_name}"),
+            ),
         ),
     )
 

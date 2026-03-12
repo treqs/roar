@@ -63,7 +63,8 @@ def _resolve_runtime_backend():
 
 
 def _initialize_runtime_backend(backend) -> None:
-    adapter = backend.runtime_import
+    distributed = backend.distributed
+    adapter = distributed.runtime_import if distributed is not None else None
     if adapter is None or backend.name in _initialized_runtime_backends:
         return
     initializer = adapter.initialize_process
@@ -78,7 +79,8 @@ def _initialize_runtime_backend(backend) -> None:
 
 
 def _observe_runtime_import(backend, module_name: str, module) -> None:
-    adapter = backend.runtime_import
+    distributed = backend.distributed
+    adapter = distributed.runtime_import if distributed is not None else None
     if adapter is None or adapter.observe_import is None:
         return
     with contextlib.suppress(Exception):
@@ -103,7 +105,8 @@ def tracking_import(name, globals=None, locals=None, fromlist=(), level=0):
 
     if matched_backend is not None:
         _initialize_runtime_backend(matched_backend)
-        adapter = matched_backend.runtime_import
+        distributed = matched_backend.distributed
+        adapter = distributed.runtime_import if distributed is not None else None
         if adapter is not None and adapter.patch_module is not None:
             with contextlib.suppress(Exception):
                 adapter.patch_module(name, module)

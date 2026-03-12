@@ -10,7 +10,7 @@ import shlex
 import click
 
 from ...core.tracer_modes import TRACER_MODE_VALUES
-from ...execution.framework.submit import maybe_rewrite_submit_command
+from ...execution.framework.planning import plan_execution_command
 from ..context import RoarContext
 from ..decorators import require_init
 from ._execution import (
@@ -127,13 +127,15 @@ def run(
             raise click.ClickException("No command specified")
         job_type = None
 
-    rewritten = maybe_rewrite_submit_command(command)
-    command = rewritten.command
-    finalize_run = rewritten.finalize_run
+    planned = plan_execution_command(command)
+    backend_name = planned.backend_name
+    command = planned.command
+    finalize_run = planned.finalize_run
 
     # Execute and report
     exit_code = execute_and_report(
         ctx=ctx,
+        backend_name=backend_name,
         command=command,
         job_type=job_type,
         step_name=step_name,

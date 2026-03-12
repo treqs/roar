@@ -5,9 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from roar.execution.framework.contract import (
-    DistributedExecutionBackend,
+    DistributedRuntimeAdapter,
     DriverBootstrapAdapter,
+    ExecutionBackend,
+    ExecutionCommandPlan,
     FragmentReconstitutionAdapter,
+    HostExecutionAdapter,
     WorkerBootstrapAdapter,
 )
 from roar.services.execution import fragment_reconstitution as submit_finalize
@@ -32,23 +35,29 @@ def test_build_ray_submit_finalizer_reconstitutes_lineage(monkeypatch) -> None:
     monkeypatch.setattr(
         submit_finalize,
         "get_execution_backend",
-        lambda _name: DistributedExecutionBackend(
+        lambda _name: ExecutionBackend(
             name="ray",
-            matches_submit_command=lambda _command: False,
-            rewrite_submit_command=lambda command: None,
-            driver_bootstrap=DriverBootstrapAdapter(
-                build_proxy_fragment=lambda *_args, **_kwargs: None,
-                local_merge=lambda *_args, **_kwargs: None,
+            matches_command=lambda _command: False,
+            rewrite_command=lambda command: ExecutionCommandPlan(
+                backend_name="ray",
+                command=list(command),
             ),
-            worker_bootstrap=WorkerBootstrapAdapter(
-                py_executable="roar-worker",
-                setup_hook="roar.services.execution.worker_bootstrap.startup",
-                prepare_runtime_env=lambda runtime_env, _job_id, _env: dict(runtime_env or {}),
-                startup=lambda: None,
-                run_entrypoint=lambda _argv: None,
-            ),
-            fragment_reconstitution=FragmentReconstitutionAdapter(
-                create_reconstituter=MagicMock(return_value=reconstituter)
+            host_execution=HostExecutionAdapter(execute=lambda _ctx: None),  # type: ignore[arg-type]
+            distributed=DistributedRuntimeAdapter(
+                driver_bootstrap=DriverBootstrapAdapter(
+                    build_proxy_fragment=lambda *_args, **_kwargs: None,
+                    local_merge=lambda *_args, **_kwargs: None,
+                ),
+                worker_bootstrap=WorkerBootstrapAdapter(
+                    py_executable="roar-worker",
+                    setup_hook="roar.services.execution.worker_bootstrap.startup",
+                    prepare_runtime_env=lambda runtime_env, _job_id, _env: dict(runtime_env or {}),
+                    startup=lambda: None,
+                    run_entrypoint=lambda _argv: None,
+                ),
+                fragment_reconstitution=FragmentReconstitutionAdapter(
+                    create_reconstituter=MagicMock(return_value=reconstituter)
+                ),
             ),
         ),
     )

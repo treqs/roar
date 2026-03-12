@@ -2,26 +2,29 @@
 
 from roar.execution.framework.contract import (
     ROAR_EXECUTION_BACKEND_ENV,
-    DistributedExecutionBackend,
+    DistributedRuntimeAdapter,
     DriverBootstrapAdapter,
+    ExecutionBackend,
+    ExecutionCommandPlan,
     FragmentReconstitutionAdapter,
-    SubmitCommandRewrite,
+    HostExecutionAdapter,
     SubmitRunFinalizer,
     WorkerBootstrapAdapter,
 )
 
 __all__ = [
     "ROAR_EXECUTION_BACKEND_ENV",
-    "DistributedExecutionBackend",
+    "DistributedRuntimeAdapter",
     "DriverBootstrapAdapter",
+    "ExecutionBackend",
+    "ExecutionCommandPlan",
     "FragmentReconstitutionAdapter",
-    "SubmitBackendAdapter",
-    "SubmitCommandRewrite",
+    "HostExecutionAdapter",
     "SubmitRunFinalizer",
     "WorkerBootstrapAdapter",
     "get_execution_backend",
     "iter_execution_backends",
-    "maybe_rewrite_submit_command",
+    "plan_execution_command",
     "register_execution_backend",
 ]
 
@@ -31,8 +34,8 @@ def __getattr__(name: str):
         from roar.execution.framework import registry
 
         return getattr(registry, name)
-    if name in {"SubmitBackendAdapter", "maybe_rewrite_submit_command"}:
-        from roar.execution.framework import submit
+    if name == "plan_execution_command":
+        from roar.execution.framework import planning
 
-        return getattr(submit, name)
+        return getattr(planning, name)
     raise AttributeError(name)

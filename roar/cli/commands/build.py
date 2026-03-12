@@ -7,6 +7,7 @@ Usage: roar build [options] <command>
 import click
 
 from ...core.tracer_modes import TRACER_MODE_VALUES
+from ...execution.framework.planning import plan_execution_command
 from ..context import RoarContext
 from ..decorators import require_init
 from ._execution import (
@@ -80,10 +81,13 @@ def build(
     # Get hash algorithms
     algorithms = get_hash_algorithms(list(hash_algorithms) if hash_algorithms else None)
 
+    planned = plan_execution_command(args_list)
+
     # Execute and report (always job_type="build")
     exit_code = execute_and_report(
         ctx=ctx,
-        command=args_list,
+        backend_name=planned.backend_name,
+        command=planned.command,
         job_type="build",
         step_name=step_name,
         quiet=quiet_setting,
