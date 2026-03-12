@@ -12,7 +12,12 @@ from roar.services.execution import driver_entrypoint
 from roar.services.execution.proxy import S3LogEntry
 
 
+def _set_backend(monkeypatch) -> None:
+    monkeypatch.setenv("ROAR_EXECUTION_BACKEND", "ray")
+
+
 def test_build_driver_proxy_fragment_maps_s3_entries_to_reads_and_writes(monkeypatch) -> None:
+    _set_backend(monkeypatch)
     monkeypatch.setenv("ROAR_JOB_ID", "job-123")
 
     fragment = ray_build_driver_proxy_fragment(
@@ -50,6 +55,7 @@ def test_build_driver_proxy_fragment_maps_s3_entries_to_reads_and_writes(monkeyp
 def test_emit_driver_proxy_fragment_streams_to_glaas_when_session_is_present(
     monkeypatch,
 ) -> None:
+    _set_backend(monkeypatch)
     fragment = {"job_uid": "task-1"}
 
     captured: dict[str, object] = {}
@@ -90,6 +96,7 @@ def test_emit_driver_proxy_fragment_streams_to_glaas_when_session_is_present(
 
 
 def test_start_driver_proxy_uses_configured_local_port(monkeypatch) -> None:
+    _set_backend(monkeypatch)
     calls: list[dict[str, object]] = []
 
     class _FakeProxyService:
@@ -132,6 +139,7 @@ def test_start_driver_proxy_uses_configured_local_port(monkeypatch) -> None:
 
 
 def test_main_preserves_loopback_proxy_endpoint_for_child_process(monkeypatch) -> None:
+    _set_backend(monkeypatch)
     captured: dict[str, object] = {}
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:24567")

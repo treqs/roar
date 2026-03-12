@@ -12,9 +12,10 @@ from roar.services.execution.inject import sitecustomize
 
 
 @pytest.fixture(autouse=True)
-def _restore_builtins():
+def _restore_builtins(monkeypatch: pytest.MonkeyPatch):
     real_open = builtins.open
     real_import = builtins.__import__
+    monkeypatch.setenv("ROAR_EXECUTION_BACKEND", "ray")
     try:
         yield
     finally:

@@ -11,6 +11,7 @@ _ENTRYPOINT_GROUP = "roar.execution_backends"
 _BUILTIN_EXECUTION_BACKEND_MODULES = ("roar.backends.ray.plugin",)
 _registered_execution_backends: list[DistributedExecutionBackend] = []
 _execution_backends_discovered = False
+_execution_backends_discovering = False
 
 
 def register_execution_backend(backend: DistributedExecutionBackend) -> None:
@@ -34,15 +35,40 @@ def get_execution_backend(name: str) -> DistributedExecutionBackend:
     raise LookupError(f"unknown execution backend: {normalized_name or '<empty>'}")
 
 
-def _ensure_execution_backends_discovered() -> None:
-    global _execution_backends_discovered
+def match_execution_backend_for_module(module_name: str) -> DistributedExecutionBackend | None:
+    _ensure_execution_backends_discovered()
+    normalized_name = str(module_name or "").strip()
+    if not normalized_name:
+        return None
 
-    if _execution_backends_discovered:
+    for backend in _registered_execution_backends:
+        adapter = backend.runtime_import
+        if adapter is None:
+            continue
+        for prefix in adapter.module_prefixes:
+            normalized_prefix = str(prefix or "").strip()
+            if not normalized_prefix:
+                continue
+            if normalized_name == normalized_prefix or normalized_name.startswith(
+                f"{normalized_prefix}."
+            ):
+                return backend
+    return None
+
+
+def _ensure_execution_backends_discovered() -> None:
+    global _execution_backends_discovered, _execution_backends_discovering
+
+    if _execution_backends_discovered or _execution_backends_discovering:
         return
 
-    _load_builtin_execution_backends()
-    _load_entrypoint_execution_backends()
-    _execution_backends_discovered = True
+    _execution_backends_discovering = True
+    try:
+        _load_builtin_execution_backends()
+        _load_entrypoint_execution_backends()
+        _execution_backends_discovered = True
+    finally:
+        _execution_backends_discovering = False
 
 
 def _load_builtin_execution_backends() -> None:
@@ -103,5 +129,6 @@ def _register_entrypoint_payload(payload: object) -> None:
 __all__ = [
     "get_execution_backend",
     "iter_execution_backends",
+    "match_execution_backend_for_module",
     "register_execution_backend",
 ]

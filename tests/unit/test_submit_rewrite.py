@@ -134,11 +134,17 @@ def test_maybe_rewrite_submit_command_accepts_finalizer_without_command_change(
 
 
 def test_execution_backends_registers_ray_backend() -> None:
-    from roar.execution.framework.registry import iter_execution_backends
+    from roar.execution.framework.registry import (
+        iter_execution_backends,
+        match_execution_backend_for_module,
+    )
 
     backends = iter_execution_backends()
 
     assert any(backend.name == "ray" for backend in backends)
+    assert match_execution_backend_for_module("ray") is not None
+    assert match_execution_backend_for_module("ray.data").name == "ray"
+    assert match_execution_backend_for_module("numpy") is None
 
 
 def test_iter_execution_backends_loads_builtin_modules_once(monkeypatch) -> None:

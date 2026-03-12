@@ -8,6 +8,7 @@ from roar.backends.ray.collector import collect_fragments
 from roar.backends.ray.fragment_reconstituter import FragmentReconstituter
 from roar.backends.ray.proxy_fragments import build_proxy_fragment
 from roar.backends.ray.roar_worker import _run_worker_entrypoint, _startup
+from roar.backends.ray.runtime_import import patch_tracked_ray_module
 from roar.backends.ray.submit import (
     maybe_rewrite_ray_job_submit,
     ray_submit_matches_command,
@@ -16,6 +17,7 @@ from roar.execution.framework.contract import (
     DistributedExecutionBackend,
     DriverBootstrapAdapter,
     FragmentReconstitutionAdapter,
+    RuntimeImportAdapter,
     WorkerBootstrapAdapter,
 )
 from roar.execution.framework.registry import register_execution_backend
@@ -105,6 +107,10 @@ RAY_EXECUTION_BACKEND = DistributedExecutionBackend(
     ),
     fragment_reconstitution=FragmentReconstitutionAdapter(
         create_reconstituter=ray_reconstituter_factory,
+    ),
+    runtime_import=RuntimeImportAdapter(
+        module_prefixes=("ray",),
+        patch_module=patch_tracked_ray_module,
     ),
 )
 

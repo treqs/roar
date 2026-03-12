@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover
 
 from roar.backends.ray.env_contract import merge_worker_bootstrap_env
 from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV
+from roar.execution.framework.registry import match_execution_backend_for_module
 from roar.services.execution.worker_bootstrap import (
     WORKER_PY_EXECUTABLE,
     WORKER_SETUP_HOOK,
@@ -76,12 +77,11 @@ builtins.open = tracking_open
 # Track imports (and patch Ray when ROAR_WRAP=1)
 # ------------------------------------------------------------------------------
 _real_import = builtins.__import__
-_ray_patched = False
 _driver_phase_s3_clients_patched = False
 
 
 def tracking_import(name, globals=None, locals=None, fromlist=(), level=0):
-    global _driver_phase_s3_clients_patched, _ray_patched
+    global _driver_phase_s3_clients_patched
     imported_modules.add(name)
     module = _real_import(name, globals, locals, fromlist, level)
     if (
@@ -99,21 +99,14 @@ def tracking_import(name, globals=None, locals=None, fromlist=(), level=0):
             _driver_phase_s3_clients_patched = True
         except Exception:
             pass
-    if (
-        not _ray_patched
-        and os.environ.get("ROAR_WRAP") == "1"
-        and (name == "ray" or name.startswith("ray."))
-    ):
-        try:
-            import sys as _sys
-
-            _ray_module = _sys.modules.get("ray")
-            if _ray_module is not None and hasattr(_ray_module, "init"):
-                _patch_ray_init(_ray_module)
-                _patch_ray_shutdown(_ray_module)
-                _ray_patched = True
-        except Exception:
-            pass
+    if os.environ.get("ROAR_WRAP") == "1":
+        matched_backend = match_execution_backend_for_module(name)
+        if matched_backend is not None:
+            os.environ.setdefault(ROAR_EXECUTION_BACKEND_ENV, matched_backend.name)
+            adapter = matched_backend.runtime_import
+            if adapter is not None:
+                with contextlib.suppress(Exception):
+                    adapter.patch_module(name, module)
     return module
 
 
@@ -795,7 +788,9 @@ def _prepare_worker_env_vars(
 
 
 def _prepare_worker_runtime_env(runtime_env, job_id: str):
-    backend_name = str(os.environ.get(ROAR_EXECUTION_BACKEND_ENV) or "").strip() or "ray"
+    backend_name = str(os.environ.get(ROAR_EXECUTION_BACKEND_ENV) or "").strip()
+    if not backend_name:
+        raise RuntimeError(f"{ROAR_EXECUTION_BACKEND_ENV} is required for worker bootstrap")
     runtime_env = prepare_worker_runtime_env(
         backend_name,
         dict(runtime_env or {}),

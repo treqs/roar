@@ -7,6 +7,11 @@ import pytest
 from roar.services.execution.inject import sitecustomize
 
 
+@pytest.fixture(autouse=True)
+def _set_execution_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ROAR_EXECUTION_BACKEND", "ray")
+
+
 def test_patch_ray_init_conflicts_inside_preinstrumented_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

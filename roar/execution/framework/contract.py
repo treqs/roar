@@ -31,6 +31,7 @@ WorkerRuntimeEnvPreparer = Callable[
 WorkerBootstrapStartup = Callable[[], None]
 WorkerEntrypointRunner = Callable[[list[str]], None]
 ReconstituterFactory = Callable[[str, str, str, Path], FragmentReconstituterProtocol]
+TrackedModulePatcher = Callable[[str, Any], None]
 
 ROAR_EXECUTION_BACKEND_ENV = "ROAR_EXECUTION_BACKEND"
 
@@ -64,6 +65,12 @@ class FragmentReconstitutionAdapter:
 
 
 @dataclass(frozen=True)
+class RuntimeImportAdapter:
+    module_prefixes: tuple[str, ...]
+    patch_module: TrackedModulePatcher
+
+
+@dataclass(frozen=True)
 class DistributedExecutionBackend:
     name: str
     matches_submit_command: SubmitCommandMatcher
@@ -71,6 +78,7 @@ class DistributedExecutionBackend:
     driver_bootstrap: DriverBootstrapAdapter
     worker_bootstrap: WorkerBootstrapAdapter
     fragment_reconstitution: FragmentReconstitutionAdapter | None = None
+    runtime_import: RuntimeImportAdapter | None = None
 
 
 __all__ = [
@@ -78,6 +86,7 @@ __all__ = [
     "DistributedExecutionBackend",
     "DriverBootstrapAdapter",
     "FragmentReconstitutionAdapter",
+    "RuntimeImportAdapter",
     "SubmitCommandRewrite",
     "SubmitRunFinalizer",
     "WorkerBootstrapAdapter",

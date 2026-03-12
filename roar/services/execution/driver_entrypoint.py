@@ -24,7 +24,10 @@ def _warn(message: str) -> None:
 
 
 def _resolve_execution_backend(environ: Mapping[str, str]) -> str:
-    return str(environ.get(ROAR_EXECUTION_BACKEND_ENV) or "").strip() or "ray"
+    backend_name = str(environ.get(ROAR_EXECUTION_BACKEND_ENV) or "").strip()
+    if backend_name:
+        return backend_name
+    raise RuntimeError(f"{ROAR_EXECUTION_BACKEND_ENV} is required for driver bootstrap")
 
 
 def _build_driver_proxy_fragment(

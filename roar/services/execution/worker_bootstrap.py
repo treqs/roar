@@ -20,7 +20,10 @@ WORKER_PY_EXECUTABLE = "roar-worker"
 
 
 def _resolve_execution_backend_name(environ: Mapping[str, str]) -> str:
-    return str(environ.get(ROAR_EXECUTION_BACKEND_ENV) or "").strip() or "ray"
+    backend_name = str(environ.get(ROAR_EXECUTION_BACKEND_ENV) or "").strip()
+    if backend_name:
+        return backend_name
+    raise RuntimeError(f"{ROAR_EXECUTION_BACKEND_ENV} is required for worker bootstrap")
 
 
 def build_packaged_worker_runtime_env(
