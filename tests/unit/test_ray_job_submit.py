@@ -212,7 +212,7 @@ def test_existing_driver_entrypoint_wrapper_is_not_duplicated(monkeypatch) -> No
         "--",
         "python",
         "-m",
-        "roar.ray.driver_entrypoint",
+        "roar.services.execution.driver_entrypoint",
         "--",
         "python",
         "main.py",
@@ -223,7 +223,7 @@ def test_existing_driver_entrypoint_wrapper_is_not_duplicated(monkeypatch) -> No
     assert _entrypoint(rewritten.command) == [
         "python",
         "-m",
-        "roar.ray.driver_entrypoint",
+        "roar.services.execution.driver_entrypoint",
         "--",
         "python",
         "main.py",

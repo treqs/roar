@@ -8,8 +8,10 @@ import tempfile
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from roar.services.execution.distributed_backends import (
+from roar.execution.framework.contract import (
     ROAR_EXECUTION_BACKEND_ENV,
+)
+from roar.execution.framework.registry import (
     get_execution_backend,
 )
 

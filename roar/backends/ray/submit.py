@@ -24,7 +24,6 @@ from roar.services.execution.fragment_sessions import save_fragment_session as s
 
 _ROAR_WORKER_SETUP_HOOK = "roar.services.execution.worker_bootstrap.startup"
 _ROAR_DRIVER_ENTRYPOINT_MODULE = "roar.services.execution.driver_entrypoint"
-_LEGACY_DRIVER_ENTRYPOINT_MODULE = "roar.ray.driver_entrypoint"
 
 
 def maybe_rewrite_ray_job_submit(command: list[str]) -> SubmitCommandRewrite:
@@ -124,7 +123,7 @@ def _wrap_entrypoint_for_driver_proxy(entrypoint: list[str]) -> list[str]:
     if (
         len(entrypoint) >= 3
         and entrypoint[1] == "-m"
-        and entrypoint[2] in {_ROAR_DRIVER_ENTRYPOINT_MODULE, _LEGACY_DRIVER_ENTRYPOINT_MODULE}
+        and entrypoint[2] == _ROAR_DRIVER_ENTRYPOINT_MODULE
     ):
         return entrypoint
 

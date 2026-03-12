@@ -7,8 +7,10 @@ import sys
 import time
 from collections.abc import Mapping, Sequence
 
-from roar.services.execution.distributed_backends import (
+from roar.execution.framework.contract import (
     ROAR_EXECUTION_BACKEND_ENV,
+)
+from roar.execution.framework.registry import (
     get_execution_backend,
 )
 from roar.services.execution.fragment_transport import emit_fragment_dicts

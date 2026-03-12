@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import types
 
-from roar.ray.backend import ray_build_driver_proxy_fragment
-from roar.services.execution import driver_entrypoint
-from roar.services.execution.distributed_backends import (
+from roar.backends.ray.plugin import ray_build_driver_proxy_fragment
+from roar.execution.framework.contract import (
     DistributedExecutionBackend,
     DriverBootstrapAdapter,
     WorkerBootstrapAdapter,
 )
+from roar.services.execution import driver_entrypoint
 from roar.services.execution.proxy import S3LogEntry
 
 

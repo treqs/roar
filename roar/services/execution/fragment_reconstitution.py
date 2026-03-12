@@ -4,13 +4,13 @@ from typing import TYPE_CHECKING
 
 import click
 
+from roar.execution.framework.registry import get_execution_backend
 from roar.glaas_client import get_glaas_url
-from roar.services.execution.distributed_backends import get_execution_backend
 from roar.services.execution.fragment_sessions import load_fragment_session
 
 if TYPE_CHECKING:
     from roar.cli.context import RoarContext
-    from roar.services.execution.distributed_backends import SubmitRunFinalizer
+    from roar.execution.framework.contract import SubmitRunFinalizer
 
 
 def build_submit_finalizer(backend_name: str, session_id: str) -> SubmitRunFinalizer:

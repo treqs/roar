@@ -4,13 +4,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from roar.services.execution import fragment_reconstitution as submit_finalize
-from roar.services.execution.distributed_backends import (
+from roar.execution.framework.contract import (
     DistributedExecutionBackend,
     DriverBootstrapAdapter,
     FragmentReconstitutionAdapter,
     WorkerBootstrapAdapter,
 )
+from roar.services.execution import fragment_reconstitution as submit_finalize
 
 
 def _ctx() -> SimpleNamespace:
