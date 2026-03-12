@@ -1,9 +1,4 @@
-"""
-Unified execution service for run and build commands.
-
-This service extracts the common logic between run.py and build.py,
-eliminating ~150 lines of duplication.
-"""
+"""Shared execution service for backend-dispatched run/build flows."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from ...core.container import get_container
 from ...core.interfaces.run import RunContext, RunResult
+from ...execution.framework.registry import get_execution_backend
 from .coordinator import RunCoordinator
 
 if TYPE_CHECKING:
@@ -37,6 +33,7 @@ class ExecutionRequest:
 
     roar_dir: Path
     command: list[str]
+    execution_backend: str
     job_type: str | None = None  # None for run, "build" for build
     quiet: bool | None = None
     hash_algorithms: list[str] | None = None
@@ -50,7 +47,7 @@ class ExecutionService:
     - Git validation (clean working tree check)
     - Git info retrieval (commit, branch, remote)
     - Config loading (quiet setting)
-    - Execution coordination
+    - Execution backend dispatch
     - Result reporting
 
     Usage:
@@ -68,7 +65,7 @@ class ExecutionService:
         Initialize execution service.
 
         Args:
-            coordinator: Run coordinator (created lazily if not provided)
+            coordinator: Legacy run coordinator handle
             presenter: Output presenter
             vcs_provider: VCS provider for git operations
         """
@@ -178,6 +175,7 @@ class ExecutionService:
             roar_dir=request.roar_dir,
             repo_root=repo_root,
             command=request.command,
+            execution_backend=request.execution_backend,
             job_type=job_type,
             quiet=quiet,
             hash_algorithms=hash_algos,
@@ -186,9 +184,8 @@ class ExecutionService:
             git_repo=git_info.remote_url,
         )
 
-        # Execute via coordinator
-        coordinator = self._get_coordinator()
-        return coordinator.execute(run_ctx)
+        backend = get_execution_backend(request.execution_backend)
+        return backend.host_execution.execute(run_ctx)
 
     def _get_vcs(self) -> "IVCSProvider":
         """Get VCS provider."""

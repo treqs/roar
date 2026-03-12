@@ -46,7 +46,7 @@ class ExecutionBackend:
     name: str
     priority: int = 0
     matches_command: CommandMatcher = lambda _command: False
-    rewrite_command: CommandPlanner = ...
+    plan_command: CommandPlanner = ...
     host_execution: HostExecutionAdapter = ...
     distributed: DistributedRuntimeAdapter | None = None
     policy: ExecutionPolicyAdapter | None = None
@@ -101,7 +101,7 @@ LOCAL_EXECUTION_BACKEND = ExecutionBackend(
     name="local",
     priority=-100,
     matches_command=local_matches_command,
-    rewrite_command=local_plan_command,
+    plan_command=local_plan_command,
     host_execution=HostExecutionAdapter(execute=execute_host_run),
 )
 
@@ -200,7 +200,7 @@ DEMO_EXECUTION_BACKEND = ExecutionBackend(
     name="demo",
     priority=100,
     matches_command=demo_matches_command,
-    rewrite_command=demo_plan_command,
+    plan_command=demo_plan_command,
     host_execution=HostExecutionAdapter(execute=execute_host_run),
     distributed=DistributedRuntimeAdapter(
         driver_bootstrap=DriverBootstrapAdapter(
@@ -239,7 +239,7 @@ The planner lives in `roar/execution/framework/planning.py`.
 Important rules:
 
 - `matches_command` should be narrow for distributed backends and broad only for fallbacks like `local`
-- `rewrite_command` should return the final command that Roar will execute
+- `plan_command` should return the final command that Roar will execute
 - `backend_name` must be set in the returned `ExecutionCommandPlan`
 - if a distributed backend returns a `session_id` and does not provide its own `finalize_run`, the framework attaches the shared submit finalizer automatically
 

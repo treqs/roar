@@ -122,7 +122,7 @@ class ExecutionBackend:
     name: str
     priority: int = 0
     matches_command: CommandMatcher = lambda _command: False
-    rewrite_command: CommandPlanner = lambda command: ExecutionCommandPlan(
+    plan_command: CommandPlanner = lambda command: ExecutionCommandPlan(
         backend_name="",
         command=list(command),
     )

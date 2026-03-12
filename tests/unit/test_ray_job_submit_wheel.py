@@ -81,7 +81,7 @@ def test_maybe_rewrite_injects_pip_even_when_vendor_wheel_exists(tmp_path, monke
     monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==1.2.3")
     monkeypatch.setattr(module, "_resolve_glaas_url", lambda: None)
 
-    rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
+    rewritten = module.plan_ray_job_submit_command(_base_ray_job_submit_command())
 
     assert _entrypoint(rewritten.command) == [
         "python",

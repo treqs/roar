@@ -24,7 +24,7 @@ LOCAL_EXECUTION_BACKEND = ExecutionBackend(
     name="local",
     priority=-100,
     matches_command=local_matches_command,
-    rewrite_command=local_plan_command,
+    plan_command=local_plan_command,
     host_execution=HostExecutionAdapter(execute=execute_host_run),
 )
 

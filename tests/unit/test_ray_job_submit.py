@@ -40,7 +40,7 @@ def _entrypoint(command: list[str]) -> list[str]:
 
 def test_non_ray_command_is_unchanged() -> None:
     command = ["python", "main.py"]
-    rewritten = _module().maybe_rewrite_ray_job_submit(command)
+    rewritten = _module().plan_ray_job_submit_command(command)
     assert rewritten.command == command
     assert rewritten.session_id is None
 
@@ -50,7 +50,7 @@ def test_ray_job_submit_injects_pip_with_installed_roar_cli_version(monkeypatch)
     monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==9.9.9")
     monkeypatch.setattr(module, "_resolve_glaas_url", lambda: None)
 
-    rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
+    rewritten = module.plan_ray_job_submit_command(_base_ray_job_submit_command())
 
     runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["pip"] == ["roar-cli==9.9.9"]
@@ -68,7 +68,7 @@ def test_ray_jobs_submit_plural_also_works(monkeypatch) -> None:
     monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==3.2.1")
     monkeypatch.setattr(module, "_resolve_glaas_url", lambda: None)
 
-    rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command(plural=True))
+    rewritten = module.plan_ray_job_submit_command(_base_ray_job_submit_command(plural=True))
 
     runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["pip"] == ["roar-cli==3.2.1"]
@@ -80,7 +80,7 @@ def test_entrypoint_is_wrapped_with_roar_driver_entrypoint(monkeypatch) -> None:
     monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==1.2.3")
     monkeypatch.setattr(module, "_resolve_glaas_url", lambda: None)
 
-    rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
+    rewritten = module.plan_ray_job_submit_command(_base_ray_job_submit_command())
 
     assert _entrypoint(rewritten.command) == [
         "python",
@@ -105,7 +105,7 @@ def test_existing_runtime_env_json_pip_list_is_merged(monkeypatch) -> None:
         json.dumps({"pip": ["numpy==1.26.0", "roar==0.0.1", "roar-cli==0.0.2"]}),
     ]
 
-    rewritten = module.maybe_rewrite_ray_job_submit(command)
+    rewritten = module.plan_ray_job_submit_command(command)
 
     runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["pip"] == ["numpy==1.26.0", "roar-cli==7.8.9"]
@@ -131,7 +131,7 @@ def test_existing_runtime_env_json_pip_list_is_untouched_when_ray_pip_install_fa
         json.dumps({"pip": ["numpy==1.26.0"]}),
     ]
 
-    rewritten = module.maybe_rewrite_ray_job_submit(command)
+    rewritten = module.plan_ray_job_submit_command(command)
 
     runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["pip"] == ["numpy==1.26.0"]
@@ -154,7 +154,7 @@ def test_existing_runtime_env_json_env_vars_are_preserved_and_glaas_url_added(mo
         json.dumps({"env_vars": {"USER_KEY": "value"}}),
     ]
 
-    rewritten = module.maybe_rewrite_ray_job_submit(command)
+    rewritten = module.plan_ray_job_submit_command(command)
 
     runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["env_vars"]["USER_KEY"] == "value"
@@ -181,7 +181,7 @@ def test_existing_roar_run_entrypoint_is_unchanged(monkeypatch) -> None:
         "main.py",
     ]
 
-    rewritten = module.maybe_rewrite_ray_job_submit(command)
+    rewritten = module.plan_ray_job_submit_command(command)
 
     assert _entrypoint(rewritten.command) == [
         "python",
@@ -218,7 +218,7 @@ def test_existing_driver_entrypoint_wrapper_is_not_duplicated(monkeypatch) -> No
         "main.py",
     ]
 
-    rewritten = module.maybe_rewrite_ray_job_submit(command)
+    rewritten = module.plan_ray_job_submit_command(command)
 
     assert _entrypoint(rewritten.command) == [
         "python",
@@ -236,7 +236,7 @@ def test_glaas_url_from_config_is_injected_into_runtime_env(monkeypatch) -> None
     monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==8.0.0")
     monkeypatch.setattr(module, "_resolve_glaas_url", lambda: "http://localhost:3001")
 
-    rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
+    rewritten = module.plan_ray_job_submit_command(_base_ray_job_submit_command())
 
     runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["env_vars"]["GLAAS_URL"] == "http://localhost:3001"
@@ -271,7 +271,7 @@ def test_cluster_glaas_url_override_is_used_for_runtime_env(monkeypatch) -> None
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://localhost:9000")
     monkeypatch.setenv("ROAR_CLUSTER_AWS_ENDPOINT_URL", "http://minio:9000")
 
-    rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
+    rewritten = module.plan_ray_job_submit_command(_base_ray_job_submit_command())
 
     runtime_env = _runtime_env_json(rewritten.command)
     expected_port = derive_submit_proxy_port(runtime_env["env_vars"]["ROAR_JOB_ID"])
@@ -295,7 +295,7 @@ def test_no_glaas_url_configured_only_instrumentation_env_var_is_injected(monkey
     monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==8.0.0")
     monkeypatch.setattr(module, "_resolve_glaas_url", lambda: None)
 
-    rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
+    rewritten = module.plan_ray_job_submit_command(_base_ray_job_submit_command())
 
     runtime_env = _runtime_env_json(rewritten.command)
     env = runtime_env["env_vars"]
@@ -323,7 +323,7 @@ def test_blank_glaas_url_does_not_enable_fragment_session(monkeypatch) -> None:
         ),
     )
 
-    rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
+    rewritten = module.plan_ray_job_submit_command(_base_ray_job_submit_command())
 
     runtime_env = _runtime_env_json(rewritten.command)
     env = runtime_env["env_vars"]
@@ -343,6 +343,6 @@ def test_ray_job_submit_without_separator_is_unchanged() -> None:
         "--working-dir",
         ".",
     ]
-    rewritten = _module().maybe_rewrite_ray_job_submit(command)
+    rewritten = _module().plan_ray_job_submit_command(command)
     assert rewritten.command == command
     assert rewritten.session_id is None

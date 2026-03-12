@@ -1,4 +1,4 @@
-"""Canonical registry surface for distributed execution backends."""
+"""Canonical registry surface for execution backends."""
 
 from __future__ import annotations
 
@@ -120,7 +120,7 @@ def is_execution_backend_job_environment(environ: Mapping[str, str] | None = Non
     return any(marker in resolved_env for marker in iter_execution_job_environment_markers())
 
 
-def is_execution_submit_command(command: str | Sequence[str] | None) -> bool:
+def is_distributed_submission_command(command: str | Sequence[str] | None) -> bool:
     tokens = _normalize_command_tokens(command)
     if not tokens:
         return False
@@ -280,9 +280,9 @@ def _iter_builtin_execution_backend_modules() -> tuple[str, ...]:
 
 __all__ = [
     "get_execution_backend",
+    "is_distributed_submission_command",
     "is_execution_backend_job_environment",
     "is_execution_noise_command",
-    "is_execution_submit_command",
     "is_execution_task_command",
     "iter_execution_backend_config_adapters",
     "iter_execution_backend_configurable_keys",

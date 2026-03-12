@@ -38,7 +38,7 @@ def test_build_ray_submit_finalizer_reconstitutes_lineage(monkeypatch) -> None:
         lambda _name: ExecutionBackend(
             name="ray",
             matches_command=lambda _command: False,
-            rewrite_command=lambda command: ExecutionCommandPlan(
+            plan_command=lambda command: ExecutionCommandPlan(
                 backend_name="ray",
                 command=list(command),
             ),

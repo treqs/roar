@@ -56,7 +56,7 @@ def _rewrite_with_fragment_session(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(module, "_register_fragment_session", _fake_register, raising=False)
     monkeypatch.chdir(tmp_path)
 
-    rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
+    rewritten = module.plan_ray_job_submit_command(_base_ray_job_submit_command())
     return module, rewritten, register_calls
 
 
@@ -126,7 +126,7 @@ def test_maybe_rewrite_skips_fragment_session_when_no_glaas_url(
     monkeypatch.setattr(module, "_register_fragment_session", _fake_register, raising=False)
     monkeypatch.chdir(tmp_path)
 
-    rewritten = module.maybe_rewrite_ray_job_submit(_base_ray_job_submit_command())
+    rewritten = module.plan_ray_job_submit_command(_base_ray_job_submit_command())
 
     assert register_calls == []
     assert not (tmp_path / ".roar" / "fragment-sessions").exists()

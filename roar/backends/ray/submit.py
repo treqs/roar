@@ -1,4 +1,4 @@
-"""Ray submit rewriting through the execution backend framework."""
+"""Ray submit planning through the execution backend framework."""
 
 from __future__ import annotations
 
@@ -24,9 +24,9 @@ _ROAR_WORKER_SETUP_HOOK = "roar.services.execution.worker_bootstrap.startup"
 _ROAR_DRIVER_ENTRYPOINT_MODULE = "roar.services.execution.driver_entrypoint"
 
 
-def maybe_rewrite_ray_job_submit(command: list[str]) -> ExecutionCommandPlan:
-    """Rewrite ray jobs submit commands for roar instrumentation."""
-    if not ray_submit_matches_command(command):
+def plan_ray_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
+    """Plan Ray job submit commands for Roar instrumentation."""
+    if not matches_ray_job_submit_command(command):
         return ExecutionCommandPlan(backend_name="ray", command=command)
 
     if "--" not in command:
@@ -108,7 +108,7 @@ def _build_instrumented_env_vars(
     return env_vars
 
 
-def ray_submit_matches_command(command: list[str]) -> bool:
+def matches_ray_job_submit_command(command: list[str]) -> bool:
     if len(command) < 3:
         return False
 
@@ -272,6 +272,6 @@ def _register_fragment_session(
 __all__ = [
     "_merge_roar_runtime_env_pip",
     "_resolve_roar_requirement",
-    "maybe_rewrite_ray_job_submit",
-    "ray_submit_matches_command",
+    "matches_ray_job_submit_command",
+    "plan_ray_job_submit_command",
 ]

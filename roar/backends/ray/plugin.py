@@ -16,8 +16,8 @@ from roar.backends.ray.runtime_hooks import (
     patch_imported_ray_module,
 )
 from roar.backends.ray.submit import (
-    maybe_rewrite_ray_job_submit,
-    ray_submit_matches_command,
+    matches_ray_job_submit_command,
+    plan_ray_job_submit_command,
 )
 from roar.execution.framework.contract import (
     DistributedRuntimeAdapter,
@@ -94,8 +94,8 @@ def ray_reconstituter_factory(
 RAY_EXECUTION_BACKEND = ExecutionBackend(
     name="ray",
     priority=100,
-    matches_command=ray_submit_matches_command,
-    rewrite_command=maybe_rewrite_ray_job_submit,
+    matches_command=matches_ray_job_submit_command,
+    plan_command=plan_ray_job_submit_command,
     host_execution=HostExecutionAdapter(
         execute=execute_host_run,
     ),

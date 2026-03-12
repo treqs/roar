@@ -20,7 +20,7 @@ def _backend(
     name: str,
     priority: int = 0,
     matches_command,
-    rewrite_command,
+    plan_command,
     with_reconstitution: bool = False,
     distributed: DistributedRuntimeAdapter | None = None,
     policy: ExecutionPolicyAdapter | None = None,
@@ -49,7 +49,7 @@ def _backend(
         name=name,
         priority=priority,
         matches_command=matches_command,
-        rewrite_command=rewrite_command,
+        plan_command=plan_command,
         host_execution=HostExecutionAdapter(execute=lambda _ctx: None),  # type: ignore[arg-type]
         distributed=runtime,
         policy=policy,
@@ -74,7 +74,7 @@ def test_plan_execution_command_returns_first_highest_priority_match(monkeypatch
                 name="ray",
                 priority=100,
                 matches_command=_specific_match,
-                rewrite_command=lambda command: ExecutionCommandPlan(
+                plan_command=lambda command: ExecutionCommandPlan(
                     backend_name="ray",
                     command=["rewritten", *command],
                     session_id="session-123",
@@ -85,7 +85,7 @@ def test_plan_execution_command_returns_first_highest_priority_match(monkeypatch
                 name="local",
                 priority=-100,
                 matches_command=_fallback_match,
-                rewrite_command=lambda command: ExecutionCommandPlan(
+                plan_command=lambda command: ExecutionCommandPlan(
                     backend_name="local",
                     command=list(command),
                 ),
@@ -110,7 +110,7 @@ def test_plan_execution_command_returns_local_backend_for_plain_commands(monkeyp
                 name="ray",
                 priority=100,
                 matches_command=lambda _command: False,
-                rewrite_command=lambda command: ExecutionCommandPlan(
+                plan_command=lambda command: ExecutionCommandPlan(
                     backend_name="ray",
                     command=["bad", *command],
                 ),
@@ -119,7 +119,7 @@ def test_plan_execution_command_returns_local_backend_for_plain_commands(monkeyp
                 name="local",
                 priority=-100,
                 matches_command=lambda _command: True,
-                rewrite_command=lambda command: ExecutionCommandPlan(
+                plan_command=lambda command: ExecutionCommandPlan(
                     backend_name="local",
                     command=list(command),
                 ),
@@ -145,7 +145,7 @@ def test_plan_execution_command_accepts_finalizer_without_command_change(monkeyp
                 name="local",
                 priority=-100,
                 matches_command=lambda _command: True,
-                rewrite_command=lambda command: ExecutionCommandPlan(
+                plan_command=lambda command: ExecutionCommandPlan(
                     backend_name="local",
                     command=command,
                     finalize_run=finalizer,
@@ -163,9 +163,9 @@ def test_plan_execution_command_accepts_finalizer_without_command_change(monkeyp
 
 def test_execution_backends_register_local_and_ray_backends() -> None:
     from roar.execution.framework.registry import (
+        is_distributed_submission_command,
         is_execution_backend_job_environment,
         is_execution_noise_command,
-        is_execution_submit_command,
         is_execution_task_command,
         iter_execution_backends,
         match_execution_backend_for_module,
@@ -181,8 +181,8 @@ def test_execution_backends_register_local_and_ray_backends() -> None:
     assert match_execution_backend_for_module("ray.data").name == "ray"
     assert match_execution_backend_for_module("numpy") is None
     assert is_execution_backend_job_environment({"RAY_JOB_ID": "job-123"})
-    assert is_execution_submit_command("ray job submit -- python main.py")
-    assert not is_execution_submit_command("python main.py")
+    assert is_distributed_submission_command("ray job submit -- python main.py")
+    assert not is_distributed_submission_command("python main.py")
     assert is_execution_noise_command("ray_task:s3_proxy")
     assert is_execution_task_command("ray_task:my_task")
     assert not is_execution_noise_command("python train.py")
@@ -194,7 +194,7 @@ def test_execution_policy_helpers_use_registered_backend_policy(monkeypatch) -> 
     fake_backend = _backend(
         name="fake",
         matches_command=lambda command: command[:2] == ["fake", "submit"],
-        rewrite_command=lambda command: ExecutionCommandPlan(
+        plan_command=lambda command: ExecutionCommandPlan(
             backend_name="fake",
             command=["fake", *command],
         ),
@@ -221,7 +221,7 @@ def test_execution_policy_helpers_use_registered_backend_policy(monkeypatch) -> 
     monkeypatch.setattr(module, "_execution_backends_discovered", True)
 
     assert module.is_execution_backend_job_environment({"FAKE_JOB_ID": "job-123"})
-    assert module.is_execution_submit_command(["fake", "submit", "--", "python", "main.py"])
+    assert module.is_distributed_submission_command(["fake", "submit", "--", "python", "main.py"])
     assert module.is_execution_task_command("fake_task:train")
 
 
@@ -231,7 +231,7 @@ def test_iter_execution_backends_loads_builtin_modules_once(monkeypatch) -> None
     fake_backend = _backend(
         name="fake",
         matches_command=lambda _command: True,
-        rewrite_command=lambda command: ExecutionCommandPlan(
+        plan_command=lambda command: ExecutionCommandPlan(
             backend_name="fake",
             command=["fake", *command],
         ),
@@ -268,7 +268,7 @@ def test_iter_execution_backends_loads_entrypoint_callable_once(monkeypatch) -> 
     fake_backend = _backend(
         name="plugin",
         matches_command=lambda _command: True,
-        rewrite_command=lambda command: ExecutionCommandPlan(
+        plan_command=lambda command: ExecutionCommandPlan(
             backend_name="plugin",
             command=["plugin", *command],
         ),

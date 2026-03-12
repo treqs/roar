@@ -76,7 +76,7 @@ def test_emit_driver_proxy_fragment_streams_to_glaas_when_session_is_present(
         lambda _name: ExecutionBackend(
             name="ray",
             matches_command=lambda _command: False,
-            rewrite_command=lambda command: ExecutionCommandPlan(
+            plan_command=lambda command: ExecutionCommandPlan(
                 backend_name="ray",
                 command=list(command),
             ),

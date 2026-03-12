@@ -52,7 +52,7 @@ def test_tracking_import_initializes_observes_and_patches_matched_backend(
         name="fake",
         priority=10,
         matches_command=lambda _command: False,
-        rewrite_command=lambda command: ExecutionCommandPlan(
+        plan_command=lambda command: ExecutionCommandPlan(
             backend_name="fake",
             command=list(command),
         ),
@@ -108,7 +108,7 @@ def test_tracking_import_reuses_initialized_backend_for_unrelated_imports(
         name="fake",
         priority=10,
         matches_command=lambda _command: False,
-        rewrite_command=lambda command: ExecutionCommandPlan(
+        plan_command=lambda command: ExecutionCommandPlan(
             backend_name="fake",
             command=list(command),
         ),

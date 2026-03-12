@@ -195,7 +195,7 @@ sequenceDiagram
 
     U->>R: roar run ray job submit ...
     R->>P: plan_execution_command(...)
-    P->>S: rewrite_command(...)
+    P->>S: plan_command(...)
     S->>S: build submit context + fragment session
     S-->>P: ExecutionCommandPlan
     P-->>R: rewritten command + finalize hook

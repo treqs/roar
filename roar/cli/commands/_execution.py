@@ -147,7 +147,7 @@ def execute_and_report(
     This is the core execution function shared between run and build.
     It handles:
     1. Creating the RunContext
-    2. Executing via RunCoordinator
+    2. Dispatching through the selected execution backend
     3. Showing the result report
     4. Displaying stale step warnings
 

@@ -12,7 +12,7 @@ def plan_execution_command(command: list[str]) -> ExecutionCommandPlan:
     for backend in iter_execution_backends():
         if not backend.matches_command(command):
             continue
-        planned = backend.rewrite_command(command)
+        planned = backend.plan_command(command)
         if not planned.backend_name:
             planned = ExecutionCommandPlan(
                 backend_name=backend.name,
