@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from roar.backends.ray.collector import collect_fragments
+from roar.backends.ray.config import load_ray_backend_config
 from roar.backends.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
 from roar.glaas.fragment_streamer import GlaasFragmentStreamer
 from roar.services.execution.fragment_transport import emit_fragment_dicts
@@ -193,15 +194,11 @@ def _get_worker_id() -> str | None:
 def _get_actor_attribution() -> str:
     default = "per_call"
     try:
-        from roar.config import load_config
-
         start_dir = os.environ.get("ROAR_PROJECT_DIR") or os.getcwd()
-        config = load_config(start_dir=start_dir)
-        ray_config = config.get("ray", {}) if isinstance(config, dict) else {}
-        if isinstance(ray_config, dict):
-            configured = str(ray_config.get("actor_attribution", default)).strip().lower()
-            if configured in {"per_call", "per_actor"}:
-                return configured
+        ray_config = load_ray_backend_config(start_dir=start_dir)
+        configured = str(ray_config.get("actor_attribution", default)).strip().lower()
+        if configured in {"per_call", "per_actor"}:
+            return configured
     except Exception:
         pass
     return default

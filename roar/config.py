@@ -1,5 +1,6 @@
 """Configuration loading and management for roar."""
 
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -10,7 +11,7 @@ from .core.tracer_modes import VALID_TRACER_MODES
 VALID_HASH_ALGORITHMS = {"blake3", "sha256", "sha512", "md5"}
 
 # Config keys that can be set via `roar config`
-CONFIGURABLE_KEYS = {
+CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
     "output.track_repo_files": {
         "type": bool,
         "default": False,
@@ -128,21 +129,6 @@ CONFIGURABLE_KEYS = {
         "default": False,
         "description": "Enable S3 proxy for lineage tracking during roar run",
     },
-    "ray.enabled": {
-        "type": bool,
-        "default": True,
-        "description": "Enable automatic Ray runtime instrumentation",
-    },
-    "ray.pip_install": {
-        "type": bool,
-        "default": True,
-        "description": "Inject roar-cli into Ray runtime_env.pip for remote workers",
-    },
-    "ray.actor_attribution": {
-        "type": str,
-        "default": "per_call",
-        "description": "Ray actor attribution mode: per_call (default) or per_actor",
-    },
     "tracer.default": {
         "type": str,
         "default": "auto",
@@ -189,6 +175,37 @@ CONFIGURABLE_KEYS = {
         "description": "Maximum composite roots materialized per run job",
     },
 }
+
+
+def get_configurable_keys() -> dict[str, dict[str, Any]]:
+    from roar.execution.framework.registry import iter_execution_backend_configurable_keys
+
+    keys: dict[str, dict[str, Any]] = dict(CORE_CONFIGURABLE_KEYS)
+    keys.update(iter_execution_backend_configurable_keys())
+    return keys
+
+
+class _ConfigurableKeysView(Mapping[str, dict[str, Any]]):
+    def __getitem__(self, key: str) -> dict[str, Any]:
+        return get_configurable_keys()[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(get_configurable_keys())
+
+    def __len__(self) -> int:
+        return len(get_configurable_keys())
+
+    def items(self):
+        return get_configurable_keys().items()
+
+    def keys(self):
+        return get_configurable_keys().keys()
+
+    def values(self):
+        return get_configurable_keys().values()
+
+
+CONFIGURABLE_KEYS: Mapping[str, dict[str, Any]] = _ConfigurableKeysView()
 
 
 def _get_default_config() -> dict:
@@ -379,12 +396,13 @@ def config_set(key: str, value: str, start_dir: str | None = None):
     """Set a config value and save to .roar.toml."""
     from typing import Any
 
-    if key not in CONFIGURABLE_KEYS:
+    configurable_keys = get_configurable_keys()
+    if key not in configurable_keys:
         raise ValueError(
-            f"Unknown config key: {key}. Valid keys: {', '.join(CONFIGURABLE_KEYS.keys())}"
+            f"Unknown config key: {key}. Valid keys: {', '.join(configurable_keys.keys())}"
         )
 
-    key_info = CONFIGURABLE_KEYS[key]
+    key_info = configurable_keys[key]
     typed_value: Any
 
     # Parse value to correct type
@@ -456,7 +474,7 @@ def config_set(key: str, value: str, start_dir: str | None = None):
 
 def config_list():
     """List all configurable keys with descriptions."""
-    return CONFIGURABLE_KEYS
+    return get_configurable_keys()
 
 
 def get_hash_algorithms(

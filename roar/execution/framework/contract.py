@@ -1,9 +1,9 @@
-"""Canonical contract surface for distributed execution backends."""
+"""Canonical contract surface for execution backends."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -33,6 +33,7 @@ WorkerEntrypointRunner = Callable[[list[str]], None]
 ReconstituterFactory = Callable[[str, str, str, Path], FragmentReconstituterProtocol]
 TrackedModulePatcher = Callable[[str, Any], None]
 RuntimeProcessInitializer = Callable[[], None]
+BackendConfigNormalizer = Callable[[Mapping[str, Any] | None], dict[str, Any]]
 
 ROAR_EXECUTION_BACKEND_ENV = "ROAR_EXECUTION_BACKEND"
 
@@ -81,6 +82,22 @@ class RuntimeImportAdapter:
 
 
 @dataclass(frozen=True)
+class ConfigurableKeySpec:
+    value_type: type[Any]
+    default: Any
+    description: str
+
+
+@dataclass(frozen=True)
+class BackendConfigAdapter:
+    section_name: str
+    default_values: Mapping[str, Any]
+    configurable_keys: Mapping[str, ConfigurableKeySpec] = field(default_factory=dict)
+    init_template: str = ""
+    normalize_section: BackendConfigNormalizer | None = None
+
+
+@dataclass(frozen=True)
 class DistributedExecutionBackend:
     name: str
     matches_submit_command: SubmitCommandMatcher
@@ -90,10 +107,14 @@ class DistributedExecutionBackend:
     fragment_reconstitution: FragmentReconstitutionAdapter | None = None
     policy: ExecutionPolicyAdapter | None = None
     runtime_import: RuntimeImportAdapter | None = None
+    config: BackendConfigAdapter | None = None
 
 
 __all__ = [
     "ROAR_EXECUTION_BACKEND_ENV",
+    "BackendConfigAdapter",
+    "BackendConfigNormalizer",
+    "ConfigurableKeySpec",
     "DistributedExecutionBackend",
     "DriverBootstrapAdapter",
     "ExecutionPolicyAdapter",

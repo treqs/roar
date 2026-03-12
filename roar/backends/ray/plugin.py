@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from roar.backends.ray.collector import collect_fragments
+from roar.backends.ray.config import RAY_BACKEND_CONFIG
 from roar.backends.ray.constants import RAY_STEP_NOISE_COMMANDS, RAY_TASK_COMMAND_PREFIXES
 from roar.backends.ray.fragment_reconstituter import FragmentReconstituter
 from roar.backends.ray.proxy_fragments import build_proxy_fragment
@@ -117,6 +118,7 @@ RAY_EXECUTION_BACKEND = DistributedExecutionBackend(
         observe_import=observe_runtime_import,
         patch_module=patch_imported_ray_module,
     ),
+    config=RAY_BACKEND_CONFIG,
 )
 
 

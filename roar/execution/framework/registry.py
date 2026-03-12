@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import importlib
 import os
+import pkgutil
 import shlex
 from collections.abc import Mapping, Sequence
 from importlib import metadata as importlib_metadata
+from typing import Any
 
-from roar.execution.framework.contract import DistributedExecutionBackend
+import roar.backends
+from roar.execution.framework.contract import BackendConfigAdapter, DistributedExecutionBackend
 
 _ENTRYPOINT_GROUP = "roar.execution_backends"
-_BUILTIN_EXECUTION_BACKEND_MODULES = ("roar.backends.ray.plugin",)
 _registered_execution_backends: list[DistributedExecutionBackend] = []
 _execution_backends_discovered = False
 _execution_backends_discovering = False
@@ -118,6 +120,58 @@ def is_execution_submit_command(command: str | Sequence[str] | None) -> bool:
     return any(backend.matches_submit_command(list(tokens)) for backend in iter_execution_backends())
 
 
+def iter_execution_backend_config_adapters() -> tuple[BackendConfigAdapter, ...]:
+    _ensure_execution_backends_discovered()
+    adapters: list[BackendConfigAdapter] = []
+    for backend in _registered_execution_backends:
+        if backend.config is not None:
+            adapters.append(backend.config)
+    return tuple(adapters)
+
+
+def iter_execution_backend_configurable_keys() -> dict[str, dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for adapter in iter_execution_backend_config_adapters():
+        for key, spec in adapter.configurable_keys.items():
+            merged[str(key)] = {
+                "type": spec.value_type,
+                "default": spec.default,
+                "description": spec.description,
+            }
+    return merged
+
+
+def iter_execution_backend_init_templates() -> tuple[str, ...]:
+    templates: list[str] = []
+    for adapter in iter_execution_backend_config_adapters():
+        template = str(adapter.init_template or "").strip()
+        if template:
+            templates.append(template)
+    return tuple(templates)
+
+
+def resolve_execution_backend_config_sections(
+    raw_config: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    payload = dict(raw_config or {})
+    resolved: dict[str, dict[str, Any]] = {}
+    for adapter in iter_execution_backend_config_adapters():
+        raw_section = payload.get(adapter.section_name)
+        mapping = raw_section if isinstance(raw_section, Mapping) else None
+        if adapter.normalize_section is not None:
+            resolved[adapter.section_name] = adapter.normalize_section(mapping)
+            continue
+        section = dict(adapter.default_values)
+        if mapping is not None:
+            section.update(dict(mapping))
+        resolved[adapter.section_name] = section
+    return resolved
+
+
+def iter_execution_backend_section_names() -> tuple[str, ...]:
+    return tuple(adapter.section_name for adapter in iter_execution_backend_config_adapters())
+
+
 def _ensure_execution_backends_discovered() -> None:
     global _execution_backends_discovered, _execution_backends_discovering
 
@@ -134,7 +188,7 @@ def _ensure_execution_backends_discovered() -> None:
 
 
 def _load_builtin_execution_backends() -> None:
-    for module_name in _BUILTIN_EXECUTION_BACKEND_MODULES:
+    for module_name in _iter_builtin_execution_backend_modules():
         importlib.import_module(module_name)
 
 
@@ -206,16 +260,30 @@ def _truthy_env_value(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _iter_builtin_execution_backend_modules() -> tuple[str, ...]:
+    modules: list[str] = []
+    for module_info in pkgutil.iter_modules(roar.backends.__path__, prefix="roar.backends."):
+        if not module_info.ispkg:
+            continue
+        modules.append(f"{module_info.name}.plugin")
+    return tuple(sorted(modules))
+
+
 __all__ = [
     "get_execution_backend",
     "is_execution_backend_job_environment",
     "is_execution_noise_command",
     "is_execution_submit_command",
     "is_execution_task_command",
+    "iter_execution_backend_config_adapters",
+    "iter_execution_backend_configurable_keys",
+    "iter_execution_backend_init_templates",
+    "iter_execution_backend_section_names",
     "iter_execution_backends",
     "iter_execution_job_environment_markers",
     "iter_execution_noise_commands",
     "iter_execution_task_command_prefixes",
     "match_execution_backend_for_module",
     "register_execution_backend",
+    "resolve_execution_backend_config_sections",
 ]

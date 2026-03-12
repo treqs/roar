@@ -6,9 +6,10 @@ Provides Pydantic models for roar configuration with validation.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, PrivateAttr, field_validator
 
 from ..tracer_modes import TracerMode
 from .base import RoarBaseModel
@@ -179,14 +180,6 @@ class LoggingConfig(ConfigBaseModel):
     file: bool = True
 
 
-class RayConfig(ConfigBaseModel):
-    """Ray integration configuration section."""
-
-    enabled: bool = True
-    pip_install: bool = True
-    actor_attribution: Literal["per_call", "per_actor"] = "per_call"
-
-
 class RunCompositeConfig(ConfigBaseModel):
     """Run-time composite materialization policy."""
 
@@ -220,8 +213,11 @@ class RoarConfig(ConfigBaseModel):
     tracer: TracerConfig = Field(default_factory=TracerConfig)
     reversible: ReversibleConfig = Field(default_factory=ReversibleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    ray: RayConfig = Field(default_factory=RayConfig)
     composites: CompositesConfig = Field(default_factory=CompositesConfig)
+    _backend_configs: dict[str, dict[str, Any]] = PrivateAttr(default_factory=dict)
+
+    def model_post_init(self, __context: Any) -> None:
+        self._backend_configs = _resolve_backend_config_sections({})
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get config value by dot-notation key.
@@ -236,7 +232,9 @@ class RoarConfig(ConfigBaseModel):
         parts = key.split(".")
         obj: Any = self
         for part in parts:
-            if hasattr(obj, part):
+            if isinstance(obj, RoarConfig) and part in self._backend_configs:
+                obj = self._backend_configs[part]
+            elif hasattr(obj, part):
                 obj = getattr(obj, part)
             elif isinstance(obj, dict) and part in obj:
                 obj = obj[part]
@@ -261,15 +259,24 @@ class RoarConfig(ConfigBaseModel):
         # Navigate to parent object
         obj: Any = self
         for part in parts[:-1]:
-            if not hasattr(obj, part):
-                raise ValueError(f"Unknown config path: {key}")
-            obj = getattr(obj, part)
+            if isinstance(obj, RoarConfig) and part in self._backend_configs:
+                obj = self._backend_configs[part]
+                continue
+            if hasattr(obj, part):
+                obj = getattr(obj, part)
+                continue
+            if isinstance(obj, dict) and part in obj:
+                obj = obj[part]
+                continue
+            raise ValueError(f"Unknown config path: {key}")
 
         # Set the final field
         field = parts[-1]
+        if isinstance(obj, dict):
+            obj[field] = value
+            return
         if not hasattr(obj, field):
             raise ValueError(f"Unknown config field: {key}")
-
         setattr(obj, field, value)
 
     @classmethod
@@ -282,7 +289,10 @@ class RoarConfig(ConfigBaseModel):
         Returns:
             RoarConfig instance
         """
-        return cls.model_validate(data)
+        core_data, backend_sections = _split_backend_config_sections(data)
+        config = cls.model_validate(core_data)
+        config._backend_configs = _resolve_backend_config_sections(backend_sections)
+        return config
 
     def to_dict(self) -> dict[str, Any]:
         """Convert config to dictionary.
@@ -290,4 +300,28 @@ class RoarConfig(ConfigBaseModel):
         Returns:
             Configuration as nested dict
         """
-        return self.model_dump()
+        result = self.model_dump()
+        result.update({key: dict(value) for key, value in self._backend_configs.items()})
+        return result
+
+
+def _resolve_backend_config_sections(data: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    from roar.execution.framework.registry import resolve_execution_backend_config_sections
+
+    return resolve_execution_backend_config_sections(data)
+
+
+def _split_backend_config_sections(
+    data: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    from roar.execution.framework.registry import iter_execution_backend_section_names
+
+    backend_sections = set(iter_execution_backend_section_names())
+    core_data: dict[str, Any] = {}
+    backend_data: dict[str, Any] = {}
+    for key, value in data.items():
+        if key in backend_sections:
+            backend_data[key] = value
+            continue
+        core_data[key] = value
+    return core_data, backend_data

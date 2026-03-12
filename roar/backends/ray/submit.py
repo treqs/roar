@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from roar.backends.ray.config import load_ray_backend_config
 from roar.backends.ray.env_contract import merge_worker_bootstrap_env
 from roar.backends.ray.submit_context import (
     RayInstrumentationContext,
@@ -199,19 +200,7 @@ def _merge_roar_runtime_env_pip(existing_pip: object) -> list[str] | None:
 
 def _ray_pip_install_enabled() -> bool:
     start_dir = os.environ.get("ROAR_PROJECT_DIR") or os.getcwd()
-    try:
-        from roar.config import load_config
-
-        config = load_config(start_dir=start_dir)
-    except Exception:
-        return True
-
-    if not isinstance(config, dict):
-        return True
-    ray_section = config.get("ray", {})
-    if not isinstance(ray_section, dict):
-        return True
-    return bool(ray_section.get("pip_install", True))
+    return bool(load_ray_backend_config(start_dir=start_dir).get("pip_install", True))
 
 
 def _coerce_runtime_env_pip(value: object) -> list[str]:

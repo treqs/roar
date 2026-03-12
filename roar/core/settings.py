@@ -16,7 +16,7 @@ try:
 except ImportError:
     import tomli as tomllib
 
-from pydantic import model_validator
+from pydantic import PrivateAttr, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 
 from .models.config import (
@@ -29,7 +29,6 @@ from .models.config import (
     LoggingConfig,
     OutputConfig,
     ProxyConfig,
-    RayConfig,
     RegisterConfig,
     ReversibleConfig,
     TracerConfig,
@@ -210,9 +209,9 @@ class RoarSettings(BaseSettings):
     tracer: TracerConfig = TracerConfig()
     reversible: ReversibleConfig = ReversibleConfig()
     logging: LoggingConfig = LoggingConfig()
-    ray: RayConfig = RayConfig()
     composites: CompositesConfig = CompositesConfig()
     env: dict[str, str] = {}
+    _backend_configs: dict[str, dict[str, Any]] = PrivateAttr(default_factory=dict)
 
     # Internal fields (not from config)
     _config_file: str | None = None
@@ -303,10 +302,10 @@ class RoarSettings(BaseSettings):
             "tracer": self.tracer.model_dump(),
             "reversible": self.reversible.model_dump(),
             "logging": self.logging.model_dump(),
-            "ray": self.ray.model_dump(),
             "composites": self.composites.model_dump(),
             "env": dict(self.env),
         }
+        result.update({key: dict(value) for key, value in self._backend_configs.items()})
         if self._config_file:
             result["_config_file"] = self._config_file
         if self._config_error:
@@ -345,9 +344,16 @@ def load_settings(config_path: Path | None = None, start_dir: str | None = None)
             settings._config_file = toml_data["_config_file"]
         if "_config_error" in toml_data:
             settings._config_error = toml_data["_config_error"]
+        settings._backend_configs = _resolve_backend_config_sections(toml_data)
 
         return settings
     finally:
         # Reset module-level vars
         _current_config_path = None
         _current_start_dir = None
+
+
+def _resolve_backend_config_sections(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    from roar.execution.framework.registry import resolve_execution_backend_config_sections
+
+    return resolve_execution_backend_config_sections(data)

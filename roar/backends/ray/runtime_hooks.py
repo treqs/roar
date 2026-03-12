@@ -18,6 +18,7 @@ try:
 except ImportError:  # pragma: no cover
     import tomli as tomllib
 
+from roar.backends.ray.config import load_ray_backend_config
 from roar.backends.ray.env_contract import merge_worker_bootstrap_env
 from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV
 from roar.services.execution.inject.support import SuppressTracking, warn_runtime
@@ -356,13 +357,9 @@ def load_ray_config() -> dict[str, object]:
     config_pip_install = False
 
     try:
-        from roar.config import load_config
-
         start_dir = os.environ.get("ROAR_PROJECT_DIR") or os.getcwd()
-        config = load_config(start_dir=start_dir)
-        ray_section = config.get("ray", {})
-        if isinstance(ray_section, dict):
-            config_enabled = bool(ray_section.get("enabled", True))
+        ray_config = load_ray_backend_config(start_dir=start_dir)
+        config_enabled = bool(ray_config.get("enabled", True))
 
         explicit_pip_install = _load_explicit_ray_pip_install(start_dir)
         if explicit_pip_install is not None:
