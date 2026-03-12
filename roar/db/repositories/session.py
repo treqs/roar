@@ -14,8 +14,8 @@ import blake3
 from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.orm import Session as SASession
 
+from ...backends.ray.constants import RAY_STEP_NOISE_COMMANDS
 from ...core.interfaces.repositories import SessionRepository
-from ...ray.constants import RAY_STEP_NOISE_COMMANDS
 from ..models import Job, Session
 
 

@@ -367,7 +367,7 @@ def test_prepare_worker_runtime_env_bundles_roar_worker_hook(
     prepared = sitecustomize._prepare_worker_runtime_env({}, "job9999")
     working_dir = Path(str(prepared["working_dir"]))
 
-    assert (working_dir / "roar" / "ray" / "roar_worker.py").exists()
+    assert (working_dir / "roar" / "backends" / "ray" / "roar_worker.py").exists()
 
 
 def test_prepare_worker_runtime_env_uses_roar_worker_entrypoint(
@@ -408,7 +408,7 @@ def test_prepare_worker_runtime_env_ignores_existing_worker_setup_hook(
     )
 
     prepared = sitecustomize._prepare_worker_runtime_env(
-        {"worker_process_setup_hook": "roar.ray.worker.setup"},
+        {"worker_process_setup_hook": "roar.backends.ray.worker.setup"},
         "job1111",
     )
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from roar.ray.collector import _assign_step_numbers
-from roar.ray.fragment import ArtifactRef, TaskFragment
+from roar.backends.ray.collector import _assign_step_numbers
+from roar.backends.ray.fragment import ArtifactRef, TaskFragment
 
 
 def _artifact(hash_value: str | None) -> ArtifactRef:

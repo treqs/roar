@@ -9,11 +9,15 @@ from pathlib import Path
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from roar.ray.fragment_key import generate_fragment_key, load_key, save_key
+from roar.services.execution.fragment_sessions import (
+    generate_fragment_session,
+    load_fragment_session,
+    save_fragment_session,
+)
 
 
 def _module():
-    return importlib.import_module("roar.ray.fragment_reconstituter")
+    return importlib.import_module("roar.backends.ray.fragment_reconstituter")
 
 
 class _FakeHttpResponse:
@@ -565,9 +569,9 @@ def test_fragment_key_file_is_retained_after_reconstitution(
 ) -> None:
     module = _module()
     roar_dir = tmp_path / ".roar"
-    key = generate_fragment_key()
-    key_path = save_key(roar_dir, key)
-    loaded_key = load_key(roar_dir, key["session_id"])
+    key = generate_fragment_session()
+    key_path = save_fragment_session(roar_dir, key)
+    loaded_key = load_fragment_session(roar_dir, key["session_id"])
     response_body = _fragments_payload(
         [
             {

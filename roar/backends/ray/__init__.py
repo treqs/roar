@@ -1,5 +1,3 @@
-"""Canonical Ray backend imports."""
+"""Ray backend package."""
 
-from roar.backends.ray.plugin import RAY_EXECUTION_BACKEND, register
-
-__all__ = ["RAY_EXECUTION_BACKEND", "register"]
+__all__: list[str] = []

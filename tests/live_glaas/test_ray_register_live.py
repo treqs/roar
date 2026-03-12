@@ -139,7 +139,7 @@ import ray
 @ray.remote
 def process_shard(shard_id: int, data: str) -> dict:
     try:
-        import roar.ray.roar_worker as _roar_worker
+        import roar.backends.ray.roar_worker as _roar_worker
         _roar_worker._startup()
     except Exception:
         pass

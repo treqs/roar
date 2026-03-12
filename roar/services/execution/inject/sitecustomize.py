@@ -521,8 +521,8 @@ def _resolve_driver_phase_timestamp(
 def _append_driver_phase_state_refs(
     fragment, phase_label: str, pre_state: dict, post_state: dict, env
 ) -> None:
-    from roar.ray.fragment import ArtifactRef
-    from roar.ray.s3_key_paths import build_s3_path_or_placeholder
+    from roar.backends.ray.fragment import ArtifactRef
+    from roar.backends.ray.s3_key_paths import build_s3_path_or_placeholder
 
     seen_reads = {str(ref.path) for ref in fragment.reads}
     seen_writes = {str(ref.path) for ref in fragment.writes}
@@ -632,8 +632,8 @@ def _build_driver_phase_capture(args, kwargs):
 def _emit_driver_phase_fragment(
     capture: dict, *, exit_code: int, started_at: float, ended_at: float
 ) -> None:
-    from roar.ray.fragment import TaskFragment, derive_task_uid
-    from roar.ray.proxy_fragments import build_proxy_fragment, emit_fragment
+    from roar.backends.ray.fragment import TaskFragment, derive_task_uid
+    from roar.backends.ray.proxy_fragments import build_proxy_fragment, emit_fragment
 
     service = capture.get("service")
     handle = capture.get("handle")
@@ -890,7 +890,7 @@ def _warn_roar(message: str, *args) -> None:
 
 def _spawn_node_agents(ray_module, job_id: str) -> None:
     try:
-        from roar.ray.node_agent import RoarNodeAgent, build_node_agent_name
+        from roar.backends.ray.node_agent import RoarNodeAgent, build_node_agent_name
     except Exception as exc:
         print(f"[roar] cannot import RoarNodeAgent: {exc}")
         return
@@ -1253,8 +1253,8 @@ def _collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
     try:
         import time as _time
 
-        from roar.ray.fragment import TaskFragment, derive_task_uid
-        from roar.ray.roar_worker import _parse_proxy_log_lines
+        from roar.backends.ray.fragment import TaskFragment, derive_task_uid
+        from roar.backends.ray.roar_worker import _parse_proxy_log_lines
     except Exception:
         return
 

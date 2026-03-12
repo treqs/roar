@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from roar.ray.fragment import TaskFragment, derive_task_identity
+from roar.backends.ray.fragment import TaskFragment, derive_task_identity
 from roar.services.execution.fragment_lineage import (
     FragmentLineageBackend,
     assign_execution_fragment_step_numbers,

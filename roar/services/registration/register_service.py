@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy import text
 
+from ...backends.ray.constants import is_ray_noise_command
 from ...config import config_get
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
@@ -32,7 +33,6 @@ from ...db.hashing.backend import compute_hashes_batch
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
 from ...plugins.vcs.git import GitVCSProvider
-from ...ray.constants import is_ray_noise_command
 from ...services.labels import collect_label_sync_payloads
 from ..put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
 from ..transfer.common import resolve_repo_url_or_local_uri

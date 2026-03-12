@@ -13,7 +13,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     roar_worker._shutdown_collector()
     monkeypatch.setattr(roar_worker, "_startup_complete", False)
@@ -62,7 +62,7 @@ def _reset_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_log_read_pushes_event_to_queue(monkeypatch: pytest.MonkeyPatch) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-1")
     monkeypatch.setattr(roar_worker, "_get_task_function_name", lambda: "read_task")
@@ -84,7 +84,7 @@ def test_log_read_pushes_event_to_queue(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_log_write_pushes_event_to_queue(monkeypatch: pytest.MonkeyPatch) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-2")
     monkeypatch.setattr(roar_worker, "_get_task_function_name", lambda: "write_task")
@@ -107,7 +107,7 @@ def test_log_write_pushes_event_to_queue(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_track_s3_api_call_uses_captured_task_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     captured: dict[str, object] = {}
     monkeypatch.setattr(
@@ -137,7 +137,7 @@ def test_tracking_open_hashes_written_bytes_on_close(
 ) -> None:
     from blake3 import blake3
 
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     output_path = tmp_path / "output.bin"
     payload = (b"checkpoint-data-" * 32) + b"end"
@@ -161,7 +161,7 @@ def test_tracking_open_hashes_written_bytes_on_close(
 def test_get_task_and_actor_id_do_not_import_ray_during_startup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     monkeypatch.delitem(roar_worker.sys.modules, "ray", raising=False)
 
@@ -179,7 +179,7 @@ def test_get_task_and_actor_id_do_not_import_ray_during_startup(
 
 
 def test_start_fragment_uses_task_function_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     monkeypatch.setenv("ROAR_JOB_ID", "job-abc")
     monkeypatch.setattr(roar_worker, "_get_task_function_name", lambda: "ingest_shard")
@@ -189,7 +189,7 @@ def test_start_fragment_uses_task_function_name(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_parse_proxy_log_lines_extracts_s3_ops() -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     lines = [
         '[S3:PutObject] s3://test-bucket/data/file.csv  (1234 bytes)  etag="abc123"',
@@ -222,7 +222,7 @@ def test_parse_proxy_log_lines_extracts_s3_ops() -> None:
 
 
 def test_configure_local_proxy_endpoint_preserves_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     monkeypatch.setenv("ROAR_UPSTREAM_S3_ENDPOINT", "http://minio:9000")
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:24567")
@@ -239,7 +239,7 @@ def test_configure_local_proxy_endpoint_preserves_upstream(monkeypatch: pytest.M
 def test_configure_local_proxy_endpoint_captures_original_upstream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://minio:9000")
     monkeypatch.delenv("ROAR_UPSTREAM_S3_ENDPOINT", raising=False)
@@ -256,7 +256,7 @@ def test_configure_local_proxy_endpoint_captures_original_upstream(
 def test_collector_flushes_local_events_after_short_idle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     flushed: list[dict[str, object]] = []
 
@@ -321,7 +321,7 @@ def test_collector_flushes_local_events_after_short_idle(
 def test_collector_lazily_initializes_streamer_from_worker_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     appended: list[dict[str, object]] = []
 
@@ -388,7 +388,7 @@ def test_collector_lazily_initializes_streamer_from_worker_env(
 def test_log_write_eagerly_flushes_local_event_when_streamer_is_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     flushed: list[dict[str, object]] = []
 
@@ -420,8 +420,8 @@ def test_log_write_eagerly_flushes_local_event_when_streamer_is_configured(
 def test_collector_flushes_native_entries_with_current_task_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
-    from roar.ray.fragment import ArtifactRef
+    import roar.backends.ray.roar_worker as roar_worker
+    from roar.backends.ray.fragment import ArtifactRef
 
     appended: list[dict[str, object]] = []
 
@@ -491,8 +491,8 @@ def test_collector_flushes_native_entries_with_current_task_id(
 def test_collector_prefers_bound_task_id_for_native_entries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
-    from roar.ray.fragment import ArtifactRef
+    import roar.backends.ray.roar_worker as roar_worker
+    from roar.backends.ray.fragment import ArtifactRef
 
     appended: list[dict[str, object]] = []
 
@@ -559,7 +559,7 @@ def test_parse_and_buffer_frames_binds_registered_child_pid_to_launch_task(
 ) -> None:
     import msgpack
 
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     monkeypatch.setattr(roar_worker, "_should_track_local_path", lambda _path: True)
     roar_worker._register_native_child_pid(43210, "task-launch")
@@ -589,7 +589,7 @@ def test_parse_and_buffer_frames_binds_same_process_thread_to_task(
 ) -> None:
     import msgpack
 
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     monkeypatch.setattr(roar_worker, "_should_track_local_path", lambda _path: True)
     roar_worker._register_native_thread_task(54321, "task-thread")
@@ -618,7 +618,7 @@ def test_parse_and_buffer_frames_binds_same_process_thread_to_task(
 def test_wrap_task_executor_keeps_current_thread_bound_until_reused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: "task-thread")
     monkeypatch.setattr(roar_worker.threading, "get_native_id", lambda: 321)
@@ -645,7 +645,7 @@ def test_wrap_task_executor_keeps_current_thread_bound_until_reused(
 def test_patch_threading_binds_spawned_thread_to_launching_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     observed: dict[str, str] = {}
 
@@ -679,7 +679,7 @@ def test_patch_threading_binds_spawned_thread_to_launching_task(
 def test_recent_thread_binding_expires_after_linger_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     now = {"value": 100.0}
     monkeypatch.setattr(roar_worker.time, "monotonic", lambda: now["value"])
@@ -699,7 +699,7 @@ def test_recent_thread_binding_expires_after_linger_window(
 def test_patch_wraps_actor_method_inside_executor_task_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     task_state = {"task_id": ""}
     monkeypatch.setattr(roar_worker, "_get_current_task_id", lambda: task_state["task_id"])
@@ -748,7 +748,7 @@ def test_patch_wraps_actor_method_inside_executor_task_context(
 def test_main_calls_startup_and_runs_worker_entrypoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     startup_calls: list[bool] = []
     monkeypatch.setattr(roar_worker, "_startup", lambda: startup_calls.append(True))
@@ -771,7 +771,7 @@ def test_run_worker_entrypoint_execs_python_for_non_script(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     captured: dict[str, object] = {}
     preload_library = tmp_path / "libroar_tracer_preload.so"
@@ -801,7 +801,7 @@ def test_run_worker_entrypoint_execs_python_for_non_script(
 def test_run_worker_entrypoint_execs_python_for_worker_script(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import roar.ray.roar_worker as roar_worker
+    import roar.backends.ray.roar_worker as roar_worker
 
     captured: dict[str, object] = {}
 

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from roar.ray.fragment import ArtifactRef, TaskFragment, derive_task_identity, derive_task_uid
+from roar.backends.ray.fragment import (
+    ArtifactRef,
+    TaskFragment,
+    derive_task_identity,
+    derive_task_uid,
+)
 
 
 def _sample_fragment() -> TaskFragment:

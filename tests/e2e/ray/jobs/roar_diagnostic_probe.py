@@ -211,7 +211,7 @@ def _proxy_log_plumbing_status() -> dict[str, Any]:
         "del proxy_logs",
     )
     collector_collect_drops_proxy_logs, collector_collect_error = _source_contains(
-        "roar.ray.collector",
+        "roar.backends.ray.collector",
         "collect",
         "del log_dir, proxy_logs",
     )

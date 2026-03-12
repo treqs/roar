@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from ..backends.ray.constants import is_ray_noise_command
 from ..db.context import optional_repo
-from ..ray.constants import is_ray_noise_command
 
 
 class DagDataBuilder:

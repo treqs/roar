@@ -20,11 +20,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from roar.backends.ray.collector import collect_fragments
+from roar.backends.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
 from roar.glaas.fragment_streamer import GlaasFragmentStreamer
-from roar.ray.collector import collect_fragments
-from roar.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
-from roar.ray.proxy_config import local_proxy_endpoint, local_proxy_port_from_env
 from roar.services.execution.fragment_transport import emit_fragment_dicts
+from roar.services.execution.proxy_config import local_proxy_endpoint, local_proxy_port_from_env
 
 IOEvent = collections.namedtuple(
     "IOEvent",

@@ -13,7 +13,7 @@ from roar.backends.ray.env_contract import (
     ROAR_CLUSTER_GLAAS_URL_ENV,
     resolve_cluster_glaas_url,
 )
-from roar.ray.proxy_config import DEFAULT_LOCAL_PROXY_PORT, local_proxy_endpoint
+from roar.services.execution.proxy_config import DEFAULT_LOCAL_PROXY_PORT, local_proxy_endpoint
 
 ROAR_JOB_INSTRUMENTED_ENV_VAR = "ROAR_JOB_INSTRUMENTED"
 _ROAR_PROXY_PORT_BASE = 20000

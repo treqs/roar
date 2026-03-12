@@ -30,7 +30,7 @@ PROXY_FUNCTIONS = {
     "unknown",
     "s3_proxy",
     "s3_driver_proxy",
-    "roar.ray.node_agent.RoarNodeAgent.__init__",
+    "roar.backends.ray.node_agent.RoarNodeAgent.__init__",
 }
 EXPECTED_PHASE_COMMANDS = (
     "ray_task:extraction",

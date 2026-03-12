@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 
-from roar.ray.collector import collect_fragments
-from roar.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
+from roar.backends.ray.collector import collect_fragments
+from roar.backends.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
 from roar.services.execution.fragment_transport import emit_fragment_dicts
 from roar.services.execution.proxy import S3LogEntry
 

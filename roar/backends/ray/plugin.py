@@ -4,6 +4,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from roar.backends.ray.collector import collect_fragments
+from roar.backends.ray.fragment_reconstituter import FragmentReconstituter
+from roar.backends.ray.proxy_fragments import build_proxy_fragment
+from roar.backends.ray.roar_worker import _run_worker_entrypoint, _startup
 from roar.backends.ray.submit import (
     maybe_rewrite_ray_job_submit,
     ray_submit_matches_command,
@@ -15,10 +19,6 @@ from roar.execution.framework.contract import (
     WorkerBootstrapAdapter,
 )
 from roar.execution.framework.registry import register_execution_backend
-from roar.ray.collector import collect_fragments
-from roar.ray.fragment_reconstituter import FragmentReconstituter
-from roar.ray.proxy_fragments import build_proxy_fragment
-from roar.ray.roar_worker import _run_worker_entrypoint, _startup
 from roar.services.execution.worker_bootstrap import build_packaged_worker_runtime_env
 
 _GENERIC_WORKER_SETUP_HOOK = "roar.services.execution.worker_bootstrap.startup"

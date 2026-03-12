@@ -101,7 +101,7 @@ class ThreadedNativeWriter:
     def write(
         self, path: str, payload: str, native_delay_ms: int, return_delay_ms: int
     ) -> dict[str, str]:
-        from roar.ray import roar_worker
+        from roar.backends.ray import roar_worker
 
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)

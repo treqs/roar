@@ -11,7 +11,7 @@ import pytest
 
 ray = pytest.importorskip("ray")
 
-from roar.ray.node_agent import RoarNodeAgent, _local_proxy_port  # noqa: E402
+from roar.backends.ray.node_agent import RoarNodeAgent, _local_proxy_port  # noqa: E402
 from roar.services.execution.cluster_bridge import (  # noqa: E402
     LocalProxyClusterBridge,
     proxy_claim_path,

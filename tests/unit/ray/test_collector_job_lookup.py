@@ -4,8 +4,8 @@ import sqlite3
 
 import pytest
 
+from roar.backends.ray import collector
 from roar.db.schema import SCHEMA
-from roar.ray import collector
 
 
 def test_create_ray_job_reuses_existing_job_from_roar_job_id(

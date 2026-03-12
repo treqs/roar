@@ -3,10 +3,10 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from roar.backends.ray import collector as ray_collector
+from roar.backends.ray.collector import collect_fragments
+from roar.backends.ray.fragment import ArtifactRef, TaskFragment
 from roar.db.schema import SCHEMA
-from roar.ray import collector as ray_collector
-from roar.ray.collector import collect_fragments
-from roar.ray.fragment import ArtifactRef, TaskFragment
 
 
 def _init_db(project_dir: Path) -> Path:

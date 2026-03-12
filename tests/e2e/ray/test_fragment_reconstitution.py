@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from roar.ray.fragment_reconstituter import FragmentReconstituter
+from roar.backends.ray.fragment_reconstituter import FragmentReconstituter
 from tests.e2e.ray.conftest import (
     init_host_project,
     load_fragment_key,
