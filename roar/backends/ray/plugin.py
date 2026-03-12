@@ -126,6 +126,10 @@ RAY_EXECUTION_BACKEND = ExecutionBackend(
         noise_commands=RAY_STEP_NOISE_COMMANDS,
         task_command_prefixes=RAY_TASK_COMMAND_PREFIXES,
         job_environment_markers=("RAY_JOB_ID",),
+        submit_roles=("submit",),
+        task_roles=("task", "phase"),
+        phase_roles=("phase",),
+        noise_roles=("noise",),
     ),
     config=RAY_BACKEND_CONFIG,
 )

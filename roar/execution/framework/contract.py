@@ -48,6 +48,7 @@ def _missing_host_execution(_ctx: RunContext) -> RunResult:
 class ExecutionCommandPlan:
     backend_name: str
     command: list[str]
+    execution_role: str | None = None
     session_id: str | None = None
     finalize_run: SubmitRunFinalizer | None = None
 
@@ -86,6 +87,11 @@ class ExecutionPolicyAdapter:
     noise_commands: tuple[str, ...] = ()
     task_command_prefixes: tuple[str, ...] = ()
     job_environment_markers: tuple[str, ...] = ()
+    host_roles: tuple[str, ...] = ()
+    submit_roles: tuple[str, ...] = ()
+    task_roles: tuple[str, ...] = ()
+    phase_roles: tuple[str, ...] = ()
+    noise_roles: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

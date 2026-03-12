@@ -58,6 +58,7 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
             return_value=SimpleNamespace(
                 backend_name="ray",
                 command=rewritten_command,
+                execution_role="submit",
                 session_id=None,
                 finalize_run=None,
             ),
@@ -69,6 +70,7 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
     assert result.exit_code == 0
     mock_rewrite.assert_called_once_with(original_command)
     assert mock_exec.call_args.kwargs["backend_name"] == "ray"
+    assert mock_exec.call_args.kwargs["execution_role"] == "submit"
     assert mock_exec.call_args.kwargs["command"] == rewritten_command
 
 
@@ -85,6 +87,7 @@ def test_run_with_non_ray_command_does_not_call_rewrite() -> None:
             return_value=SimpleNamespace(
                 backend_name="local",
                 command=["python", "main.py"],
+                execution_role="host",
                 session_id=None,
                 finalize_run=None,
             ),
@@ -96,6 +99,7 @@ def test_run_with_non_ray_command_does_not_call_rewrite() -> None:
     assert result.exit_code == 0
     mock_rewrite.assert_called_once_with(["python", "main.py"])
     assert mock_exec.call_args.kwargs["backend_name"] == "local"
+    assert mock_exec.call_args.kwargs["execution_role"] == "host"
     assert mock_exec.call_args.kwargs["command"] == ["python", "main.py"]
 
 
@@ -141,6 +145,7 @@ def test_run_with_ray_job_submit_triggers_post_run_finalizer() -> None:
             return_value=SimpleNamespace(
                 backend_name="ray",
                 command=rewritten_command,
+                execution_role="submit",
                 session_id="session-123",
                 finalize_run=finalizer,
             ),

@@ -34,6 +34,7 @@ class ExecutionRequest:
     roar_dir: Path
     command: list[str]
     execution_backend: str
+    execution_role: str
     job_type: str | None = None  # None for run, "build" for build
     quiet: bool | None = None
     hash_algorithms: list[str] | None = None
@@ -176,6 +177,7 @@ class ExecutionService:
             repo_root=repo_root,
             command=request.command,
             execution_backend=request.execution_backend,
+            execution_role=request.execution_role,
             job_type=job_type,
             quiet=quiet,
             hash_algorithms=hash_algos,

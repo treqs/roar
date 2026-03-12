@@ -60,6 +60,8 @@ def test_run_migrations_adds_parent_job_uid_column() -> None:
 
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
     assert "parent_job_uid" in columns
+    assert "execution_backend" in columns
+    assert "execution_role" in columns
 
 
 def test_insert_job_with_parent_job_uid_succeeds() -> None:
@@ -112,6 +114,8 @@ def test_sqlalchemy_schema_includes_parent_job_uid_column() -> None:
         columns = {row[1] for row in conn.execute(text("PRAGMA table_info(jobs)")).fetchall()}
 
     assert "parent_job_uid" in columns
+    assert "execution_backend" in columns
+    assert "execution_role" in columns
 
 
 def test_create_database_context_migrates_parent_job_uid_for_legacy_db(tmp_path: Path) -> None:
@@ -134,3 +138,5 @@ def test_create_database_context_migrates_parent_job_uid_for_legacy_db(tmp_path:
         migrated.close()
 
     assert "parent_job_uid" in columns
+    assert "execution_backend" in columns
+    assert "execution_role" in columns

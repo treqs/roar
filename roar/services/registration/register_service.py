@@ -30,9 +30,9 @@ from ...core.logging import get_logger
 from ...db.context import create_database_context, optional_repo
 from ...db.hashing.backend import compute_hashes_batch
 from ...execution.framework.registry import (
-    is_distributed_submission_command,
-    is_execution_noise_command,
-    is_execution_task_command,
+    is_execution_noise_job,
+    is_execution_submit_job,
+    is_execution_task_job,
 )
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
@@ -751,7 +751,7 @@ class RegisterService:
             root_candidates = [
                 job
                 for job in normalized
-                if not is_execution_task_command(job.get("command"))
+                if not is_execution_task_job(job)
             ]
 
         for job in normalized:
@@ -768,7 +768,7 @@ class RegisterService:
         return normalized
 
     def _is_registration_noise_job(self, job: dict) -> bool:
-        return is_execution_noise_command(job.get("command"))
+        return is_execution_noise_job(job)
 
     def _order_jobs_for_registration(self, jobs: list[dict]) -> list[dict]:
         jobs_by_uid = {
@@ -825,14 +825,12 @@ class RegisterService:
         return str(inferred_uid) if inferred_uid else None
 
     def _is_local_parent_candidate(self, job: dict) -> bool:
-        command = str(job.get("command", "") or "")
         job_type = str(job.get("job_type", "") or "")
-        return not is_execution_task_command(command) and job_type != "build"
+        return not is_execution_task_job(job) and not is_execution_noise_job(job) and job_type != "build"
 
     def _parent_candidate_sort_key(self, job: dict) -> tuple[int, int, float, int]:
-        command = str(job.get("command", "") or "")
         return (
-            1 if is_distributed_submission_command(command) else 0,
+            1 if is_execution_submit_job(job) else 0,
             int(job.get("step_number") or 0),
             float(job.get("timestamp") or 0.0),
             int(job.get("id") or 0),

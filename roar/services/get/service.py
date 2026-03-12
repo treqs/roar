@@ -399,6 +399,8 @@ class GetService:
             session_id=session_id,
             step_number=step_number,
             metadata=metadata_json,
+            execution_backend="local",
+            execution_role="host",
             job_type="get",
             exit_code=0,
             duration_seconds=duration_seconds,

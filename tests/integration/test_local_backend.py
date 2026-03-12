@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 
 def _write_backend_probe(temp_git_repo, output_name: str) -> None:
@@ -31,6 +32,21 @@ def test_run_uses_local_execution_backend(temp_git_repo, roar_cli, git_commit, p
     assert result.returncode == 0
     payload = json.loads((temp_git_repo / "run_backend.json").read_text(encoding="utf-8"))
     assert payload == {"backend": "local"}
+    conn = sqlite3.connect(temp_git_repo / ".roar" / "roar.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            """
+            SELECT execution_backend, execution_role
+            FROM jobs
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert dict(row) == {"execution_backend": "local", "execution_role": "host"}
 
 
 def test_build_uses_local_execution_backend(
@@ -44,3 +60,22 @@ def test_build_uses_local_execution_backend(
     assert result.returncode == 0
     payload = json.loads((temp_git_repo / "build_backend.json").read_text(encoding="utf-8"))
     assert payload == {"backend": "local"}
+    conn = sqlite3.connect(temp_git_repo / ".roar" / "roar.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            """
+            SELECT execution_backend, execution_role, job_type
+            FROM jobs
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert dict(row) == {
+        "execution_backend": "local",
+        "execution_role": "host",
+        "job_type": "build",
+    }

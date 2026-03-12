@@ -16,6 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from roar.backends.ray.constants import RAY_STEP_NOISE_COMMANDS
 from roar.backends.ray.fragment import TaskFragment, derive_task_identity
 from roar.services.execution.fragment_lineage import (
     FragmentLineageBackend,
@@ -35,6 +36,10 @@ RAY_FRAGMENT_LINEAGE_BACKEND = FragmentLineageBackend(
     job_type="ray_task",
     command_for_fragment=lambda fragment: _ray_fragment_command(fragment.task_name),
     script_for_fragment=lambda fragment: fragment.task_name,
+    execution_role_from_fragment=lambda fragment, fallback_parent_job_uid: _ray_fragment_role(
+        fragment,
+        fallback_parent_job_uid=fallback_parent_job_uid,
+    ),
     metadata_from_fragment=lambda fragment, fallback_parent_job_uid: _ray_fragment_metadata(
         fragment,
         fallback_parent_job_uid=fallback_parent_job_uid,
@@ -283,6 +288,23 @@ def _ray_fragment_metadata(
     if fallback_parent_job_uid and not fragment.parent_job_uid:
         metadata["parent_job_uid"] = fallback_parent_job_uid
     return metadata
+
+
+def _ray_fragment_role(
+    fragment: ExecutionFragment,
+    *,
+    fallback_parent_job_uid: str | None,
+) -> str:
+    command = _ray_fragment_command(fragment.task_name)
+    if command in RAY_STEP_NOISE_COMMANDS:
+        return "noise"
+
+    parent_job_uid = str(fragment.parent_job_uid or fallback_parent_job_uid or "").strip()
+    task_name = str(fragment.task_name or "").strip()
+    if parent_job_uid and task_name and "." not in task_name:
+        return "phase"
+
+    return "task"
 
 
 def _task_command_name(function_name: str) -> str:

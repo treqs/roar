@@ -424,6 +424,8 @@ class PutService:
             session_id=session_id,
             step_number=step_number,
             metadata=metadata_json,
+            execution_backend="local",
+            execution_role="host",
             job_type="put",
             exit_code=0,
         )

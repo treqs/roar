@@ -30,19 +30,31 @@ def plan_ray_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
         return ExecutionCommandPlan(backend_name="ray", command=command)
 
     if "--" not in command:
-        return ExecutionCommandPlan(backend_name="ray", command=command)
+        return ExecutionCommandPlan(
+            backend_name="ray",
+            command=command,
+            execution_role="submit",
+        )
 
     separator_index = command.index("--")
     before_separator = list(command[:separator_index])
     entrypoint = list(command[separator_index + 1 :])
     if not entrypoint:
-        return ExecutionCommandPlan(backend_name="ray", command=command)
+        return ExecutionCommandPlan(
+            backend_name="ray",
+            command=command,
+            execution_role="submit",
+        )
     entrypoint = _wrap_entrypoint_for_driver_proxy(entrypoint)
 
     runtime_env_json_arg = _find_runtime_env_json(before_separator)
     runtime_env = _load_runtime_env(before_separator, runtime_env_json_arg)
     if runtime_env is None:
-        return ExecutionCommandPlan(backend_name="ray", command=command)
+        return ExecutionCommandPlan(
+            backend_name="ray",
+            command=command,
+            execution_role="submit",
+        )
 
     if _ray_pip_install_enabled():
         merged_pip = _merge_roar_runtime_env_pip(runtime_env.get("pip"))
@@ -88,6 +100,7 @@ def plan_ray_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
     return ExecutionCommandPlan(
         backend_name="ray",
         command=[*before_separator, "--", *entrypoint],
+        execution_role="submit",
         session_id=fragment_session_id,
     )
 

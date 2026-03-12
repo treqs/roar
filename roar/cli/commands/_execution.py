@@ -132,6 +132,7 @@ def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
 def execute_and_report(
     ctx: "RoarContext",
     backend_name: str,
+    execution_role: str,
     command: list[str],
     job_type: str | None,
     step_name: str | None,
@@ -177,6 +178,7 @@ def execute_and_report(
         repo_root=repo_root,
         command=command,
         execution_backend=backend_name,
+        execution_role=execution_role,
         job_type=job_type_literal,
         step_name=step_name,
         quiet=quiet,

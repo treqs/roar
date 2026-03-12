@@ -129,6 +129,11 @@ def run(
 
     planned = plan_execution_command(command)
     backend_name = planned.backend_name
+    execution_role = str(planned.execution_role or "").strip()
+    if not execution_role:
+        raise click.ClickException(
+            f"Execution backend '{backend_name}' did not provide an execution role."
+        )
     command = planned.command
     finalize_run = planned.finalize_run
 
@@ -136,6 +141,7 @@ def run(
     exit_code = execute_and_report(
         ctx=ctx,
         backend_name=backend_name,
+        execution_role=execution_role,
         command=command,
         job_type=job_type,
         step_name=step_name,

@@ -84,6 +84,37 @@ def is_execution_noise_command(command: str | None) -> bool:
     return bool(text) and text in iter_execution_noise_commands()
 
 
+def _normalize_job_backend_name(job: Mapping[str, Any] | None) -> str:
+    if job is None:
+        return ""
+    return str(job.get("execution_backend") or "").strip()
+
+
+def _normalize_job_execution_role(job: Mapping[str, Any] | None) -> str:
+    if job is None:
+        return ""
+    return str(job.get("execution_role") or "").strip()
+
+
+def _job_role_matches(job: Mapping[str, Any] | None, *, attr_name: str) -> bool:
+    backend_name = _normalize_job_backend_name(job)
+    execution_role = _normalize_job_execution_role(job)
+    if not backend_name or not execution_role:
+        return False
+
+    try:
+        backend = get_execution_backend(backend_name)
+    except LookupError:
+        return False
+
+    policy = backend.policy
+    if policy is None:
+        return False
+
+    allowed_roles = getattr(policy, attr_name)
+    return execution_role in allowed_roles
+
+
 def iter_execution_task_command_prefixes() -> tuple[str, ...]:
     _ensure_execution_backends_discovered()
     prefixes: list[str] = []
@@ -100,6 +131,24 @@ def is_execution_task_command(command: str | None) -> bool:
     if not text:
         return False
     return any(text.startswith(prefix) for prefix in iter_execution_task_command_prefixes())
+
+
+def is_execution_noise_job(job: Mapping[str, Any] | None) -> bool:
+    if _job_role_matches(job, attr_name="noise_roles"):
+        return True
+    return is_execution_noise_command(str((job or {}).get("command") or ""))
+
+
+def is_execution_task_job(job: Mapping[str, Any] | None) -> bool:
+    if _job_role_matches(job, attr_name="task_roles"):
+        return True
+    if is_execution_noise_job(job):
+        return False
+    return is_execution_task_command(str((job or {}).get("command") or ""))
+
+
+def is_execution_phase_job(job: Mapping[str, Any] | None) -> bool:
+    return _job_role_matches(job, attr_name="phase_roles")
 
 
 def iter_execution_job_environment_markers() -> tuple[str, ...]:
@@ -128,6 +177,12 @@ def is_distributed_submission_command(command: str | Sequence[str] | None) -> bo
         backend.distributed is not None and backend.matches_command(list(tokens))
         for backend in iter_execution_backends()
     )
+
+
+def is_execution_submit_job(job: Mapping[str, Any] | None) -> bool:
+    if _job_role_matches(job, attr_name="submit_roles"):
+        return True
+    return is_distributed_submission_command(str((job or {}).get("command") or ""))
 
 
 def iter_execution_backend_config_adapters() -> tuple[BackendConfigAdapter, ...]:

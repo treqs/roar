@@ -16,6 +16,7 @@ def test_execution_service_dispatches_through_backend_host_execution(monkeypatch
         roar_dir=Path("/tmp/repo/.roar"),
         command=["python", "main.py"],
         execution_backend="local",
+        execution_role="host",
     )
     git_info = GitValidationResult(
         is_valid=True,
@@ -51,4 +52,5 @@ def test_execution_service_dispatches_through_backend_host_execution(monkeypatch
     assert len(captured) == 1
     run_ctx = captured[0]
     assert run_ctx.execution_backend == "local"
+    assert run_ctx.execution_role == "host"
     assert run_ctx.repo_root == "/tmp/repo"

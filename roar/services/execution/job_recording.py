@@ -474,6 +474,8 @@ class ExecutionJobRecorder:
                 input_files=read_files,
                 output_files=written_files,
                 metadata=metadata_json,
+                execution_backend=ctx.execution_backend,
+                execution_role=ctx.execution_role,
                 job_type=ctx.job_type,
                 repo_root=ctx.repo_root,
                 telemetry=telemetry_json,

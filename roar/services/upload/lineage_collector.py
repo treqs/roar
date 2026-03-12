@@ -11,6 +11,7 @@ from pathlib import Path
 from ...core.digests import extract_primary_digest
 from ...core.interfaces.upload import LineageData
 from ...db.context import create_database_context
+from ...execution.framework.registry import is_execution_task_job
 
 
 def compute_io_signature(job: dict) -> str:
@@ -93,9 +94,9 @@ class LineageCollector:
             # references can be registered safely in GLaaS.
             lineage_jobs = self._add_parent_jobs(ctx_db, lineage_jobs)
 
-            # Include Ray task jobs linked by parent_job_uid even when the
-            # driver doesn't directly read each task output artifact.
-            lineage_jobs = self._add_parent_linked_ray_tasks(ctx_db, lineage_jobs)
+            # Include distributed child jobs linked by parent_job_uid even when the
+            # root job doesn't directly read each child output artifact.
+            lineage_jobs = self._add_parent_linked_execution_tasks(ctx_db, lineage_jobs)
 
             # Deduplicate re-runs
             lineage_jobs = self._deduplicate_reruns(lineage_jobs)
@@ -156,7 +157,7 @@ class LineageCollector:
                         ctx_db, session, lineage_jobs, set(target_hashes)
                     )
                 lineage_jobs = self._add_parent_jobs(ctx_db, lineage_jobs)
-                lineage_jobs = self._add_parent_linked_ray_tasks(ctx_db, lineage_jobs)
+                lineage_jobs = self._add_parent_linked_execution_tasks(ctx_db, lineage_jobs)
             else:
                 lineage_jobs = []
 
@@ -190,7 +191,7 @@ class LineageCollector:
 
             jobs = [self._hydrate_job(ctx_db, job) for job in ctx_db.sessions.get_steps(session_id)]
             jobs = self._add_parent_jobs(ctx_db, jobs)
-            jobs = self._add_parent_linked_ray_tasks(ctx_db, jobs)
+            jobs = self._add_parent_linked_execution_tasks(ctx_db, jobs)
             jobs.sort(key=lambda job: job["timestamp"])
             all_hashes = self._collect_all_hashes(jobs)
             artifacts = self._get_artifact_info(ctx_db, all_hashes)
@@ -240,7 +241,7 @@ class LineageCollector:
                         ctx_db, session, lineage_jobs, set(target_hashes)
                     )
                 lineage_jobs = self._add_parent_jobs(ctx_db, lineage_jobs)
-                lineage_jobs = self._add_parent_linked_ray_tasks(ctx_db, lineage_jobs)
+                lineage_jobs = self._add_parent_linked_execution_tasks(ctx_db, lineage_jobs)
             else:
                 lineage_jobs = []
 
@@ -312,8 +313,8 @@ class LineageCollector:
         # Combine build jobs with lineage jobs, avoiding duplicates
         return build_job_list + [j for j in lineage_jobs if j["id"] not in build_job_ids]
 
-    def _add_parent_linked_ray_tasks(self, ctx_db, lineage_jobs: list[dict]) -> list[dict]:
-        """Include Ray task jobs reachable via parent_job_uid edges."""
+    def _add_parent_linked_execution_tasks(self, ctx_db, lineage_jobs: list[dict]) -> list[dict]:
+        """Include distributed child jobs reachable via parent_job_uid edges."""
         if not lineage_jobs:
             return lineage_jobs
 
@@ -322,10 +323,12 @@ class LineageCollector:
         frontier = {str(job["job_uid"]) for job in lineage_jobs if job.get("job_uid")}
 
         while frontier:
-            ray_children = ctx_db.jobs.get_by_parent_uids(list(frontier), job_type="ray_task")
+            child_jobs = ctx_db.jobs.get_by_parent_uids(list(frontier))
             next_frontier: set[str] = set()
 
-            for child in ray_children:
+            for child in child_jobs:
+                if not is_execution_task_job(child):
+                    continue
                 child_id = child["id"]
                 if child_id in seen_ids:
                     continue

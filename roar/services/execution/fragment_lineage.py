@@ -23,6 +23,7 @@ class FragmentLineageBackend:
     job_type: str
     command_for_fragment: Callable[[ExecutionFragment], str]
     script_for_fragment: Callable[[ExecutionFragment], str | None]
+    execution_role_from_fragment: Callable[[ExecutionFragment, str | None], str | None]
     metadata_from_fragment: Callable[
         [ExecutionFragment, str | None],
         Mapping[str, Any] | None,
@@ -384,6 +385,12 @@ def _insert_fragment_job(
     if "parent_job_uid" in job_columns:
         fields.append("parent_job_uid")
         values.append(parent_job_uid)
+    if "execution_backend" in job_columns:
+        fields.append("execution_backend")
+        values.append(fragment.backend)
+    if "execution_role" in job_columns:
+        fields.append("execution_role")
+        values.append(backend.execution_role_from_fragment(fragment, driver_job_uid))
     if "session_id" in job_columns and session_id is not None:
         fields.append("session_id")
         values.append(session_id)
@@ -472,6 +479,13 @@ def _update_fragment_job(
             "parent_job_uid = CASE WHEN (parent_job_uid IS NULL OR parent_job_uid = '') AND ? IS NOT NULL AND ? != '' THEN ? ELSE parent_job_uid END"
         )
         params.extend([parent_job_uid, parent_job_uid, parent_job_uid])
+    if "execution_backend" in job_columns:
+        updates.append("execution_backend = COALESCE(execution_backend, ?)")
+        params.append(fragment.backend)
+    if "execution_role" in job_columns:
+        execution_role = backend.execution_role_from_fragment(fragment, parent_job_uid)
+        updates.append("execution_role = COALESCE(execution_role, ?)")
+        params.append(execution_role)
     if "session_id" in job_columns and session_id is not None:
         updates.append("session_id = COALESCE(session_id, ?)")
         params.append(session_id)

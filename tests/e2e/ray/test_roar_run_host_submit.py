@@ -123,6 +123,23 @@ def _artifact_count(project_dir: Path) -> int:
         conn.close()
 
 
+def _job_execution_rows(project_dir: Path) -> list[dict[str, object]]:
+    db = project_dir / ".roar" / "roar.db"
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT execution_backend, execution_role, job_type
+            FROM jobs
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
 def _base_env(ray_cluster: dict[str, str]) -> dict[str, str]:
     """Build a clean env for roar run — inherits PATH but overrides AWS/roar vars."""
     env = dict(os.environ)
@@ -206,6 +223,56 @@ def test_roar_run_from_host_s3_job_succeeds_and_captures_artifacts(
         f"Expected proxy logs to be collected and reconstituted. "
         f"roar.db path: {project_dir / '.roar' / 'roar.db'}"
     )
+
+
+@pytest.mark.e2e
+@pytest.mark.ray_e2e
+def test_roar_run_from_host_persists_execution_backend_roles(
+    ray_cluster: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "project"
+    _init_project(project_dir)
+
+    cmd = [
+        _roar_bin(),
+        "run",
+        "ray",
+        "job",
+        "submit",
+        "--address",
+        ray_cluster["dashboard_url"],
+        "--working-dir",
+        str(JOBS_DIR),
+        "--",
+        "python",
+        "s3_workload.py",
+    ]
+
+    result = subprocess.run(
+        cmd,
+        cwd=project_dir,
+        env=_base_env(ray_cluster),
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+
+    assert result.returncode == 0, (
+        f"roar run ray job submit failed (rc={result.returncode}).\n"
+        f"STDOUT:\n{textwrap.indent(result.stdout, '  ')}\n"
+        f"STDERR:\n{textwrap.indent(result.stderr, '  ')}"
+    )
+
+    rows = _job_execution_rows(project_dir)
+    assert any(
+        row["execution_backend"] == "ray" and row["execution_role"] == "submit" for row in rows
+    ), rows
+    ray_task_rows = [row for row in rows if row["job_type"] == "ray_task"]
+    assert ray_task_rows, rows
+    assert all(row["execution_backend"] == "ray" for row in ray_task_rows), ray_task_rows
+    assert all(str(row["execution_role"] or "").strip() for row in ray_task_rows), ray_task_rows
+    assert any(row["execution_role"] in {"task", "phase"} for row in ray_task_rows), ray_task_rows
 
 
 @pytest.mark.e2e

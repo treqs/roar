@@ -82,11 +82,17 @@ def build(
     algorithms = get_hash_algorithms(list(hash_algorithms) if hash_algorithms else None)
 
     planned = plan_execution_command(args_list)
+    execution_role = str(planned.execution_role or "").strip()
+    if not execution_role:
+        raise click.ClickException(
+            f"Execution backend '{planned.backend_name}' did not provide an execution role."
+        )
 
     # Execute and report (always job_type="build")
     exit_code = execute_and_report(
         ctx=ctx,
         backend_name=planned.backend_name,
+        execution_role=execution_role,
         command=planned.command,
         job_type="build",
         step_name=step_name,

@@ -6,8 +6,9 @@ from typing import Any, cast
 
 from ..db.context import optional_repo
 from ..execution.framework.registry import (
-    is_execution_noise_command,
-    is_execution_task_command,
+    is_execution_noise_job,
+    is_execution_phase_job,
+    is_execution_task_job,
 )
 
 
@@ -126,23 +127,16 @@ class DagDataBuilder:
 
     def _step_sort_key(self, step: dict) -> tuple[int, float, int]:
         job_type = step.get("job_type")
-        command = str(step.get("command") or "")
-        script = str(step.get("script") or "")
-        parent_job_uid = str(step.get("parent_job_uid") or "")
-        is_phase_wrapper = (
-            is_execution_task_command(command)
-            and not is_execution_noise_command(command)
-            and bool(parent_job_uid)
-            and bool(script)
-            and "." not in script
-        )
-        if job_type in (None, "run"):
-            priority = 6
-        elif is_phase_wrapper:
+        if job_type in (None, "run") and not is_execution_task_job(step):
+            if is_execution_noise_job(step):
+                priority = 1
+            else:
+                priority = 6
+        elif is_execution_phase_job(step):
             priority = 5
-        elif command and not is_execution_noise_command(command):
+        elif is_execution_task_job(step):
             priority = 4
-        elif is_execution_noise_command(command):
+        elif is_execution_noise_job(step):
             priority = 1
         else:
             priority = 2
