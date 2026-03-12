@@ -1581,12 +1581,6 @@ def _configure_local_proxy_endpoint() -> None:
     _proxy_configured = True
     print("[roar-worker] proxy endpoint configured")
 
-
-def _configure_proxy_in_background() -> None:
-    """Compatibility wrapper for older call sites."""
-    _configure_local_proxy_endpoint()
-
-
 def _resolve_preload_library_for_worker_exec() -> str | None:
     explicit = str(os.environ.get("ROAR_PRELOAD_LIB", "")).strip()
     if explicit and os.path.exists(explicit):

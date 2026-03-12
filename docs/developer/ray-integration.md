@@ -12,8 +12,8 @@ The canonical extension points now live under:
 - `roar.execution.framework.*` for the shared backend framework
 - `roar.backends.ray.*` for the concrete Ray adapter
 
-The Ray submit path now lives entirely under `roar.backends.ray.*`. The remaining legacy
-imports are limited to compatibility wrappers around older shared-framework module paths.
+The Ray submit path now lives entirely under `roar.backends.ray.*`, and the shared
+execution framework now lives under `roar.execution.framework.*`.
 
 If you want to add another backend on top of this framework, start with `docs/developer/execution-backend-adapter.md`.
 
@@ -111,8 +111,6 @@ These two modules are the main backend-neutral extraction from the older inline 
   - Starts driver-local proxy capture when needed.
   - Preserves loopback proxy routing for the child process.
   - Emits driver proxy fragments through the shared `fragment_transport.py` helper.
-- `roar/ray/driver_entrypoint.py`
-  - Compatibility wrapper over the shared driver entrypoint module.
 
 ### e. Ray startup patching
 
@@ -161,7 +159,7 @@ This path still matters for nested `ray.init(...)` inside already instrumented j
 - `roar/services/execution/fragment_reconstitution.py`
   - Owns the shared submit finalizer and backend-driven reconstitution dispatch.
 - `roar/services/execution/fragment_models.py`
-  - Defines the backend-neutral `ExecutionFragment` envelope under the Ray compatibility wrapper.
+  - Defines the backend-neutral `ExecutionFragment` envelope.
 - `roar/services/execution/fragment_lineage.py`
   - Owns shared fragment merge, identity resolution, dependency reconstruction, and DB persistence.
 - `roar/ray/fragment_reconstituter.py`
