@@ -36,7 +36,7 @@ def test_init_template_includes_backend_registered_sections() -> None:
 
 def test_packaged_roar_worker_entrypoint_uses_canonical_runtime_module() -> None:
     pyproject = tomllib.loads(
-        (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(encoding="utf-8")
+        (Path(__file__).resolve().parents[3] / "pyproject.toml").read_text(encoding="utf-8")
     )
 
     scripts = pyproject["project"]["scripts"]

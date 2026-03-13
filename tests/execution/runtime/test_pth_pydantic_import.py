@@ -4,7 +4,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-SOURCE_ROOT = Path(__file__).resolve().parents[2]
+SOURCE_ROOT = Path(__file__).resolve().parents[3]
 PTH_FILE = SOURCE_ROOT / "roar_inject.pth"
 
 

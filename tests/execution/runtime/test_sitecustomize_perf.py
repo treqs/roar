@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-INJECT_DIR = Path(__file__).resolve().parents[2] / "roar" / "execution" / "runtime" / "inject"
+INJECT_DIR = Path(__file__).resolve().parents[3] / "roar" / "execution" / "runtime" / "inject"
 
 
 def _roar_env(*, log_file: str | None = None) -> dict:
