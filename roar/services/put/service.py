@@ -17,12 +17,20 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
+from ...application.publish.registration import (
+    CompositeRegistrationCandidate,
+    ensure_composite_hash_entry,
+    extract_composite_digest,
+    normalize_registration_source_type,
+    parse_composite_registration_response,
+    preregister_lineage_composites,
+    sync_publish_labels,
+)
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...db.context import optional_repo
 from ...glaas_client import GlaasClient, get_glaas_url
 from ...services.execution.dataset_identifier import DatasetIdentifierInferer
-from ...services.labels import collect_label_sync_payloads
 from ...services.registration import (
     RegistrationCoordinator,
     SessionRegistrationService,
@@ -42,8 +50,6 @@ from .composite_builder import CompositeArtifactBuilder, CompositeBuildResult, C
 from .resolver import ResolvedSource, SourceResolver
 
 _AUTO_COMPOSITE_MIN_CONFIDENCE = 0.80
-_VALID_REMOTE_SOURCE_TYPES = {"s3", "gs", "https"}
-
 
 @dataclass
 class PutResult:
@@ -338,7 +344,7 @@ class PutService:
         # Prepare artifacts for registration (add session_hash)
         uploaded_artifacts = self._build_uploaded_artifacts_for_registration(
             uploads,
-            self._normalize_registration_source_type(self._destination_type()),
+            normalize_registration_source_type(self._destination_type()),
         )
         prepared_artifacts = self._prepare_artifacts_for_registration(
             uploaded_artifacts + lineage.artifacts, session_hash
@@ -360,8 +366,9 @@ class PutService:
         if pre_registration_errors:
             registration_result.errors = pre_registration_errors + registration_result.errors
 
-        label_payloads = collect_label_sync_payloads(
-            self._db,
+        sync_publish_labels(
+            glaas_client=client,
+            db_ctx=self._db,
             session_id=int(session_id),
             session_hash=session_hash or "",
             jobs=lineage.jobs,
@@ -369,11 +376,8 @@ class PutService:
                 *lineage.artifacts,
                 *[{"id": u.artifact_id, "hash": u.hash} for u in uploads],
             ],
+            errors=registration_result.errors,
         )
-        if label_payloads:
-            _label_result, label_error = client.sync_labels(label_payloads)
-            if label_error:
-                registration_result.errors.append(f"Label sync failed: {label_error}")
 
         self._logger.debug(
             "Registration result: jobs=%d/%d, artifacts=%d/%d, links=%d, errors=%d",
@@ -524,7 +528,7 @@ class PutService:
             if any(h.get("algorithm") == "composite-blake3" for h in hashes):
                 continue
 
-            source_type = self._normalize_registration_source_type(art.get("source_type"))
+            source_type = normalize_registration_source_type(art.get("source_type"))
             try:
                 size = int(art.get("size", 0))
             except (TypeError, ValueError):
@@ -594,58 +598,27 @@ class PutService:
             session_hash=session_hash,
             dataset_identifiers=dataset_identifiers,
         )
-        registrations: list[dict[str, Any]] = []
-
-        for item in payloads:
-            digest = item["hash"]
-            response = client.register_composite_artifact(item["payload"])
-            result, error = self._parse_composite_registration_response(response)
-
-            registration: dict[str, Any] = {
-                "lineage": True,
-                "hash": digest,
-                "root_path": item["root_path"],
-                "component_count_total": item["component_count_total"],
-                "component_count_stored": item["component_count_stored"],
-            }
-            if error:
-                registration["registered"] = False
-                registration["error"] = error
-                registration_errors.append(f"Lineage composite {digest[:12]}: {error}")
-            else:
-                registration["registered"] = True
-                if isinstance(result, dict):
-                    if "artifact_id" in result:
-                        registration["artifact_id"] = result["artifact_id"]
-                    if "created" in result:
-                        registration["created"] = result["created"]
-
-            registrations.append(registration)
-
-        if registrations:
-            failures = sum(1 for item in registrations if not item.get("registered"))
-            self._logger.debug(
-                "Lineage composite pre-registration complete: %d total, %d failed",
-                len(registrations),
-                failures,
-            )
-
-        return registrations
+        return preregister_lineage_composites(
+            glaas_client=client,
+            payloads=payloads,
+            registration_errors=registration_errors,
+            logger=self._logger,
+        )
 
     def _build_lineage_composite_payloads(
         self,
         lineage_artifacts: list[dict[str, Any]],
         session_hash: str,
         dataset_identifiers: list[dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[CompositeRegistrationCandidate]:
         """Build composite registration payloads from local lineage artifacts."""
         composites_repo = cast(Any, optional_repo(self._db, "composites"))
-        payloads: list[dict[str, Any]] = []
+        payloads: list[CompositeRegistrationCandidate] = []
         seen_hashes: set[str] = set()
 
         for artifact in lineage_artifacts:
             hashes = self._extract_registration_hashes(artifact)
-            composite_digest = self._extract_composite_digest(hashes)
+            composite_digest = extract_composite_digest(hashes)
             if not composite_digest:
                 continue
             if composite_digest in seen_hashes:
@@ -695,9 +668,9 @@ class PutService:
                 component_count_total=component_count_total,
                 components=components,
             )
-            normalized_hashes = self._ensure_composite_hash_entry(hashes, composite_digest)
+            normalized_hashes = ensure_composite_hash_entry(hashes, composite_digest)
             root_path = _artifact_ref.artifact_path(artifact) or ""
-            source_type = self._normalize_registration_source_type(artifact.get("source_type"))
+            source_type = normalize_registration_source_type(artifact.get("source_type"))
             try:
                 size = max(0, int(artifact.get("size", 0)))
             except (TypeError, ValueError):
@@ -724,25 +697,16 @@ class PutService:
                 payload["metadata"] = metadata_json
 
             payloads.append(
-                {
-                    "hash": composite_digest,
-                    "root_path": str(root_path),
-                    "component_count_total": component_count_total,
-                    "component_count_stored": len(components),
-                    "payload": payload,
-                }
+                CompositeRegistrationCandidate(
+                    hash=composite_digest,
+                    root_path=str(root_path),
+                    component_count_total=component_count_total,
+                    component_count_stored=len(components),
+                    payload=payload,
+                )
             )
 
         return payloads
-
-    @staticmethod
-    def _extract_composite_digest(hashes: list[dict[str, str]]) -> str | None:
-        for item in hashes:
-            if item.get("algorithm") == "composite-blake3":
-                digest = item.get("digest")
-                if isinstance(digest, str) and digest:
-                    return digest
-        return None
 
     @staticmethod
     def _normalize_lineage_components(
@@ -903,23 +867,6 @@ class PutService:
 
         return payload
 
-    @staticmethod
-    def _ensure_composite_hash_entry(
-        hashes: list[dict[str, str]],
-        composite_digest: str,
-    ) -> list[dict[str, str]]:
-        normalized_hashes = [dict(item) for item in hashes]
-        has_composite_digest = any(
-            item.get("algorithm") == "composite-blake3" and item.get("digest") == composite_digest
-            for item in normalized_hashes
-        )
-        if not has_composite_digest:
-            normalized_hashes.insert(
-                0,
-                {"algorithm": "composite-blake3", "digest": composite_digest},
-            )
-        return normalized_hashes
-
     def _link_local_put_job_artifacts(
         self,
         job_id: int,
@@ -1014,15 +961,6 @@ class PutService:
             self._logger.debug("Put job input linking failed: %s", link_result.error)
             if link_result.error:
                 registration_errors.append(f"Put job links: {link_result.error}")
-
-    @staticmethod
-    def _normalize_registration_source_type(source_type: Any) -> str | None:
-        if not isinstance(source_type, str):
-            return None
-        normalized = source_type.strip().lower()
-        if normalized in _VALID_REMOTE_SOURCE_TYPES:
-            return normalized
-        return None
 
     @staticmethod
     def _extract_registration_hashes(artifact: dict[str, Any]) -> list[dict[str, str]]:
@@ -1491,7 +1429,7 @@ class PutService:
             if metadata_json is not None:
                 payload["metadata"] = metadata_json
             response = client.register_composite_artifact(payload)
-            result, error = self._parse_composite_registration_response(response)
+            result, error = parse_composite_registration_response(response)
 
             composite_registration = {
                 "root_path": composite.root_path,
@@ -1522,32 +1460,6 @@ class PutService:
                     composite_registration["local_persisted"] = True
             composite_registrations.append(composite_registration)
         return composite_registrations
-
-    @staticmethod
-    def _parse_composite_registration_response(
-        response: Any,
-    ) -> tuple[dict[str, Any] | None, str | None]:
-        if isinstance(response, tuple) and len(response) == 2:
-            raw_result, raw_error = response
-            if isinstance(raw_error, str):
-                return (
-                    raw_result if isinstance(raw_result, dict) else None,
-                    raw_error or None,
-                )
-            if raw_error is not None:
-                return None, str(raw_error)
-            if not isinstance(raw_result, dict):
-                return (
-                    None,
-                    "Unexpected response from GLaaS when registering composite artifact: "
-                    f"expected dict payload, got {type(raw_result).__name__}",
-                )
-            return raw_result, None
-
-        if response is None:
-            return None, "Empty response from GLaaS when registering composite artifact"
-
-        return None, "Unexpected response from GLaaS when registering composite artifact"
 
     def _build_put_metadata(
         self,

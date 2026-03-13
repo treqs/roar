@@ -8,7 +8,7 @@ import json
 import os
 import sys
 from collections.abc import Mapping, MutableMapping, Sequence
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from roar.execution.runtime.inject.support import is_suppressed
 
@@ -45,8 +45,9 @@ def get_installed_packages() -> dict[str, str]:
         from importlib import metadata as importlib_metadata
 
         for dist in importlib_metadata.distributions():
-            name = dist.metadata.get("Name")
-            version = dist.metadata.get("Version")
+            metadata = cast(Mapping[str, str], dist.metadata)
+            name = metadata.get("Name", None)
+            version = metadata.get("Version", None)
             if name and version:
                 packages[name] = version
     except Exception:

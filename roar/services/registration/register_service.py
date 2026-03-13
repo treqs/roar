@@ -22,6 +22,14 @@ from urllib.parse import urlparse
 
 from sqlalchemy import text
 
+from ...application.publish.registration import (
+    CompositeRegistrationCandidate,
+    ensure_composite_hash_entry,
+    extract_composite_digest,
+    normalize_registration_source_type,
+    preregister_lineage_composites,
+    sync_publish_labels,
+)
 from ...config import config_get
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
@@ -37,7 +45,6 @@ from ...execution.framework.registry import (
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
 from ...plugins.vcs.git import GitVCSProvider
-from ...services.labels import collect_label_sync_payloads
 from ..put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
 from ..transfer.common import resolve_repo_url_or_local_uri
 from ..upload.lineage_collector import LineageCollector
@@ -59,8 +66,6 @@ boto3 = None
 _STEP_REFERENCE_RE = re.compile(r"^@(?:B)?\d+$", re.IGNORECASE)
 _SESSION_HASH_RE = re.compile(r"^[a-f0-9]{8,64}$")
 _HEX_IDENTIFIER_RE = re.compile(r"^[a-f0-9]{4,64}$", re.IGNORECASE)
-_VALID_REMOTE_SOURCE_TYPES = {"s3", "gs", "https"}
-
 
 def _ensure_boto3():
     global boto3
@@ -654,18 +659,17 @@ class RegisterService:
             artifacts=self._prepare_artifacts(lineage.artifacts, session_hash),
         )
 
-        with create_database_context(roar_dir) as db_ctx:
-            label_payloads = collect_label_sync_payloads(
-                db_ctx,
-                session_id=session_id,
-                session_hash=session_hash,
-                jobs=lineage.jobs,
-                artifacts=lineage.artifacts,
-            )
-        if label_payloads:
-            _label_result, label_error = self.glaas_client.sync_labels(label_payloads)
-            if label_error:
-                batch_result.errors.append(f"Label sync failed: {label_error}")
+        if session_id is not None:
+            with create_database_context(roar_dir) as db_ctx:
+                sync_publish_labels(
+                    glaas_client=self.glaas_client,
+                    db_ctx=db_ctx,
+                    session_id=session_id,
+                    session_hash=session_hash,
+                    jobs=lineage.jobs,
+                    artifacts=lineage.artifacts,
+                    errors=batch_result.errors,
+                )
 
         if tagging_enabled and git_context.commit:
             tag_name = f"roar/{git_context.commit[:8]}"
@@ -1221,7 +1225,7 @@ class RegisterService:
 
     def _has_lineage_composites(self, artifacts: list[dict[str, Any]]) -> bool:
         return any(
-            self._extract_composite_digest(self._extract_registration_hashes(artifact))
+            extract_composite_digest(self._extract_registration_hashes(artifact))
             for artifact in artifacts
         )
 
@@ -1267,7 +1271,7 @@ class RegisterService:
                 {
                     "hashes": ordered_hashes,
                     "size": size,
-                    "source_type": self._normalize_registration_source_type(art.get("source_type")),
+                    "source_type": normalize_registration_source_type(art.get("source_type")),
                     "session_hash": session_hash,
                 }
             )
@@ -1286,43 +1290,12 @@ class RegisterService:
             lineage_artifacts=lineage_artifacts,
             session_hash=session_hash,
         )
-        registrations: list[dict[str, Any]] = []
-
-        for item in payloads:
-            digest = item["hash"]
-            response = self.glaas_client.register_composite_artifact(item["payload"])
-            result, error = self._parse_composite_registration_response(response)
-
-            registration: dict[str, Any] = {
-                "lineage": True,
-                "hash": digest,
-                "root_path": item["root_path"],
-                "component_count_total": item["component_count_total"],
-                "component_count_stored": item["component_count_stored"],
-            }
-            if error:
-                registration["registered"] = False
-                registration["error"] = error
-                registration_errors.append(f"Lineage composite {digest[:12]}: {error}")
-            else:
-                registration["registered"] = True
-                if isinstance(result, dict):
-                    if "artifact_id" in result:
-                        registration["artifact_id"] = result["artifact_id"]
-                    if "created" in result:
-                        registration["created"] = result["created"]
-
-            registrations.append(registration)
-
-        if registrations:
-            failures = sum(1 for item in registrations if not item.get("registered"))
-            self._logger.debug(
-                "Lineage composite pre-registration complete: %d total, %d failed",
-                len(registrations),
-                failures,
-            )
-
-        return registrations
+        return preregister_lineage_composites(
+            glaas_client=self.glaas_client,
+            payloads=payloads,
+            registration_errors=registration_errors,
+            logger=self._logger,
+        )
 
     def _build_lineage_composite_payloads(
         self,
@@ -1330,19 +1303,19 @@ class RegisterService:
         db_ctx: Any,
         lineage_artifacts: list[dict[str, Any]],
         session_hash: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[CompositeRegistrationCandidate]:
         composites_repo: Any = optional_repo(db_ctx, "composites")
         lineage_artifacts_by_id = {
             str(artifact_id): artifact
             for artifact in lineage_artifacts
             if isinstance((artifact_id := artifact.get("id")), str) and artifact_id
         }
-        payloads: list[dict[str, Any]] = []
+        payloads: list[CompositeRegistrationCandidate] = []
         seen_hashes: set[str] = set()
 
         for artifact in lineage_artifacts:
             hashes = self._extract_registration_hashes(artifact)
-            composite_digest = self._extract_composite_digest(hashes)
+            composite_digest = extract_composite_digest(hashes)
             if not composite_digest or composite_digest in seen_hashes:
                 continue
 
@@ -1380,9 +1353,9 @@ class RegisterService:
                 component_count_total=component_count_total,
                 components=components,
             )
-            normalized_hashes = self._ensure_composite_hash_entry(hashes, composite_digest)
+            normalized_hashes = ensure_composite_hash_entry(hashes, composite_digest)
             root_path = _artifact_ref.artifact_path(artifact) or ""
-            source_type = self._normalize_registration_source_type(artifact.get("source_type"))
+            source_type = normalize_registration_source_type(artifact.get("source_type"))
             try:
                 size = max(0, int(artifact.get("size", 0)))
             except (TypeError, ValueError):
@@ -1390,12 +1363,12 @@ class RegisterService:
 
             seen_hashes.add(composite_digest)
             payloads.append(
-                {
-                    "hash": composite_digest,
-                    "root_path": str(root_path),
-                    "component_count_total": component_count_total,
-                    "component_count_stored": len(components),
-                    "payload": {
+                CompositeRegistrationCandidate(
+                    hash=composite_digest,
+                    root_path=str(root_path),
+                    component_count_total=component_count_total,
+                    component_count_stored=len(components),
+                    payload={
                         "hash": composite_digest,
                         "hashes": normalized_hashes,
                         "size": size,
@@ -1405,19 +1378,10 @@ class RegisterService:
                         "components": components,
                         "membership_index": membership_payload,
                     },
-                }
+                )
             )
 
         return payloads
-
-    @staticmethod
-    def _extract_composite_digest(hashes: list[dict[str, str]]) -> str | None:
-        for item in hashes:
-            if item.get("algorithm") == "composite-blake3":
-                digest = item.get("digest")
-                if isinstance(digest, str) and digest:
-                    return digest
-        return None
 
     def _normalize_lineage_components(
         self,
@@ -1619,32 +1583,6 @@ class RegisterService:
         return payload
 
     @staticmethod
-    def _ensure_composite_hash_entry(
-        hashes: list[dict[str, str]],
-        composite_digest: str,
-    ) -> list[dict[str, str]]:
-        normalized_hashes = [dict(item) for item in hashes]
-        has_composite_digest = any(
-            item.get("algorithm") == "composite-blake3" and item.get("digest") == composite_digest
-            for item in normalized_hashes
-        )
-        if not has_composite_digest:
-            normalized_hashes.insert(
-                0,
-                {"algorithm": "composite-blake3", "digest": composite_digest},
-            )
-        return normalized_hashes
-
-    @staticmethod
-    def _normalize_registration_source_type(source_type: Any) -> str | None:
-        if not isinstance(source_type, str):
-            return None
-        normalized = source_type.strip().lower()
-        if normalized in _VALID_REMOTE_SOURCE_TYPES:
-            return normalized
-        return None
-
-    @staticmethod
     def _extract_registration_hashes(artifact: dict[str, Any]) -> list[dict[str, str]]:
         normalized_hashes: list[dict[str, str]] = []
         seen: set[str] = set()
@@ -1689,32 +1627,6 @@ class RegisterService:
                 )
 
         return normalized_hashes
-
-    @staticmethod
-    def _parse_composite_registration_response(
-        response: Any,
-    ) -> tuple[dict[str, Any] | None, str | None]:
-        if isinstance(response, tuple) and len(response) == 2:
-            raw_result, raw_error = response
-            if isinstance(raw_error, str):
-                return (
-                    raw_result if isinstance(raw_result, dict) else None,
-                    raw_error or None,
-                )
-            if raw_error is not None:
-                return None, str(raw_error)
-            if not isinstance(raw_result, dict):
-                return (
-                    None,
-                    "Unexpected response from GLaaS when registering composite artifact: "
-                    f"expected dict payload, got {type(raw_result).__name__}",
-                )
-            return raw_result, None
-
-        if response is None:
-            return None, "Empty response from GLaaS when registering composite artifact"
-
-        return None, "Unexpected response from GLaaS when registering composite artifact"
 
     def _detect_secrets_in_lineage(
         self,
