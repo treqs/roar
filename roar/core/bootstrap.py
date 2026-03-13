@@ -39,6 +39,9 @@ def bootstrap(roar_dir: Path | None = None) -> ServiceContainer:
     # Register core services
     _register_core_services(container, roar_dir)
 
+    # Register built-in integrations that should not depend on plugin discovery.
+    _register_builtin_integrations(container)
+
     # Discover and register plugins
     discover_plugins()
 
@@ -82,6 +85,13 @@ def _register_database_services(container: ServiceContainer, roar_dir: Path) -> 
     # which is created on-demand using create_database_context(roar_dir)
     # Each command/caller creates its own context as needed
     # No global singleton registration needed since contexts are lightweight
+
+
+def _register_builtin_integrations(container: ServiceContainer) -> None:
+    """Register built-in integrations that are part of the core product path."""
+    from ..integrations.git import GitVCSProvider
+
+    container.register_vcs_provider("git", GitVCSProvider)
 
 
 def reset() -> None:

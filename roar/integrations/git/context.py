@@ -7,7 +7,7 @@ from typing import Any
 
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
-from ...plugins.vcs.git import GitVCSProvider
+from .provider import GitVCSProvider
 
 
 def resolve_repo_url_or_local_uri(

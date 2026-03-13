@@ -8,8 +8,7 @@ from pathlib import Path
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
-from ...integrations.git import resolve_git_context
-from ...plugins.vcs.git import GitVCSProvider
+from ...integrations.git import GitVCSProvider, resolve_git_context
 
 
 @dataclass(frozen=True)

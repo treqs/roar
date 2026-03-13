@@ -1,5 +1,5 @@
 """
-Plugin registry with auto-discovery.
+Plugin registry with auto-discovery for optional plugins.
 
 Automatically discovers and registers plugins from:
 1. Built-in plugins in roar.plugins.*
@@ -45,8 +45,8 @@ def _discover_builtin_plugins(container, package_name: str) -> None:
         # Plugins package not yet created
         return
 
-    # Walk through plugin subpackages
-    subpackages = ["cloud", "telemetry", "vcs", "analyzers"]
+    # Walk through optional built-in plugin subpackages
+    subpackages = ["cloud", "telemetry", "analyzers"]
     for subpackage in subpackages:
         try:
             subpkg = importlib.import_module(f"{package_name}.{subpackage}")

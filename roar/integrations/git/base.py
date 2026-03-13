@@ -1,8 +1,4 @@
-"""
-Base VCS provider.
-
-Defines the interface for version control system providers.
-"""
+"""Base VCS provider interface for built-in git integration."""
 
 from abc import abstractmethod
 
@@ -20,7 +16,7 @@ class BaseVCSProvider(IVCSProvider):
     @abstractmethod
     def name(self) -> str:
         """Return the VCS name (e.g., 'git', 'hg')."""
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def get_repo_root(self, path: str | None = None) -> str | None:
@@ -33,7 +29,7 @@ class BaseVCSProvider(IVCSProvider):
         Returns:
             Repository root path, or None if not in a repository
         """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def get_info(self, repo_root: str) -> VCSInfo:
@@ -46,7 +42,7 @@ class BaseVCSProvider(IVCSProvider):
         Returns:
             VCSInfo with commit, branch, status, etc.
         """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def get_status(self, repo_root: str) -> tuple[bool, list[str]]:
@@ -59,7 +55,7 @@ class BaseVCSProvider(IVCSProvider):
         Returns:
             (is_clean, list_of_changes)
         """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def classify_file(self, repo_root: str, path: str) -> str:
@@ -73,7 +69,7 @@ class BaseVCSProvider(IVCSProvider):
         Returns:
             Classification string: 'tracked', 'untracked', 'external', 'site-package'
         """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def is_tracked(self, repo_root: str, path: str) -> bool:
@@ -87,7 +83,7 @@ class BaseVCSProvider(IVCSProvider):
         Returns:
             True if the file is tracked
         """
-        pass
+        raise NotImplementedError
 
     def is_available(self) -> bool:
         """

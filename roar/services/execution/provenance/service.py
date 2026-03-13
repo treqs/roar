@@ -289,8 +289,8 @@ class ProvenanceService:
             vcs = get_container().get_vcs_provider("git")
             vcs_info = vcs.get_info(repo_root)
         except KeyError:
-            # Defensive fallback if plugin bootstrap/registration was skipped.
-            from ....plugins.vcs.git import GitVCSProvider
+            # Defensive fallback if explicit git provider registration was skipped.
+            from ....integrations.git import GitVCSProvider
 
             vcs_info = GitVCSProvider().get_info(repo_root)
 
