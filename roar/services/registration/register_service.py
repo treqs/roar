@@ -20,10 +20,9 @@ from ...application.publish.registration import (
 from ...config import config_get
 from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
-from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...db.context import create_database_context
-from ...filters.omit import OmitFilter, OmitMatch
+from ...filters.omit import OmitFilter
 from ...glaas_client import GlaasClient
 from .blake3_upgrade import upgrade_s3_etags_to_blake3
 from .coordinator import RegistrationCoordinator
@@ -34,6 +33,7 @@ from .job_preparation import (
     refresh_job_artifact_references,
 )
 from .lineage_composites import has_lineage_composites, preregister_lineage_composites_with_glaas
+from .secrets import detect_lineage_secrets, filter_lineage_secrets
 
 
 @dataclass
@@ -138,7 +138,11 @@ class RegisterService:
         omit_filter = self.omit_filter
         detected_secrets: list[str] = []
         if omit_filter:
-            detected_secrets = self._detect_secrets_in_lineage(lineage, git_context)
+            detected_secrets = detect_lineage_secrets(
+                lineage=lineage,
+                git_context=git_context,
+                omit_filter=omit_filter,
+            )
             self._logger.debug("Detected %d potential secret types", len(detected_secrets))
 
             if detected_secrets and not skip_confirmation:
@@ -161,7 +165,10 @@ class RegisterService:
                     )
 
         if detected_secrets or (omit_filter is not None and omit_filter.enabled):
-            lineage = self._filter_lineage_secrets(lineage, git_context)
+            lineage = filter_lineage_secrets(
+                lineage=lineage,
+                omit_filter=omit_filter,
+            )
 
         registration_jobs = order_jobs_for_registration(normalize_jobs_for_registration(lineage.jobs))
 
@@ -270,93 +277,3 @@ class RegisterService:
     @staticmethod
     def _extract_registration_hashes(artifact: dict[str, Any]) -> list[dict[str, str]]:
         return normalize_registration_hashes(artifact, fallback_to_hash=True)
-
-    def _detect_secrets_in_lineage(
-        self,
-        lineage: LineageData,
-        git_context: GitContext,
-    ) -> list[str]:
-        """
-        Detect potential secrets in lineage data without filtering.
-
-        Scans commands, git URLs, and metadata for secrets.
-
-        Args:
-            lineage: Lineage data to scan
-            git_context: Git context to scan
-
-        Returns:
-            List of unique detected secret pattern IDs
-        """
-        if not self.omit_filter:
-            return []
-
-        all_detections: list[OmitMatch] = []
-
-        # Check git URL
-        if git_context.repo:
-            all_detections.extend(self.omit_filter.detect_secrets(git_context.repo, "git_url"))
-
-        # Check each job
-        for job in lineage.jobs:
-            # Check command
-            command = job.get("command", "")
-            if command:
-                all_detections.extend(self.omit_filter.detect_secrets(command, "command"))
-
-            # Check metadata
-            metadata = job.get("metadata")
-            if metadata and isinstance(metadata, str):
-                all_detections.extend(self.omit_filter.detect_secrets(metadata, "metadata"))
-
-        # Return unique pattern IDs
-        return self.omit_filter.get_detection_summary(all_detections)
-
-    def _filter_lineage_secrets(
-        self,
-        lineage: LineageData,
-        git_context: GitContext,
-    ) -> LineageData:
-        """
-        Filter secrets from lineage data.
-
-        Creates a new LineageData with filtered jobs.
-
-        Args:
-            lineage: Original lineage data
-            git_context: Git context (for reference, not modified)
-
-        Returns:
-            New LineageData with filtered jobs
-        """
-        if not self.omit_filter:
-            return lineage
-
-        filtered_jobs = []
-        for job in lineage.jobs:
-            filtered_job = dict(job)  # Shallow copy
-
-            # Filter command
-            command = filtered_job.get("command", "")
-            if command:
-                filtered_command, _ = self.omit_filter.filter_command(command)
-                filtered_job["command"] = filtered_command
-
-            # Filter metadata
-            metadata = filtered_job.get("metadata")
-            if metadata:
-                if isinstance(metadata, str):
-                    filtered_metadata, _ = self.omit_filter.filter_telemetry(metadata)
-                    filtered_job["metadata"] = filtered_metadata
-                elif isinstance(metadata, dict):
-                    filtered_metadata_dict, _ = self.omit_filter.filter_metadata(metadata)
-                    filtered_job["metadata"] = filtered_metadata_dict  # type: ignore[assignment]
-
-            filtered_jobs.append(filtered_job)
-
-        return LineageData(
-            jobs=filtered_jobs,
-            artifacts=lineage.artifacts,
-            artifact_hashes=lineage.artifact_hashes,
-            pipeline=lineage.pipeline,
-        )
