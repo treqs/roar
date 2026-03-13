@@ -113,12 +113,12 @@ def test_register_lineage_target_returns_collection_error(tmp_path: Path) -> Non
 
 def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) -> None:
     db_ctx = MagicMock()
-    db_ctx.sessions.get_active.return_value = {"id": 1}
     put_result = PutResult(success=True, job_id=7, uploaded_files=[], dry_run=False)
     logger = MagicMock()
     git_state = MagicMock(commit="deadbeef", repo_root=tmp_path)
     runtime = MagicMock()
     backend = MagicMock()
+    prepared = MagicMock()
 
     with (
         patch("roar.application.publish.service.bootstrap"),
@@ -129,6 +129,10 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
         ),
         patch("roar.application.publish.service._get_backend", return_value=backend),
         patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
+        patch(
+            "roar.application.publish.service.prepare_put_execution",
+            return_value=prepared,
+        ) as prepare_put,
         patch("roar.application.publish.service.PutService") as mock_put_cls,
         patch("roar.application.publish.service.ensure_clean_publish_repo", return_value=git_state),
         patch(
@@ -136,7 +140,7 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
             return_value=(True, None),
         ),
     ):
-        mock_put_cls.return_value.put.return_value = put_result
+        mock_put_cls.return_value.put_prepared.return_value = put_result
 
         response = put_artifacts(
             PutRequest(
@@ -156,12 +160,21 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
         "destination": "memory://bucket/prefix",
         "repo_root": tmp_path,
         "roar_dir": tmp_path / ".roar",
-        "glaas_client": runtime.glaas_client,
         "lineage_collector": runtime.lineage_collector,
         "registration_coordinator": runtime.registration_coordinator,
-        "session_service": runtime.session_service,
     }
-    mock_put_cls.return_value.put.assert_called_once_with(
+    prepare_put.assert_called_once_with(
+        db_ctx=db_ctx,
+        runtime=runtime,
+        roar_dir=tmp_path / ".roar",
+        repo_root=tmp_path,
+        sources=["model.pt"],
+        destination="memory://bucket/prefix",
+        git_commit="deadbeef",
+        logger=logger,
+    )
+    mock_put_cls.return_value.put_prepared.assert_called_once_with(
+        prepared=prepared,
         sources=["model.pt"],
         message="publish",
         dry_run=False,
@@ -174,15 +187,12 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
 
 
 def test_put_artifacts_rejects_dirty_repo_before_put(tmp_path: Path) -> None:
-    db_ctx = MagicMock()
-    db_ctx.sessions.get_active.return_value = {"id": 1}
-
     with (
         patch("roar.application.publish.service.bootstrap"),
         patch("roar.application.publish.service.get_logger", return_value=MagicMock()),
         patch(
             "roar.application.publish.service.create_database_context",
-            return_value=nullcontext(db_ctx),
+            return_value=nullcontext(MagicMock()),
         ),
         patch("roar.application.publish.service._get_backend", return_value=MagicMock()),
         patch("roar.application.publish.service.PutService") as mock_put_cls,
@@ -203,13 +213,13 @@ def test_put_artifacts_rejects_dirty_repo_before_put(tmp_path: Path) -> None:
             )
         )
 
-    mock_put_cls.return_value.put.assert_not_called()
+    mock_put_cls.return_value.put_prepared.assert_not_called()
 
 
 def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> None:
     db_ctx = MagicMock()
-    db_ctx.sessions.get_active.return_value = {"id": 1}
     put_result = PutResult(success=True, job_id=3, uploaded_files=[], dry_run=False)
+    prepared = MagicMock()
 
     with (
         patch("roar.application.publish.service.bootstrap"),
@@ -219,13 +229,17 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
             return_value=nullcontext(db_ctx),
         ),
         patch("roar.application.publish.service._get_backend", return_value=MagicMock()),
+        patch(
+            "roar.application.publish.service.prepare_put_execution",
+            return_value=prepared,
+        ),
         patch("roar.application.publish.service.PutService") as mock_put_cls,
         patch(
             "roar.application.publish.service.ensure_clean_publish_repo",
             side_effect=RuntimeError("git unavailable"),
         ),
     ):
-        mock_put_cls.return_value.put.return_value = put_result
+        mock_put_cls.return_value.put_prepared.return_value = put_result
 
         response = put_artifacts(
             PutRequest(
@@ -241,3 +255,37 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
     assert response.result is put_result
     assert response.git_tag is None
     assert response.warnings == ["Git operation failed: git unavailable"]
+
+
+def test_put_artifacts_returns_preparation_error_before_service(tmp_path: Path) -> None:
+    db_ctx = MagicMock()
+
+    with (
+        patch("roar.application.publish.service.bootstrap"),
+        patch("roar.application.publish.service.get_logger", return_value=MagicMock()),
+        patch(
+            "roar.application.publish.service.create_database_context",
+            return_value=nullcontext(db_ctx),
+        ),
+        patch("roar.application.publish.service._get_backend", return_value=MagicMock()),
+        patch("roar.application.publish.service.build_publish_runtime", return_value=MagicMock()),
+        patch(
+            "roar.application.publish.service.prepare_put_execution",
+            side_effect=ValueError("No active session"),
+        ),
+        patch("roar.application.publish.service.PutService") as mock_put_cls,
+        pytest.raises(ValueError, match="No active session"),
+    ):
+        put_artifacts(
+            PutRequest(
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                repo_root=tmp_path,
+                sources=["model.pt"],
+                destination="memory://bucket/prefix",
+                message="publish",
+                dry_run=True,
+            )
+        )
+
+    mock_put_cls.return_value.put_prepared.assert_not_called()

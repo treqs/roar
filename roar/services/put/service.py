@@ -1,8 +1,8 @@
 """
 Put service orchestrator.
 
-Coordinates the full put workflow: resolve sources, upload files,
-register lineage with GLaaS, create job record with metadata.
+Executes the put workflow after the application layer has already
+prepared session, git, and source context.
 
 roar put ALWAYS registers lineage with GLaaS. This is not optional.
 """
@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
-from ...application.publish.git import resolve_publish_git_context
 from ...application.publish.lineage import LineageCollector
+from ...application.publish.put_preparation import PreparedPutExecution
 from ...application.publish.registration import (
     CompositeRegistrationCandidate,
     build_lineage_membership_index_payload,
@@ -32,15 +32,13 @@ from ...application.publish.registration import (
     register_publish_lineage,
     resolve_lineage_component_count_total,
 )
-from ...application.publish.session import prepare_publish_session
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...db.context import optional_repo
-from ...glaas_client import GlaasClient, get_glaas_url
+from ...glaas_client import GlaasClient
 from ...services.execution.dataset_identifier import DatasetIdentifierInferer
 from ...services.registration import (
     RegistrationCoordinator,
-    SessionRegistrationService,
     _artifact_ref,
 )
 from ...services.registration._dataset_label import build_dataset_metadata, find_matching_identifier
@@ -52,7 +50,7 @@ from ...services.transfer import (
 )
 from .backends.base import StorageBackend
 from .composite_builder import CompositeArtifactBuilder, CompositeBuildResult
-from .resolver import ResolvedSource, SourceResolver
+from .resolver import ResolvedSource
 
 _AUTO_COMPOSITE_MIN_CONFIDENCE = 0.80
 
@@ -86,13 +84,9 @@ class PutService:
     """
     Orchestrates the put workflow.
 
-    1. Check GLaaS is configured (required)
-    2. Resolve sources to file paths
-    3. Hash files and find/create artifacts
-    4. Upload files to storage backend
-    5. Collect lineage for uploaded artifacts
-    6. Register lineage with GLaaS
-    7. Create job record with inputs and metadata
+    The application layer prepares the session/git/source context first.
+    This service then performs upload, lineage collection, GLaaS registration,
+    and local job/artifact persistence.
     """
 
     def __init__(
@@ -102,10 +96,8 @@ class PutService:
         destination: str,
         repo_root: Path | None = None,
         roar_dir: Path | None = None,
-        glaas_client: GlaasClient | None = None,
         lineage_collector: LineageCollector | None = None,
         registration_coordinator: RegistrationCoordinator | None = None,
-        session_service: SessionRegistrationService | None = None,
         composite_builder: CompositeArtifactBuilder | None = None,
         dataset_identifier_inferer: DatasetIdentifierInferer | None = None,
     ):
@@ -118,10 +110,8 @@ class PutService:
             destination: Destination URL (e.g., s3://bucket/prefix).
             repo_root: Repository root for path resolution.
             roar_dir: Path to .roar directory (for lineage collection).
-            glaas_client: GLaaS client (optional, for testing).
             lineage_collector: Lineage collector (optional, for testing).
             registration_coordinator: Registration coordinator (optional, for testing).
-            session_service: Session registration service (optional, for testing).
             composite_builder: Composite builder (optional, for testing).
             dataset_identifier_inferer: Dataset identifier inferer (optional, for testing).
         """
@@ -132,10 +122,8 @@ class PutService:
         self._roar_dir = Path(roar_dir) if roar_dir else self._repo_root / ".roar"
         self._logger = get_logger()
         # Dependency injection for testing
-        self._glaas_client = glaas_client
         self._lineage_collector = lineage_collector
         self._registration_coordinator = registration_coordinator
-        self._session_service = session_service
         self._composite_builder = composite_builder or CompositeArtifactBuilder()
         self._dataset_identifier_inferer = dataset_identifier_inferer or DatasetIdentifierInferer()
 
@@ -147,8 +135,10 @@ class PutService:
             type(backend).__name__,
         )
 
-    def put(
+    def put_prepared(
         self,
+        *,
+        prepared: PreparedPutExecution,
         sources: list[str],
         message: str,
         dry_run: bool = False,
@@ -173,75 +163,36 @@ class PutService:
             FileNotFoundError: If source files don't exist.
         """
         self._logger.debug(
-            "put() called: sources=%s, message=%r, dry_run=%s, git_commit=%s, git_tag=%s",
+            "put_prepared() called: sources=%s, message=%r, dry_run=%s, git_commit=%s, git_tag=%s",
             sources,
             message,
             dry_run,
             git_commit,
             git_tag,
         )
+        client = prepared.glaas_client
+        session_id = prepared.session_id
+        session_hash = prepared.session_hash
+        git_context = prepared.git_context
+        resolved = prepared.resolved_sources
+        destination_type = prepared.destination_type
+        composite_source_type = prepared.composite_source_type
 
-        # Check GLaaS is configured (required for put)
-        glaas_url = get_glaas_url()
-        self._logger.debug("GLaaS URL: %s", glaas_url)
-        if not glaas_url:
-            raise ValueError(
-                "GLaaS is not configured. Run 'roar config set glaas.url <url>' to configure."
-            )
-
-        # Get or create GLaaS client
-        client = self._glaas_client or GlaasClient(glaas_url)
-
-        # Check for active session
-        active_session = self._db.sessions.get_active()
-        if active_session is None:
-            raise ValueError("No active session")
-
-        session_id = active_session["id"]
-        self._logger.debug("Active session: id=%s", session_id)
-
-        # Get git context for registration
-        git_context = self._get_git_context(git_commit)
+        self._logger.debug("Prepared session: id=%s, hash=%s", session_id, session_hash[:12])
         self._logger.debug(
             "Git context: repo=%s, commit=%s, branch=%s",
             git_context.repo,
             git_context.commit,
             git_context.branch,
         )
-
-        session_service = self._session_service or SessionRegistrationService(client)
-        publish_session = prepare_publish_session(
-            glaas_client=client,
-            session_service=session_service,
-            roar_dir=self._roar_dir,
-            session_id=session_id,
-            git_context=git_context,
-            logger=self._logger,
-            register_with_glaas=True,
-        )
-        session_hash = publish_session.session_hash
-
-        # Resolve sources to files
-        resolver = SourceResolver(
-            repo_root=self._repo_root,
-            session_repo=self._db.sessions,
-            job_repo=self._db.jobs,
-        )
-        self._logger.debug("Resolving sources: %s", sources)
-        resolved = resolver.resolve(sources)
         self._logger.debug("Resolved %d source file(s)", len(resolved))
-
-        destination_type = self._destination_type()
-        composite_source_type = (
-            destination_type if destination_type in {"s3", "gs", "https"} else None
-        )
 
         if dry_run:
             self._logger.debug("Dry run mode — skipping upload and registration")
             return PutResult(
                 success=True,
                 session_hash=session_hash,
-                session_url=publish_session.session_url,
+                session_url=prepared.session_url,
                 dry_run=True,
                 would_upload=[{"path": str(r.path), "exists": r.exists} for r in resolved],
             )
@@ -333,7 +284,7 @@ class PutService:
         # Prepare artifacts for registration (add session_hash)
         uploaded_artifacts = self._build_uploaded_artifacts_for_registration(
             uploads,
-            normalize_registration_source_type(self._destination_type()),
+            normalize_registration_source_type(destination_type),
         )
         prepared_artifacts = prepare_batch_registration_artifacts(
             uploaded_artifacts + lineage.artifacts,
@@ -474,7 +425,7 @@ class PutService:
                 job_id=job_id,
                 job_uid=job_uid,
                 session_hash=session_hash,
-                session_url=publish_session.session_url,
+                session_url=prepared.session_url,
                 uploaded_files=uploaded_files,
                 composites_registered=composite_registrations,
                 error=registration_error,
@@ -490,7 +441,7 @@ class PutService:
             job_id=job_id,
             job_uid=job_uid,
             session_hash=session_hash,
-            session_url=publish_session.session_url,
+            session_url=prepared.session_url,
             uploaded_files=uploaded_files,
             composites_registered=composite_registrations,
         )
@@ -955,14 +906,6 @@ class PutService:
         )
         return artifact_id
 
-    def _get_git_context(self, git_commit: str | None = None) -> GitContext:
-        """Get git context from repository."""
-        return resolve_publish_git_context(
-            self._repo_root,
-            logger=self._logger,
-            git_commit=git_commit,
-        )
-
     def _build_composite_payloads(
         self,
         resolved: list[ResolvedSource],
@@ -995,10 +938,6 @@ class PutService:
             if result:
                 results.append(result)
         return results
-
-    def _destination_type(self) -> str:
-        parsed = urlparse(self._destination)
-        return parsed.scheme.lower()
 
     def _infer_dataset_identifiers(
         self,
@@ -1075,34 +1014,6 @@ class PutService:
                 grouped[parent] = sources
 
         return grouped
-
-    def _expand_implicit_composite_roots(
-        self,
-        resolved: list[ResolvedSource],
-        resolver: SourceResolver,
-    ) -> list[ResolvedSource]:
-        """
-        Expand composite-root directory outputs into file leaves for upload/hash steps.
-
-        Composite outputs from implicit/session source resolution are directory roots.
-        The put pipeline operates on file leaves, so composite roots are expanded here.
-        """
-        expanded: list[ResolvedSource] = []
-        for source in resolved:
-            if source.artifact_kind == "composite" and source.path.is_dir():
-                expanded.extend(resolver.resolve([str(source.path)]))
-                continue
-            expanded.append(source)
-
-        deduped: list[ResolvedSource] = []
-        seen_paths: set[str] = set()
-        for source in expanded:
-            key = str(source.path)
-            if key in seen_paths:
-                continue
-            seen_paths.add(key)
-            deduped.append(source)
-        return deduped
 
     def _persist_local_composite_registration(
         self,

@@ -17,6 +17,7 @@ from ...services.registration.register_service import RegisterResult, RegisterSe
 from ...services.transfer import load_backend_class, resolve_backend_for_scheme
 from .collection import collect_register_lineage
 from .git import build_publish_tag_name, create_publish_git_tag, ensure_clean_publish_repo
+from .put_preparation import prepare_put_execution
 from .requests import (
     PutRequest,
     PutResponse,
@@ -80,10 +81,6 @@ def put_artifacts(request: PutRequest) -> PutResponse:
     repo_root = request.repo_root or request.cwd
 
     with create_database_context(request.roar_dir) as db_ctx:
-        active_session = db_ctx.sessions.get_active()
-        if not active_session:
-            raise ValueError("No active session. Run 'roar init' first.")
-
         runtime = build_publish_runtime(glaas_url=get_glaas_url())
         service = PutService(
             db_context=db_ctx,
@@ -91,10 +88,8 @@ def put_artifacts(request: PutRequest) -> PutResponse:
             destination=request.destination,
             repo_root=repo_root,
             roar_dir=request.roar_dir,
-            glaas_client=runtime.glaas_client,
             lineage_collector=runtime.lineage_collector,
             registration_coordinator=runtime.registration_coordinator,
-            session_service=runtime.session_service,
         )
 
         git_state = None
@@ -117,7 +112,19 @@ def put_artifacts(request: PutRequest) -> PutResponse:
                 logger.debug("Git operation failed during put preflight: %s", exc)
                 warnings.append(f"Git operation failed: {exc}")
 
-        result = service.put(
+        prepared = prepare_put_execution(
+            db_ctx=db_ctx,
+            runtime=runtime,
+            roar_dir=request.roar_dir,
+            repo_root=repo_root,
+            sources=request.sources,
+            destination=request.destination,
+            git_commit=git_commit,
+            logger=logger,
+        )
+
+        result = service.put_prepared(
+            prepared=prepared,
             sources=request.sources,
             message=request.message,
             dry_run=request.dry_run,
