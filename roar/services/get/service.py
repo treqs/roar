@@ -134,44 +134,22 @@ class GetService:
         force: bool = False,
     ) -> GetTransferResult:
         """Download a single file."""
-        pending = self._prepare_pending_download(
-            remote_key=self._source.key,
-            remote_url=self._source.original_url,
-            local_path=self._resolve_destination(destination, self._source.filename),
-            force=force,
-        )
+        pending_downloads = [
+            self._prepare_pending_download(
+                remote_key=self._source.key,
+                remote_url=self._source.original_url,
+                local_path=self._resolve_destination(destination, self._source.filename),
+                force=force,
+            )
+        ]
 
         if dry_run:
-            return GetTransferResult(
-                success=True,
-                dry_run=True,
-                would_download=[self._build_dry_run_entry(pending)],
-            )
+            return self._build_dry_run_result(pending_downloads)
 
-        try:
-            self._download_to_tmp(pending)
-
-            file_hash = self._hash_files_batch([pending.tmp_path])[str(pending.tmp_path)]
-            file_size = pending.tmp_path.stat().st_size
-
-            if expected_hash and file_hash != expected_hash:
-                pending.tmp_path.unlink()
-                return GetTransferResult(
-                    success=False,
-                    error=(f"Hash mismatch: expected {expected_hash}, got {file_hash}"),
-                )
-
-            self._finalize_download(pending)
-        except Exception as e:
-            self._cleanup_tmp_files([pending])
-            self._logger.debug(
-                "Single-file get failed for %s: %s", pending.remote_key, e
-            )
-            raise
-
-        return GetTransferResult(
-            success=True,
-            downloaded_files=[self._build_downloaded_file_entry(pending, file_hash, file_size)],
+        return self._execute_pending_downloads(
+            pending_downloads,
+            failure_context=f"Single-file get failed for {self._source.key}",
+            expected_hash=expected_hash,
         )
 
     def _get_prefix(
@@ -193,64 +171,23 @@ class GetService:
 
         self._logger.debug("Found %d key(s) under prefix", len(keys))
 
+        pending_downloads = [
+            self._prepare_pending_download(
+                remote_key=key,
+                remote_url=self._build_remote_url(key),
+                local_path=destination / self._relative_to_prefix(key, prefix),
+                force=force,
+                relative_key=self._relative_to_prefix(key, prefix),
+            )
+            for key in keys
+        ]
+
         if dry_run:
-            would_download = [
-                self._build_dry_run_entry(
-                    _PendingDownload(
-                        remote_key=key,
-                        remote_url=self._build_remote_url(key),
-                        local_path=destination / self._relative_to_prefix(key, prefix),
-                        tmp_path=Path(),
-                        relative_key=self._relative_to_prefix(key, prefix),
-                    )
-                )
-                for key in keys
-            ]
-            return GetTransferResult(
-                success=True,
-                dry_run=True,
-                would_download=would_download,
-            )
+            return self._build_dry_run_result(pending_downloads)
 
-        downloaded_files: list[dict[str, Any]] = []
-        pending_downloads: list[_PendingDownload] = []
-        try:
-            for key in keys:
-                relative = self._relative_to_prefix(key, prefix)
-                pending_downloads.append(
-                    self._prepare_pending_download(
-                        remote_key=key,
-                        remote_url=self._build_remote_url(key),
-                        local_path=destination / relative,
-                        force=force,
-                        relative_key=relative,
-                    )
-                )
-                self._download_to_tmp(pending_downloads[-1])
-
-            hashes_by_tmp_path = self._hash_files_batch(
-                [entry.tmp_path for entry in pending_downloads]
-            )
-
-            for entry in pending_downloads:
-                key = str(entry.tmp_path)
-                if key not in hashes_by_tmp_path:
-                    raise OSError(f"Failed to hash downloaded file: {entry.tmp_path}")
-
-                file_hash = hashes_by_tmp_path[key]
-                file_size = entry.tmp_path.stat().st_size
-                self._finalize_download(entry)
-                downloaded_files.append(
-                    self._build_downloaded_file_entry(entry, file_hash, file_size)
-                )
-        except Exception as e:
-            self._cleanup_tmp_files(pending_downloads)
-            self._logger.debug("Prefix get failed for %s: %s", prefix, e)
-            raise
-
-        return GetTransferResult(
-            success=True,
-            downloaded_files=downloaded_files,
+        return self._execute_pending_downloads(
+            pending_downloads,
+            failure_context=f"Prefix get failed for {prefix}",
         )
 
     def _prepare_pending_download(
@@ -308,6 +245,61 @@ class GetService:
         if pending.relative_key is not None:
             file_info["relative_key"] = pending.relative_key
         return file_info
+
+    def _build_dry_run_result(
+        self,
+        pending_downloads: list[_PendingDownload],
+    ) -> GetTransferResult:
+        return GetTransferResult(
+            success=True,
+            dry_run=True,
+            would_download=[
+                self._build_dry_run_entry(pending) for pending in pending_downloads
+            ],
+        )
+
+    def _execute_pending_downloads(
+        self,
+        pending_downloads: list[_PendingDownload],
+        *,
+        failure_context: str,
+        expected_hash: str | None = None,
+    ) -> GetTransferResult:
+        downloaded_files: list[dict[str, Any]] = []
+        try:
+            for pending in pending_downloads:
+                self._download_to_tmp(pending)
+
+            hashes_by_tmp_path = self._hash_files_batch(
+                [entry.tmp_path for entry in pending_downloads]
+            )
+
+            for entry in pending_downloads:
+                key = str(entry.tmp_path)
+                if key not in hashes_by_tmp_path:
+                    raise OSError(f"Failed to hash downloaded file: {entry.tmp_path}")
+
+                file_hash = hashes_by_tmp_path[key]
+                file_size = entry.tmp_path.stat().st_size
+                if expected_hash and file_hash != expected_hash:
+                    entry.tmp_path.unlink()
+                    return GetTransferResult(
+                        success=False,
+                        error=(f"Hash mismatch: expected {expected_hash}, got {file_hash}"),
+                    )
+                self._finalize_download(entry)
+                downloaded_files.append(
+                    self._build_downloaded_file_entry(entry, file_hash, file_size)
+                )
+        except Exception as e:
+            self._cleanup_tmp_files(pending_downloads)
+            self._logger.debug("%s: %s", failure_context, e)
+            raise
+
+        return GetTransferResult(
+            success=True,
+            downloaded_files=downloaded_files,
+        )
 
     @staticmethod
     def _cleanup_tmp_files(pending_downloads: list[_PendingDownload]) -> None:
