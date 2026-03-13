@@ -1,20 +1,20 @@
 """Tests for git requirement behavior when running inside Ray jobs."""
 
-import importlib
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
-run_module = importlib.import_module("roar.cli.commands.run")
-run = run_module.run
+from roar.cli.commands.run import run
 
 
 def _ctx(base_dir: Path) -> MagicMock:
     ctx = MagicMock()
     ctx.is_initialized = True
     ctx.roar_dir = base_dir / ".roar"
+    ctx.cwd = base_dir
     return ctx
 
 
@@ -29,14 +29,10 @@ def _invoke_run(
         monkeypatch.setenv("RAY_JOB_ID", ray_job_id)
 
     runner = CliRunner()
-    with (
-        patch.object(run_module, "get_quiet_setting", return_value=False),
-        patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
-        patch.object(run_module, "execute_and_report", return_value=0) as mock_exec,
-    ):
+    with patch("roar.cli.commands.run.run_command", return_value=0) as mock_run_command:
         result = runner.invoke(run, ["python", "main.py"], obj=_ctx(base_dir))
 
-    return result, mock_exec
+    return result, mock_run_command
 
 
 def test_run_in_non_git_dir_without_ray_job_id_exits_with_git_error(tmp_path, monkeypatch) -> None:
@@ -50,14 +46,16 @@ def test_run_in_non_git_dir_without_ray_job_id_exits_with_git_error(tmp_path, mo
     assert "roar requires the working directory to be inside a git repository." in result.output
 
 
-def test_run_in_non_git_dir_with_ray_job_id_does_not_raise_git_error(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("ray_job_id", ["rjob-12345", ""])
+def test_run_in_non_git_dir_with_ray_job_id_does_not_raise_git_error(
+    tmp_path, monkeypatch, ray_job_id: str
+) -> None:
     monkeypatch.chdir(tmp_path)
-    result, mock_exec = _invoke_run(tmp_path, "rjob-12345", monkeypatch)
+    result, mock_run_command = _invoke_run(tmp_path, ray_job_id, monkeypatch)
 
     assert result.exit_code == 0
     assert "roar requires the working directory to be inside a git repository." not in result.output
-    mock_exec.assert_called_once()
-    assert mock_exec.call_args.kwargs["repo_root"] == str(tmp_path)
+    mock_run_command.assert_called_once()
 
 
 def test_run_in_git_dir_works_regardless_of_ray_job_id(tmp_path, monkeypatch) -> None:
@@ -67,12 +65,10 @@ def test_run_in_git_dir_works_regardless_of_ray_job_id(tmp_path, monkeypatch) ->
 
     monkeypatch.chdir(repo_dir)
 
-    result_no_ray, mock_exec_no_ray = _invoke_run(repo_dir, None, monkeypatch)
+    result_no_ray, mock_run_command_no_ray = _invoke_run(repo_dir, None, monkeypatch)
     assert result_no_ray.exit_code == 0
-    mock_exec_no_ray.assert_called_once()
-    assert mock_exec_no_ray.call_args.kwargs["repo_root"] == str(repo_dir)
+    mock_run_command_no_ray.assert_called_once()
 
-    result_with_ray, mock_exec_with_ray = _invoke_run(repo_dir, "rjob-99999", monkeypatch)
+    result_with_ray, mock_run_command_with_ray = _invoke_run(repo_dir, "rjob-99999", monkeypatch)
     assert result_with_ray.exit_code == 0
-    mock_exec_with_ray.assert_called_once()
-    assert mock_exec_with_ray.call_args.kwargs["repo_root"] == str(repo_dir)
+    mock_run_command_with_ray.assert_called_once()

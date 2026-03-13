@@ -5,20 +5,12 @@ Usage: roar run [options] <command>
        roar run @N [--param=value ...]
 """
 
-import shlex
-
 import click
 
+from ...application.run import RunRequest, run_command
 from ...core.tracer_modes import TRACER_MODE_VALUES
-from ...execution.framework.planning import plan_execution_command
 from ..context import RoarContext
 from ..decorators import require_init
-from ._execution import (
-    execute_and_report,
-    get_hash_algorithms,
-    get_quiet_setting,
-    validate_git_clean,
-)
 
 
 @click.command(
@@ -76,137 +68,26 @@ def run(
         click.echo(_get_help_text())
         return
 
-    # Parse out any roar-specific options from args
-    command: list[str] = []
-    dag_reference: str | None = None
-    param_overrides: dict[str, str] = {}
-
-    i = 0
-    while i < len(args_list):
-        arg = args_list[i]
-
-        # Check for DAG reference
-        if arg.startswith("@") and dag_reference is None:
-            dag_reference = arg
-            i += 1
-            continue
-
-        # Check for parameter overrides (only after DAG reference)
-        if dag_reference and arg.startswith("--") and "=" in arg:
-            key, value = arg[2:].split("=", 1)
-            param_overrides[key] = value
-            i += 1
-            continue
-
-        # Regular argument
-        command.append(arg)
-        i += 1
-
-    # Validate git is clean
-    repo_root = validate_git_clean()
-
-    # Get quiet setting
-    quiet_setting = get_quiet_setting(quiet, repo_root)
-
-    # Get hash algorithms
-    algorithms = get_hash_algorithms(list(hash_algorithms) if hash_algorithms else None)
-
-    # Handle DAG reference
-    if dag_reference:
-        resolved_command, is_build = _resolve_dag_reference(
-            ctx, dag_reference, param_overrides, repo_root
+    try:
+        exit_code = run_command(
+            RunRequest(
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                args=tuple(args_list),
+                quiet=quiet,
+                step_name=step_name,
+                tracer_mode=tracer_mode,
+                tracer_fallback=tracer_fallback,
+                hash_algorithms=tuple(hash_algorithms),
+            )
         )
-        if resolved_command is None:
-            return  # Error already printed
-
-        command = shlex.split(resolved_command)
-        job_type = "build" if is_build else None
-    else:
-        if not command:
+    except ValueError as exc:
+        if str(exc) == "No command specified":
             click.echo(_get_help_text())
-            raise click.ClickException("No command specified")
-        job_type = None
-
-    planned = plan_execution_command(command)
-    backend_name = planned.backend_name
-    execution_role = str(planned.execution_role or "").strip()
-    if not execution_role:
-        raise click.ClickException(
-            f"Execution backend '{backend_name}' did not provide an execution role."
-        )
-    command = planned.command
-    finalize_run = planned.finalize_run
-
-    # Execute and report
-    exit_code = execute_and_report(
-        ctx=ctx,
-        backend_name=backend_name,
-        execution_role=execution_role,
-        command=command,
-        job_type=job_type,
-        step_name=step_name,
-        quiet=quiet_setting,
-        hash_algorithms=algorithms,
-        repo_root=repo_root,
-        tracer_mode=tracer_mode,
-        tracer_fallback=tracer_fallback,
-    )
-
-    if finalize_run:
-        finalize_run(ctx)
+        raise click.ClickException(str(exc)) from exc
 
     if exit_code != 0:
         raise SystemExit(exit_code)
-
-
-def _resolve_dag_reference(
-    ctx: RoarContext,
-    reference: str,
-    param_overrides: dict[str, str],
-    repo_root: str,
-) -> tuple[str | None, bool]:
-    """
-    Resolve @N or @BN reference to a command.
-
-    Returns:
-        Tuple of (command_string, is_build) or (None, False) on error
-    """
-    from ...db.context import create_database_context
-    from ...presenters.console import ConsolePresenter
-    from ...presenters.run_report import RunReportPresenter
-    from ...services.execution.dag_resolver import DAGReferenceResolver
-
-    with create_database_context(ctx.roar_dir) as db_ctx:
-        resolver = DAGReferenceResolver(
-            db_ctx.sessions,
-            db_ctx.jobs,
-            db_ctx.artifacts,
-            db_ctx.lineage,
-            db_ctx.session_service,
-        )
-        resolved, error = resolver.resolve(reference, param_overrides)
-
-        if error:
-            raise click.ClickException(error)
-
-        if resolved is None:
-            raise click.ClickException(f"Could not resolve DAG reference: {reference}")
-
-        # Check for stale upstream and warn
-        if resolved.stale_upstream:
-            presenter = ConsolePresenter()
-            report = RunReportPresenter(presenter)
-            if not report.show_upstream_stale_warning(
-                resolved.step_number, resolved.stale_upstream
-            ):
-                click.echo("Aborted.")
-                return None, False
-            click.echo("")
-
-        click.echo(f"Re-running @{resolved.step_number}: {resolved.command}")
-        click.echo("")
-
-        return resolved.command, resolved.is_build
 
 
 def _get_help_text() -> str:

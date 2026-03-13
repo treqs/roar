@@ -1,26 +1,22 @@
-"""Integration tests for ray job submit interception in `roar run`."""
+"""Integration tests for ray job submit interception in the run application service."""
 
-import importlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from click.testing import CliRunner
-
-from roar.cli.commands.run import run
-
-run_module = importlib.import_module("roar.cli.commands.run")
+from roar.application.run.requests import RunRequest
+from roar.application.run.service import run_command
 
 
-def _ctx() -> MagicMock:
-    obj = MagicMock()
-    obj.is_initialized = True
-    obj.roar_dir = Path("/tmp/repo/.roar")
-    return obj
+def _request(*args: str) -> RunRequest:
+    return RunRequest(
+        roar_dir=Path("/tmp/repo/.roar"),
+        cwd=Path("/tmp/repo"),
+        args=tuple(args),
+    )
 
 
 def test_run_with_ray_job_submit_calls_rewrite() -> None:
-    runner = CliRunner()
     original_command = [
         "ray",
         "job",
@@ -49,12 +45,11 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
     ]
 
     with (
-        patch.object(run_module, "validate_git_clean", return_value="/tmp/repo"),
-        patch.object(run_module, "get_quiet_setting", return_value=False),
-        patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
-        patch.object(
-            run_module,
-            "plan_execution_command",
+        patch("roar.application.run.service.validate_git_clean", return_value="/tmp/repo"),
+        patch("roar.application.run.service.get_quiet_setting", return_value=False),
+        patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
+        patch(
+            "roar.application.run.service.plan_execution_command",
             return_value=SimpleNamespace(
                 backend_name="ray",
                 command=rewritten_command,
@@ -63,11 +58,11 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
                 finalize_run=None,
             ),
         ) as mock_rewrite,
-        patch.object(run_module, "execute_and_report", return_value=0) as mock_exec,
+        patch("roar.application.run.service.execute_and_report", return_value=0) as mock_exec,
     ):
-        result = runner.invoke(run, original_command, obj=_ctx())
+        result = run_command(_request(*original_command))
 
-    assert result.exit_code == 0
+    assert result == 0
     mock_rewrite.assert_called_once_with(original_command)
     assert mock_exec.call_args.kwargs["backend_name"] == "ray"
     assert mock_exec.call_args.kwargs["execution_role"] == "submit"
@@ -75,15 +70,12 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
 
 
 def test_run_with_non_ray_command_does_not_call_rewrite() -> None:
-    runner = CliRunner()
-
     with (
-        patch.object(run_module, "validate_git_clean", return_value="/tmp/repo"),
-        patch.object(run_module, "get_quiet_setting", return_value=False),
-        patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
-        patch.object(
-            run_module,
-            "plan_execution_command",
+        patch("roar.application.run.service.validate_git_clean", return_value="/tmp/repo"),
+        patch("roar.application.run.service.get_quiet_setting", return_value=False),
+        patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
+        patch(
+            "roar.application.run.service.plan_execution_command",
             return_value=SimpleNamespace(
                 backend_name="local",
                 command=["python", "main.py"],
@@ -92,11 +84,11 @@ def test_run_with_non_ray_command_does_not_call_rewrite() -> None:
                 finalize_run=None,
             ),
         ) as mock_rewrite,
-        patch.object(run_module, "execute_and_report", return_value=0) as mock_exec,
+        patch("roar.application.run.service.execute_and_report", return_value=0) as mock_exec,
     ):
-        result = runner.invoke(run, ["python", "main.py"], obj=_ctx())
+        result = run_command(_request("python", "main.py"))
 
-    assert result.exit_code == 0
+    assert result == 0
     mock_rewrite.assert_called_once_with(["python", "main.py"])
     assert mock_exec.call_args.kwargs["backend_name"] == "local"
     assert mock_exec.call_args.kwargs["execution_role"] == "host"
@@ -104,8 +96,6 @@ def test_run_with_non_ray_command_does_not_call_rewrite() -> None:
 
 
 def test_run_with_ray_job_submit_triggers_post_run_finalizer() -> None:
-    runner = CliRunner()
-    ctx = _ctx()
     original_command = [
         "ray",
         "job",
@@ -136,12 +126,11 @@ def test_run_with_ray_job_submit_triggers_post_run_finalizer() -> None:
     finalizer = MagicMock()
 
     with (
-        patch.object(run_module, "validate_git_clean", return_value="/tmp/repo"),
-        patch.object(run_module, "get_quiet_setting", return_value=False),
-        patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
-        patch.object(
-            run_module,
-            "plan_execution_command",
+        patch("roar.application.run.service.validate_git_clean", return_value="/tmp/repo"),
+        patch("roar.application.run.service.get_quiet_setting", return_value=False),
+        patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
+        patch(
+            "roar.application.run.service.plan_execution_command",
             return_value=SimpleNamespace(
                 backend_name="ray",
                 command=rewritten_command,
@@ -150,9 +139,10 @@ def test_run_with_ray_job_submit_triggers_post_run_finalizer() -> None:
                 finalize_run=finalizer,
             ),
         ),
-        patch.object(run_module, "execute_and_report", return_value=0),
+        patch("roar.application.run.service.execute_and_report", return_value=0),
     ):
-        result = runner.invoke(run, original_command, obj=ctx)
+        result = run_command(_request(*original_command))
 
-    assert result.exit_code == 0
-    finalizer.assert_called_once_with(ctx)
+    assert result == 0
+    finalizer.assert_called_once()
+    assert finalizer.call_args.args[0].roar_dir == Path("/tmp/repo/.roar")
