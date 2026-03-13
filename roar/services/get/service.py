@@ -31,6 +31,17 @@ class GetTransferResult:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class _PendingDownload:
+    """Internal download plan for a single file."""
+
+    remote_key: str
+    remote_url: str
+    local_path: Path
+    tmp_path: Path
+    relative_key: str | None = None
+
+
 class GetService:
     """
     Executes `get` transfer mechanics.
@@ -123,70 +134,44 @@ class GetService:
         force: bool = False,
     ) -> GetTransferResult:
         """Download a single file."""
-        remote_key = self._source.key
-
-        # Determine final path
-        final_path = self._resolve_destination(destination, self._source.filename)
-
-        # Check if file exists
-        if final_path.exists() and not force:
-            raise FileExistsError(
-                f"Destination already exists: {final_path}. Use --force to overwrite."
-            )
+        pending = self._prepare_pending_download(
+            remote_key=self._source.key,
+            remote_url=self._source.original_url,
+            local_path=self._resolve_destination(destination, self._source.filename),
+            force=force,
+        )
 
         if dry_run:
             return GetTransferResult(
                 success=True,
                 dry_run=True,
-                would_download=[
-                    {
-                        "remote_url": self._source.original_url,
-                        "local_path": str(final_path),
-                    }
-                ],
+                would_download=[self._build_dry_run_entry(pending)],
             )
 
-        # Download to temp file, then move
-        final_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = final_path.with_suffix(final_path.suffix + ".roar_tmp")
-
         try:
-            self._backend.download(remote_key, tmp_path)
+            self._download_to_tmp(pending)
 
-            # Hash the downloaded file
-            file_hash = self._hash_files_batch([tmp_path])[str(tmp_path)]
-            file_size = tmp_path.stat().st_size
+            file_hash = self._hash_files_batch([pending.tmp_path])[str(pending.tmp_path)]
+            file_size = pending.tmp_path.stat().st_size
 
-            # Verify hash if expected
             if expected_hash and file_hash != expected_hash:
-                tmp_path.unlink()
+                pending.tmp_path.unlink()
                 return GetTransferResult(
                     success=False,
                     error=(f"Hash mismatch: expected {expected_hash}, got {file_hash}"),
                 )
 
-            # Move to final destination
-            if final_path.exists():
-                final_path.unlink()
-            tmp_path.rename(final_path)
-
+            self._finalize_download(pending)
         except Exception as e:
-            # Clean up tmp file on error
-            if tmp_path.exists():
-                tmp_path.unlink()
-            self._logger.debug("Single-file get failed for %s: %s", remote_key, e)
+            self._cleanup_tmp_files([pending])
+            self._logger.debug(
+                "Single-file get failed for %s: %s", pending.remote_key, e
+            )
             raise
-
-        file_info = {
-            "remote_url": self._source.original_url,
-            "local_path": str(final_path),
-            "hash": file_hash,
-            "size": file_size,
-        }
 
         return GetTransferResult(
             success=True,
-            downloaded_files=[file_info],
+            downloaded_files=[self._build_downloaded_file_entry(pending, file_hash, file_size)],
         )
 
     def _get_prefix(
@@ -209,79 +194,57 @@ class GetService:
         self._logger.debug("Found %d key(s) under prefix", len(keys))
 
         if dry_run:
-            would_download = []
-            for key in keys:
-                relative = self._relative_to_prefix(key, prefix)
-                local_path = destination / relative
-                remote_url = f"{self._source.scheme}://{self._source.bucket}/{key}"
-                would_download.append({"remote_url": remote_url, "local_path": str(local_path)})
+            would_download = [
+                self._build_dry_run_entry(
+                    _PendingDownload(
+                        remote_key=key,
+                        remote_url=self._build_remote_url(key),
+                        local_path=destination / self._relative_to_prefix(key, prefix),
+                        tmp_path=Path(),
+                        relative_key=self._relative_to_prefix(key, prefix),
+                    )
+                )
+                for key in keys
+            ]
             return GetTransferResult(
                 success=True,
                 dry_run=True,
                 would_download=would_download,
             )
 
-        # Download each file then hash all files in one batch.
         downloaded_files: list[dict[str, Any]] = []
-        pending_downloads: list[dict[str, Any]] = []
+        pending_downloads: list[_PendingDownload] = []
         try:
             for key in keys:
                 relative = self._relative_to_prefix(key, prefix)
-                local_path = destination / relative
-
-                if local_path.exists() and not force:
-                    raise FileExistsError(
-                        f"Destination already exists: {local_path}. Use --force to overwrite."
-                    )
-
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                tmp_path = local_path.with_suffix(local_path.suffix + ".roar_tmp")
-                self._backend.download(key, tmp_path)
-                remote_url = f"{self._source.scheme}://{self._source.bucket}/{key}"
                 pending_downloads.append(
-                    {
-                        "tmp_path": tmp_path,
-                        "local_path": local_path,
-                        "remote_url": remote_url,
-                        "relative_key": relative,
-                    }
+                    self._prepare_pending_download(
+                        remote_key=key,
+                        remote_url=self._build_remote_url(key),
+                        local_path=destination / relative,
+                        force=force,
+                        relative_key=relative,
+                    )
                 )
+                self._download_to_tmp(pending_downloads[-1])
 
             hashes_by_tmp_path = self._hash_files_batch(
-                [entry["tmp_path"] for entry in pending_downloads]
+                [entry.tmp_path for entry in pending_downloads]
             )
 
             for entry in pending_downloads:
-                tmp_path = entry["tmp_path"]
-                local_path = entry["local_path"]
-                remote_url = entry["remote_url"]
-                relative = entry["relative_key"]
-                key = str(tmp_path)
+                key = str(entry.tmp_path)
                 if key not in hashes_by_tmp_path:
-                    raise OSError(f"Failed to hash downloaded file: {tmp_path}")
+                    raise OSError(f"Failed to hash downloaded file: {entry.tmp_path}")
 
                 file_hash = hashes_by_tmp_path[key]
-                file_size = tmp_path.stat().st_size
-
-                if local_path.exists():
-                    local_path.unlink()
-                tmp_path.rename(local_path)
-
+                file_size = entry.tmp_path.stat().st_size
+                self._finalize_download(entry)
                 downloaded_files.append(
-                    {
-                        "remote_url": remote_url,
-                        "local_path": str(local_path),
-                        "hash": file_hash,
-                        "size": file_size,
-                        "relative_key": relative,
-                    }
+                    self._build_downloaded_file_entry(entry, file_hash, file_size)
                 )
         except Exception as e:
-            # Clean up any pending temp files on failure.
-            for entry in pending_downloads:
-                tmp_path = entry["tmp_path"]
-                if tmp_path.exists():
-                    tmp_path.unlink()
+            self._cleanup_tmp_files(pending_downloads)
             self._logger.debug("Prefix get failed for %s: %s", prefix, e)
             raise
 
@@ -289,6 +252,71 @@ class GetService:
             success=True,
             downloaded_files=downloaded_files,
         )
+
+    def _prepare_pending_download(
+        self,
+        *,
+        remote_key: str,
+        remote_url: str,
+        local_path: Path,
+        force: bool,
+        relative_key: str | None = None,
+    ) -> _PendingDownload:
+        if local_path.exists() and not force:
+            raise FileExistsError(
+                f"Destination already exists: {local_path}. Use --force to overwrite."
+            )
+
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = local_path.with_suffix(local_path.suffix + ".roar_tmp")
+        return _PendingDownload(
+            remote_key=remote_key,
+            remote_url=remote_url,
+            local_path=local_path,
+            tmp_path=tmp_path,
+            relative_key=relative_key,
+        )
+
+    def _download_to_tmp(self, pending: _PendingDownload) -> None:
+        self._backend.download(pending.remote_key, pending.tmp_path)
+
+    @staticmethod
+    def _finalize_download(pending: _PendingDownload) -> None:
+        if pending.local_path.exists():
+            pending.local_path.unlink()
+        pending.tmp_path.rename(pending.local_path)
+
+    @staticmethod
+    def _build_dry_run_entry(pending: _PendingDownload) -> dict[str, str]:
+        return {
+            "remote_url": pending.remote_url,
+            "local_path": str(pending.local_path),
+        }
+
+    @staticmethod
+    def _build_downloaded_file_entry(
+        pending: _PendingDownload,
+        file_hash: str,
+        file_size: int,
+    ) -> dict[str, Any]:
+        file_info: dict[str, Any] = {
+            "remote_url": pending.remote_url,
+            "local_path": str(pending.local_path),
+            "hash": file_hash,
+            "size": file_size,
+        }
+        if pending.relative_key is not None:
+            file_info["relative_key"] = pending.relative_key
+        return file_info
+
+    @staticmethod
+    def _cleanup_tmp_files(pending_downloads: list[_PendingDownload]) -> None:
+        for pending in pending_downloads:
+            if pending.tmp_path.exists():
+                pending.tmp_path.unlink()
+
+    def _build_remote_url(self, key: str) -> str:
+        return f"{self._source.scheme}://{self._source.bucket}/{key}"
 
     def _resolve_destination(self, destination: Path, filename: str) -> Path:
         """Resolve the final destination path for a single file download."""
