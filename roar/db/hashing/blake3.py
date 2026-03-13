@@ -1,27 +1,10 @@
-"""Shared transfer-layer utilities for get/put services."""
+"""Convenience helpers for BLAKE3 hashing operations."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol
 
-from ...db.hashing.backend import compute_hashes_batch
-
-
-class DatabaseContext(Protocol):
-    """Protocol for database context dependency."""
-
-    @property
-    def artifacts(self) -> Any: ...
-
-    @property
-    def jobs(self) -> Any: ...
-
-    @property
-    def sessions(self) -> Any: ...
-
-    @property
-    def labels(self) -> Any: ...
+from .backend import compute_hashes_batch
 
 
 def hash_files_blake3(paths: list[Path]) -> dict[str, str]:

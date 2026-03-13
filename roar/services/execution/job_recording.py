@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlparse
 
 from ...db.context import optional_repo
+from ...db.hashing import hash_files_blake3
 from ..registration._dataset_label import build_dataset_metadata, find_matching_identifier
-from ..transfer import hash_files_blake3
 from .dataset_identifier import DatasetIdentifierInferer
 
 if TYPE_CHECKING:
