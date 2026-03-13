@@ -230,7 +230,7 @@ class EntityLookupService:
         """Look up artifact on GLaaS."""
         try:
             from ...core.exceptions import GlaasApiError
-            from ...glaas_client import GlaasClient
+            from ...integrations.glaas import GlaasClient
 
             glaas = GlaasClient()
             if not glaas.is_configured():

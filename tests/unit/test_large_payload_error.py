@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from roar.glaas_client import GlaasClient
+from roar.integrations.glaas import GlaasClient
 from roar.services.registration.artifact import ArtifactRegistrationService
 from roar.services.registration.job import (
     JobRegistrationService,

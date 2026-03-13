@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 def _get_logger():
-    from roar.core.logging import get_logger
+    from ...core.logging import get_logger
 
     return get_logger()
 

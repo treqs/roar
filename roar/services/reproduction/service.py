@@ -23,7 +23,7 @@ from .pipeline_executor import PipelineExecutor
 
 if TYPE_CHECKING:
     from ...core.interfaces.presenter import IPresenter
-    from ...glaas_client import GlaasClient
+    from ...integrations.glaas import GlaasClient
 
 
 class ReproductionService:
@@ -395,7 +395,7 @@ class ReproductionService:
         client = self._glaas
 
         if server_url and not client:
-            from ...glaas_client import GlaasClient
+            from ...integrations.glaas import GlaasClient
 
             client = GlaasClient(server_url)
 

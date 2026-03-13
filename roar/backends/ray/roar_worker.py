@@ -25,7 +25,7 @@ from roar.backends.ray.config import load_ray_backend_config
 from roar.backends.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
 from roar.execution.cluster.proxy_config import local_proxy_endpoint, local_proxy_port_from_env
 from roar.execution.fragments.transport import emit_fragment_dicts
-from roar.glaas.fragment_streamer import GlaasFragmentStreamer
+from roar.integrations.glaas import GlaasFragmentStreamer
 
 IOEvent = collections.namedtuple(
     "IOEvent",

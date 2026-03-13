@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
-from ...glaas_client import GlaasClient
+from ...integrations.glaas import GlaasClient
 from ..git import resolve_roar_git_context
 from .datasets import (
     detect_additional_publish_composite_roots,

@@ -92,14 +92,14 @@ def ray_job_submit_available() -> bool:
 
 @pytest.fixture
 def glaas_client(glaas_url: str):
-    from roar.glaas_client import GlaasClient
+    from roar.integrations.glaas import GlaasClient
 
     return GlaasClient(glaas_url)
 
 
 @pytest.fixture(scope="module")
 def glaas_session_read_available(glaas_url: str) -> bool:
-    from roar.glaas_client import make_auth_header
+    from roar.integrations.glaas import make_auth_header
 
     session_hash = "0" * 64
     api_path = f"/api/v1/sessions/{session_hash}"

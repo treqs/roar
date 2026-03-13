@@ -17,7 +17,7 @@ from ...core.interfaces.registration import (
 )
 from ...core.logging import get_logger
 from ...core.validation import validate_session_registration
-from ...glaas_client import GlaasClient
+from ...integrations.glaas import GlaasClient
 
 
 class SessionRegistrationService(ISessionRegistrar):

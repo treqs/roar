@@ -19,7 +19,7 @@ from roar.core.interfaces.registration import (
     JobLinkResult,
     JobRegistrationResult,
 )
-from roar.glaas_client import GlaasClient
+from roar.integrations.glaas import GlaasClient
 from roar.integrations.storage import MemoryBackend
 from roar.services.put.service import PutService
 

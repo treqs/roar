@@ -8,7 +8,7 @@ from typing import Protocol
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext, SessionRegistrationResult
-from ...glaas_client import GlaasClient
+from ...integrations.glaas import GlaasClient
 
 
 class PublishSessionService(Protocol):

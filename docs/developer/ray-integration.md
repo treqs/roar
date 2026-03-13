@@ -160,7 +160,7 @@ This path still matters for nested `ray.init(...)` inside already instrumented j
 
 - `roar/execution/fragments/sessions.py`
   - Owns fragment-session key generation and on-disk storage.
-- `roar/glaas/fragment_streamer.py`
+- `roar/integrations/glaas/fragment_streamer.py`
   - Buffers fragments, encrypts batches, and posts them to GLaaS.
 - `roar/execution/fragments/transport.py`
   - Centralizes "stream to GLaaS or fall back locally" behavior.

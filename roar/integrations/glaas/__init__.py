@@ -9,9 +9,13 @@ from .auth import (
     make_auth_header,
     sign_payload,
 )
+from .client import GlaasClient
+from .fragment_streamer import GlaasFragmentStreamer
 from .transport import parse_json_response, request_json
 
 __all__ = [
+    "GlaasClient",
+    "GlaasFragmentStreamer",
     "compute_pubkey_fingerprint",
     "create_signature_payload",
     "find_ssh_private_key",

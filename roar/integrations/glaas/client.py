@@ -5,12 +5,12 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from .glaas import auth as _auth
-from .glaas.transport import parse_json_response, request_json
+from . import auth as _auth
+from .transport import parse_json_response, request_json
 
 
 def _get_logger():
-    from .core.logging import get_logger
+    from ...core.logging import get_logger
 
     return get_logger()
 
@@ -89,7 +89,7 @@ class GlaasClient:
             GlaasConnectionError: If connection to server fails
             GlaasApiError: If server returns non-200 status
         """
-        from .core.exceptions import (
+        from ...core.exceptions import (
             GlaasApiError,
             GlaasConnectionError,
             GlaasNotConfiguredError,
@@ -234,7 +234,7 @@ class GlaasClient:
         Raises:
             GlaasError: If request fails (connection, auth, or API error)
         """
-        from .core.exceptions import GlaasApiError
+        from ...core.exceptions import GlaasApiError
 
         result, error = self._request("GET", f"/api/v1/artifacts/{hash_prefix}")
         if error:
@@ -493,7 +493,7 @@ class GlaasClient:
         may still send ``artifact_id`` (historical misnomer). The GLaaS API
         ``jobArtifactBatchSchema`` expects ``hash``.
         """
-        mapped: list[dict] = []
+        mapped: list[dict[str, Any]] = []
         for a in artifacts:
             artifact_hash = a.get("artifact_hash", a.get("artifact_id", a.get("hash", "")))
             entry: dict[str, Any] = {

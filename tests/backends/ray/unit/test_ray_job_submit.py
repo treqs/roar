@@ -311,7 +311,7 @@ def test_no_glaas_url_configured_only_instrumentation_env_var_is_injected(monkey
 
 def test_blank_glaas_url_does_not_enable_fragment_session(monkeypatch) -> None:
     module = _module()
-    glaas_client = importlib.import_module("roar.glaas_client")
+    glaas_client = importlib.import_module("roar.integrations.glaas")
 
     monkeypatch.setattr(module, "_resolve_roar_requirement", lambda: "roar-cli==8.0.0")
     monkeypatch.setattr(glaas_client, "get_glaas_url", lambda: "")

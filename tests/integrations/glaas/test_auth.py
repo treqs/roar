@@ -1,4 +1,4 @@
-from roar.glaas.auth import get_glaas_url
+from roar.integrations.glaas import get_glaas_url
 
 
 def test_get_glaas_url_prefers_env_over_config(monkeypatch):

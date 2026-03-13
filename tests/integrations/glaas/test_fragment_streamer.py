@@ -8,7 +8,7 @@ import urllib.request
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from roar.glaas.fragment_streamer import GlaasFragmentStreamer
+from roar.integrations.glaas import GlaasFragmentStreamer
 
 
 class _FakeHttpResponse:

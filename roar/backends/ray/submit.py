@@ -18,7 +18,7 @@ from roar.execution.fragments.sessions import (
 )
 from roar.execution.fragments.sessions import save_fragment_session as save_key
 from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV, ExecutionCommandPlan
-from roar.glaas_client import GlaasClient
+from roar.integrations.glaas import GlaasClient
 
 _ROAR_WORKER_SETUP_HOOK = "roar.execution.runtime.worker_bootstrap.startup"
 _ROAR_DRIVER_ENTRYPOINT_MODULE = "roar.execution.runtime.driver_entrypoint"
@@ -256,7 +256,7 @@ def _resolve_roar_requirement() -> str:
 
 
 def _resolve_glaas_url() -> str | None:
-    from roar.glaas_client import get_glaas_url
+    from roar.integrations.glaas import get_glaas_url
 
     url = get_glaas_url()
     if url is None:

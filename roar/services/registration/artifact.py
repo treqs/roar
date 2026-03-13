@@ -15,7 +15,7 @@ from ...core.interfaces.registration import (
 )
 from ...core.logging import get_logger
 from ...core.validation import validate_artifact_registration
-from ...glaas_client import GlaasClient
+from ...integrations.glaas import GlaasClient
 from . import _artifact_ref
 
 # Server body-parser limit is ~100KB, use 90KB for safety margin

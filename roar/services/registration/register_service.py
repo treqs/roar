@@ -23,7 +23,7 @@ from ...core.interfaces.logger import ILogger
 from ...core.logging import get_logger
 from ...db.context import create_database_context
 from ...filters.omit import OmitFilter
-from ...glaas_client import GlaasClient
+from ...integrations.glaas import GlaasClient
 from .blake3_upgrade import upgrade_s3_etags_to_blake3
 from .coordinator import RegistrationCoordinator
 from .job_preparation import (

@@ -10,7 +10,7 @@ from typing import Any
 
 
 def _get_logger():
-    from ..core.logging import get_logger
+    from ...core.logging import get_logger
 
     return get_logger()
 

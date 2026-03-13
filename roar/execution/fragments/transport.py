@@ -4,7 +4,7 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 
-from roar.glaas.fragment_streamer import GlaasFragmentStreamer
+from roar.integrations.glaas import GlaasFragmentStreamer
 
 FragmentLocalMerge = Callable[[list[dict[str, Any]], str, str | None], None]
 FragmentLocalFallback = Callable[[], None]

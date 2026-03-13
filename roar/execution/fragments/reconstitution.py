@@ -6,7 +6,7 @@ import click
 
 from roar.execution.fragments.sessions import load_fragment_session
 from roar.execution.framework.registry import get_execution_backend
-from roar.glaas_client import get_glaas_url
+from roar.integrations.glaas import get_glaas_url
 
 if TYPE_CHECKING:
     from roar.cli.context import RoarContext

@@ -7,7 +7,7 @@ from typing import Any
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
-from ...glaas_client import GlaasClient
+from ...integrations.glaas import GlaasClient
 from ...services.labels import collect_label_sync_payloads
 
 _VALID_REMOTE_SOURCE_TYPES = {"s3", "gs", "https"}

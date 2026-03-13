@@ -14,7 +14,7 @@ from ...application.publish.registration import (
 )
 from ...core.interfaces.logger import ILogger
 from ...db.context import optional_repo
-from ...glaas_client import GlaasClient
+from ...integrations.glaas import GlaasClient
 from .blake3_upgrade import ensure_artifact_blake3_digest, select_hash_by_algorithm
 
 

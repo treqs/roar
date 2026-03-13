@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from roar.glaas_client import make_auth_header
+from roar.integrations.glaas import make_auth_header
 
 pytestmark = pytest.mark.live_glaas
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from ...core.bootstrap import bootstrap
 from ...core.logging import get_logger
 from ...db.context import create_database_context
-from ...glaas_client import get_glaas_url
+from ...integrations.glaas import get_glaas_url
 from ...integrations.storage import resolve_publish_storage_backend
 from ...services.put import PutService
 from ...services.registration.register_service import RegisterResult, RegisterService

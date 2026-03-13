@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from ...config import load_config
 from ...core.bootstrap import bootstrap
-from ...glaas_client import GlaasClient
+from ...integrations.glaas import GlaasClient
 from ...presenters.console import ConsolePresenter
 from ...services.reproduction import PipelineExecutor, ReproductionService
 from ...services.reproduction.pipeline_metadata import PipelineMetadataParser

@@ -16,7 +16,7 @@ from roar.core.exceptions import (
     GlaasConnectionError,
     GlaasNotConfiguredError,
 )
-from roar.glaas_client import GlaasClient
+from roar.integrations.glaas import GlaasClient
 
 
 class TestGlaasClientExceptions:
@@ -25,7 +25,7 @@ class TestGlaasClientExceptions:
     def test_health_check_raises_not_configured_when_no_url(self):
         """health_check should raise GlaasNotConfiguredError when URL is missing."""
         # Must patch get_glaas_url since GlaasClient falls back to it
-        with patch("roar.glaas_client.get_glaas_url", return_value=None):
+        with patch("roar.integrations.glaas.client.get_glaas_url", return_value=None):
             client = GlaasClient(base_url=None)
 
             with pytest.raises(GlaasNotConfiguredError) as exc_info:
@@ -128,7 +128,7 @@ class TestOptionalAuth:
         client = GlaasClient(base_url="http://localhost:9999")
 
         with (
-            patch("roar.glaas_client.make_auth_header", return_value=None),
+            patch("roar.integrations.glaas.client.make_auth_header", return_value=None),
             patch("urllib.request.urlopen") as mock_urlopen,
         ):
             mock_response = MagicMock()
@@ -152,7 +152,7 @@ class TestOptionalAuth:
         client = GlaasClient(base_url="http://localhost:9999")
 
         with (
-            patch("roar.glaas_client.make_auth_header", return_value="SSH-SIG test-signature"),
+            patch("roar.integrations.glaas.client.make_auth_header", return_value="SSH-SIG test-signature"),
             patch("urllib.request.urlopen") as mock_urlopen,
         ):
             mock_response = MagicMock()
@@ -184,7 +184,7 @@ class TestOptionalAuth:
         unauthorized.read = MagicMock(return_value=b'{"detail":"Unauthorized"}')
 
         with (
-            patch("roar.glaas_client.make_auth_header", return_value="SSH-SIG test-signature"),
+            patch("roar.integrations.glaas.client.make_auth_header", return_value="SSH-SIG test-signature"),
             patch("urllib.request.urlopen") as mock_urlopen,
         ):
             mock_response = MagicMock()
@@ -228,7 +228,7 @@ class TestOptionalAuth:
         forbidden.read = MagicMock(return_value=b'{"detail":"Forbidden"}')
 
         with (
-            patch("roar.glaas_client.make_auth_header", return_value="SSH-SIG test-signature"),
+            patch("roar.integrations.glaas.client.make_auth_header", return_value="SSH-SIG test-signature"),
             patch("urllib.request.urlopen") as mock_urlopen,
         ):
             mock_urlopen.side_effect = [unauthorized, forbidden]
