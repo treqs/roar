@@ -24,6 +24,99 @@ class CompositeRegistrationCandidate:
     payload: dict[str, Any]
 
 
+def normalize_registration_hashes(
+    artifact: dict[str, Any],
+    *,
+    fallback_to_hash: bool = False,
+) -> list[dict[str, str]]:
+    """Normalize artifact hashes for GLaaS registration payloads."""
+    normalized_hashes: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    raw_hashes = artifact.get("hashes")
+    if isinstance(raw_hashes, list):
+        for entry in raw_hashes:
+            if not isinstance(entry, dict):
+                continue
+            algorithm = entry.get("algorithm")
+            digest = entry.get("digest")
+            if not isinstance(algorithm, str) or not isinstance(digest, str):
+                continue
+            algorithm_value = algorithm.strip().lower()
+            digest_value = digest.strip().lower()
+            if not algorithm_value or not digest_value:
+                continue
+            key = f"{algorithm_value}:{digest_value}"
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized_hashes.append(
+                {
+                    "algorithm": algorithm_value,
+                    "digest": digest_value,
+                }
+            )
+
+    if not normalized_hashes and fallback_to_hash:
+        hash_value = artifact.get("hash")
+        if isinstance(hash_value, str) and hash_value.strip():
+            algorithm = (
+                "composite-blake3"
+                if str(artifact.get("kind") or "").strip().lower() == "composite"
+                else "blake3"
+            )
+            normalized_hashes.append(
+                {
+                    "algorithm": algorithm,
+                    "digest": hash_value.strip().lower(),
+                }
+            )
+
+    return normalized_hashes
+
+
+def prepare_batch_registration_artifacts(
+    artifacts: list[dict[str, Any]],
+    session_hash: str,
+    *,
+    fallback_to_hash: bool = False,
+    prefer_blake3_first: bool = False,
+) -> list[dict[str, Any]]:
+    """Prepare artifact payloads for the GLaaS batch registration endpoint."""
+    prepared: list[dict[str, Any]] = []
+
+    for artifact in artifacts:
+        hashes = normalize_registration_hashes(artifact, fallback_to_hash=fallback_to_hash)
+        if not hashes:
+            continue
+
+        if prefer_blake3_first:
+            blake3_hashes = [h for h in hashes if h["algorithm"] == "blake3"]
+            other_hashes = [h for h in hashes if h["algorithm"] != "blake3"]
+            hashes = blake3_hashes + other_hashes
+
+        if artifact.get("kind") == "composite" or any(
+            h.get("algorithm") == "composite-blake3" for h in hashes
+        ):
+            continue
+
+        try:
+            size = max(0, int(artifact.get("size", 0)))
+        except (TypeError, ValueError):
+            size = 0
+
+        prepared.append(
+            {
+                "hashes": hashes,
+                "size": size,
+                "source_type": normalize_registration_source_type(artifact.get("source_type")),
+                "session_hash": session_hash,
+            }
+        )
+
+    return prepared
+
+
 def register_publish_lineage(
     *,
     coordinator: Any,

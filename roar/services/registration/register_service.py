@@ -33,7 +33,9 @@ from ...application.publish.registration import (
     CompositeRegistrationCandidate,
     ensure_composite_hash_entry,
     extract_composite_digest,
+    normalize_registration_hashes,
     normalize_registration_source_type,
+    prepare_batch_registration_artifacts,
     preregister_lineage_composites,
     register_publish_lineage,
 )
@@ -669,7 +671,12 @@ class RegisterService:
                     session_hash=session_hash,
                     git_context=git_context,
                     jobs=registration_jobs,
-                    artifacts=self._prepare_artifacts(lineage.artifacts, session_hash),
+                    artifacts=prepare_batch_registration_artifacts(
+                        lineage.artifacts,
+                        session_hash,
+                        fallback_to_hash=True,
+                        prefer_blake3_first=True,
+                    ),
                     db_ctx=db_ctx,
                     session_id=session_id,
                     label_artifacts=lineage.artifacts,
@@ -681,7 +688,12 @@ class RegisterService:
                 session_hash=session_hash,
                 git_context=git_context,
                 jobs=registration_jobs,
-                artifacts=self._prepare_artifacts(lineage.artifacts, session_hash),
+                artifacts=prepare_batch_registration_artifacts(
+                    lineage.artifacts,
+                    session_hash,
+                    fallback_to_hash=True,
+                    prefer_blake3_first=True,
+                ),
                 db_ctx=None,
                 session_id=None,
                 label_artifacts=lineage.artifacts,
@@ -1243,40 +1255,6 @@ class RegisterService:
                 return digest
         return None
 
-    def _prepare_artifacts(self, artifacts: list[dict], session_hash: str) -> list[dict]:
-        """Prepare artifacts for registration with required fields."""
-        prepared = []
-        for art in artifacts:
-            normalized_hashes = self._extract_registration_hashes(art)
-
-            # Prefer blake3 first when present while preserving remaining order.
-            blake3_hashes = [h for h in normalized_hashes if h["algorithm"] == "blake3"]
-            other_hashes = [h for h in normalized_hashes if h["algorithm"] != "blake3"]
-            ordered_hashes = blake3_hashes + other_hashes
-
-            if not ordered_hashes:
-                continue
-
-            if art.get("kind") == "composite" or any(
-                h.get("algorithm") == "composite-blake3" for h in ordered_hashes
-            ):
-                continue
-
-            try:
-                size = max(0, int(art.get("size", 0)))
-            except (TypeError, ValueError):
-                size = 0
-
-            prepared.append(
-                {
-                    "hashes": ordered_hashes,
-                    "size": size,
-                    "source_type": normalize_registration_source_type(art.get("source_type")),
-                    "session_hash": session_hash,
-                }
-            )
-        return prepared
-
     def _register_lineage_composites_with_glaas(
         self,
         *,
@@ -1584,49 +1562,7 @@ class RegisterService:
 
     @staticmethod
     def _extract_registration_hashes(artifact: dict[str, Any]) -> list[dict[str, str]]:
-        normalized_hashes: list[dict[str, str]] = []
-        seen: set[str] = set()
-
-        raw_hashes = artifact.get("hashes")
-        if isinstance(raw_hashes, list):
-            for entry in raw_hashes:
-                if not isinstance(entry, dict):
-                    continue
-                algorithm = entry.get("algorithm")
-                digest = entry.get("digest")
-                if not isinstance(algorithm, str) or not isinstance(digest, str):
-                    continue
-                algorithm_value = algorithm.strip().lower()
-                digest_value = digest.strip().lower()
-                if not algorithm_value or not digest_value:
-                    continue
-                key = f"{algorithm_value}:{digest_value}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                normalized_hashes.append(
-                    {
-                        "algorithm": algorithm_value,
-                        "digest": digest_value,
-                    }
-                )
-
-        if not normalized_hashes:
-            hash_value = artifact.get("hash")
-            if isinstance(hash_value, str) and hash_value.strip():
-                algorithm = (
-                    "composite-blake3"
-                    if str(artifact.get("kind") or "").strip().lower() == "composite"
-                    else "blake3"
-                )
-                normalized_hashes.append(
-                    {
-                        "algorithm": algorithm,
-                        "digest": hash_value.strip().lower(),
-                    }
-                )
-
-        return normalized_hashes
+        return normalize_registration_hashes(artifact, fallback_to_hash=True)
 
     def _detect_secrets_in_lineage(
         self,

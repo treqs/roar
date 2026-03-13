@@ -4,7 +4,9 @@ from unittest.mock import MagicMock, patch
 
 from roar.application.publish.registration import (
     CompositeRegistrationCandidate,
+    normalize_registration_hashes,
     normalize_registration_source_type,
+    prepare_batch_registration_artifacts,
     preregister_lineage_composites,
     register_publish_lineage,
     sync_publish_labels,
@@ -177,3 +179,77 @@ def test_normalize_registration_source_type_accepts_only_remote_sources() -> Non
     assert normalize_registration_source_type(" https ") == "https"
     assert normalize_registration_source_type("local") is None
     assert normalize_registration_source_type(None) is None
+
+
+def test_normalize_registration_hashes_deduplicates_and_optionally_falls_back() -> None:
+    assert normalize_registration_hashes(
+        {
+            "hashes": [
+                {"algorithm": "BLAKE3", "digest": "A" * 64},
+                {"algorithm": "blake3", "digest": "a" * 64},
+                {"algorithm": "", "digest": "ignored"},
+            ]
+        }
+    ) == [{"algorithm": "blake3", "digest": "a" * 64}]
+    assert normalize_registration_hashes({"hash": "B" * 64}) == []
+    assert normalize_registration_hashes({"hash": "B" * 64}, fallback_to_hash=True) == [
+        {"algorithm": "blake3", "digest": "b" * 64}
+    ]
+
+
+def test_prepare_batch_registration_artifacts_filters_composites_and_prefers_blake3() -> None:
+    prepared = prepare_batch_registration_artifacts(
+        [
+            {
+                "kind": "composite",
+                "hashes": [{"algorithm": "composite-blake3", "digest": "c" * 64}],
+                "size": 11,
+                "source_type": "local",
+            },
+            {
+                "hashes": [
+                    {"algorithm": "etag", "digest": "etag-digest-1"},
+                    {"algorithm": "blake3", "digest": "B" * 64},
+                ],
+                "size": "100",
+                "source_type": "S3",
+            },
+        ],
+        "session-1",
+        prefer_blake3_first=True,
+    )
+
+    assert prepared == [
+        {
+            "hashes": [
+                {"algorithm": "blake3", "digest": "b" * 64},
+                {"algorithm": "etag", "digest": "etag-digest-1"},
+            ],
+            "size": 100,
+            "source_type": "s3",
+            "session_hash": "session-1",
+        }
+    ]
+
+
+def test_prepare_batch_registration_artifacts_uses_hash_fallback_when_requested() -> None:
+    prepared = prepare_batch_registration_artifacts(
+        [
+            {
+                "hash": "d" * 64,
+                "size": 9,
+                "source_type": "local",
+            }
+        ],
+        "session-1",
+        fallback_to_hash=True,
+    )
+
+    assert prepared == [
+        {
+            "hashes": [{"algorithm": "blake3", "digest": "d" * 64}],
+            "size": 9,
+            "source_type": None,
+            "session_hash": "session-1",
+        }
+    ]

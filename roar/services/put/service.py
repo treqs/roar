@@ -23,8 +23,10 @@ from ...application.publish.registration import (
     CompositeRegistrationCandidate,
     ensure_composite_hash_entry,
     extract_composite_digest,
+    normalize_registration_hashes,
     normalize_registration_source_type,
     parse_composite_registration_response,
+    prepare_batch_registration_artifacts,
     preregister_lineage_composites,
     register_publish_lineage,
 )
@@ -331,8 +333,9 @@ class PutService:
             uploads,
             normalize_registration_source_type(self._destination_type()),
         )
-        prepared_artifacts = self._prepare_artifacts_for_registration(
-            uploaded_artifacts + lineage.artifacts, session_hash
+        prepared_artifacts = prepare_batch_registration_artifacts(
+            uploaded_artifacts + lineage.artifacts,
+            session_hash or "",
         )
         self._logger.debug("Prepared %d artifact(s) for registration", len(prepared_artifacts))
 
@@ -489,40 +492,6 @@ class PutService:
             uploaded_files=uploaded_files,
             composites_registered=composite_registrations,
         )
-
-    def _prepare_artifacts_for_registration(
-        self, artifacts: list[dict], session_hash: str | None
-    ) -> list[dict]:
-        """Prepare artifacts for registration with required fields."""
-        prepared = []
-        for art in artifacts:
-            hashes = self._extract_registration_hashes(art)
-            if not hashes:
-                continue
-
-            # Composites from lineage are references to already-registered artifacts.
-            # They must not be re-registered via the batch endpoint (which lacks
-            # composite metadata creation).  Fresh composites go through
-            # _register_composites_with_glaas() separately.
-            if any(h.get("algorithm") == "composite-blake3" for h in hashes):
-                continue
-
-            source_type = normalize_registration_source_type(art.get("source_type"))
-            try:
-                size = int(art.get("size", 0))
-            except (TypeError, ValueError):
-                size = 0
-            size = max(0, size)
-
-            prepared.append(
-                {
-                    "hashes": hashes,
-                    "size": size,
-                    "source_type": source_type,
-                    "session_hash": session_hash or "",
-                }
-            )
-        return prepared
 
     @staticmethod
     def _build_uploaded_artifacts_for_registration(
@@ -943,34 +912,7 @@ class PutService:
 
     @staticmethod
     def _extract_registration_hashes(artifact: dict[str, Any]) -> list[dict[str, str]]:
-        normalized_hashes: list[dict[str, str]] = []
-        seen: set[str] = set()
-
-        raw_hashes = artifact.get("hashes")
-        if isinstance(raw_hashes, list):
-            for entry in raw_hashes:
-                if not isinstance(entry, dict):
-                    continue
-                algorithm = entry.get("algorithm")
-                digest = entry.get("digest")
-                if not isinstance(algorithm, str) or not isinstance(digest, str):
-                    continue
-                algorithm_value = algorithm.strip().lower()
-                digest_value = digest.strip().lower()
-                if not algorithm_value or not digest_value:
-                    continue
-                key = f"{algorithm_value}:{digest_value}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                normalized_hashes.append(
-                    {
-                        "algorithm": algorithm_value,
-                        "digest": digest_value,
-                    }
-                )
-
-        return normalized_hashes
+        return normalize_registration_hashes(artifact)
 
     @staticmethod
     def _collect_local_composite_outputs(
