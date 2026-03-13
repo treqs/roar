@@ -9,14 +9,19 @@ roar put ALWAYS registers lineage with GLaaS. This is not optional.
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
 from ...application.publish.composite_builder import CompositeArtifactBuilder, CompositeBuildResult
+from ...application.publish.composites import build_publish_composite_results
 from ...application.publish.lineage import LineageCollector
+from ...application.publish.metadata import (
+    build_local_publish_composite_metadata_json,
+    build_publish_composite_dataset_metadata_json,
+    build_put_operation_metadata_json,
+)
 from ...application.publish.put_preparation import PreparedPutExecution
 from ...application.publish.registration import (
     CompositeRegistrationCandidate,
@@ -31,7 +36,6 @@ from ...application.publish.registration import (
     register_publish_lineage,
     resolve_lineage_component_count_total,
 )
-from ...application.publish.source_resolution import ResolvedSource
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...db.context import optional_repo
@@ -41,11 +45,8 @@ from ...services.registration import (
     RegistrationCoordinator,
     _artifact_ref,
 )
-from ...services.registration._dataset_label import build_dataset_metadata, find_matching_identifier
-from ...services.registration._dataset_profile import build_dataset_profile
 from ...services.transfer import (
     DatabaseContext,
-    build_operation_metadata_json,
     hash_files_blake3,
 )
 from .job_links import (
@@ -325,13 +326,13 @@ class PutService:
         )
 
         # Register directory composites after primitive artifacts exist in GLaaS.
-        composite_results = self._build_composite_payloads(
-            resolved=resolved,
+        composite_results = build_publish_composite_results(
+            resolved_sources=resolved,
             hashes_by_path=hashes_by_path,
             session_hash=session_hash or "",
             source_type=composite_source_type,
-            dataset_identifiers=dataset_identifiers,
             additional_composite_roots=additional_composite_roots,
+            composite_builder=self._composite_builder,
         )
         composite_registrations = self._register_composites_with_glaas(
             client,
@@ -345,8 +346,9 @@ class PutService:
         command = f'roar put {source_str} -m "{message}"'
 
         # Build metadata
-        metadata_json = self._build_put_metadata(
+        metadata_json = build_put_operation_metadata_json(
             message=message,
+            destination=self._destination,
             destination_type=destination_type,
             artifact_urls=artifact_urls,
             composite_registrations=composite_registrations,
@@ -354,6 +356,7 @@ class PutService:
             dataset_identifiers=dataset_identifiers,
             git_commit=git_commit,
             git_tag=git_tag,
+            timestamp=time.time(),
         )
 
         # Create job record
@@ -558,7 +561,7 @@ class PutService:
             )
 
             seen_hashes.add(composite_digest)
-            metadata_json = self._build_composite_dataset_metadata_json(
+            metadata_json = build_publish_composite_dataset_metadata_json(
                 root_path=str(_artifact_ref.artifact_path(artifact) or ""),
                 dataset_identifiers=dataset_identifiers,
                 artifact_metadata=artifact.get("metadata"),
@@ -727,37 +730,6 @@ class PutService:
         )
         return artifact_id
 
-    def _build_composite_payloads(
-        self,
-        resolved: list[ResolvedSource],
-        hashes_by_path: dict[str, str],
-        session_hash: str,
-        source_type: str | None,
-        dataset_identifiers: list[dict[str, Any]],
-        additional_composite_roots: dict[Path, list[ResolvedSource]],
-    ) -> list[CompositeBuildResult]:
-        grouped_by_root: dict[Path, list[ResolvedSource]] = {}
-        for source in resolved:
-            if source.source_root is None:
-                continue
-            grouped_by_root.setdefault(source.source_root, []).append(source)
-
-        for root_path, sources in additional_composite_roots.items():
-            grouped_by_root.setdefault(root_path, sources)
-
-        results: list[CompositeBuildResult] = []
-        for root_path in sorted(grouped_by_root, key=lambda item: str(item)):
-            result = self._composite_builder.build_for_root(
-                root_path=root_path,
-                resolved_sources=grouped_by_root[root_path],
-                hashes_by_path=hashes_by_path,
-                session_hash=session_hash,
-                source_type=source_type,
-            )
-            if result:
-                results.append(result)
-        return results
-
     def _persist_local_composite_registration(
         self,
         composite: CompositeBuildResult,
@@ -770,26 +742,10 @@ class PutService:
             return None
 
         try:
-            meta_dict: dict[str, Any] = {
-                "composite": {
-                    "root_path": composite.root_path,
-                    "component_count_total": composite.component_count_total,
-                    "component_count_stored": composite.component_count_stored,
-                }
-            }
-            profile = build_dataset_profile(
-                list(composite.payload.get("components") or []),
-                total_components=composite.component_count_total,
+            metadata = build_local_publish_composite_metadata_json(
+                composite=composite,
+                dataset_identifiers=dataset_identifiers,
             )
-            if dataset_identifiers:
-                matching = find_matching_identifier(composite.root_path, dataset_identifiers)
-                if matching is not None:
-                    meta_dict["dataset"] = build_dataset_metadata(matching)
-            if profile is not None:
-                dataset_meta = meta_dict.setdefault("dataset", {})
-                if isinstance(dataset_meta, dict):
-                    dataset_meta["profile"] = profile
-            metadata = json.dumps(meta_dict)
             local_artifact_id, _created = artifacts_repo.register(
                 hashes={"composite-blake3": composite.digest},
                 size=int(composite.payload.get("size") or 0),
@@ -813,67 +769,6 @@ class PutService:
             )
             return str(exc)
 
-    def _build_composite_dataset_metadata_json(
-        self,
-        root_path: str,
-        dataset_identifiers: list[dict[str, Any]] | None,
-        artifact_metadata: Any = None,
-        components: list[dict[str, Any]] | None = None,
-        component_count_total: int | None = None,
-    ) -> str | None:
-        """Build serialized composite metadata containing a normalized dataset label."""
-        dataset_metadata = self._extract_dataset_metadata_from_artifact_metadata(artifact_metadata)
-        derived_profile = build_dataset_profile(
-            components or [],
-            total_components=component_count_total,
-        )
-
-        if dataset_metadata is None and dataset_identifiers:
-            matching = find_matching_identifier(root_path, dataset_identifiers)
-            if matching is not None:
-                extracted = build_dataset_metadata(matching)
-                if extracted:
-                    dataset_metadata = extracted
-
-        if dataset_metadata is None and derived_profile is None:
-            return None
-
-        if dataset_metadata is None:
-            dataset_metadata = {}
-
-        if derived_profile is not None:
-            dataset_metadata["profile"] = derived_profile
-
-        return json.dumps({"dataset": dataset_metadata}, separators=(",", ":"))
-
-    @staticmethod
-    def _extract_dataset_metadata_from_artifact_metadata(
-        artifact_metadata: Any,
-    ) -> dict[str, Any] | None:
-        parsed_metadata: dict[str, Any] | None = None
-
-        if isinstance(artifact_metadata, dict):
-            parsed_metadata = artifact_metadata
-        elif isinstance(artifact_metadata, str):
-            try:
-                parsed = json.loads(artifact_metadata)
-            except (TypeError, ValueError):
-                parsed = None
-            if isinstance(parsed, dict):
-                parsed_metadata = parsed
-
-        if parsed_metadata is None:
-            return None
-
-        dataset = parsed_metadata.get("dataset")
-        if not isinstance(dataset, dict):
-            return None
-
-        normalized = build_dataset_metadata(dataset)
-        if not normalized:
-            return None
-        return normalized
-
     def _register_composites_with_glaas(
         self,
         client: GlaasClient,
@@ -885,7 +780,7 @@ class PutService:
         composite_registrations: list[dict[str, Any]] = []
         for composite in composite_results:
             payload = dict(composite.payload)
-            metadata_json = self._build_composite_dataset_metadata_json(
+            metadata_json = build_publish_composite_dataset_metadata_json(
                 root_path=composite.root_path,
                 dataset_identifiers=dataset_identifiers,
                 components=list(composite.payload.get("components") or []),
@@ -925,35 +820,3 @@ class PutService:
                     composite_registration["local_persisted"] = True
             composite_registrations.append(composite_registration)
         return composite_registrations
-
-    def _build_put_metadata(
-        self,
-        message: str,
-        destination_type: str,
-        artifact_urls: dict[str, str],
-        composite_registrations: list[dict[str, Any]],
-        lineage_composite_registrations: list[dict[str, Any]],
-        dataset_identifiers: list[dict[str, Any]],
-        git_commit: str | None,
-        git_tag: str | None,
-    ) -> str:
-        """Build the metadata JSON payload for the put job record."""
-        metadata_json = build_operation_metadata_json(
-            "put",
-            {
-                "message": message,
-                "destination": self._destination,
-                "destination_type": destination_type,
-                "artifacts": artifact_urls,
-                "composites": composite_registrations,
-                "lineage_composites": lineage_composite_registrations,
-                "dataset_identifiers": dataset_identifiers,
-                "git_commit": git_commit,
-                "git_tag": git_tag,
-                "timestamp": time.time(),
-            },
-        )
-        self._logger.debug(
-            "Job metadata: destination_type=%s, artifacts=%d", destination_type, len(artifact_urls)
-        )
-        return metadata_json
