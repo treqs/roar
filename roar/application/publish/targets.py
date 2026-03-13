@@ -98,7 +98,7 @@ def resolve_local_artifact_hash(target: str, roar_dir: Path) -> str | None:
     if not artifact:
         return None
 
-    return _select_primary_hash(artifact)
+    return select_publish_artifact_hash(artifact)
 
 
 def is_register_step_reference(target: str) -> bool:
@@ -113,7 +113,7 @@ def looks_like_hex_identifier(target: str) -> bool:
     return bool(_HEX_IDENTIFIER_RE.match(target))
 
 
-def _select_primary_hash(artifact: dict) -> str | None:
+def select_publish_artifact_hash(artifact: dict) -> str | None:
     hashes = artifact.get("hashes")
     if not isinstance(hashes, list):
         return None

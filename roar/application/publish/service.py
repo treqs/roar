@@ -13,8 +13,9 @@ from ...services.put.backends import (
     parse_destination,
     should_skip_upload,
 )
-from ...services.registration.register_service import RegisterService
+from ...services.registration.register_service import RegisterResult, RegisterService
 from ...services.transfer import load_backend_class, resolve_backend_for_scheme
+from .collection import collect_register_lineage
 from .git import build_publish_tag_name, create_publish_git_tag, ensure_clean_publish_repo
 from .requests import (
     PutRequest,
@@ -31,7 +32,6 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
     runtime = build_publish_runtime(glaas_url=get_glaas_url())
     service = RegisterService(
         glaas_client=runtime.glaas_client,
-        lineage_collector=runtime.lineage_collector,
         coordinator=runtime.registration_coordinator,
         session_service=runtime.session_service,
     )
@@ -40,56 +40,29 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         cwd=request.cwd,
         roar_dir=request.roar_dir,
     )
-    if resolved_target.kind == "step_reference":
-        result = service.register_step_lineage(
-            step_reference=resolved_target.value,
-            roar_dir=request.roar_dir,
-            cwd=request.cwd,
-            dry_run=request.dry_run,
-            as_blake3=request.as_blake3,
-            skip_confirmation=request.skip_confirmation,
-            confirm_callback=request.confirm_callback,
-        )
-    elif resolved_target.kind == "job_uid":
-        result = service.register_job_lineage(
-            job_uid=resolved_target.value,
-            roar_dir=request.roar_dir,
-            cwd=request.cwd,
-            dry_run=request.dry_run,
-            as_blake3=request.as_blake3,
-            skip_confirmation=request.skip_confirmation,
-            confirm_callback=request.confirm_callback,
-        )
-    elif resolved_target.kind == "artifact_hash":
-        result = service.register_artifact_hash_lineage(
-            artifact_hash=resolved_target.value,
-            roar_dir=request.roar_dir,
-            cwd=request.cwd,
-            dry_run=request.dry_run,
-            as_blake3=request.as_blake3,
-            skip_confirmation=request.skip_confirmation,
-            confirm_callback=request.confirm_callback,
-        )
-    elif resolved_target.kind == "session_hash":
-        result = service.register_session_lineage(
-            session_hash=resolved_target.value,
-            roar_dir=request.roar_dir,
-            cwd=request.cwd,
-            dry_run=request.dry_run,
-            as_blake3=request.as_blake3,
-            skip_confirmation=request.skip_confirmation,
-            confirm_callback=request.confirm_callback,
-        )
-    else:
-        result = service.register_artifact_lineage(
-            artifact_path=resolved_target.value,
-            roar_dir=request.roar_dir,
-            cwd=request.cwd,
-            dry_run=request.dry_run,
-            as_blake3=request.as_blake3,
-            skip_confirmation=request.skip_confirmation,
-            confirm_callback=request.confirm_callback,
-        )
+    collected_lineage, error = collect_register_lineage(
+        target=resolved_target,
+        roar_dir=request.roar_dir,
+        cwd=request.cwd,
+        lineage_collector=runtime.lineage_collector,
+        session_service=runtime.session_service,
+        logger=get_logger(),
+    )
+    if collected_lineage is None:
+        return RegisterLineageResponse(result=RegisterResult(success=False, error=error))
+
+    result = service.register_collected_lineage(
+        lineage=collected_lineage.lineage,
+        roar_dir=request.roar_dir,
+        cwd=request.cwd,
+        session_id=collected_lineage.session_id,
+        artifact_hash=collected_lineage.artifact_hash,
+        dry_run=request.dry_run,
+        as_blake3=request.as_blake3,
+        skip_confirmation=request.skip_confirmation,
+        confirm_callback=request.confirm_callback,
+        session_hash_override=collected_lineage.session_hash_override,
+    )
     return RegisterLineageResponse(result=result)
 
 

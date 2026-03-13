@@ -9,24 +9,39 @@ import pytest
 from roar.application.publish.requests import PutRequest, RegisterLineageRequest
 from roar.application.publish.service import put_artifacts, register_lineage_target
 from roar.application.publish.targets import ResolvedRegisterTarget
+from roar.core.interfaces.lineage import LineageData
 from roar.services.put.service import PutResult
 from roar.services.registration.register_service import RegisterResult
 
 
-def test_register_lineage_target_delegates_to_register_service(tmp_path: Path) -> None:
+def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:
     expected = RegisterResult(success=True, session_hash="a" * 64)
     runtime = MagicMock()
+    logger = MagicMock()
+    collected = MagicMock()
+    collected.lineage = LineageData(jobs=[], artifacts=[], artifact_hashes=set(), pipeline={"id": 7})
+    collected.session_id = 7
+    collected.artifact_hash = "a" * 64
+    collected.session_hash_override = None
 
     with (
         patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
-        patch("roar.application.publish.service.get_glaas_url", return_value="http://localhost:3001"),
+        patch(
+            "roar.application.publish.service.get_glaas_url",
+            return_value="http://localhost:3001",
+        ),
+        patch("roar.application.publish.service.get_logger", return_value=logger),
         patch(
             "roar.application.publish.service.resolve_register_lineage_target",
             return_value=ResolvedRegisterTarget(kind="artifact_path", value="model.pt"),
         ),
+        patch(
+            "roar.application.publish.service.collect_register_lineage",
+            return_value=(collected, None),
+        ) as collect_lineage,
         patch("roar.application.publish.service.RegisterService") as mock_cls,
     ):
-        mock_cls.return_value.register_artifact_lineage.return_value = expected
+        mock_cls.return_value.register_collected_lineage.return_value = expected
 
         response = register_lineage_target(
             RegisterLineageRequest(
@@ -40,69 +55,60 @@ def test_register_lineage_target_delegates_to_register_service(tmp_path: Path) -
     assert response.result is expected
     mock_cls.assert_called_once_with(
         glaas_client=runtime.glaas_client,
-        lineage_collector=runtime.lineage_collector,
         coordinator=runtime.registration_coordinator,
         session_service=runtime.session_service,
     )
-    mock_cls.return_value.register_artifact_lineage.assert_called_once_with(
-        artifact_path="model.pt",
+    collect_lineage.assert_called_once_with(
+        target=ResolvedRegisterTarget(kind="artifact_path", value="model.pt"),
         roar_dir=tmp_path / ".roar",
         cwd=tmp_path,
+        lineage_collector=runtime.lineage_collector,
+        session_service=runtime.session_service,
+        logger=logger,
+    )
+    mock_cls.return_value.register_collected_lineage.assert_called_once_with(
+        lineage=collected.lineage,
+        roar_dir=tmp_path / ".roar",
+        cwd=tmp_path,
+        session_id=7,
+        artifact_hash="a" * 64,
         dry_run=True,
         as_blake3=False,
         skip_confirmation=False,
         confirm_callback=None,
+        session_hash_override=None,
     )
 
 
-def test_register_lineage_target_dispatches_step_reference(tmp_path: Path) -> None:
+def test_register_lineage_target_returns_collection_error(tmp_path: Path) -> None:
     runtime = MagicMock()
 
     with (
         patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
-        patch("roar.application.publish.service.get_glaas_url", return_value="http://localhost:3001"),
+        patch(
+            "roar.application.publish.service.get_glaas_url",
+            return_value="http://localhost:3001",
+        ),
         patch(
             "roar.application.publish.service.resolve_register_lineage_target",
-            return_value=ResolvedRegisterTarget(kind="step_reference", value="@4"),
+            return_value=ResolvedRegisterTarget(kind="artifact_path", value="missing.csv"),
+        ),
+        patch(
+            "roar.application.publish.service.collect_register_lineage",
+            return_value=(None, "File not found: missing.csv"),
         ),
         patch("roar.application.publish.service.RegisterService") as mock_cls,
     ):
-        mock_cls.return_value.register_step_lineage.return_value = RegisterResult(success=True)
-
-        register_lineage_target(
+        response = register_lineage_target(
             RegisterLineageRequest(
-                target="@4",
+                target="missing.csv",
                 roar_dir=tmp_path / ".roar",
                 cwd=tmp_path,
             )
         )
 
-    mock_cls.return_value.register_step_lineage.assert_called_once()
-
-
-def test_register_lineage_target_dispatches_job_uid(tmp_path: Path) -> None:
-    runtime = MagicMock()
-
-    with (
-        patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
-        patch("roar.application.publish.service.get_glaas_url", return_value="http://localhost:3001"),
-        patch(
-            "roar.application.publish.service.resolve_register_lineage_target",
-            return_value=ResolvedRegisterTarget(kind="job_uid", value="deadbeef"),
-        ),
-        patch("roar.application.publish.service.RegisterService") as mock_cls,
-    ):
-        mock_cls.return_value.register_job_lineage.return_value = RegisterResult(success=True)
-
-        register_lineage_target(
-            RegisterLineageRequest(
-                target="deadbeef",
-                roar_dir=tmp_path / ".roar",
-                cwd=tmp_path,
-            )
-        )
-
-    mock_cls.return_value.register_job_lineage.assert_called_once()
+    assert response.result == RegisterResult(success=False, error="File not found: missing.csv")
+    mock_cls.return_value.register_collected_lineage.assert_not_called()
 
 
 def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) -> None:

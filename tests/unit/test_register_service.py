@@ -1,15 +1,16 @@
-"""
-Unit tests for RegisterService.
-
-Tests error conditions and dry-run mode using mocked dependencies.
-"""
+"""Focused unit tests for RegisterService registration mechanics."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from roar.core.interfaces.registration import GitContext
+from roar.core.interfaces.lineage import LineageData
+from roar.core.interfaces.registration import (
+    BatchRegistrationResult,
+    GitContext,
+    SessionRegistrationResult,
+)
 from roar.services.registration.register_service import RegisterResult, RegisterService
 
 
@@ -23,11 +24,23 @@ def _git_context(
     return GitContext(repo=repo, commit=commit, branch=branch)
 
 
-class TestRegisterResult:
-    """Test RegisterResult dataclass."""
+def _lineage_data(
+    *,
+    jobs: list[dict] | None = None,
+    artifacts: list[dict] | None = None,
+    artifact_hashes: set[str] | None = None,
+    pipeline: dict | None = None,
+) -> LineageData:
+    return LineageData(
+        jobs=jobs or [{"id": 1, "job_uid": "job-1"}],
+        artifacts=artifacts or [{"id": "a1"}],
+        artifact_hashes=artifact_hashes or {"hash1"},
+        pipeline=pipeline or {"id": 1},
+    )
 
-    def test_success_result(self):
-        """Test creating a successful result."""
+
+class TestRegisterResult:
+    def test_success_result(self) -> None:
         result = RegisterResult(
             success=True,
             session_hash="abc123",
@@ -42,58 +55,55 @@ class TestRegisterResult:
         assert result.links_created == 8
         assert result.error is None
 
-    def test_error_result(self):
-        """Test creating an error result."""
-        result = RegisterResult(
-            success=False,
-            error="Something went wrong",
-        )
+    def test_error_result(self) -> None:
+        result = RegisterResult(success=False, error="Something went wrong")
         assert result.success is False
         assert result.error == "Something went wrong"
 
 
 class TestRegisterService:
-    """Test RegisterService class."""
-
     @pytest.fixture
     def mock_glaas_client(self):
-        """Create a mock GLaaS client."""
         client = MagicMock()
         client.health_check.return_value = (True, None)
         client.is_configured.return_value = True
         return client
 
     @pytest.fixture
-    def mock_lineage_collector(self):
-        """Create a mock lineage collector."""
-        collector = MagicMock()
-        return collector
-
-    @pytest.fixture
     def mock_coordinator(self):
-        """Create a mock registration coordinator."""
         coordinator = MagicMock()
+        coordinator.register_lineage.return_value = BatchRegistrationResult(
+            session_registered=True,
+            jobs_created=1,
+            jobs_failed=0,
+            artifacts_registered=1,
+            artifacts_failed=0,
+            links_created=2,
+            links_failed=0,
+            errors=[],
+        )
         return coordinator
 
     @pytest.fixture
     def mock_session_service(self):
-        """Create a mock session service."""
         service = MagicMock()
+        service.compute_session_hash.return_value = "session-hash-123"
+        service.register.return_value = SessionRegistrationResult(
+            success=True,
+            session_hash="session-hash-123",
+            session_url="https://glaas.example/dag/session-hash-123",
+        )
         return service
 
     @pytest.fixture
-    def service(
-        self, mock_glaas_client, mock_lineage_collector, mock_coordinator, mock_session_service
-    ):
-        """Create a RegisterService with mocked dependencies."""
+    def service(self, mock_glaas_client, mock_coordinator, mock_session_service):
         return RegisterService(
             glaas_client=mock_glaas_client,
-            lineage_collector=mock_lineage_collector,
             coordinator=mock_coordinator,
             session_service=mock_session_service,
         )
 
-    def test_order_jobs_for_registration_puts_parent_before_child(self, service):
+    def test_order_jobs_for_registration_puts_parent_before_child(self, service) -> None:
         parent = {
             "id": 2,
             "job_uid": "parent-uid",
@@ -114,7 +124,7 @@ class TestRegisterService:
 
     def test_normalize_jobs_for_registration_maps_unresolved_ray_parent_to_submit_job(
         self, service
-    ):
+    ) -> None:
         submit_job = {
             "id": 1,
             "job_uid": "local-submit",
@@ -138,7 +148,7 @@ class TestRegisterService:
         jobs_by_uid = {job["job_uid"]: job for job in normalized}
         assert jobs_by_uid["phase-job"]["parent_job_uid"] == "local-submit"
 
-    def test_normalize_jobs_for_registration_filters_known_ray_noise_jobs(self, service):
+    def test_normalize_jobs_for_registration_filters_known_ray_noise_jobs(self, service) -> None:
         submit_job = {
             "id": 1,
             "job_uid": "local-submit",
@@ -183,373 +193,7 @@ class TestRegisterService:
         jobs_by_uid = {job["job_uid"]: job for job in normalized}
         assert jobs_by_uid["phase-job"]["parent_job_uid"] == "local-submit"
 
-    def test_register_artifact_lineage_file_not_found(self, service):
-        """Test error when artifact file doesn't exist."""
-        result = service.register_artifact_lineage(
-            artifact_path="/nonexistent/file.csv",
-            roar_dir=Path("/tmp/.roar"),
-            cwd=Path("/tmp"),
-        )
-        assert result.success is False
-        assert "not found" in result.error.lower() or "does not exist" in result.error.lower()
-
-    def test_register_artifact_lineage_not_tracked(self, service, tmp_path):
-        """Test error when artifact exists but is not tracked in roar."""
-        # Create a file that exists but isn't tracked
-        artifact_file = tmp_path / "untracked.csv"
-        artifact_file.write_text("data")
-
-        # Mock database context to return no artifact
-        with patch(
-            "roar.services.registration.register_service.create_database_context"
-        ) as mock_ctx:
-            mock_db = MagicMock()
-            mock_db.__enter__ = MagicMock(return_value=mock_db)
-            mock_db.__exit__ = MagicMock(return_value=None)
-            mock_db.artifacts.get_by_hash.return_value = None
-            mock_ctx.return_value = mock_db
-
-            result = service.register_artifact_lineage(
-                artifact_path=str(artifact_file),
-                roar_dir=tmp_path / ".roar",
-                cwd=tmp_path,
-            )
-            assert result.success is False
-            assert "not tracked" in result.error.lower() or "not found" in result.error.lower()
-
-    def test_register_artifact_lineage_no_active_session(self, service, tmp_path):
-        """Test error when there is no active session."""
-        artifact_file = tmp_path / "file.csv"
-        artifact_file.write_text("data")
-
-        # Mock database context
-        with patch(
-            "roar.services.registration.register_service.create_database_context"
-        ) as mock_ctx:
-            mock_db = MagicMock()
-            mock_db.__enter__ = MagicMock(return_value=mock_db)
-            mock_db.__exit__ = MagicMock(return_value=None)
-            mock_db.artifacts.get_by_hash.return_value = {"id": "1", "hashes": []}
-            mock_db.sessions.get_active.return_value = None  # No active session
-            mock_ctx.return_value = mock_db
-
-            result = service.register_artifact_lineage(
-                artifact_path=str(artifact_file),
-                roar_dir=tmp_path / ".roar",
-                cwd=tmp_path,
-            )
-            assert result.success is False
-            assert "session" in result.error.lower()
-
-    def test_register_artifact_lineage_s3_uri_uses_tracked_path(
-        self,
-        service,
-        tmp_path,
-        mock_lineage_collector,
-    ):
-        """S3 artifact registration should resolve by tracked DB path, not local filesystem."""
-        artifact_path = "s3://output-bucket/results/run123/final_report.json"
-
-        from roar.core.interfaces.lineage import LineageData
-
-        mock_lineage_collector.collect.return_value = LineageData(
-            jobs=[],
-            artifacts=[],
-            artifact_hashes={"etag123"},
-            pipeline={"id": 1},
-        )
-
-        with patch(
-            "roar.services.registration.register_service.create_database_context"
-        ) as mock_ctx:
-            mock_db = MagicMock()
-            mock_db.__enter__ = MagicMock(return_value=mock_db)
-            mock_db.__exit__ = MagicMock(return_value=None)
-            mock_db.artifacts.get_by_path.return_value = {
-                "id": "artifact-1",
-                "hashes": [{"algorithm": "etag", "digest": "etag123"}],
-            }
-            mock_db.sessions.get_active.return_value = {
-                "id": 1,
-                "git_commit": "abc123",
-                "git_branch": "main",
-            }
-            mock_ctx.return_value = mock_db
-
-            with patch(
-                "roar.services.registration.register_service.resolve_publish_git_context",
-                return_value=_git_context(tmp_path, commit="abc123"),
-            ), patch("roar.services.registration.register_service.config_get") as mock_config:
-                mock_config.return_value = False
-                service._session_service.compute_session_hash.return_value = "session-hash-1"
-
-                result = service.register_artifact_lineage(
-                    artifact_path=artifact_path,
-                    roar_dir=tmp_path / ".roar",
-                    cwd=tmp_path,
-                    dry_run=True,
-                )
-
-        assert result.success is True
-        mock_db.artifacts.get_by_path.assert_called_once_with(artifact_path)
-        mock_db.artifacts.get_by_hash.assert_not_called()
-        mock_lineage_collector.collect.assert_called_once_with(["etag123"], tmp_path / ".roar")
-
-    def test_register_artifact_lineage_dry_run(self, service, tmp_path, mock_lineage_collector):
-        """Test dry-run mode returns counts without calling API."""
-        artifact_file = tmp_path / "file.csv"
-        artifact_file.write_text("data")
-
-        # Mock LineageData
-        from roar.core.interfaces.lineage import LineageData
-
-        mock_lineage = LineageData(
-            jobs=[{"id": 1, "job_uid": "job1"}, {"id": 2, "job_uid": "job2"}],
-            artifacts=[{"id": "a1"}, {"id": "a2"}, {"id": "a3"}],
-            artifact_hashes={"hash1", "hash2", "hash3"},
-            pipeline={"id": 1},
-        )
-        mock_lineage_collector.collect.return_value = mock_lineage
-
-        # Mock database context
-        with patch(
-            "roar.services.registration.register_service.create_database_context"
-        ) as mock_ctx:
-            mock_db = MagicMock()
-            mock_db.__enter__ = MagicMock(return_value=mock_db)
-            mock_db.__exit__ = MagicMock(return_value=None)
-            mock_db.artifacts.get_by_hash.return_value = {
-                "id": "1",
-                "hashes": [{"algorithm": "blake3", "digest": "abc123"}],
-            }
-            mock_db.sessions.get_active.return_value = {
-                "id": 1,
-                "git_commit": "abc",
-                "git_branch": "main",
-            }
-            mock_ctx.return_value = mock_db
-
-            # Mock git context retrieval
-            with (
-                patch(
-                    "roar.services.registration.register_service.resolve_publish_git_context",
-                    return_value=_git_context(tmp_path, commit="abc123"),
-                ),
-                patch("roar.services.registration.register_service.config_get") as mock_config,
-            ):
-                mock_config.return_value = False
-
-                result = service.register_artifact_lineage(
-                    artifact_path=str(artifact_file),
-                    roar_dir=tmp_path / ".roar",
-                    cwd=tmp_path,
-                    dry_run=True,
-                )
-
-        assert result.success is True
-        assert result.jobs_registered == 2
-        assert result.artifacts_registered == 3
-        # In dry-run mode, no actual API calls should be made
-        service._coordinator.register_lineage.assert_not_called()
-
-    def test_register_artifact_lineage_dry_run_filters_known_ray_noise_jobs(
-        self,
-        service,
-        tmp_path,
-        mock_lineage_collector,
-        mock_session_service,
-    ):
-        """Dry-run counts should exclude known internal Ray/bootstrap jobs."""
-        artifact_file = tmp_path / "file.csv"
-        artifact_file.write_text("data")
-
-        from roar.core.interfaces.lineage import LineageData
-
-        mock_lineage = LineageData(
-            jobs=[
-                {
-                    "id": 1,
-                    "job_uid": "local-submit",
-                    "step_number": 1,
-                    "timestamp": 10.0,
-                    "command": "ray job submit --address http://localhost:8265 -- python main.py",
-                    "job_type": None,
-                    "_outputs": [{"artifact_id": "driver-output"}],
-                },
-                {
-                    "id": 2,
-                    "job_uid": "noise-job",
-                    "parent_job_uid": "local-submit",
-                    "step_number": 2,
-                    "timestamp": 20.0,
-                    "command": "ray_task:unknown",
-                    "job_type": "ray_task",
-                    "_outputs": [{"artifact_id": "noise-output"}],
-                },
-                {
-                    "id": 3,
-                    "job_uid": "phase-job",
-                    "parent_job_uid": "noise-job",
-                    "step_number": 3,
-                    "timestamp": 30.0,
-                    "command": "ray_task:process_shard",
-                    "job_type": "ray_task",
-                    "_inputs": [{"artifact_id": "driver-output"}],
-                    "_outputs": [{"artifact_id": "task-output"}],
-                },
-            ],
-            artifacts=[{"id": "a1"}],
-            artifact_hashes={"hash1"},
-            pipeline={"id": 1},
-        )
-        mock_lineage_collector.collect.return_value = mock_lineage
-        mock_session_service.compute_session_hash.return_value = "session-hash-1"
-
-        with patch(
-            "roar.services.registration.register_service.create_database_context"
-        ) as mock_ctx:
-            mock_db = MagicMock()
-            mock_db.__enter__ = MagicMock(return_value=mock_db)
-            mock_db.__exit__ = MagicMock(return_value=None)
-            mock_db.artifacts.get_by_hash.return_value = {
-                "id": "1",
-                "hashes": [{"algorithm": "blake3", "digest": "abc123"}],
-            }
-            mock_db.sessions.get_active.return_value = {
-                "id": 1,
-                "git_commit": "abc",
-                "git_branch": "main",
-            }
-            mock_ctx.return_value = mock_db
-
-            with patch(
-                "roar.services.registration.register_service.resolve_publish_git_context",
-                return_value=_git_context(tmp_path, commit="abc123"),
-            ), patch("roar.services.registration.register_service.config_get") as mock_config:
-                mock_config.return_value = False
-
-                result = service.register_artifact_lineage(
-                    artifact_path=str(artifact_file),
-                    roar_dir=tmp_path / ".roar",
-                    cwd=tmp_path,
-                    dry_run=True,
-                )
-
-        assert result.success is True
-        assert result.jobs_registered == 2
-        assert result.links_created == 3
-        service._coordinator.register_lineage.assert_not_called()
-
-    def test_register_artifact_lineage_glaas_health_check_fails(
-        self, service, tmp_path, mock_glaas_client, mock_lineage_collector
-    ):
-        """Test error when GLaaS health check fails."""
-        artifact_file = tmp_path / "file.csv"
-        artifact_file.write_text("data")
-
-        # Make health check fail
-        from roar.core.exceptions import GlaasConnectionError
-
-        mock_glaas_client.health_check.side_effect = GlaasConnectionError("Connection refused")
-
-        # Mock LineageData
-        from roar.core.interfaces.lineage import LineageData
-
-        mock_lineage = LineageData(
-            jobs=[{"id": 1, "job_uid": "job1"}],
-            artifacts=[{"id": "a1"}],
-            artifact_hashes={"hash1"},
-            pipeline={"id": 1},
-        )
-        mock_lineage_collector.collect.return_value = mock_lineage
-
-        # Mock database context
-        with patch(
-            "roar.services.registration.register_service.create_database_context"
-        ) as mock_ctx:
-            mock_db = MagicMock()
-            mock_db.__enter__ = MagicMock(return_value=mock_db)
-            mock_db.__exit__ = MagicMock(return_value=None)
-            mock_db.artifacts.get_by_hash.return_value = {
-                "id": "1",
-                "hashes": [{"algorithm": "blake3", "digest": "abc123"}],
-            }
-            mock_db.sessions.get_active.return_value = {
-                "id": 1,
-                "git_commit": "abc",
-                "git_branch": "main",
-            }
-            mock_ctx.return_value = mock_db
-
-            # Mock git context retrieval
-            with (
-                patch(
-                    "roar.services.registration.register_service.resolve_publish_git_context",
-                    return_value=_git_context(tmp_path, commit="abc123"),
-                ),
-                patch("roar.services.registration.register_service.config_get") as mock_config,
-            ):
-                mock_config.return_value = False
-
-                result = service.register_artifact_lineage(
-                    artifact_path=str(artifact_file),
-                    roar_dir=tmp_path / ".roar",
-                    cwd=tmp_path,
-                    dry_run=False,
-                )
-
-        assert result.success is False
-        assert "health" in result.error.lower() or "connection" in result.error.lower()
-
-    def test_register_artifact_lineage_glaas_not_configured(self, tmp_path):
-        """Test error when GLaaS is not configured."""
-        artifact_file = tmp_path / "file.csv"
-        artifact_file.write_text("data")
-
-        mock_client = MagicMock()
-        mock_client.is_configured.return_value = False
-
-        service = RegisterService(glaas_client=mock_client)
-
-        # Mock database context
-        with patch(
-            "roar.services.registration.register_service.create_database_context"
-        ) as mock_ctx:
-            mock_db = MagicMock()
-            mock_db.__enter__ = MagicMock(return_value=mock_db)
-            mock_db.__exit__ = MagicMock(return_value=None)
-            mock_db.artifacts.get_by_hash.return_value = {
-                "id": "1",
-                "hashes": [{"algorithm": "blake3", "digest": "abc123"}],
-            }
-            mock_db.sessions.get_active.return_value = {
-                "id": 1,
-                "git_commit": "abc",
-                "git_branch": "main",
-            }
-            mock_ctx.return_value = mock_db
-
-            # Mock git context retrieval
-            with (
-                patch(
-                    "roar.services.registration.register_service.resolve_publish_git_context",
-                    return_value=_git_context(tmp_path, commit="abc123"),
-                ),
-                patch("roar.services.registration.register_service.config_get") as mock_config,
-            ):
-                mock_config.return_value = False
-
-                result = service.register_artifact_lineage(
-                    artifact_path=str(artifact_file),
-                    roar_dir=tmp_path / ".roar",
-                    cwd=tmp_path,
-                )
-
-        assert result.success is False
-        assert "not configured" in result.error.lower() or "glaas" in result.error.lower()
-
-    def test_register_result_includes_artifact_hash(self):
-        """Test that RegisterResult includes artifact_hash field."""
+    def test_register_result_includes_artifact_hash(self) -> None:
         result = RegisterResult(
             success=True,
             session_hash="session123",
@@ -560,295 +204,281 @@ class TestRegisterService:
         )
         assert result.artifact_hash == "artifact456"
 
-    def test_register_artifact_lineage_dirty_repo_fails(
-        self, service, tmp_path, mock_lineage_collector
-    ):
-        """Test that registration fails with uncommitted changes when tagging is enabled."""
-        artifact_file = tmp_path / "file.csv"
-        artifact_file.write_text("data")
-
-        # Mock database context
-        with patch(
-            "roar.services.registration.register_service.create_database_context"
-        ) as mock_ctx:
-            mock_db = MagicMock()
-            mock_db.__enter__ = MagicMock(return_value=mock_db)
-            mock_db.__exit__ = MagicMock(return_value=None)
-            mock_db.artifacts.get_by_hash.return_value = {
-                "id": "1",
-                "hashes": [{"algorithm": "blake3", "digest": "abc123"}],
-            }
-            mock_db.sessions.get_active.return_value = {
-                "id": 1,
-                "git_commit": "abc",
-                "git_branch": "main",
-            }
-            mock_ctx.return_value = mock_db
-
-            # Mock git context and dirty-repo policy
-            with (
-                patch(
-                    "roar.services.registration.register_service.resolve_publish_git_context",
-                    return_value=_git_context(tmp_path),
+    def test_register_collected_lineage_dry_run(self, service, tmp_path) -> None:
+        with (
+            patch.object(service, "_get_git_context", return_value=_git_context(tmp_path)),
+            patch("roar.services.registration.register_service.config_get", return_value=False),
+        ):
+            result = service.register_collected_lineage(
+                lineage=_lineage_data(
+                    jobs=[{"id": 1, "job_uid": "job1"}, {"id": 2, "job_uid": "job2"}],
+                    artifacts=[{"id": "a1"}, {"id": "a2"}, {"id": "a3"}],
+                    artifact_hashes={"hash1", "hash2", "hash3"},
                 ),
-                patch(
-                    "roar.services.registration.register_service.ensure_clean_publish_repo",
-                    side_effect=ValueError(
-                        "Cannot register with uncommitted changes. Commit your changes first."
-                    ),
-                ),
-                patch("roar.services.registration.register_service.config_get") as mock_config,
-            ):
-                mock_config.return_value = True  # tagging enabled
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                session_id=1,
+                artifact_hash="hash1",
+                dry_run=True,
+                as_blake3=False,
+                skip_confirmation=False,
+                confirm_callback=None,
+            )
 
-                result = service.register_artifact_lineage(
-                    artifact_path=str(artifact_file),
-                    roar_dir=tmp_path / ".roar",
-                    cwd=tmp_path,
-                )
+        assert result.success is True
+        assert result.jobs_registered == 2
+        assert result.artifacts_registered == 3
+        service._coordinator.register_lineage.assert_not_called()
+
+    def test_register_collected_lineage_dry_run_filters_known_ray_noise_jobs(self, service, tmp_path):
+        with (
+            patch.object(service, "_get_git_context", return_value=_git_context(tmp_path)),
+            patch("roar.services.registration.register_service.config_get", return_value=False),
+        ):
+            result = service.register_collected_lineage(
+                lineage=_lineage_data(
+                    jobs=[
+                        {
+                            "id": 1,
+                            "job_uid": "local-submit",
+                            "step_number": 1,
+                            "timestamp": 10.0,
+                            "command": "ray job submit --address http://localhost:8265 -- python main.py",
+                            "job_type": None,
+                            "_outputs": [{"artifact_id": "driver-output"}],
+                        },
+                        {
+                            "id": 2,
+                            "job_uid": "noise-job",
+                            "parent_job_uid": "local-submit",
+                            "step_number": 2,
+                            "timestamp": 20.0,
+                            "command": "ray_task:unknown",
+                            "job_type": "ray_task",
+                            "_outputs": [{"artifact_id": "noise-output"}],
+                        },
+                        {
+                            "id": 3,
+                            "job_uid": "phase-job",
+                            "parent_job_uid": "noise-job",
+                            "step_number": 3,
+                            "timestamp": 30.0,
+                            "command": "ray_task:process_shard",
+                            "job_type": "ray_task",
+                            "_inputs": [{"artifact_id": "driver-output"}],
+                            "_outputs": [{"artifact_id": "task-output"}],
+                        },
+                    ],
+                    artifacts=[{"id": "a1"}],
+                    artifact_hashes={"hash1"},
+                ),
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                session_id=1,
+                artifact_hash="hash1",
+                dry_run=True,
+                as_blake3=False,
+                skip_confirmation=False,
+                confirm_callback=None,
+            )
+
+        assert result.success is True
+        assert result.jobs_registered == 2
+        assert result.links_created == 3
+        service._coordinator.register_lineage.assert_not_called()
+
+    def test_register_collected_lineage_glaas_health_check_fails(
+        self, service, tmp_path, mock_glaas_client
+    ) -> None:
+        from roar.core.exceptions import GlaasConnectionError
+
+        mock_glaas_client.health_check.side_effect = GlaasConnectionError("Connection refused")
+
+        with (
+            patch.object(service, "_get_git_context", return_value=_git_context(tmp_path)),
+            patch("roar.services.registration.register_service.config_get", return_value=False),
+        ):
+            result = service.register_collected_lineage(
+                lineage=_lineage_data(),
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                session_id=1,
+                artifact_hash="hash1",
+                dry_run=False,
+                as_blake3=False,
+                skip_confirmation=False,
+                confirm_callback=None,
+            )
+
+        assert result.success is False
+        assert "health" in result.error.lower() or "connection" in result.error.lower()
+
+    def test_register_collected_lineage_glaas_not_configured(self, tmp_path) -> None:
+        mock_client = MagicMock()
+        mock_client.is_configured.return_value = False
+        service = RegisterService(glaas_client=mock_client, session_service=MagicMock())
+        service._session_service.compute_session_hash.return_value = "session_hash_123"
+
+        with (
+            patch.object(service, "_get_git_context", return_value=_git_context(tmp_path)),
+            patch("roar.services.registration.register_service.config_get", return_value=False),
+        ):
+            result = service.register_collected_lineage(
+                lineage=_lineage_data(),
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                session_id=1,
+                artifact_hash="hash1",
+                dry_run=False,
+                as_blake3=False,
+                skip_confirmation=False,
+                confirm_callback=None,
+            )
+
+        assert result.success is False
+        assert "not configured" in result.error.lower() or "glaas" in result.error.lower()
+
+    def test_register_collected_lineage_dirty_repo_fails(self, service, tmp_path) -> None:
+        with (
+            patch.object(service, "_get_git_context", return_value=_git_context(tmp_path)),
+            patch(
+                "roar.services.registration.register_service.ensure_clean_publish_repo",
+                side_effect=ValueError(
+                    "Cannot register with uncommitted changes. Commit your changes first."
+                ),
+            ),
+            patch("roar.services.registration.register_service.config_get", return_value=True),
+        ):
+            result = service.register_collected_lineage(
+                lineage=_lineage_data(),
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                session_id=1,
+                artifact_hash="hash1",
+                dry_run=False,
+                as_blake3=False,
+                skip_confirmation=False,
+                confirm_callback=None,
+            )
 
         assert result.success is False
         assert "uncommitted" in result.error.lower()
 
-    def test_register_artifact_lineage_creates_git_tag(
-        self, service, tmp_path, mock_lineage_collector, mock_session_service, mock_coordinator
-    ):
-        """Test that successful registration creates a git tag."""
-        artifact_file = tmp_path / "file.csv"
-        artifact_file.write_text("data")
-
-        # Mock LineageData
-        from roar.core.interfaces.lineage import LineageData
-
-        mock_lineage = LineageData(
-            jobs=[{"id": 1, "job_uid": "job1"}],
-            artifacts=[{"id": "a1"}],
-            artifact_hashes={"hash1"},
-            pipeline={"id": 1},
-        )
-        mock_lineage_collector.collect.return_value = mock_lineage
-
-        # Mock session registration success
-        mock_session_result = MagicMock()
-        mock_session_result.success = True
-        mock_session_service.register.return_value = mock_session_result
-        mock_session_service.compute_session_hash.return_value = "session_hash_123"
-
-        # Mock coordinator batch result
-        from roar.core.interfaces.registration import BatchRegistrationResult
-
-        mock_batch_result = BatchRegistrationResult(
-            session_registered=True,
-            jobs_created=1,
-            jobs_failed=0,
-            artifacts_registered=1,
-            artifacts_failed=0,
-            links_created=2,
-            links_failed=0,
-            errors=[],
-        )
-        mock_coordinator.register_lineage.return_value = mock_batch_result
-
-        # Mock database context
-        with patch(
-            "roar.services.registration.register_service.create_database_context"
-        ) as mock_ctx:
+    def test_register_collected_lineage_creates_git_tag(
+        self, service, tmp_path, mock_coordinator
+    ) -> None:
+        with (
+            patch.object(service, "_get_git_context", return_value=_git_context(tmp_path)),
+            patch(
+                "roar.services.registration.register_service.ensure_clean_publish_repo",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "roar.services.registration.register_service.create_publish_git_tag",
+                return_value=(True, None),
+            ) as mock_create_tag,
+            patch("roar.services.registration.register_service.create_database_context") as mock_ctx,
+            patch("roar.services.registration.register_service.config_get") as mock_config,
+        ):
             mock_db = MagicMock()
             mock_db.__enter__ = MagicMock(return_value=mock_db)
             mock_db.__exit__ = MagicMock(return_value=None)
-            mock_db.artifacts.get_by_hash.return_value = {
-                "id": "1",
-                "hashes": [{"algorithm": "blake3", "digest": "abc123"}],
-            }
-            mock_db.sessions.get_active.return_value = {
-                "id": 1,
-                "git_commit": "abc",
-                "git_branch": "main",
-            }
             mock_ctx.return_value = mock_db
 
-            # Mock git context and shared publish git policy
-            with (
-                patch(
-                    "roar.services.registration.register_service.resolve_publish_git_context",
-                    return_value=_git_context(tmp_path),
-                ),
-                patch(
-                    "roar.services.registration.register_service.ensure_clean_publish_repo",
-                    return_value=MagicMock(),
-                ),
-                patch(
-                    "roar.services.registration.register_service.create_publish_git_tag",
-                    return_value=(True, None),
-                ) as mock_create_tag,
-                patch("roar.services.registration.register_service.config_get") as mock_config,
-            ):
+            def config_side_effect(key):
+                if key == "registration.tagging.enabled":
+                    return True
+                if key == "registration.omit":
+                    return {"enabled": False}
+                return None
 
-                def config_side_effect(key):
-                    if key == "registration.tagging.enabled":
-                        return True
-                    elif key == "registration.omit":
-                        return {"enabled": False}  # Disable omit filter
-                    return None
+            mock_config.side_effect = config_side_effect
 
-                mock_config.side_effect = config_side_effect
-
-                result = service.register_artifact_lineage(
-                    artifact_path=str(artifact_file),
-                    roar_dir=tmp_path / ".roar",
-                    cwd=tmp_path,
-                )
+            result = service.register_collected_lineage(
+                lineage=_lineage_data(),
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                session_id=1,
+                artifact_hash="hash1",
+                dry_run=False,
+                as_blake3=False,
+                skip_confirmation=False,
+                confirm_callback=None,
+            )
 
         assert result.success is True
+        mock_coordinator.register_lineage.assert_called_once()
         mock_create_tag.assert_called_once_with(tmp_path, "roar/abc123de")
 
-    def test_register_artifact_lineage_tagging_disabled_skips_dirty_check(
-        self, service, tmp_path, mock_lineage_collector
-    ):
-        """Test that dirty repo check is skipped when tagging is disabled."""
-        artifact_file = tmp_path / "file.csv"
-        artifact_file.write_text("data")
+    def test_register_collected_lineage_tagging_disabled_skips_dirty_check(self, service, tmp_path):
+        with (
+            patch.object(service, "_get_git_context", return_value=_git_context(tmp_path)),
+            patch(
+                "roar.services.registration.register_service.ensure_clean_publish_repo"
+            ) as ensure_clean,
+            patch("roar.services.registration.register_service.config_get", return_value=False),
+        ):
+            result = service.register_collected_lineage(
+                lineage=_lineage_data(),
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                session_id=1,
+                artifact_hash="hash1",
+                dry_run=True,
+                as_blake3=False,
+                skip_confirmation=False,
+                confirm_callback=None,
+            )
 
-        # Mock database context
-        with patch(
-            "roar.services.registration.register_service.create_database_context"
-        ) as mock_ctx:
-            mock_db = MagicMock()
-            mock_db.__enter__ = MagicMock(return_value=mock_db)
-            mock_db.__exit__ = MagicMock(return_value=None)
-            mock_db.artifacts.get_by_hash.return_value = {
-                "id": "1",
-                "hashes": [{"algorithm": "blake3", "digest": "abc123"}],
-            }
-            mock_db.sessions.get_active.return_value = {
-                "id": 1,
-                "git_commit": "abc",
-                "git_branch": "main",
-            }
-            mock_ctx.return_value = mock_db
-
-            # Mock git context
-            with (
-                patch(
-                    "roar.services.registration.register_service.resolve_publish_git_context",
-                    return_value=_git_context(tmp_path),
-                ),
-                patch(
-                    "roar.services.registration.register_service.ensure_clean_publish_repo"
-                ) as ensure_clean,
-                patch("roar.services.registration.register_service.config_get") as mock_config,
-            ):
-                mock_config.return_value = False  # tagging disabled
-
-                # Dry run to avoid full registration flow
-                result = service.register_artifact_lineage(
-                    artifact_path=str(artifact_file),
-                    roar_dir=tmp_path / ".roar",
-                    cwd=tmp_path,
-                    dry_run=True,
-                )
-
-        # Should succeed in dry-run mode (dirty check was skipped)
         assert result.success is True
         ensure_clean.assert_not_called()
 
-    def test_register_artifact_lineage_uses_local_repo_uri_when_remote_missing(
-        self,
-        service,
-        tmp_path,
-        mock_lineage_collector,
-        mock_session_service,
-        mock_coordinator,
-    ):
-        """Registration should not fail solely because origin remote is missing."""
-        artifact_file = tmp_path / "file.csv"
-        artifact_file.write_text("data")
-
-        # Mock LineageData
-        from roar.core.interfaces.lineage import LineageData
-
-        mock_lineage = LineageData(
-            jobs=[{"id": 1, "job_uid": "job1"}],
-            artifacts=[{"id": "a1"}],
-            artifact_hashes={"hash1"},
-            pipeline={"id": 1},
-        )
-        mock_lineage_collector.collect.return_value = mock_lineage
-
-        # Mock session registration success
-        mock_session_result = MagicMock()
-        mock_session_result.success = True
-        mock_session_service.register.return_value = mock_session_result
-        mock_session_service.compute_session_hash.return_value = "session_hash_123"
-
-        # Mock coordinator batch result
-        from roar.core.interfaces.registration import BatchRegistrationResult
-
-        mock_batch_result = BatchRegistrationResult(
-            session_registered=True,
-            jobs_created=1,
-            jobs_failed=0,
-            artifacts_registered=1,
-            artifacts_failed=0,
-            links_created=1,
-            links_failed=0,
-            errors=[],
-        )
-        mock_coordinator.register_lineage.return_value = mock_batch_result
-
-        # Mock database context
-        with patch(
-            "roar.services.registration.register_service.create_database_context"
-        ) as mock_ctx:
+    def test_register_collected_lineage_uses_local_repo_uri_when_remote_missing(
+        self, service, tmp_path, mock_coordinator
+    ) -> None:
+        with (
+            patch(
+                "roar.services.registration.register_service.resolve_publish_git_context",
+                return_value=_git_context(
+                    tmp_path,
+                    repo=tmp_path.resolve().as_uri(),
+                ),
+            ),
+            patch("roar.services.registration.register_service.create_database_context") as mock_ctx,
+            patch("roar.services.registration.register_service.config_get") as mock_config,
+        ):
             mock_db = MagicMock()
             mock_db.__enter__ = MagicMock(return_value=mock_db)
             mock_db.__exit__ = MagicMock(return_value=None)
-            mock_db.artifacts.get_by_hash.return_value = {
-                "id": "1",
-                "hashes": [{"algorithm": "blake3", "digest": "abc123"}],
-            }
-            mock_db.sessions.get_active.return_value = {
-                "id": 1,
-                "git_commit": "abc",
-                "git_branch": "main",
-            }
             mock_ctx.return_value = mock_db
 
-            # Mock git context retrieval with missing remote
-            with (
-                patch(
-                    "roar.services.registration.register_service.resolve_publish_git_context",
-                    return_value=_git_context(
-                        tmp_path,
-                        repo=tmp_path.resolve().as_uri(),
-                    ),
-                ),
-                patch("roar.services.registration.register_service.config_get") as mock_config,
-            ):
+            def config_side_effect(key):
+                if key == "registration.tagging.enabled":
+                    return False
+                if key == "registration.omit":
+                    return {"enabled": False}
+                return None
 
-                def config_side_effect(key):
-                    if key == "registration.tagging.enabled":
-                        return False
-                    if key == "registration.omit":
-                        return {"enabled": False}
-                    return None
+            mock_config.side_effect = config_side_effect
 
-                mock_config.side_effect = config_side_effect
-
-                result = service.register_artifact_lineage(
-                        artifact_path=str(artifact_file),
-                        roar_dir=tmp_path / ".roar",
-                        cwd=tmp_path,
-                    )
+            result = service.register_collected_lineage(
+                lineage=_lineage_data(),
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                session_id=1,
+                artifact_hash="hash1",
+                dry_run=False,
+                as_blake3=False,
+                skip_confirmation=False,
+                confirm_callback=None,
+            )
 
         assert result.success is True
-        assert mock_session_service.register.called
-        registered_git_context = mock_session_service.register.call_args.args[1]
+        assert mock_coordinator.register_lineage.called
+        registered_git_context = service._session_service.register.call_args.args[1]
         assert registered_git_context.repo == tmp_path.resolve().as_uri()
 
-    def test_build_lineage_membership_index_payload_rebuilds_full_component_bloom(self):
-        service = RegisterService()
-
+    def test_build_lineage_membership_index_payload_rebuilds_full_component_bloom(self, service):
         payload = service._build_lineage_membership_index_payload(
             membership_index={
                 "total_components": 2,
@@ -887,25 +517,13 @@ class TestRegisterService:
         assert payload["bloom_version"] == 1
 
     def test_register_collected_lineage_preregisters_composites_before_batch_registration(
-        self,
-        service,
-        tmp_path,
-        mock_glaas_client,
-        mock_coordinator,
-        mock_session_service,
-    ):
-        from roar.core.interfaces.lineage import LineageData
-        from roar.core.interfaces.registration import (
-            BatchRegistrationResult,
-            GitContext,
-            SessionRegistrationResult,
-        )
-
+        self, service, tmp_path, mock_glaas_client, mock_coordinator
+    ) -> None:
         primitive_digest = "a" * 64
         composite_digest = "c" * 64
         composite_root = tmp_path / "exports" / "bundle"
 
-        lineage = LineageData(
+        lineage = _lineage_data(
             jobs=[
                 {
                     "id": 1,
@@ -932,44 +550,17 @@ class TestRegisterService:
                 },
             ],
             artifact_hashes={primitive_digest, composite_digest},
-            pipeline={"id": 1},
         )
 
-        mock_session_service.compute_session_hash.return_value = "session-hash-123"
-        mock_session_service.register.return_value = SessionRegistrationResult(
-            success=True,
-            session_hash="session-hash-123",
-            session_url="https://glaas.example/dag/session-hash-123",
-        )
         mock_glaas_client.register_composite_artifact.return_value = (
             {"artifact_id": "srv-comp-1", "created": True},
             None,
         )
-        mock_coordinator.register_lineage.return_value = BatchRegistrationResult(
-            session_registered=True,
-            jobs_created=1,
-            jobs_failed=0,
-            artifacts_registered=1,
-            artifacts_failed=0,
-            links_created=0,
-            links_failed=0,
-            errors=[],
-        )
 
         with (
-            patch(
-                "roar.services.registration.register_service.create_database_context"
-            ) as mock_ctx,
+            patch("roar.services.registration.register_service.create_database_context") as mock_ctx,
             patch("roar.services.registration.register_service.config_get", return_value=False),
-            patch.object(
-                service,
-                "_get_git_context",
-                return_value=GitContext(
-                    repo="https://github.com/test/repo",
-                    commit="abc123def456",
-                    branch="main",
-                ),
-            ),
+            patch.object(service, "_get_git_context", return_value=_git_context(tmp_path)),
         ):
             mock_db = MagicMock()
             mock_db.__enter__ = MagicMock(return_value=mock_db)
@@ -996,7 +587,7 @@ class TestRegisterService:
             mock_db.composites.get_membership_index.return_value = None
             mock_ctx.return_value = mock_db
 
-            result = service._register_collected_lineage(
+            result = service.register_collected_lineage(
                 lineage=lineage,
                 roar_dir=tmp_path / ".roar",
                 cwd=tmp_path,

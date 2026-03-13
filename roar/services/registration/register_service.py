@@ -1,17 +1,9 @@
 """
 Register service for submitting artifact lineage to GLaaS.
 
-Orchestrates the workflow:
-1. Resolve artifact path and compute hash
-2. Look up artifact in local database
-3. Get active session and git context
-4. Collect lineage via LineageCollector
-5. Compute session hash
-6. Detect and filter secrets with user confirmation
-7. Register with GLaaS via RegistrationCoordinator
+Owns the registration mechanics after local lineage has already been collected.
 """
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -27,7 +19,6 @@ from ...application.publish.git import (
     ensure_clean_publish_repo,
     resolve_publish_git_context,
 )
-from ...application.publish.lineage import LineageCollector
 from ...application.publish.registration import (
     CompositeRegistrationCandidate,
     ensure_composite_hash_entry,
@@ -39,17 +30,12 @@ from ...application.publish.registration import (
     register_publish_lineage,
 )
 from ...application.publish.session import prepare_publish_session
-from ...application.publish.targets import (
-    parse_register_step_reference,
-    resolve_publish_artifact_path,
-)
 from ...config import config_get
 from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...db.context import create_database_context, optional_repo
-from ...db.hashing.backend import compute_hashes_batch
 from ...execution.framework.registry import (
     is_execution_noise_job,
     is_execution_submit_job,
@@ -101,14 +87,10 @@ class RegisterService:
     """
     Service for registering artifact lineage with GLaaS.
 
-    Orchestrates the complete registration workflow:
-    1. Resolve artifact path and compute BLAKE3 hash
-    2. Look up artifact in local database
-    3. Get active session and extract git context
-    4. Collect lineage via LineageCollector
-    5. Compute session hash
-    6. Detect secrets and prompt for confirmation (if interactive)
-    7. If not dry-run:
+    Runs the shared registration mechanics after the application layer has
+    already resolved the local target and collected the lineage bundle.
+
+    If not dry-run:
        a. Check GLaaS health
        b. Register session
        c. Register lineage via RegistrationCoordinator (with secrets filtered)
@@ -122,7 +104,6 @@ class RegisterService:
     def __init__(
         self,
         glaas_client: GlaasClient | None = None,
-        lineage_collector: LineageCollector | None = None,
         coordinator: RegistrationCoordinator | None = None,
         session_service: SessionRegistrationService | None = None,
         composite_builder: CompositeArtifactBuilder | None = None,
@@ -134,14 +115,12 @@ class RegisterService:
 
         Args:
             glaas_client: GLaaS client for API communication
-            lineage_collector: Service for collecting lineage data
             coordinator: Registration coordinator for 4-phase pattern
             session_service: Service for session registration
             omit_filter: Filter for detecting and redacting secrets
             logger: Logger instance. If None, resolves from DI container.
         """
         self._glaas_client = glaas_client
-        self._lineage_collector = lineage_collector
         self._coordinator = coordinator
         self._session_service = session_service
         self._composite_builder = composite_builder or CompositeArtifactBuilder()
@@ -164,11 +143,6 @@ class RegisterService:
         return self._glaas_client or GlaasClient()
 
     @cached_property
-    def lineage_collector(self) -> LineageCollector:
-        """Get or create lineage collector."""
-        return self._lineage_collector or LineageCollector()
-
-    @cached_property
     def coordinator(self) -> RegistrationCoordinator:
         """Get or create registration coordinator."""
         return self._coordinator or RegistrationCoordinator()
@@ -178,266 +152,7 @@ class RegisterService:
         """Get or create session service."""
         return self._session_service or SessionRegistrationService()
 
-    def register_step_lineage(
-        self,
-        step_reference: str,
-        roar_dir: Path,
-        cwd: Path,
-        dry_run: bool = False,
-        as_blake3: bool = False,
-        skip_confirmation: bool = False,
-        confirm_callback: Callable[[list[str]], bool] | None = None,
-    ) -> RegisterResult:
-        """Register lineage for a local DAG step reference like ``@4``."""
-        parsed = parse_register_step_reference(step_reference)
-        if parsed is None:
-            return RegisterResult(success=False, error=f"Invalid DAG reference: {step_reference}")
-        step_number, is_build = parsed
-
-        with create_database_context(roar_dir) as db_ctx:
-            session = db_ctx.sessions.get_active()
-            if not session:
-                return RegisterResult(
-                    success=False,
-                    error="No active session. Run 'roar run' to create a session first.",
-                )
-            lineage = self.lineage_collector.collect_step(
-                session_id=int(session["id"]),
-                step_number=step_number,
-                roar_dir=roar_dir,
-                job_type="build" if is_build else None,
-            )
-
-        if not lineage.jobs:
-            return RegisterResult(
-                success=False,
-                error=f"No tracked jobs found for DAG reference {step_reference}.",
-            )
-
-        representative_hash = self._select_representative_hash(lineage)
-        return self._register_collected_lineage(
-            lineage=lineage,
-            roar_dir=roar_dir,
-            cwd=cwd,
-            session_id=int(lineage.pipeline["id"]) if lineage.pipeline else None,
-            artifact_hash=representative_hash,
-            dry_run=dry_run,
-            as_blake3=as_blake3,
-            skip_confirmation=skip_confirmation,
-            confirm_callback=confirm_callback,
-        )
-
-    def register_session_lineage(
-        self,
-        session_hash: str,
-        roar_dir: Path,
-        cwd: Path,
-        dry_run: bool = False,
-        as_blake3: bool = False,
-        skip_confirmation: bool = False,
-        confirm_callback: Callable[[list[str]], bool] | None = None,
-    ) -> RegisterResult:
-        """Register the complete local session identified by a GLaaS session hash or prefix."""
-        with create_database_context(roar_dir) as db_ctx:
-            session, resolved_hash, error = self._resolve_session_target(
-                db_ctx=db_ctx,
-                roar_dir=roar_dir,
-                session_hash=session_hash,
-            )
-            if session is None:
-                return RegisterResult(success=False, error=error or "Session not found.")
-            lineage = self.lineage_collector.collect_session(int(session["id"]), roar_dir)
-
-        return self._register_collected_lineage(
-            lineage=lineage,
-            roar_dir=roar_dir,
-            cwd=cwd,
-            session_id=int(session["id"]),
-            artifact_hash="",
-            dry_run=dry_run,
-            as_blake3=as_blake3,
-            skip_confirmation=skip_confirmation,
-            confirm_callback=confirm_callback,
-            session_hash_override=resolved_hash,
-        )
-
-    def register_job_lineage(
-        self,
-        job_uid: str,
-        roar_dir: Path,
-        cwd: Path,
-        dry_run: bool = False,
-        as_blake3: bool = False,
-        skip_confirmation: bool = False,
-        confirm_callback: Callable[[list[str]], bool] | None = None,
-    ) -> RegisterResult:
-        """Register lineage for a local job identified by job UID or prefix."""
-        lineage = self.lineage_collector.collect_job(job_uid, roar_dir)
-        if not lineage.jobs:
-            return RegisterResult(success=False, error=f"No local job matches '{job_uid}'.")
-
-        representative_hash = self._select_representative_hash(lineage)
-        pipeline_id = lineage.pipeline.get("id") if isinstance(lineage.pipeline, dict) else None
-        return self._register_collected_lineage(
-            lineage=lineage,
-            roar_dir=roar_dir,
-            cwd=cwd,
-            session_id=int(pipeline_id) if pipeline_id is not None else None,
-            artifact_hash=representative_hash,
-            dry_run=dry_run,
-            as_blake3=as_blake3,
-            skip_confirmation=skip_confirmation,
-            confirm_callback=confirm_callback,
-        )
-
-    def register_artifact_lineage(
-        self,
-        artifact_path: str,
-        roar_dir: Path,
-        cwd: Path,
-        dry_run: bool = False,
-        as_blake3: bool = False,
-        skip_confirmation: bool = False,
-        confirm_callback: Callable[[list[str]], bool] | None = None,
-    ) -> RegisterResult:
-        """
-        Register artifact and its lineage with GLaaS.
-
-        Args:
-            artifact_path: Path to the artifact file
-            roar_dir: Path to .roar directory
-            cwd: Current working directory
-            dry_run: If True, show what would be registered without calling API
-            as_blake3: If True, upgrade S3 etag-only artifacts to blake3 hashes
-            skip_confirmation: If True, skip confirmation prompt even if secrets detected
-            confirm_callback: Callback function to prompt user for confirmation.
-                              Receives list of detected secret types, returns True to proceed.
-                              If None and secrets are detected (and skip_confirmation=False),
-                              registration will abort.
-
-        Returns:
-            RegisterResult with success status and counts
-        """
-        # Step 1: Resolve artifact path
-        resolved_path = resolve_publish_artifact_path(artifact_path, cwd)
-        if not resolved_path:
-            return RegisterResult(
-                success=False,
-                error=f"File not found: {artifact_path}",
-            )
-
-        is_s3_artifact = self._is_s3_url(resolved_path)
-        if not is_s3_artifact and not os.path.exists(resolved_path):
-            return RegisterResult(
-                success=False,
-                error=f"File not found: {artifact_path}",
-            )
-
-        # Step 2/3: Resolve hash and tracked artifact record
-        with create_database_context(roar_dir) as db_ctx:
-            if is_s3_artifact:
-                db_artifact = db_ctx.artifacts.get_by_path(resolved_path)
-                if not db_artifact:
-                    return RegisterResult(
-                        success=False,
-                        error=f"Artifact not tracked by roar: {artifact_path}\n"
-                        "Run 'roar run' to track this artifact first.",
-                    )
-                artifact_hash = self._select_primary_hash(db_artifact)
-            else:
-                artifact_hash = self._compute_hash(resolved_path)
-                if not artifact_hash:
-                    return RegisterResult(
-                        success=False,
-                        error=f"Failed to compute hash for: {artifact_path}",
-                    )
-                db_artifact = db_ctx.artifacts.get_by_hash(artifact_hash, algorithm="blake3")
-                if not db_artifact:
-                    return RegisterResult(
-                        success=False,
-                        error=f"Artifact not tracked by roar: {artifact_path}\n"
-                        "Run 'roar run' to track this artifact first.",
-                    )
-
-            if not artifact_hash:
-                return RegisterResult(
-                    success=False,
-                    error=f"Artifact has no registered hash: {artifact_path}",
-                )
-
-            self._logger.debug("Artifact hash: %s", artifact_hash[:12])
-
-            # Step 4: Get active session
-            session = db_ctx.sessions.get_active()
-            if not session:
-                return RegisterResult(
-                    success=False,
-                    error="No active session. Run 'roar run' to create a session first.",
-                )
-
-            self._logger.debug("Active session: %d", session["id"])
-            lineage = self.lineage_collector.collect([artifact_hash], roar_dir)
-
-        return self._register_collected_lineage(
-            lineage=lineage,
-            roar_dir=roar_dir,
-            cwd=cwd,
-            session_id=int(session["id"]),
-            artifact_hash=artifact_hash,
-            dry_run=dry_run,
-            as_blake3=as_blake3,
-            skip_confirmation=skip_confirmation,
-            confirm_callback=confirm_callback,
-        )
-
-    def register_artifact_hash_lineage(
-        self,
-        artifact_hash: str,
-        roar_dir: Path,
-        cwd: Path,
-        dry_run: bool = False,
-        as_blake3: bool = False,
-        skip_confirmation: bool = False,
-        confirm_callback: Callable[[list[str]], bool] | None = None,
-    ) -> RegisterResult:
-        """Register lineage for a tracked local artifact identified by hash."""
-        with create_database_context(roar_dir) as db_ctx:
-            db_artifact = db_ctx.artifacts.get_by_prefix(artifact_hash)
-            if not db_artifact:
-                return RegisterResult(
-                    success=False,
-                    error=f"No tracked local artifact matches '{artifact_hash}'.",
-                )
-
-            resolved_hash = self._select_primary_hash(db_artifact)
-            if not resolved_hash:
-                return RegisterResult(
-                    success=False,
-                    error=f"Artifact has no registered hash: {artifact_hash}",
-                )
-
-            session = db_ctx.sessions.get_active()
-            if not session:
-                return RegisterResult(
-                    success=False,
-                    error="No active session. Run 'roar run' to create a session first.",
-                )
-
-            lineage = self.lineage_collector.collect([resolved_hash], roar_dir)
-
-        return self._register_collected_lineage(
-            lineage=lineage,
-            roar_dir=roar_dir,
-            cwd=cwd,
-            session_id=int(session["id"]),
-            artifact_hash=resolved_hash,
-            dry_run=dry_run,
-            as_blake3=as_blake3,
-            skip_confirmation=skip_confirmation,
-            confirm_callback=confirm_callback,
-        )
-
-    def _register_collected_lineage(
+    def register_collected_lineage(
         self,
         *,
         lineage: LineageData,
@@ -451,6 +166,7 @@ class RegisterService:
         confirm_callback: Callable[[list[str]], bool] | None,
         session_hash_override: str | None = None,
     ) -> RegisterResult:
+        """Register already-collected local lineage with GLaaS."""
         self._logger.debug(
             "Collected lineage: %d jobs, %d artifacts",
             len(lineage.jobs),
@@ -645,50 +361,6 @@ class RegisterService:
             secrets_redacted=bool(detected_secrets),
         )
 
-    def _resolve_session_target(
-        self,
-        *,
-        db_ctx,
-        roar_dir: Path,
-        session_hash: str,
-    ) -> tuple[dict | None, str | None, str | None]:
-        candidates: list[tuple[dict, str]] = []
-        for session in db_ctx.sessions.get_all():
-            resolved_hash = self.session_service.compute_session_hash(
-                roar_dir=str(roar_dir),
-                session_id=int(session["id"]),
-            )
-            if resolved_hash.startswith(session_hash):
-                candidates.append((session, resolved_hash))
-
-        if len(candidates) == 1:
-            return candidates[0][0], candidates[0][1], None
-        if len(candidates) > 1:
-            return (
-                None,
-                None,
-                (
-                    f"Ambiguous session hash prefix '{session_hash}'. "
-                    "Provide more characters to select a single local session."
-                ),
-            )
-
-        local_session = db_ctx.sessions.get_by_hash_prefix(session_hash)
-        if local_session:
-            resolved_hash = self.session_service.compute_session_hash(
-                roar_dir=str(roar_dir),
-                session_id=int(local_session["id"]),
-            )
-            return local_session, resolved_hash, None
-
-        return None, None, f"No local session matches '{session_hash}'."
-
-    def _select_representative_hash(self, lineage: LineageData) -> str:
-        hashes = sorted(str(hash_value) for hash_value in lineage.artifact_hashes if hash_value)
-        if len(hashes) == 1:
-            return hashes[0]
-        return ""
-
     def _normalize_jobs_for_registration(self, jobs: list[dict]) -> list[dict]:
         normalized = [dict(job) for job in jobs if not self._is_registration_noise_job(job)]
         known_job_uids = {
@@ -783,45 +455,6 @@ class RegisterService:
             float(job.get("timestamp") or 0.0),
             int(job.get("id") or 0),
         )
-
-    def _is_s3_url(self, path: str) -> bool:
-        parsed = urlparse(path)
-        return parsed.scheme == "s3" and bool(parsed.netloc)
-
-    def _select_primary_hash(self, artifact: dict) -> str | None:
-        hashes = artifact.get("hashes")
-        if isinstance(hashes, list):
-            by_algorithm: dict[str, str] = {}
-            for entry in hashes:
-                if not isinstance(entry, dict):
-                    continue
-                algorithm = entry.get("algorithm")
-                digest = entry.get("digest")
-                if isinstance(algorithm, str) and isinstance(digest, str) and digest:
-                    by_algorithm.setdefault(algorithm.strip().lower(), digest)
-
-            for algorithm in ("blake3", "sha256", "etag"):
-                digest = by_algorithm.get(algorithm)
-                if digest:
-                    return digest
-
-            for digest in by_algorithm.values():
-                if digest:
-                    return digest
-
-        fallback = artifact.get("hash")
-        if isinstance(fallback, str) and fallback:
-            return fallback
-        return None
-
-    def _compute_hash(self, path: str) -> str | None:
-        """Compute BLAKE3 hash of file."""
-        try:
-            hashes_by_path = compute_hashes_batch([path], ["blake3"])
-            return hashes_by_path.get(path, {}).get("blake3")
-        except (OSError, ValueError) as e:
-            self._logger.error("Failed to hash file %s: %s", path, e)
-            return None
 
     def upgrade_s3_etags_to_blake3(self, roar_dir: Path, lineage: LineageData) -> None:
         """
