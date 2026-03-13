@@ -2,7 +2,7 @@
 Plugin registry with auto-discovery for optional plugins.
 
 Automatically discovers and registers plugins from:
-1. Built-in plugins in roar.plugins.*
+1. Optional built-in plugin packages in ``roar.plugins.*`` when present
 2. Entry point plugins from external packages
 """
 
@@ -11,7 +11,6 @@ import importlib
 import pkgutil
 
 from .container import get_container
-from .interfaces.cloud import ICloudStorageProvider
 from .interfaces.command import ICommand
 from .interfaces.telemetry import ITelemetryProvider
 from .interfaces.vcs import IVCSProvider
@@ -22,7 +21,7 @@ def discover_plugins(package_name: str = "roar.plugins") -> None:
     """
     Auto-discover and register plugins.
 
-    Scans roar.plugins.* for classes implementing provider interfaces.
+    Scans optional ``roar.plugins.*`` packages for plugin classes when present.
     Also supports entry points for external plugins.
 
     Args:
@@ -45,8 +44,8 @@ def _discover_builtin_plugins(container, package_name: str) -> None:
         # Plugins package not yet created
         return
 
-    # Walk through optional built-in plugin subpackages
-    subpackages = ["cloud", "analyzers"]
+    # Walk through optional built-in plugin subpackages.
+    subpackages = ["analyzers"]
     for subpackage in subpackages:
         try:
             subpkg = importlib.import_module(f"{package_name}.{subpackage}")
@@ -83,19 +82,7 @@ def _scan_package_for_plugins(container, package, plugin_type: str) -> None:
 def _try_register_plugin(container, cls: type, plugin_type: str) -> None:
     """Try to register a class as a plugin if it implements the right interface."""
 
-    if plugin_type == "cloud" and _implements(cls, ICloudStorageProvider):
-        try:
-            instance = cls()
-            container.register_cloud_provider(instance.scheme, cls)
-        except Exception as e:
-            _get_logger().debug(
-                "Failed to load cloud plugin %s.%s: %s",
-                cls.__module__,
-                cls.__name__,
-                e,
-            )
-
-    elif plugin_type == "telemetry" and _implements(cls, ITelemetryProvider):
+    if plugin_type == "telemetry" and _implements(cls, ITelemetryProvider):
         try:
             instance = cls()
             container.register_telemetry_provider(instance.name, cls)
@@ -145,7 +132,7 @@ def _discover_entrypoint_plugins(container) -> None:
     External packages can register plugins by adding to pyproject.toml:
 
         [project.entry-points."roar.plugins"]
-        my_provider = "my_package.provider:MyCloudProvider"
+        my_provider = "my_package.provider:MyTelemetryProvider"
     """
     try:
         from importlib.metadata import entry_points
@@ -167,10 +154,7 @@ def _discover_entrypoint_plugins(container) -> None:
 
 def _register_entrypoint_plugin(container, plugin_cls: type) -> None:
     """Register an entry point plugin based on its interface."""
-    if _implements(plugin_cls, ICloudStorageProvider):
-        instance = plugin_cls()
-        container.register_cloud_provider(instance.scheme, plugin_cls)
-    elif _implements(plugin_cls, ITelemetryProvider):
+    if _implements(plugin_cls, ITelemetryProvider):
         instance = plugin_cls()
         container.register_telemetry_provider(instance.name, plugin_cls)
     elif _implements(plugin_cls, IVCSProvider):
@@ -236,17 +220,14 @@ def register_plugin(cls: type) -> type:
 
     Usage:
         @register_plugin
-        class MyCloudProvider(ICloudStorageProvider):
+        class MyTelemetryProvider(ITelemetryProvider):
             ...
 
     The decorator auto-detects the interface and registers appropriately.
     """
     container = get_container()
 
-    if _implements(cls, ICloudStorageProvider):
-        instance = cls()
-        container.register_cloud_provider(instance.scheme, cls)
-    elif _implements(cls, ITelemetryProvider):
+    if _implements(cls, ITelemetryProvider):
         instance = cls()
         container.register_telemetry_provider(instance.name, cls)
     elif _implements(cls, IVCSProvider):

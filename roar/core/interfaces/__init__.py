@@ -5,7 +5,6 @@ These protocols define the contracts that implementations must follow,
 enabling dependency inversion and loose coupling throughout the codebase.
 """
 
-from .cloud import ICloudStorageProvider
 from .command import CommandContext, CommandResult, ICommand
 from .config import IConfigProvider
 from .lineage import ILineageCollector, LineageData
@@ -34,7 +33,6 @@ __all__ = [
     "CommandResult",
     "HashCacheRepository",
     "HashingService",
-    "ICloudStorageProvider",
     "ICommand",
     "IConfigProvider",
     "ILineageCollector",

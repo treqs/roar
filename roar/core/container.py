@@ -14,7 +14,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
-    from .interfaces.cloud import ICloudStorageProvider
     from .interfaces.command import ICommand
     from .interfaces.telemetry import ITelemetryProvider
     from .interfaces.vcs import IVCSProvider
@@ -80,8 +79,8 @@ class ServiceContainer:
     """
     Dependency injection container for roar.
 
-    Combines DI capabilities with plugin registries for extensible
-    components like cloud providers and analyzers.
+    Combines DI capabilities with registries for extensible
+    components like telemetry providers and analyzers.
     """
 
     _instance: ServiceContainer | None = None
@@ -92,7 +91,6 @@ class ServiceContainer:
         self._providers: dict[type, _Provider] = {}
 
         # Plugin registries (multiple implementations per interface)
-        self._cloud_providers: dict[str, type[ICloudStorageProvider]] = {}
         self._telemetry_providers: dict[str, type[ITelemetryProvider]] = {}
         self._vcs_providers: dict[str, type[IVCSProvider]] = {}
         self._commands: dict[str, type[ICommand]] = {}
@@ -208,45 +206,6 @@ class ServiceContainer:
             provider: The new provider to use
         """
         self._providers[interface] = provider
-
-    # -------------------------------------------------------------------------
-    # Cloud provider registry
-    # -------------------------------------------------------------------------
-
-    def register_cloud_provider(
-        self,
-        scheme: str,
-        provider_class: type[ICloudStorageProvider],
-    ) -> None:
-        """
-        Register a cloud storage provider.
-
-        Args:
-            scheme: URL scheme (e.g., 's3', 'gs', 'az')
-            provider_class: Provider class implementing ICloudStorageProvider
-        """
-        self._cloud_providers[scheme] = provider_class
-
-    def get_cloud_provider(self, scheme: str) -> ICloudStorageProvider:
-        """
-        Get a cloud provider instance by scheme.
-
-        Args:
-            scheme: URL scheme
-
-        Returns:
-            Provider instance
-
-        Raises:
-            KeyError: If no provider registered for scheme
-        """
-        if scheme not in self._cloud_providers:
-            raise KeyError(f"No cloud provider registered for scheme: {scheme}")
-        return self._cloud_providers[scheme]()
-
-    def list_cloud_providers(self) -> list[str]:
-        """List registered cloud provider schemes."""
-        return list(self._cloud_providers.keys())
 
     # -------------------------------------------------------------------------
     # Telemetry provider registry
