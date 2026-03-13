@@ -249,7 +249,10 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
             "roar.application.publish.service.create_database_context",
             return_value=nullcontext(db_ctx),
         ),
-        patch("roar.application.publish.service._get_backend", return_value=backend),
+        patch(
+            "roar.application.publish.service.resolve_publish_storage_backend",
+            return_value=backend,
+        ),
         patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
         patch(
             "roar.application.publish.service.prepare_put_execution",
@@ -316,7 +319,10 @@ def test_put_artifacts_rejects_dirty_repo_before_put(tmp_path: Path) -> None:
             "roar.application.publish.service.create_database_context",
             return_value=nullcontext(MagicMock()),
         ),
-        patch("roar.application.publish.service._get_backend", return_value=MagicMock()),
+        patch(
+            "roar.application.publish.service.resolve_publish_storage_backend",
+            return_value=MagicMock(),
+        ),
         patch("roar.application.publish.service.PutService") as mock_put_cls,
         patch(
             "roar.application.publish.service.ensure_clean_publish_repo",
@@ -350,7 +356,10 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
             "roar.application.publish.service.create_database_context",
             return_value=nullcontext(db_ctx),
         ),
-        patch("roar.application.publish.service._get_backend", return_value=MagicMock()),
+        patch(
+            "roar.application.publish.service.resolve_publish_storage_backend",
+            return_value=MagicMock(),
+        ),
         patch(
             "roar.application.publish.service.prepare_put_execution",
             return_value=prepared,
@@ -389,7 +398,10 @@ def test_put_artifacts_returns_preparation_error_before_service(tmp_path: Path) 
             "roar.application.publish.service.create_database_context",
             return_value=nullcontext(db_ctx),
         ),
-        patch("roar.application.publish.service._get_backend", return_value=MagicMock()),
+        patch(
+            "roar.application.publish.service.resolve_publish_storage_backend",
+            return_value=MagicMock(),
+        ),
         patch("roar.application.publish.service.build_publish_runtime", return_value=MagicMock()),
         patch(
             "roar.application.publish.service.prepare_put_execution",

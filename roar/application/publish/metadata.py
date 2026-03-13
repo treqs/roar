@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ...core.operation_metadata import build_operation_metadata_json
 from ...services.registration._dataset_label import build_dataset_metadata, find_matching_identifier
 from ...services.registration._dataset_profile import build_dataset_profile
-from ...services.transfer import build_operation_metadata_json
 from .composite_builder import CompositeBuildResult
 
 

@@ -7,12 +7,7 @@ from ...core.logging import get_logger
 from ...db.context import create_database_context
 from ...glaas_client import get_glaas_url
 from ...integrations.storage import (
-    MemoryBackend,
-    NoOpBackend,
-    load_backend_class,
-    parse_destination,
-    resolve_backend_for_scheme,
-    should_skip_upload,
+    resolve_publish_storage_backend,
 )
 from ...services.put import PutService
 from ...services.registration.register_service import RegisterResult, RegisterService
@@ -108,8 +103,7 @@ def put_artifacts(request: PutRequest) -> PutResponse:
     bootstrap(request.roar_dir)
     logger = get_logger()
 
-    parse_destination(request.destination)
-    backend = _get_backend(request.destination)
+    backend = resolve_publish_storage_backend(request.destination)
 
     git_commit: str | None = None
     expected_tag: str | None = None
@@ -188,36 +182,4 @@ def put_artifacts(request: PutRequest) -> PutResponse:
         result=result,
         git_tag=created_git_tag,
         warnings=warnings,
-    )
-
-
-def _get_backend(destination: str):
-    """Resolve the storage backend for a publish destination."""
-    parsed = parse_destination(destination)
-
-    if should_skip_upload():
-        return NoOpBackend(
-            bucket=parsed.bucket,
-            prefix=parsed.prefix,
-            scheme=parsed.scheme,
-        )
-
-    builders = {
-        "s3": lambda: load_backend_class(
-            "roar.integrations.storage.s3",
-            "S3Backend",
-            "S3 backend requires boto3. Install with: pip install boto3",
-        )(bucket=parsed.bucket, prefix=parsed.prefix),
-        "gs": lambda: load_backend_class(
-            "roar.integrations.storage.gcs",
-            "GCSBackend",
-            "GCS backend requires google-cloud-storage. Install with: pip install google-cloud-storage",
-        )(bucket=parsed.bucket, prefix=parsed.prefix),
-        "memory": lambda: MemoryBackend(bucket=parsed.bucket, prefix=parsed.prefix),
-    }
-
-    return resolve_backend_for_scheme(
-        parsed.scheme,
-        builders,
-        f"Unsupported destination scheme: {parsed.scheme}",
     )

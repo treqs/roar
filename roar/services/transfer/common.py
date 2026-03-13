@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -38,6 +37,3 @@ def hash_files_blake3(paths: list[Path]) -> dict[str, str]:
         if digest:
             result[key] = digest
     return result
-def build_operation_metadata_json(operation: str, payload: dict[str, Any]) -> str:
-    """Wrap operation payload in a namespaced metadata object and serialize to JSON."""
-    return json.dumps({operation: payload})
