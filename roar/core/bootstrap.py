@@ -1,7 +1,8 @@
 """
 Application bootstrap for roar.
 
-Initializes the DI container with all services and plugins.
+Initializes the DI container with core services, built-in integrations,
+and optional plugins.
 This module should be called once at application startup.
 """
 
@@ -21,7 +22,8 @@ def bootstrap(roar_dir: Path | None = None) -> ServiceContainer:
 
     Initializes the DI container with:
     - Core services (database, hashing, etc.)
-    - Plugins (cloud providers, telemetry, VCS)
+    - Built-in integrations (git, telemetry)
+    - Optional plugins discovered from the plugin registry
 
     Args:
         roar_dir: Optional path to .roar directory
@@ -90,8 +92,10 @@ def _register_database_services(container: ServiceContainer, roar_dir: Path) -> 
 def _register_builtin_integrations(container: ServiceContainer) -> None:
     """Register built-in integrations that are part of the core product path."""
     from ..integrations.git import GitVCSProvider
+    from ..integrations.telemetry import WandBTelemetryProvider
 
     container.register_vcs_provider("git", GitVCSProvider)
+    container.register_telemetry_provider("wandb", WandBTelemetryProvider)
 
 
 def reset() -> None:

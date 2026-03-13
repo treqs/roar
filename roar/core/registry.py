@@ -46,7 +46,7 @@ def _discover_builtin_plugins(container, package_name: str) -> None:
         return
 
     # Walk through optional built-in plugin subpackages
-    subpackages = ["cloud", "telemetry", "analyzers"]
+    subpackages = ["cloud", "analyzers"]
     for subpackage in subpackages:
         try:
             subpkg = importlib.import_module(f"{package_name}.{subpackage}")
