@@ -51,6 +51,12 @@ from ...services.transfer import (
     build_operation_metadata_json,
     hash_files_blake3,
 )
+from .job_links import (
+    build_put_job_link_inputs,
+    build_put_job_link_outputs,
+    collect_local_composite_outputs,
+    collect_local_lineage_composite_inputs,
+)
 
 _AUTO_COMPOSITE_MIN_CONFIDENCE = 0.80
 
@@ -612,7 +618,7 @@ class PutService:
             self._db.jobs.add_input(job_id, artifact_id, path)
         self._logger.debug("Linked %d artifact(s) as job inputs", len(artifacts_info))
 
-        lineage_composite_inputs = self._collect_local_lineage_composite_inputs(lineage_artifacts)
+        lineage_composite_inputs = collect_local_lineage_composite_inputs(lineage_artifacts)
         for artifact_id, path in lineage_composite_inputs:
             self._db.jobs.add_input(job_id, artifact_id, path)
         if lineage_composite_inputs:
@@ -621,7 +627,7 @@ class PutService:
                 len(lineage_composite_inputs),
             )
 
-        local_composite_outputs = self._collect_local_composite_outputs(composite_registrations)
+        local_composite_outputs = collect_local_composite_outputs(composite_registrations)
         for artifact_id, path in local_composite_outputs:
             self._db.jobs.add_output(job_id, artifact_id, path)
         if local_composite_outputs:
@@ -672,7 +678,7 @@ class PutService:
         registration_errors: list[str],
     ) -> None:
         """Link put job input/output edges in GLaaS after artifact registration."""
-        input_artifacts, input_resolution_errors = self._build_put_job_link_inputs(
+        input_artifacts, input_resolution_errors = build_put_job_link_inputs(
             coordinator=coordinator,
             uploaded_files=uploaded_files,
             lineage_artifacts=lineage_artifacts,
@@ -680,7 +686,7 @@ class PutService:
         for resolution_error in input_resolution_errors:
             registration_errors.append(f"Put job input link: {resolution_error}")
 
-        output_artifacts = self._build_put_job_link_outputs(composite_registrations)
+        output_artifacts = build_put_job_link_outputs(composite_registrations)
         if not input_artifacts and not output_artifacts:
             return
 
@@ -698,126 +704,6 @@ class PutService:
     @staticmethod
     def _extract_registration_hashes(artifact: dict[str, Any]) -> list[dict[str, str]]:
         return normalize_registration_hashes(artifact)
-
-    @staticmethod
-    def _collect_local_composite_outputs(
-        composite_registrations: list[dict[str, Any]],
-    ) -> list[tuple[str, str]]:
-        seen: dict[tuple[str, str], None] = {}
-        for composite in composite_registrations:
-            local_artifact_id = composite.get("local_artifact_id")
-            root_path = composite.get("root_path")
-            if (
-                isinstance(local_artifact_id, str)
-                and local_artifact_id
-                and isinstance(root_path, str)
-                and root_path
-            ):
-                seen[(local_artifact_id, root_path)] = None
-        return list(seen)
-
-    @staticmethod
-    def _collect_local_lineage_composite_inputs(
-        lineage_artifacts: list[dict[str, Any]],
-    ) -> list[tuple[str, str]]:
-        seen: dict[tuple[str, str], None] = {}
-        for artifact in lineage_artifacts:
-            if artifact.get("kind") != "composite":
-                continue
-            artifact_id = artifact.get("id")
-            path = _artifact_ref.artifact_path(artifact)
-            if isinstance(artifact_id, str) and artifact_id and path:
-                seen[(artifact_id, path)] = None
-        return list(seen)
-
-    @staticmethod
-    def _build_put_job_link_outputs(
-        composite_registrations: list[dict[str, Any]],
-    ) -> list[dict[str, str]]:
-        return [
-            {
-                "artifact_hash": registration["hash"],
-                "path": registration["root_path"],
-            }
-            for registration in composite_registrations
-            if registration.get("registered") and registration.get("hash")
-        ]
-
-    def _build_put_job_link_inputs(
-        self,
-        coordinator: RegistrationCoordinator,
-        uploaded_files: list[dict[str, Any]],
-        lineage_artifacts: list[dict[str, Any]],
-    ) -> tuple[list[dict[str, str]], list[str]]:
-        candidates: list[dict[str, Any]] = []
-
-        for uploaded in uploaded_files:
-            digest = uploaded.get("hash")
-            path = uploaded.get("local_path")
-            if isinstance(digest, str) and digest and isinstance(path, str) and path:
-                candidates.append({"hash": digest, "path": path})
-
-        for artifact in lineage_artifacts:
-            if artifact.get("kind") != "composite":
-                continue
-
-            path = _artifact_ref.artifact_path(artifact)
-            if not isinstance(path, str) or not path:
-                continue
-
-            hashes = self._extract_registration_hashes(artifact)
-            if not hashes:
-                continue
-
-            candidates.append({"hashes": hashes, "path": path})
-
-        return self._resolve_put_job_link_input_candidates(coordinator, candidates)
-
-    @staticmethod
-    def _resolve_put_job_link_input_candidates(
-        coordinator: RegistrationCoordinator,
-        candidates: list[dict[str, Any]],
-    ) -> tuple[list[dict[str, str]], list[str]]:
-        artifact_service = coordinator.artifact_service
-
-        resolved_inputs: list[dict[str, str]] = []
-        errors: list[str] = []
-        artifact_hash_cache: dict[str, str] = {}
-        seen_rows: set[tuple[str, str]] = set()
-
-        for candidate in candidates:
-            path = candidate.get("path")
-            if not isinstance(path, str) or not path:
-                continue
-
-            cache_key = _artifact_ref.cache_key(candidate)
-            artifact_hash = artifact_hash_cache.get(cache_key) if cache_key else None
-            if not artifact_hash:
-                resolution = artifact_service.resolve_artifact_hash(candidate)
-                if not isinstance(resolution, tuple) or len(resolution) != 2:
-                    continue
-                resolved_artifact_hash, error = resolution
-                if error:
-                    errors.append(
-                        f"{(_artifact_ref.preview(candidate) or 'unknown-artifact')} could not be resolved: {error}"
-                    )
-                    continue
-                if not isinstance(resolved_artifact_hash, str) or not resolved_artifact_hash:
-                    errors.append(
-                        f"{(_artifact_ref.preview(candidate) or 'unknown-artifact')} returned empty artifact hash"
-                    )
-                    continue
-                artifact_hash = resolved_artifact_hash
-                if cache_key:
-                    artifact_hash_cache[cache_key] = artifact_hash
-
-            row_key = (artifact_hash, path)
-            if row_key in seen_rows:
-                continue
-            seen_rows.add(row_key)
-            resolved_inputs.append({"artifact_hash": artifact_hash, "path": path})
-
-        return resolved_inputs, errors
 
     def _hash_files_batch(self, paths: list[Path]) -> dict[str, str]:
         """Compute BLAKE3 hashes for paths in one backend batch call."""
