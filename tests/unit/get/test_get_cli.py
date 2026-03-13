@@ -1,28 +1,16 @@
-"""
-Unit tests for the get CLI command.
-
-Tests Click command parsing, option handling, and backend selection.
-"""
+"""Unit tests for the thin get CLI wrapper."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from click.testing import CliRunner
 
+from roar.application.get.requests import GetResponse
 from roar.cli.commands.get import get
-from roar.integrations.download import resolve_download_backend
+from roar.services.get.service import GetResult
 
 
-@pytest.fixture
-def runner():
-    """Create a Click test runner."""
-    return CliRunner()
-
-
-@pytest.fixture
-def mock_roar_context(tmp_path: Path):
-    """Create a mock RoarContext."""
+def _mock_context(tmp_path: Path) -> MagicMock:
     roar_dir = tmp_path / ".roar"
     roar_dir.mkdir()
     ctx = MagicMock()
@@ -33,55 +21,79 @@ def mock_roar_context(tmp_path: Path):
     return ctx
 
 
-class TestGetCLIParsing:
-    """Tests for CLI argument/option parsing."""
+def test_source_required(tmp_path: Path) -> None:
+    runner = CliRunner()
 
-    def test_source_required(self, runner, mock_roar_context):
-        """Source argument is required."""
-        result = runner.invoke(get, [], obj=mock_roar_context)
-        assert result.exit_code != 0
-        assert "Missing argument" in result.output or "Error" in result.output
+    result = runner.invoke(get, [], obj=_mock_context(tmp_path))
 
-    def test_unsupported_scheme_error(self, runner, mock_roar_context):
-        """Unsupported scheme shows error."""
-        import importlib
-
-        get_module = importlib.import_module("roar.cli.commands.get")
-
-        with patch.object(get_module, "bootstrap"):
-            result = runner.invoke(
-                get,
-                ["ftp://server/file.pt"],
-                obj=mock_roar_context,
-            )
-
-            assert result.exit_code != 0
-            assert "Unsupported" in result.output
+    assert result.exit_code != 0
+    assert "Missing argument" in result.output or "Error" in result.output
 
 
-class TestGetBackendSelection:
-    """Tests for backend selection logic."""
+def test_cli_surfaces_application_errors(tmp_path: Path) -> None:
+    runner = CliRunner()
 
-    def test_http_uses_http_backend(self):
-        """HTTP URLs use HTTPBackend."""
-        with patch("roar.integrations.download.get.should_skip_download", return_value=False):
-            backend = resolve_download_backend("https://example.com/model.pt")
-            from roar.integrations.download.http import HTTPBackend
+    with patch("roar.cli.commands.get.get_artifacts", side_effect=ValueError("Unsupported")):
+        result = runner.invoke(get, ["ftp://server/file.pt"], obj=_mock_context(tmp_path))
 
-            assert isinstance(backend, HTTPBackend)
+    assert result.exit_code != 0
+    assert "Unsupported" in result.output
 
-    def test_skip_download_uses_noop(self):
-        """ROAR_GET_SKIP_DOWNLOAD=1 uses NoOpDownloadBackend."""
-        with patch("roar.integrations.download.get.should_skip_download", return_value=True):
-            backend = resolve_download_backend("s3://bucket/model.pt")
-            from roar.integrations.download.noop import NoOpDownloadBackend
 
-            assert isinstance(backend, NoOpDownloadBackend)
+def test_cli_prints_dry_run_plan(tmp_path: Path) -> None:
+    runner = CliRunner()
+    response = GetResponse(
+        result=GetResult(
+            success=True,
+            dry_run=True,
+            would_download=[
+                {
+                    "remote_url": "s3://bucket/model.pt",
+                    "local_path": str(tmp_path / "model.pt"),
+                }
+            ],
+        )
+    )
 
-    def test_unsupported_scheme_raises_valueerror(self):
-        """Unsupported scheme in parse_source raises ValueError (CLI catches it)."""
-        with (
-            patch("roar.integrations.download.get.should_skip_download", return_value=False),
-            pytest.raises(ValueError, match="Unsupported"),
-        ):
-            resolve_download_backend("wandb://project/artifact")
+    with patch("roar.cli.commands.get.get_artifacts", return_value=response):
+        result = runner.invoke(
+            get,
+            ["s3://bucket/model.pt", "--dry-run"],
+            obj=_mock_context(tmp_path),
+        )
+
+    assert result.exit_code == 0
+    assert "Dry run - would download:" in result.output
+    assert "s3://bucket/model.pt" in result.output
+
+
+def test_cli_prints_success_tag_and_warnings(tmp_path: Path) -> None:
+    runner = CliRunner()
+    response = GetResponse(
+        result=GetResult(
+            success=True,
+            job_id=7,
+            downloaded_files=[
+                {
+                    "remote_url": "s3://bucket/model.pt",
+                    "local_path": str(tmp_path / "model.pt"),
+                }
+            ],
+        ),
+        git_tag="roar/deadbeef",
+        warnings=["Could not create git tag: warning"],
+    )
+
+    with patch("roar.cli.commands.get.get_artifacts", return_value=response):
+        result = runner.invoke(
+            get,
+            ["s3://bucket/model.pt", str(tmp_path / "model.pt"), "--tag"],
+            obj=_mock_context(tmp_path),
+        )
+
+    assert result.exit_code == 0
+    assert "Created git tag: roar/deadbeef" in result.output
+    assert "Downloaded 1 file(s) from s3://bucket/model.pt" in result.output
+    assert "Job created: step 7" in result.output
+    assert "Warning: Could not create git tag: warning" in result.stderr
+
