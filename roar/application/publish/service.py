@@ -5,7 +5,7 @@ from __future__ import annotations
 from ...core.bootstrap import bootstrap
 from ...core.logging import get_logger
 from ...db.context import create_database_context
-from ...services.put import GitError, GitOperations, PutService
+from ...services.put import PutService
 from ...services.put.backends import (
     MemoryBackend,
     NoOpBackend,
@@ -14,6 +14,7 @@ from ...services.put.backends import (
 )
 from ...services.registration.register_service import RegisterService
 from ...services.transfer import load_backend_class, resolve_backend_for_scheme
+from .git import build_publish_tag_name, create_publish_git_tag, ensure_clean_publish_repo
 from .requests import (
     PutRequest,
     PutResponse,
@@ -63,21 +64,23 @@ def put_artifacts(request: PutRequest) -> PutResponse:
             roar_dir=request.roar_dir,
         )
 
-        git_ops: GitOperations | None = None
+        git_state = None
         if not request.dry_run:
             try:
-                git_ops = GitOperations(repo_root=repo_root)
-                if git_ops.has_uncommitted_changes():
-                    raise ValueError(
+                git_state = ensure_clean_publish_repo(
+                    repo_root,
+                    error_message=(
                         "Repository has uncommitted changes.\n"
                         "Please commit your changes before running 'roar put'.\n"
                         "This ensures artifacts can be traced to a specific commit."
-                    )
-
-                git_commit = git_ops.get_current_commit()
+                    ),
+                )
+                git_commit = git_state.commit
                 if not request.no_tag:
-                    expected_tag = f"roar/{git_commit}"
-            except GitError as exc:
+                    expected_tag = build_publish_tag_name(git_commit)
+            except ValueError:
+                raise
+            except Exception as exc:
                 logger.debug("Git operation failed during put preflight: %s", exc)
                 warnings.append(f"Git operation failed: {exc}")
 
@@ -92,10 +95,16 @@ def put_artifacts(request: PutRequest) -> PutResponse:
         created_git_tag: str | None = None
         if result.success and not result.dry_run and not request.no_tag and git_commit:
             try:
-                if git_ops is None:
-                    git_ops = GitOperations(repo_root=repo_root)
-                created_git_tag = git_ops.create_tag(git_commit)
-            except GitError as exc:
+                tag_name = expected_tag or build_publish_tag_name(git_commit)
+                success, tag_error = create_publish_git_tag(
+                    git_state.repo_root if git_state is not None else repo_root,
+                    tag_name,
+                )
+                if success:
+                    created_git_tag = tag_name
+                elif tag_error:
+                    warnings.append(f"Could not create git tag: {tag_error}")
+            except Exception as exc:
                 logger.debug("Git tag creation failed: %s", exc)
                 warnings.append(f"Could not create git tag: {exc}")
 

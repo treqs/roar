@@ -745,14 +745,21 @@ class TestRegisterService:
             }
             mock_ctx.return_value = mock_db
 
-            # Mock git context and status (dirty repo)
-            with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
+            # Mock git context and dirty-repo policy
+            with (
+                patch("roar.services.registration.register_service.GitVCSProvider") as mock_git,
+                patch(
+                    "roar.services.registration.register_service.ensure_clean_publish_repo",
+                    side_effect=ValueError(
+                        "Cannot register with uncommitted changes. Commit your changes first."
+                    ),
+                ),
+            ):
                 mock_vcs = MagicMock()
                 mock_vcs.get_repo_root.return_value = str(tmp_path)
                 mock_vcs.get_remote_url.return_value = "https://github.com/test/repo"
                 mock_vcs.get_commit_hash.return_value = "abc123def456"
                 mock_vcs.get_branch.return_value = "main"
-                mock_vcs.get_status.return_value = (False, ["M file.txt"])  # Dirty repo
                 mock_git.return_value = mock_vcs
 
                 # Mock config to enable tagging
@@ -825,15 +832,23 @@ class TestRegisterService:
             }
             mock_ctx.return_value = mock_db
 
-            # Mock git context (clean repo)
-            with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
+            # Mock git context and shared publish git policy
+            with (
+                patch("roar.services.registration.register_service.GitVCSProvider") as mock_git,
+                patch(
+                    "roar.services.registration.register_service.ensure_clean_publish_repo",
+                    return_value=MagicMock(),
+                ),
+                patch(
+                    "roar.services.registration.register_service.create_publish_git_tag",
+                    return_value=(True, None),
+                ) as mock_create_tag,
+            ):
                 mock_vcs = MagicMock()
                 mock_vcs.get_repo_root.return_value = str(tmp_path)
                 mock_vcs.get_remote_url.return_value = "https://github.com/test/repo"
                 mock_vcs.get_commit_hash.return_value = "abc123def456"
                 mock_vcs.get_branch.return_value = "main"
-                mock_vcs.get_status.return_value = (True, [])  # Clean repo
-                mock_vcs.create_tag.return_value = (True, None)  # Tag creation succeeds
                 mock_git.return_value = mock_vcs
 
                 # Mock config to enable tagging
@@ -855,10 +870,7 @@ class TestRegisterService:
                     )
 
         assert result.success is True
-        # Verify create_tag was called with expected tag name
-        mock_vcs.create_tag.assert_called_once()
-        call_args = mock_vcs.create_tag.call_args
-        assert call_args[0][1] == "roar/abc123de"  # roar/{commit[:8]}
+        mock_create_tag.assert_called_once_with(tmp_path, "roar/abc123de")
 
     def test_register_artifact_lineage_tagging_disabled_skips_dirty_check(
         self, service, tmp_path, mock_lineage_collector

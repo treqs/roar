@@ -22,6 +22,11 @@ from urllib.parse import urlparse
 
 from sqlalchemy import text
 
+from ...application.publish.git import (
+    build_publish_tag_name,
+    create_publish_git_tag,
+    ensure_clean_publish_repo,
+)
 from ...application.publish.registration import (
     CompositeRegistrationCandidate,
     ensure_composite_hash_entry,
@@ -544,16 +549,17 @@ class RegisterService:
         if tagging_enabled is None:
             tagging_enabled = True
         if tagging_enabled and git_context.commit:
-            vcs = GitVCSProvider()
-            repo_root = vcs.get_repo_root(str(cwd))
-            if repo_root:
-                clean, _changes = vcs.get_status(repo_root)
-                if not clean:
-                    return RegisterResult(
-                        success=False,
-                        artifact_hash=artifact_hash,
-                        error="Cannot register with uncommitted changes. Commit your changes first.",
-                    )
+            try:
+                ensure_clean_publish_repo(
+                    cwd,
+                    error_message="Cannot register with uncommitted changes. Commit your changes first.",
+                )
+            except ValueError as exc:
+                return RegisterResult(
+                    success=False,
+                    artifact_hash=artifact_hash,
+                    error=str(exc),
+                )
 
         publish_session = prepare_publish_session(
             glaas_client=self.glaas_client,
@@ -676,13 +682,10 @@ class RegisterService:
                 )
 
         if tagging_enabled and git_context.commit:
-            tag_name = f"roar/{git_context.commit[:8]}"
-            vcs = GitVCSProvider()
-            repo_root = vcs.get_repo_root(str(cwd))
-            if repo_root:
-                success, tag_error = vcs.create_tag(repo_root, tag_name)
-                if not success:
-                    self._logger.debug("Failed to create git tag: %s", tag_error)
+            tag_name = build_publish_tag_name(git_context.commit, short=True)
+            success, tag_error = create_publish_git_tag(cwd, tag_name)
+            if not success:
+                self._logger.debug("Failed to create git tag: %s", tag_error)
 
         composite_registered = sum(1 for item in composite_registrations if item.get("registered"))
         composite_failed = sum(1 for item in composite_registrations if not item.get("registered"))
