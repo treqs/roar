@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import random
 import re
 import socket
 import statistics
@@ -10,6 +11,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,6 +37,23 @@ class ProxyProcess:
     stderr_thread: threading.Thread | None = None
 
 
+@dataclass
+class CaseResult:
+    direct_samples: list[float] = field(default_factory=list)
+    proxy_samples: list[float] = field(default_factory=list)
+    paired_deltas: list[float] = field(default_factory=list)
+    direct_first_count: int = 0
+    proxy_first_count: int = 0
+
+
+@dataclass(frozen=True)
+class BenchmarkCase:
+    label: str
+    operation_name: str
+    direct_operation: Callable[[], None]
+    proxy_operation: Callable[[], None]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark roar-proxy against live S3 from the local machine.")
     parser.add_argument("--bucket", help="S3 bucket to use. If omitted with --create-bucket, a unique bucket is created.")
@@ -47,6 +66,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--range-min-bytes", type=int, default=16 * 1024)
     parser.add_argument("--range-cap-bytes", type=int, default=1024 * 1024)
     parser.add_argument("--prefix", default=None, help="Object key prefix. Defaults to a unique run prefix.")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=12345,
+        help="Random seed for paired request ordering.",
+    )
     parser.add_argument(
         "--buffer-bytes",
         type=int,
@@ -156,10 +181,87 @@ def mean_ms(values: list[float]) -> float:
     return statistics.fmean(values) if values else 0.0
 
 
+def median_ms(values: list[float]) -> float:
+    return statistics.median(values) if values else 0.0
+
+
 def percent_delta(candidate: float, baseline: float) -> float:
     if baseline == 0:
         return 0.0
     return ((candidate - baseline) / baseline) * 100.0
+
+
+def timed(operation: Callable[[], None]) -> float:
+    start = time.perf_counter()
+    operation()
+    return (time.perf_counter() - start) * 1000.0
+
+
+def run_paired_round(
+    case: BenchmarkCase, *, direct_first: bool, result: CaseResult | None = None
+) -> None:
+    if direct_first:
+        direct_ms = timed(case.direct_operation)
+        proxy_ms = timed(case.proxy_operation)
+    else:
+        proxy_ms = timed(case.proxy_operation)
+        direct_ms = timed(case.direct_operation)
+
+    if result is None:
+        return
+
+    result.direct_samples.append(direct_ms)
+    result.proxy_samples.append(proxy_ms)
+    result.paired_deltas.append(proxy_ms - direct_ms)
+    if direct_first:
+        result.direct_first_count += 1
+    else:
+        result.proxy_first_count += 1
+
+
+def paired_orders(rounds: int, rng: random.Random) -> list[bool]:
+    orders = [True] * (rounds // 2) + [False] * (rounds // 2)
+    if rounds % 2:
+        orders.append(rng.random() < 0.5)
+    rng.shuffle(orders)
+    return orders
+
+
+def measure_cases(
+    cases: list[BenchmarkCase],
+    *,
+    iterations: int,
+    warmups: int,
+    rng: random.Random,
+) -> dict[tuple[str, str], CaseResult]:
+    results = {(case.label, case.operation_name): CaseResult() for case in cases}
+    warmup_order_by_case = {
+        (case.label, case.operation_name): paired_orders(warmups, rng) for case in cases
+    }
+    measurement_order_by_case = {
+        (case.label, case.operation_name): paired_orders(iterations, rng) for case in cases
+    }
+
+    for round_index in range(warmups):
+        schedule = list(cases)
+        rng.shuffle(schedule)
+        for case in schedule:
+            run_paired_round(
+                case,
+                direct_first=warmup_order_by_case[(case.label, case.operation_name)][round_index],
+            )
+
+    for round_index in range(iterations):
+        schedule = list(cases)
+        rng.shuffle(schedule)
+        for case in schedule:
+            run_paired_round(
+                case,
+                direct_first=measurement_order_by_case[(case.label, case.operation_name)][round_index],
+                result=results[(case.label, case.operation_name)],
+            )
+
+    return results
 
 
 def free_port() -> int:
@@ -268,8 +370,10 @@ def main() -> int:
         print(f"prefix={prefix}")
         print(f"binary={binary}")
         print(f"proxy_endpoint=http://127.0.0.1:{proxy.port}")
+        print(f"seed={args.seed}")
         print(f"buffer_bytes={'default' if args.buffer_bytes is None else args.buffer_bytes}")
 
+        benchmark_cases: list[BenchmarkCase] = []
         for label, size_bytes in FILE_SIZES.items():
             key = keys[label]
             range_value = range_header(
@@ -279,41 +383,64 @@ def main() -> int:
                 cap=args.range_cap_bytes,
             )
 
-            direct_get = measure(
-                lambda key=key: read_body(direct_client.get_object(Bucket=bucket, Key=key)),
-                iterations=args.iterations,
-                warmups=args.warmups,
-            )
-            proxy_get = measure(
-                lambda key=key: read_body(proxy_client.get_object(Bucket=bucket, Key=key)),
-                iterations=args.iterations,
-                warmups=args.warmups,
-            )
-            direct_range = measure(
-                lambda key=key, range_value=range_value: read_body(
-                    direct_client.get_object(Bucket=bucket, Key=key, Range=range_value)
-                ),
-                iterations=args.iterations,
-                warmups=args.warmups,
-            )
-            proxy_range = measure(
-                lambda key=key, range_value=range_value: read_body(
-                    proxy_client.get_object(Bucket=bucket, Key=key, Range=range_value)
-                ),
-                iterations=args.iterations,
-                warmups=args.warmups,
+            benchmark_cases.extend(
+                [
+                    BenchmarkCase(
+                        label=label,
+                        operation_name="GET",
+                        direct_operation=lambda key=key: read_body(
+                            direct_client.get_object(Bucket=bucket, Key=key)
+                        ),
+                        proxy_operation=lambda key=key: read_body(
+                            proxy_client.get_object(Bucket=bucket, Key=key)
+                        ),
+                    ),
+                    BenchmarkCase(
+                        label=label,
+                        operation_name="RANGE",
+                        direct_operation=lambda key=key, range_value=range_value: read_body(
+                            direct_client.get_object(Bucket=bucket, Key=key, Range=range_value)
+                        ),
+                        proxy_operation=lambda key=key, range_value=range_value: read_body(
+                            proxy_client.get_object(Bucket=bucket, Key=key, Range=range_value)
+                        ),
+                    ),
+                ]
             )
 
-            direct_get_mean = mean_ms(direct_get)
-            proxy_get_mean = mean_ms(proxy_get)
-            direct_range_mean = mean_ms(direct_range)
-            proxy_range_mean = mean_ms(proxy_range)
+        results = measure_cases(
+            benchmark_cases,
+            iterations=args.iterations,
+            warmups=args.warmups,
+            rng=random.Random(args.seed),
+        )
+
+        for label in FILE_SIZES:
+            get_result = results[(label, "GET")]
+            range_result = results[(label, "RANGE")]
+
+            direct_get_mean = mean_ms(get_result.direct_samples)
+            proxy_get_mean = mean_ms(get_result.proxy_samples)
+            direct_range_mean = mean_ms(range_result.direct_samples)
+            proxy_range_mean = mean_ms(range_result.proxy_samples)
 
             print(
                 f"file={label:<6} GET: {direct_get_mean:.2f} -> {proxy_get_mean:.2f}ms "
                 f"({percent_delta(proxy_get_mean, direct_get_mean):+.1f}%)  "
                 f"RANGE: {direct_range_mean:.2f} -> {proxy_range_mean:.2f}ms "
                 f"({percent_delta(proxy_range_mean, direct_range_mean):+.1f}%)"
+            )
+            print(
+                " "
+                f"paired_delta GET mean={mean_ms(get_result.paired_deltas):+.2f}ms "
+                f"median={median_ms(get_result.paired_deltas):+.2f}ms "
+                f"order={get_result.direct_first_count} direct-first / {get_result.proxy_first_count} proxy-first"
+            )
+            print(
+                " "
+                f"paired_delta RANGE mean={mean_ms(range_result.paired_deltas):+.2f}ms "
+                f"median={median_ms(range_result.paired_deltas):+.2f}ms "
+                f"order={range_result.direct_first_count} direct-first / {range_result.proxy_first_count} proxy-first"
             )
     finally:
         stop_proxy(proxy)
