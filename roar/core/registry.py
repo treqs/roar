@@ -2,8 +2,7 @@
 Plugin registry with auto-discovery for optional plugins.
 
 Automatically discovers and registers plugins from:
-1. Optional built-in plugin packages in ``roar.plugins.*`` when present
-2. Entry point plugins from external packages
+1. Entry point plugins from external packages
 """
 
 import contextlib
@@ -17,94 +16,16 @@ from .interfaces.vcs import IVCSProvider
 from .logging import get_logger as _get_logger
 
 
-def discover_plugins(package_name: str = "roar.plugins") -> None:
+def discover_plugins() -> None:
     """
     Auto-discover and register plugins.
 
-    Scans optional ``roar.plugins.*`` packages for plugin classes when present.
-    Also supports entry points for external plugins.
-
-    Args:
-        package_name: Base package to scan for plugins
+    Discovers optional plugin entry points from external packages.
     """
     container = get_container()
 
-    # Discover built-in plugins
-    _discover_builtin_plugins(container, package_name)
-
     # Discover entry point plugins (for external packages)
     _discover_entrypoint_plugins(container)
-
-
-def _discover_builtin_plugins(container, package_name: str) -> None:
-    """Discover plugins from the built-in plugins package."""
-    try:
-        importlib.import_module(package_name)
-    except ImportError:
-        # Plugins package not yet created
-        return
-
-    # Walk through optional built-in plugin subpackages.
-    subpackages = ["analyzers"]
-    for subpackage in subpackages:
-        try:
-            subpkg = importlib.import_module(f"{package_name}.{subpackage}")
-            _scan_package_for_plugins(container, subpkg, subpackage)
-        except ImportError:
-            continue
-
-
-def _scan_package_for_plugins(container, package, plugin_type: str) -> None:
-    """Scan a package for plugin classes and register them."""
-    package_path = getattr(package, "__path__", None)
-    if not package_path:
-        return
-
-    for _importer, modname, _ispkg in pkgutil.iter_modules(package_path):
-        # Skip private modules and base classes
-        if modname.startswith("_") or modname == "base":
-            continue
-
-        try:
-            module = importlib.import_module(f"{package.__name__}.{modname}")
-        except ImportError:
-            continue
-
-        # Find and register plugin classes
-        for attr_name in dir(module):
-            attr = getattr(module, attr_name)
-            if not isinstance(attr, type):
-                continue
-
-            _try_register_plugin(container, attr, plugin_type)
-
-
-def _try_register_plugin(container, cls: type, plugin_type: str) -> None:
-    """Try to register a class as a plugin if it implements the right interface."""
-
-    if plugin_type == "telemetry" and _implements(cls, ITelemetryProvider):
-        try:
-            instance = cls()
-            container.register_telemetry_provider(instance.name, cls)
-        except Exception as e:
-            _get_logger().debug(
-                "Failed to load telemetry plugin %s.%s: %s",
-                cls.__module__,
-                cls.__name__,
-                e,
-            )
-
-    elif plugin_type == "vcs" and _implements(cls, IVCSProvider):
-        try:
-            instance = cls()
-            container.register_vcs_provider(instance.name, cls)
-        except Exception as e:
-            _get_logger().debug(
-                "Failed to load VCS plugin %s.%s: %s",
-                cls.__module__,
-                cls.__name__,
-                e,
-            )
 
 
 def _implements(cls: type, interface: type) -> bool:
