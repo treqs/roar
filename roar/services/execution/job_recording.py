@@ -1,7 +1,8 @@
 """
-Job recording helpers for run/build execution.
+Job recording helpers for local execution persistence.
 
-This module extracts persistence-oriented responsibilities from RunCoordinator:
+This module extracts persistence-oriented responsibilities from higher-level
+execution/application orchestration:
 - metadata and telemetry shaping
 - job recording
 - stale-step analysis
@@ -177,6 +178,110 @@ class ProxyArtifactRegistrar:
                 db_ctx.jobs.add_input(job_id, artifact_id, s3_url, byte_ranges=entry.byte_ranges)
             else:
                 db_ctx.jobs.add_output(job_id, artifact_id, s3_url)
+
+
+@dataclass(frozen=True)
+class LocalRecordedArtifact:
+    """Precomputed artifact facts for local job recording."""
+
+    path: str
+    hashes: dict[str, str]
+    size: int
+    source_type: str | None = None
+    source_url: str | None = None
+    metadata: str | None = None
+    byte_ranges: list[list[int]] | None = None
+
+
+class LocalJobRecorder:
+    """Persist a local job from precomputed artifact facts."""
+
+    def record(
+        self,
+        db_ctx: Any,
+        *,
+        command: str,
+        timestamp: float,
+        metadata: str | None,
+        execution_backend: str,
+        execution_role: str,
+        job_type: str,
+        output_artifacts: list[LocalRecordedArtifact],
+        input_artifacts: list[LocalRecordedArtifact] | None = None,
+        duration_seconds: float | None = None,
+        exit_code: int | None = None,
+        session_id: int | None = None,
+        job_uid: str | None = None,
+    ) -> tuple[int, str]:
+        """Create a job and link precomputed input/output artifacts."""
+        resolved_session_id = session_id
+        if resolved_session_id is None:
+            active_session = db_ctx.sessions.get_active()
+            if active_session is None:
+                raise ValueError("No active session")
+            resolved_session_id = int(active_session["id"])
+
+        step_number = db_ctx.sessions.get_next_step_number(resolved_session_id)
+        job_id, recorded_job_uid = db_ctx.jobs.create(
+            command=command,
+            timestamp=timestamp,
+            job_uid=job_uid,
+            session_id=resolved_session_id,
+            step_number=step_number,
+            metadata=metadata,
+            execution_backend=execution_backend,
+            execution_role=execution_role,
+            job_type=job_type,
+            exit_code=exit_code,
+            duration_seconds=duration_seconds,
+        )
+
+        self._register_artifacts(
+            db_ctx=db_ctx,
+            job_id=job_id,
+            artifacts=input_artifacts or [],
+            is_input=True,
+        )
+        self._register_artifacts(
+            db_ctx=db_ctx,
+            job_id=job_id,
+            artifacts=output_artifacts,
+            is_input=False,
+        )
+
+        return job_id, recorded_job_uid
+
+    @staticmethod
+    def _register_artifacts(
+        *,
+        db_ctx: Any,
+        job_id: int,
+        artifacts: list[LocalRecordedArtifact],
+        is_input: bool,
+    ) -> None:
+        for artifact in artifacts:
+            artifact_id, _created = db_ctx.artifacts.register(
+                hashes=artifact.hashes,
+                size=artifact.size,
+                path=artifact.path,
+                source_type=artifact.source_type,
+                source_url=artifact.source_url,
+                metadata=artifact.metadata,
+            )
+            if is_input:
+                db_ctx.jobs.add_input(
+                    job_id,
+                    artifact_id,
+                    artifact.path,
+                    byte_ranges=artifact.byte_ranges,
+                )
+            else:
+                db_ctx.jobs.add_output(
+                    job_id,
+                    artifact_id,
+                    artifact.path,
+                    byte_ranges=artifact.byte_ranges,
+                )
 
 
 class CompositeOutputMaterializer:

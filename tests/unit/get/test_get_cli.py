@@ -5,9 +5,8 @@ from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
-from roar.application.get.requests import GetResponse
+from roar.application.get.requests import GetResponse, GetResult
 from roar.cli.commands.get import get
-from roar.services.get.service import GetResult
 
 
 def _mock_context(tmp_path: Path) -> MagicMock:
@@ -96,4 +95,3 @@ def test_cli_prints_success_tag_and_warnings(tmp_path: Path) -> None:
     assert "Downloaded 1 file(s) from s3://bucket/model.pt" in result.output
     assert "Job created: step 7" in result.output
     assert "Warning: Could not create git tag: warning" in result.stderr
-

@@ -2,9 +2,9 @@
 Get service for downloading artifacts from cloud storage.
 """
 
-from .service import GetResult, GetService
+from .service import GetService, GetTransferResult
 
 __all__ = [
-    "GetResult",
     "GetService",
+    "GetTransferResult",
 ]
