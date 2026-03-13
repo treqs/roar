@@ -6,15 +6,13 @@ from ...core.bootstrap import bootstrap
 from ...core.logging import get_logger
 from ...db.context import create_database_context
 from ...glaas_client import get_glaas_url
-from ...integrations.storage import (
-    resolve_publish_storage_backend,
-)
+from ...integrations.storage import resolve_publish_storage_backend
 from ...services.put import PutService
 from ...services.registration.register_service import RegisterResult, RegisterService
 from .collection import collect_register_lineage
 from .git import (
-    create_publish_git_tag,
     finalize_put_publish_git,
+    finalize_register_publish_git,
     prepare_put_publish_git,
 )
 from .put_preparation import prepare_put_execution
@@ -83,21 +81,13 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         prepared=prepared,
     )
 
-    if (
-        result.success
-        and not request.dry_run
-        and prepared.git_tag_name
-        and prepared.git_tag_repo_root is not None
-    ):
-        try:
-            success, tag_error = create_publish_git_tag(
-                prepared.git_tag_repo_root,
-                prepared.git_tag_name,
-            )
-            if not success and tag_error:
-                logger.debug("Failed to create git tag: %s", tag_error)
-        except Exception as exc:
-            logger.debug("Failed to create git tag: %s", exc)
+    finalize_register_publish_git(
+        result_success=result.success,
+        dry_run=request.dry_run,
+        git_tag_name=prepared.git_tag_name,
+        git_tag_repo_root=prepared.git_tag_repo_root,
+        logger=logger,
+    )
 
     return RegisterLineageResponse(result=result)
 

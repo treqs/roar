@@ -11,6 +11,7 @@ from roar.application.publish.git import (
     create_publish_git_tag,
     ensure_clean_publish_repo,
     finalize_put_publish_git,
+    finalize_register_publish_git,
     prepare_put_publish_git,
     resolve_publish_git_context,
     resolve_publish_git_state,
@@ -140,6 +141,24 @@ def test_finalize_put_publish_git_returns_created_tag(tmp_path: Path) -> None:
 
     assert created_tag == "roar/deadbeef"
     assert warnings == []
+    create_tag.assert_called_once_with(tmp_path, "roar/deadbeef")
+
+
+def test_finalize_register_publish_git_creates_tag_when_enabled(tmp_path: Path) -> None:
+    logger = MagicMock()
+
+    with patch(
+        "roar.application.publish.git.create_publish_git_tag",
+        return_value=(True, None),
+    ) as create_tag:
+        finalize_register_publish_git(
+            result_success=True,
+            dry_run=False,
+            git_tag_name="roar/deadbeef",
+            git_tag_repo_root=tmp_path,
+            logger=logger,
+        )
+
     create_tag.assert_called_once_with(tmp_path, "roar/deadbeef")
 
 

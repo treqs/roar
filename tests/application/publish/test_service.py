@@ -213,10 +213,7 @@ def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -
             "roar.application.publish.service.prepare_register_execution",
             return_value=prepared,
         ),
-        patch(
-            "roar.application.publish.service.create_publish_git_tag",
-            return_value=(True, None),
-        ) as create_tag,
+        patch("roar.application.publish.service.finalize_register_publish_git") as finalize_register,
         patch("roar.application.publish.service.RegisterService") as mock_cls,
     ):
         mock_cls.return_value.register_prepared_lineage.return_value = expected
@@ -230,7 +227,13 @@ def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -
         )
 
     assert response.result is expected
-    create_tag.assert_called_once_with(tmp_path, "roar/deadbeef")
+    finalize_register.assert_called_once_with(
+        result_success=True,
+        dry_run=False,
+        git_tag_name="roar/deadbeef",
+        git_tag_repo_root=tmp_path,
+        logger=logger,
+    )
 
 
 def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) -> None:

@@ -151,6 +151,29 @@ def finalize_put_publish_git(
     return None, []
 
 
+def finalize_register_publish_git(
+    *,
+    result_success: bool,
+    dry_run: bool,
+    git_tag_name: str | None,
+    git_tag_repo_root: Path | None,
+    logger: ILogger,
+) -> None:
+    """Best-effort publish tag finalization for `roar register`."""
+    if not result_success or dry_run or not git_tag_name or git_tag_repo_root is None:
+        return
+
+    try:
+        success, tag_error = create_publish_git_tag(
+            git_tag_repo_root,
+            git_tag_name,
+        )
+        if not success and tag_error:
+            logger.debug("Failed to create git tag: %s", tag_error)
+    except Exception as exc:
+        logger.debug("Failed to create git tag: %s", exc)
+
+
 def create_publish_git_tag(path: Path, tag_name: str) -> tuple[bool, str | None]:
     """Create a publish tag if it does not already exist."""
     state = resolve_publish_git_state(path)
