@@ -10,6 +10,7 @@ import pytest
 
 from roar.application.publish.put_preparation import PreparedPutExecution
 from roar.application.publish.registration import build_lineage_membership_index_payload
+from roar.application.publish.source_resolution import ResolvedSource
 from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import (
     BatchRegistrationResult,
@@ -20,7 +21,6 @@ from roar.core.interfaces.registration import (
 from roar.glaas_client import GlaasClient
 from roar.services.put.backends import MemoryBackend
 from roar.services.put.composite_builder import CompositeArtifactBuilder
-from roar.services.put.resolver import ResolvedSource
 from roar.services.put.service import PutService
 
 

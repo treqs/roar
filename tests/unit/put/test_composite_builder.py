@@ -6,8 +6,8 @@ from pathlib import Path
 
 import blake3
 
+from roar.application.publish.source_resolution import ResolvedSource
 from roar.services.put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
-from roar.services.put.resolver import ResolvedSource
 
 
 def _file_hash(path: Path) -> str:

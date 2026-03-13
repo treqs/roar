@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .resolver import ResolvedSource
+from ...application.publish.source_resolution import ResolvedSource
 
 _blake3: Any | None
 try:

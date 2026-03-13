@@ -207,8 +207,8 @@ class CompositeOutputMaterializer:
         if composite_repo is None:
             return []
 
+        from ...application.publish.source_resolution import ResolvedSource
         from ..put.composite_builder import CompositeArtifactBuilder
-        from ..put.resolver import ResolvedSource
 
         builder = CompositeArtifactBuilder()
         materialized: list[dict[str, Any]] = []

@@ -32,6 +32,7 @@ from ...application.publish.registration import (
     register_publish_lineage,
     resolve_lineage_component_count_total,
 )
+from ...application.publish.source_resolution import ResolvedSource
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...db.context import optional_repo
@@ -50,7 +51,6 @@ from ...services.transfer import (
 )
 from .backends.base import StorageBackend
 from .composite_builder import CompositeArtifactBuilder, CompositeBuildResult
-from .resolver import ResolvedSource
 
 _AUTO_COMPOSITE_MIN_CONFIDENCE = 0.80
 

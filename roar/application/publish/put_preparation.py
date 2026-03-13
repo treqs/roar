@@ -15,7 +15,7 @@ from .runtime import PublishRuntime
 from .session import prepare_publish_session
 
 if TYPE_CHECKING:
-    from ...services.put.resolver import ResolvedSource
+    from .source_resolution import ResolvedSource
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,7 @@ def prepare_put_execution(
     logger: ILogger,
 ) -> PreparedPutExecution:
     """Resolve the local context needed to execute a put workflow."""
-    from ...services.put.resolver import SourceResolver
+    from .source_resolution import SourceResolver
 
     active_session = db_ctx.sessions.get_active()
     if active_session is None:
