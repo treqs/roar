@@ -6,6 +6,10 @@ from unittest.mock import MagicMock, patch
 from roar.application.publish.register_preparation import PreparedRegisterExecution
 from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import BatchRegistrationResult, GitContext
+from roar.services.registration.job_preparation import (
+    normalize_jobs_for_registration,
+    order_jobs_for_registration,
+)
 from roar.services.registration.register_service import RegisterResult, RegisterService
 
 
@@ -116,7 +120,7 @@ class TestRegisterService:
             "timestamp": 10.0,
         }
 
-        ordered = self.service._order_jobs_for_registration([child, parent])
+        ordered = order_jobs_for_registration([child, parent])
 
         assert [job["job_uid"] for job in ordered] == ["parent-uid", "child-uid"]
 
@@ -139,7 +143,7 @@ class TestRegisterService:
             "job_type": "ray_task",
         }
 
-        normalized = self.service._normalize_jobs_for_registration([phase_job, submit_job])
+        normalized = normalize_jobs_for_registration([phase_job, submit_job])
 
         jobs_by_uid = {job["job_uid"]: job for job in normalized}
         assert jobs_by_uid["phase-job"]["parent_job_uid"] == "local-submit"
@@ -181,9 +185,7 @@ class TestRegisterService:
             "job_type": "ray_task",
         }
 
-        normalized = self.service._normalize_jobs_for_registration(
-            [submit_job, noise_job, phase_job, shutdown_job]
-        )
+        normalized = normalize_jobs_for_registration([submit_job, noise_job, phase_job, shutdown_job])
 
         assert [job["job_uid"] for job in normalized] == ["local-submit", "phase-job"]
         jobs_by_uid = {job["job_uid"]: job for job in normalized}
