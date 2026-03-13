@@ -12,7 +12,7 @@ See also:
 - `roar/execution/framework/registry.py`
 - `roar/services/execution/driver_entrypoint.py`
 - `roar/services/execution/worker_bootstrap.py`
-- `roar/services/execution/fragment_reconstitution.py`
+- `roar/execution/fragments/reconstitution.py`
 
 ## 1. What The Framework Owns
 

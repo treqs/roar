@@ -5,7 +5,7 @@ from collections.abc import Sequence
 
 from roar.backends.ray.collector import collect_fragments
 from roar.backends.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
-from roar.services.execution.fragment_transport import emit_fragment_dicts
+from roar.execution.fragments.transport import emit_fragment_dicts
 from roar.services.execution.proxy import S3LogEntry
 
 _S3_WRITE_OPS = frozenset({"PutObject", "UploadPart", "CompleteMultipartUpload", "DeleteObject"})

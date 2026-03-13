@@ -18,12 +18,12 @@ from typing import Any
 
 from roar.backends.ray.constants import RAY_STEP_NOISE_COMMANDS
 from roar.backends.ray.fragment import TaskFragment, derive_task_identity
-from roar.services.execution.fragment_lineage import (
+from roar.execution.fragments.lineage import (
     FragmentLineageBackend,
     assign_execution_fragment_step_numbers,
     merge_execution_fragments,
 )
-from roar.services.execution.fragment_models import ExecutionFragment
+from roar.execution.fragments.models import ExecutionFragment
 
 
 def _get_logger():

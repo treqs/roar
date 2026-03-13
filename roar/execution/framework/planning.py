@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from roar.execution.fragments.reconstitution import build_submit_finalizer
 from roar.execution.framework.contract import ExecutionCommandPlan
-from roar.services.execution.fragment_reconstitution import build_submit_finalizer
 
 
 def plan_execution_command(command: list[str]) -> ExecutionCommandPlan:

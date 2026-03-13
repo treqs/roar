@@ -5,13 +5,13 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from roar.services.execution.fragment_models import (
+from roar.execution.fragments.models import (
     ArtifactRef,
     ExecutionFragment,
     _artifact_ref_from_mapping,
     derive_fragment_identity,
 )
-from roar.services.execution.fragment_models import (
+from roar.execution.fragments.models import (
     derive_fragment_fallback_identity as derive_execution_fragment_fallback_identity,
 )
 

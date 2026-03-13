@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from roar.services.execution.fragment_sessions import (
+from roar.execution.fragments.sessions import (
     generate_fragment_session,
     load_fragment_session,
     save_fragment_session,

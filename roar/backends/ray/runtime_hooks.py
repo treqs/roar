@@ -473,7 +473,7 @@ def collect_ray_io(proxy_logs: dict[str, dict] | None = None) -> None:
     if not fragments:
         return
 
-    from roar.services.execution.fragment_transport import emit_fragment_dicts
+    from roar.execution.fragments.transport import emit_fragment_dicts
 
     emit_fragment_dicts(
         fragments,

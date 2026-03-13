@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from roar.services.execution.fragment_sessions import (
+from roar.execution.fragments.sessions import (
     fragment_session_path,
     generate_fragment_session,
     load_fragment_session,

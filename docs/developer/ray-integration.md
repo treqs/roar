@@ -38,13 +38,13 @@ flowchart TD
     J --> K[backends/ray/node_agent.py]
     J --> L[Workers boot via roar-worker]
     L --> M[TaskFragment to ExecutionFragment]
-    M --> N[fragment_transport.py]
+    M --> N[execution/fragments/transport.py]
     N --> O[glaas.fragment_streamer.py]
     O --> P[GLaaS fragment batches]
-    A --> Q[fragment_reconstitution.py]
+    A --> Q[execution/fragments/reconstitution.py]
     Q --> R[backends/ray/fragment_reconstituter.py]
     R --> S[backends/ray/collector.py]
-    S --> T[fragment_lineage.py]
+    S --> T[execution/fragments/lineage.py]
     T --> U[(.roar/roar.db)]
     G --> N
 ```
@@ -68,7 +68,7 @@ flowchart TD
   - Loads built-in backends and optional `roar.execution_backends` entrypoints.
 - `roar/services/execution/host_execution.py`
   - Provides the shared host-side execution path used by the local backend and the Ray backend host launcher.
-- `roar/services/execution/fragment_reconstitution.py`
+- `roar/execution/fragments/reconstitution.py`
   - Owns the shared post-run finalizer that loads fragment session credentials and dispatches to the backend reconstituter.
 - `roar/cli/commands/run.py`
   - Calls the generic planner before execution.
@@ -118,7 +118,7 @@ These two modules are the main backend-neutral extraction from the older inline 
   - Resolves the active execution backend from `ROAR_EXECUTION_BACKEND`.
   - Starts driver-local proxy capture when needed.
   - Preserves loopback proxy routing for the child process.
-  - Emits driver proxy fragments through the shared `fragment_transport.py` helper.
+  - Emits driver proxy fragments through the shared `roar.execution.fragments.transport` helper.
 
 ### e. Ray startup patching
 
@@ -158,17 +158,17 @@ This path still matters for nested `ray.init(...)` inside already instrumented j
 
 ### h. Fragment transport and reconstitution
 
-- `roar/services/execution/fragment_sessions.py`
+- `roar/execution/fragments/sessions.py`
   - Owns fragment-session key generation and on-disk storage.
 - `roar/glaas/fragment_streamer.py`
   - Buffers fragments, encrypts batches, and posts them to GLaaS.
-- `roar/services/execution/fragment_transport.py`
+- `roar/execution/fragments/transport.py`
   - Centralizes "stream to GLaaS or fall back locally" behavior.
-- `roar/services/execution/fragment_reconstitution.py`
+- `roar/execution/fragments/reconstitution.py`
   - Owns the shared submit finalizer and backend-driven reconstitution dispatch.
-- `roar/services/execution/fragment_models.py`
+- `roar/execution/fragments/models.py`
   - Defines the backend-neutral `ExecutionFragment` envelope.
-- `roar/services/execution/fragment_lineage.py`
+- `roar/execution/fragments/lineage.py`
   - Owns shared fragment merge, identity resolution, dependency reconstruction, and DB persistence.
 - `roar/backends/ray/fragment_reconstituter.py`
   - Implements Ray-specific batch fetch, decrypt, dedupe, and composite-materialization behavior.

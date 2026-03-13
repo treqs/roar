@@ -23,8 +23,8 @@ from typing import Any, cast
 from roar.backends.ray.collector import collect_fragments
 from roar.backends.ray.config import load_ray_backend_config
 from roar.backends.ray.fragment import ArtifactRef, TaskFragment, derive_task_uid
+from roar.execution.fragments.transport import emit_fragment_dicts
 from roar.glaas.fragment_streamer import GlaasFragmentStreamer
-from roar.services.execution.fragment_transport import emit_fragment_dicts
 from roar.services.execution.proxy_config import local_proxy_endpoint, local_proxy_port_from_env
 
 IOEvent = collections.namedtuple(
