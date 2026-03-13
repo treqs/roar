@@ -1,9 +1,9 @@
-"""Unit tests for shared transfer-layer git context helpers."""
+"""Tests for git context integration helpers."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from roar.services.transfer.common import resolve_git_context, resolve_repo_url_or_local_uri
+from roar.integrations.git.context import resolve_git_context, resolve_repo_url_or_local_uri
 
 
 def test_resolve_repo_url_or_local_uri_prefers_remote_url() -> None:
@@ -34,7 +34,7 @@ def test_resolve_git_context_falls_back_to_local_repo_uri_when_remote_missing(
     tmp_path: Path,
 ) -> None:
     """resolve_git_context should use local URI fallback for repos without remotes."""
-    with patch("roar.services.transfer.common.GitVCSProvider") as mock_git:
+    with patch("roar.integrations.git.context.GitVCSProvider") as mock_git:
         mock_vcs = MagicMock()
         mock_vcs.get_repo_root.return_value = str(tmp_path)
         mock_vcs.get_remote_url.return_value = None
