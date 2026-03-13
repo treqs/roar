@@ -71,9 +71,10 @@ def _build_payload(client: JobSubmissionClient, job_id: str, status: JobStatus) 
 
 def _build_runtime_env(job_id: str) -> dict[str, Any]:
     return {
-        "worker_process_setup_hook": "roar.services.execution.worker_bootstrap.startup",
+        "worker_process_setup_hook": "roar.execution.runtime.worker_bootstrap.startup",
         "env_vars": {
-            "PYTHONPATH": "/app/roar/services/execution/inject",
+            "ROAR_EXECUTION_BACKEND": "ray",
+            "PYTHONPATH": "/app/roar/execution/runtime/inject",
             "ROAR_JOB_ID": job_id,
             "ROAR_JOB_INSTRUMENTED": "1",
             "ROAR_PROJECT_DIR": "/app",

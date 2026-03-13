@@ -8,21 +8,14 @@ import tempfile
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from roar.execution.framework.contract import (
-    ROAR_EXECUTION_BACKEND_ENV,
-)
-from roar.execution.framework.registry import (
-    get_execution_backend,
-)
-from roar.services.execution.inject.support import (
-    SuppressTracking,
-    warn_runtime,
-)
-from roar.services.execution.inject.support import (
+from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV
+from roar.execution.framework.registry import get_execution_backend
+from roar.execution.runtime.inject.support import SuppressTracking, warn_runtime
+from roar.execution.runtime.inject.support import (
     merge_working_dir as default_merge_working_dir,
 )
 
-WORKER_SETUP_HOOK = "roar.services.execution.worker_bootstrap.startup"
+WORKER_SETUP_HOOK = "roar.execution.runtime.worker_bootstrap.startup"
 WORKER_PY_EXECUTABLE = "roar-worker"
 
 

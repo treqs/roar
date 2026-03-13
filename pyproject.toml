@@ -70,7 +70,7 @@ dev = [
 [project.scripts]
 # This registers `roar` on PATH after pip install
 roar = "roar.__main__:main"
-roar-worker = "roar.services.execution.worker_bootstrap:main"
+roar-worker = "roar.execution.runtime.worker_bootstrap:main"
 
 [project.entry-points."roar.execution_backends"]
 ray = "roar.backends.ray.plugin:register"

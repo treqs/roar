@@ -3,8 +3,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from roar.services.execution.inject.support import is_suppressed
-from roar.services.execution.worker_bootstrap import build_packaged_worker_runtime_env
+from roar.execution.runtime.inject.support import is_suppressed
+from roar.execution.runtime.worker_bootstrap import build_packaged_worker_runtime_env
 
 
 def test_build_packaged_worker_runtime_env_copies_user_files_and_preload(

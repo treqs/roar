@@ -57,7 +57,7 @@ def test_ray_job_submit_injects_pip_with_installed_roar_cli_version(monkeypatch)
     assert "py_executable" not in runtime_env
     assert (
         runtime_env["worker_process_setup_hook"]
-        == "roar.services.execution.worker_bootstrap.startup"
+        == "roar.execution.runtime.worker_bootstrap.startup"
     )
     assert runtime_env["env_vars"]["ROAR_JOB_INSTRUMENTED"] == "1"
     assert rewritten.session_id is None
@@ -85,7 +85,7 @@ def test_entrypoint_is_wrapped_with_roar_driver_entrypoint(monkeypatch) -> None:
     assert _entrypoint(rewritten.command) == [
         "python",
         "-m",
-        "roar.services.execution.driver_entrypoint",
+        "roar.execution.runtime.driver_entrypoint",
         "--",
         "python",
         "main.py",
@@ -137,7 +137,7 @@ def test_existing_runtime_env_json_pip_list_is_untouched_when_ray_pip_install_fa
     assert runtime_env["pip"] == ["numpy==1.26.0"]
     assert (
         runtime_env["worker_process_setup_hook"]
-        == "roar.services.execution.worker_bootstrap.startup"
+        == "roar.execution.runtime.worker_bootstrap.startup"
     )
     assert rewritten.session_id is None
 
@@ -186,7 +186,7 @@ def test_existing_roar_run_entrypoint_is_unchanged(monkeypatch) -> None:
     assert _entrypoint(rewritten.command) == [
         "python",
         "-m",
-        "roar.services.execution.driver_entrypoint",
+        "roar.execution.runtime.driver_entrypoint",
         "--",
         "roar",
         "run",
@@ -212,7 +212,7 @@ def test_existing_driver_entrypoint_wrapper_is_not_duplicated(monkeypatch) -> No
         "--",
         "python",
         "-m",
-        "roar.services.execution.driver_entrypoint",
+        "roar.execution.runtime.driver_entrypoint",
         "--",
         "python",
         "main.py",
@@ -223,7 +223,7 @@ def test_existing_driver_entrypoint_wrapper_is_not_duplicated(monkeypatch) -> No
     assert _entrypoint(rewritten.command) == [
         "python",
         "-m",
-        "roar.services.execution.driver_entrypoint",
+        "roar.execution.runtime.driver_entrypoint",
         "--",
         "python",
         "main.py",

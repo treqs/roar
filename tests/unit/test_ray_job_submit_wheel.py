@@ -86,7 +86,7 @@ def test_maybe_rewrite_injects_pip_even_when_vendor_wheel_exists(tmp_path, monke
     assert _entrypoint(rewritten.command) == [
         "python",
         "-m",
-        "roar.services.execution.driver_entrypoint",
+        "roar.execution.runtime.driver_entrypoint",
         "--",
         "python",
         "main.py",

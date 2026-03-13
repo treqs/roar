@@ -206,10 +206,11 @@ def _query_project_db(
 
 def _manual_gap_runtime_env(job_id: str) -> dict[str, str]:
     return {
+        "ROAR_EXECUTION_BACKEND": "ray",
         "ROAR_JOB_ID": job_id,
         "ROAR_RAY_NODE_AGENTS": "1",
         "ROAR_WRAP": "1",
-        "PYTHONPATH": "/app/roar/services/execution/inject",
+        "PYTHONPATH": "/app/roar/execution/runtime/inject",
         "AWS_ENDPOINT_URL": "",
     }
 

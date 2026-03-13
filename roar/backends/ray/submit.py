@@ -20,8 +20,8 @@ from roar.execution.fragments.sessions import save_fragment_session as save_key
 from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV, ExecutionCommandPlan
 from roar.glaas_client import GlaasClient
 
-_ROAR_WORKER_SETUP_HOOK = "roar.services.execution.worker_bootstrap.startup"
-_ROAR_DRIVER_ENTRYPOINT_MODULE = "roar.services.execution.driver_entrypoint"
+_ROAR_WORKER_SETUP_HOOK = "roar.execution.runtime.worker_bootstrap.startup"
+_ROAR_DRIVER_ENTRYPOINT_MODULE = "roar.execution.runtime.driver_entrypoint"
 
 
 def plan_ray_job_submit_command(command: list[str]) -> ExecutionCommandPlan:

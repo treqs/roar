@@ -8,7 +8,7 @@ import uuid
 
 import ray
 
-from roar.services.execution.inject.sitecustomize import _prepare_worker_runtime_env
+from roar.backends.ray.plugin import ray_prepare_worker_runtime_env as _prepare_worker_runtime_env
 from tests.benchmarks.ray_bench_utils import (
     RAY_ADDRESS,
     benchmark_metadata,
@@ -126,7 +126,7 @@ def main() -> int:
         print(f"ERROR: {exc}")
         return 2
 
-    roar_runtime_env = _prepare_worker_runtime_env({}, f"preload-bench-{uuid.uuid4().hex[:8]}")
+    roar_runtime_env = _prepare_worker_runtime_env({}, f"preload-bench-{uuid.uuid4().hex[:8]}", {})
     try:
         baseline_series, roar_series = _measure_mode_interleaved(
             file_counts=file_counts,

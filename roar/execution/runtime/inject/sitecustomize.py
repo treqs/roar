@@ -5,7 +5,7 @@ import os
 import sys
 
 from roar.execution.framework.runtime_imports import RuntimeImportController
-from roar.services.execution.inject.support import is_suppressed
+from roar.execution.runtime.inject.support import is_suppressed
 
 # ------------------------------------------------------------------------------
 # Data structures the parent will ingest
@@ -14,6 +14,8 @@ from roar.services.execution.inject.support import is_suppressed
 opened_files = set()
 imported_modules = set()
 env_reads = {}
+_ORIGINAL_ENVIRON_GET_ATTR = "_original_get"
+_ENVIRON_GET_METHOD_NAME = "get"
 
 # File where parent told us to write logs
 LOG_FILE = os.environ.get("ROAR_LOG_FILE")
@@ -64,17 +66,18 @@ builtins.__import__ = tracking_import
 # Track environment variable reads
 # ------------------------------------------------------------------------------
 
-if not hasattr(os.environ, "_original_get"):
-    os.environ._original_get = os.environ.get
+if not hasattr(os.environ, _ORIGINAL_ENVIRON_GET_ATTR):
+    setattr(os.environ, _ORIGINAL_ENVIRON_GET_ATTR, os.environ.get)
 
 
 def patched_environ_get(key, default=None):
     if key in os.environ:
         env_reads[key] = os.environ[key]
-    return os.environ._original_get(key, default)
+    original_get = getattr(os.environ, _ORIGINAL_ENVIRON_GET_ATTR)
+    return original_get(key, default)
 
 
-os.environ.get = patched_environ_get
+setattr(os.environ, _ENVIRON_GET_METHOD_NAME, patched_environ_get)
 
 
 # ------------------------------------------------------------------------------
@@ -174,7 +177,7 @@ def _write_log():
         "shared_libs": _get_loaded_shared_libs(),
         "sys_prefix": sys.prefix,
         "sys_base_prefix": sys.base_prefix,
-        "virtual_env": os.environ._original_get("VIRTUAL_ENV", ""),
+        "virtual_env": getattr(os.environ, _ORIGINAL_ENVIRON_GET_ATTR)("VIRTUAL_ENV", ""),
         "argv": sys.argv,
         "installed_packages": installed_packages,
         "used_packages": used_packages,

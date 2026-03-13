@@ -29,10 +29,10 @@ flowchart TD
     C --> D[backends/ray/plugin.py]
     D --> E[backends/ray/submit.py]
     E --> F[backends/ray/submit_context.py]
-    E --> G[services/execution/driver_entrypoint.py]
-    E --> H[services/execution/worker_bootstrap.py]
+    E --> G[execution/runtime/driver_entrypoint.py]
+    E --> H[execution/runtime/worker_bootstrap.py]
     A --> D0
-    D0 --> H0[services/execution/host_execution.py]
+    D0 --> H0[execution/runtime/host_execution.py]
     G --> I[Ray cluster job]
     I --> J[sitecustomize.py patched ray.init]
     J --> K[backends/ray/node_agent.py]
@@ -66,7 +66,7 @@ flowchart TD
     - provide fragment reconstitution callbacks
 - `roar/execution/framework/registry.py`
   - Loads built-in backends and optional `roar.execution_backends` entrypoints.
-- `roar/services/execution/host_execution.py`
+- `roar/execution/runtime/host_execution.py`
   - Provides the shared host-side execution path used by the local backend and the Ray backend host launcher.
 - `roar/execution/fragments/reconstitution.py`
   - Owns the shared post-run finalizer that loads fragment session credentials and dispatches to the backend reconstituter.
@@ -89,7 +89,7 @@ This is the generalization seam for future local and distributed integrations.
     - fragment reconstituter construction
 - `roar/backends/ray/submit.py`
   - Detects `ray job submit`.
-  - Rewrites the entrypoint through `python -m roar.services.execution.driver_entrypoint`.
+  - Rewrites the entrypoint through `python -m roar.execution.runtime.driver_entrypoint`.
   - Shapes worker-facing env vars and runtime env.
   - Pre-registers fragment sessions when GLaaS is configured.
   - Returns a fragment session id; the shared finalizer handles reconstitution afterward.
@@ -113,7 +113,7 @@ These two modules are the main backend-neutral extraction from the older inline 
 
 ### d. Driver bootstrap
 
-- `roar/services/execution/driver_entrypoint.py`
+- `roar/execution/runtime/driver_entrypoint.py`
   - Runs inside distributed jobs instead of the user entrypoint directly.
   - Resolves the active execution backend from `ROAR_EXECUTION_BACKEND`.
   - Starts driver-local proxy capture when needed.
@@ -122,7 +122,7 @@ These two modules are the main backend-neutral extraction from the older inline 
 
 ### e. Ray startup patching
 
-- `roar/services/execution/inject/sitecustomize.py`
+- `roar/execution/runtime/inject/sitecustomize.py`
   - Patches `ray.init` and `ray.shutdown` when `ROAR_WRAP=1`.
   - Uses backend dispatch to locate runtime-import hooks.
   - Applies the Ray backend worker env contract.
@@ -132,7 +132,7 @@ This path still matters for nested `ray.init(...)` inside already instrumented j
 
 ### f. Worker bootstrap and capture
 
-- `roar/services/execution/worker_bootstrap.py`
+- `roar/execution/runtime/worker_bootstrap.py`
   - Owns the shared worker bootstrap interface.
   - Provides the generic `worker_process_setup_hook` path and the `roar-worker` executable entrypoint.
   - Resolves the active execution backend from `ROAR_EXECUTION_BACKEND` and dispatches startup/entrypoint execution to it.

@@ -206,7 +206,7 @@ def _source_contains(module_name: str, attribute_name: str, needle: str) -> tupl
 
 def _proxy_log_plumbing_status() -> dict[str, Any]:
     collect_ray_io_drops_proxy_logs, collect_ray_io_error = _source_contains(
-        "roar.services.execution.inject.sitecustomize",
+        "roar.execution.runtime.inject.sitecustomize",
         "_collect_ray_io",
         "del proxy_logs",
     )

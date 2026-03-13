@@ -706,9 +706,10 @@ def submit_job_on_head(
     # When ROAR_WRAP=1, inject PYTHONPATH so sitecustomize.py activates on the
     # driver, and set ROAR_PROJECT_DIR so the collector knows where roar.db lives.
     if merged_env.get("ROAR_WRAP") == "1":
-        inject_dir = "/app/roar/services/execution/inject"
+        inject_dir = "/app/roar/execution/runtime/inject"
         existing_pp = merged_env.get("PYTHONPATH", "")
         merged_env["PYTHONPATH"] = f"{inject_dir}:{existing_pp}" if existing_pp else inject_dir
+        merged_env.setdefault("ROAR_EXECUTION_BACKEND", "ray")
         merged_env.setdefault("ROAR_PROJECT_DIR", "/app")
         merged_env.setdefault("ROAR_RAY_NODE_AGENTS", "1")
 

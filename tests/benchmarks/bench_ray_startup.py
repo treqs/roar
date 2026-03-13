@@ -8,7 +8,7 @@ from pathlib import Path
 
 import ray
 
-from roar.services.execution.inject.sitecustomize import _prepare_worker_runtime_env
+from roar.backends.ray.plugin import ray_prepare_worker_runtime_env as _prepare_worker_runtime_env
 from tests.benchmarks.ray_bench_utils import (
     RAY_ADDRESS,
     benchmark_metadata,
@@ -81,7 +81,7 @@ def _measure_runs_interleaved(
 
 
 def _make_roar_runtime_env(*, job_id: str, cold_marker: str | None = None) -> dict:
-    runtime_env = _prepare_worker_runtime_env({}, job_id)
+    runtime_env = _prepare_worker_runtime_env({}, job_id, {})
     if cold_marker:
         marker_path = Path(runtime_env["working_dir"]) / ".ray_startup_cold_marker"
         marker_path.write_text(cold_marker, encoding="utf-8")

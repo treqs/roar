@@ -4,8 +4,8 @@ import builtins
 
 import pytest
 
-from roar.services.execution.inject import sitecustomize
-from roar.services.execution.inject.support import SuppressTracking
+from roar.execution.runtime.inject import sitecustomize
+from roar.execution.runtime.inject.support import SuppressTracking
 
 
 @pytest.fixture(autouse=True)

@@ -10,8 +10,8 @@ See also:
 - `roar/execution/framework/contract.py`
 - `roar/execution/framework/planning.py`
 - `roar/execution/framework/registry.py`
-- `roar/services/execution/driver_entrypoint.py`
-- `roar/services/execution/worker_bootstrap.py`
+- `roar/execution/runtime/driver_entrypoint.py`
+- `roar/execution/runtime/worker_bootstrap.py`
 - `roar/execution/fragments/reconstitution.py`
 
 ## 1. What The Framework Owns
@@ -83,7 +83,7 @@ from roar.execution.framework.contract import (
     HostExecutionAdapter,
 )
 from roar.execution.framework.registry import register_execution_backend
-from roar.services.execution.host_execution import execute_host_run
+from roar.execution.runtime.host_execution import execute_host_run
 
 
 def local_matches_command(_command: list[str]) -> bool:
@@ -133,8 +133,8 @@ from roar.execution.framework.contract import (
     WorkerBootstrapAdapter,
 )
 from roar.execution.framework.registry import register_execution_backend
-from roar.services.execution.host_execution import execute_host_run
-from roar.services.execution.worker_bootstrap import build_packaged_worker_runtime_env
+from roar.execution.runtime.host_execution import execute_host_run
+from roar.execution.runtime.worker_bootstrap import build_packaged_worker_runtime_env
 
 
 def demo_matches_command(command: list[str]) -> bool:
@@ -210,7 +210,7 @@ DEMO_EXECUTION_BACKEND = ExecutionBackend(
         ),
         worker_bootstrap=WorkerBootstrapAdapter(
             py_executable="roar-worker",
-            setup_hook="roar.services.execution.worker_bootstrap.startup",
+            setup_hook="roar.execution.runtime.worker_bootstrap.startup",
             prepare_runtime_env=demo_prepare_worker_runtime_env,
             startup=demo_worker_startup,
             run_entrypoint=demo_run_worker_entrypoint,
@@ -247,7 +247,7 @@ The planner is now the single place where `roar run` and `roar build` choose a b
 
 ## 6. Host And Distributed Responsibilities
 
-`host_execution` owns the host-side command path. The shared helper is `roar.services.execution.host_execution.execute_host_run`.
+`host_execution` owns the host-side command path. The shared helper is `roar.execution.runtime.host_execution.execute_host_run`.
 
 `distributed` owns distributed-only hooks:
 

@@ -32,7 +32,7 @@ def _fake_backend(calls: list[str]) -> ExecutionBackend:
             ),
             worker_bootstrap=WorkerBootstrapAdapter(
                 py_executable="roar-worker",
-                setup_hook="roar.services.execution.worker_bootstrap.startup",
+                setup_hook="roar.execution.runtime.worker_bootstrap.startup",
                 prepare_runtime_env=lambda runtime_env, _job_id, _environ: dict(runtime_env or {}),
                 startup=lambda: None,
                 run_entrypoint=lambda _argv: None,

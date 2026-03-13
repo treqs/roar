@@ -11,7 +11,7 @@ from roar.execution.framework.contract import (
     HostExecutionAdapter,
     WorkerBootstrapAdapter,
 )
-from roar.services.execution import driver_entrypoint
+from roar.execution.runtime import driver_entrypoint
 from roar.services.execution.proxy import S3LogEntry
 
 
@@ -88,7 +88,7 @@ def test_emit_driver_proxy_fragment_streams_to_glaas_when_session_is_present(
                 ),
                 worker_bootstrap=WorkerBootstrapAdapter(
                     py_executable="roar-worker",
-                    setup_hook="roar.services.execution.worker_bootstrap.startup",
+                    setup_hook="roar.execution.runtime.worker_bootstrap.startup",
                     prepare_runtime_env=lambda runtime_env, _job_id, _env: dict(runtime_env or {}),
                     startup=lambda: None,
                     run_entrypoint=lambda _argv: None,

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import tomllib
+
 from roar.backends.local.plugin import LOCAL_EXECUTION_BACKEND
 from roar.backends.ray.plugin import RAY_EXECUTION_BACKEND
 from roar.cli.commands.init import build_default_config_template
@@ -28,3 +32,13 @@ def test_init_template_includes_backend_registered_sections() -> None:
 
     assert "[ray]" in template
     assert 'actor_attribution = "per_call"' in template
+
+
+def test_packaged_roar_worker_entrypoint_uses_canonical_runtime_module() -> None:
+    pyproject = tomllib.loads(
+        (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(encoding="utf-8")
+    )
+
+    scripts = pyproject["project"]["scripts"]
+
+    assert scripts["roar-worker"] == "roar.execution.runtime.worker_bootstrap:main"

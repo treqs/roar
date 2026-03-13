@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from roar.execution.fragments import reconstitution as submit_finalize
 from roar.execution.framework.contract import (
     DistributedRuntimeAdapter,
     DriverBootstrapAdapter,
@@ -13,7 +14,6 @@ from roar.execution.framework.contract import (
     HostExecutionAdapter,
     WorkerBootstrapAdapter,
 )
-from roar.services.execution import fragment_reconstitution as submit_finalize
 
 
 def _ctx() -> SimpleNamespace:
@@ -50,7 +50,7 @@ def test_build_ray_submit_finalizer_reconstitutes_lineage(monkeypatch) -> None:
                 ),
                 worker_bootstrap=WorkerBootstrapAdapter(
                     py_executable="roar-worker",
-                    setup_hook="roar.services.execution.worker_bootstrap.startup",
+                    setup_hook="roar.execution.runtime.worker_bootstrap.startup",
                     prepare_runtime_env=lambda runtime_env, _job_id, _env: dict(runtime_env or {}),
                     startup=lambda: None,
                     run_entrypoint=lambda _argv: None,

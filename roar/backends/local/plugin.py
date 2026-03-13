@@ -7,7 +7,7 @@ from roar.execution.framework.contract import (
     HostExecutionAdapter,
 )
 from roar.execution.framework.registry import register_execution_backend
-from roar.services.execution.host_execution import execute_host_run
+from roar.execution.runtime.host_execution import execute_host_run
 
 
 def local_matches_command(_command: list[str]) -> bool:

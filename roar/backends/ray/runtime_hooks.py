@@ -21,12 +21,12 @@ except ImportError:  # pragma: no cover
 from roar.backends.ray.config import load_ray_backend_config
 from roar.backends.ray.env_contract import merge_worker_bootstrap_env
 from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV
-from roar.services.execution.inject.support import SuppressTracking, warn_runtime
-from roar.services.execution.worker_bootstrap import (
+from roar.execution.runtime.inject.support import SuppressTracking, warn_runtime
+from roar.execution.runtime.worker_bootstrap import (
     WORKER_PY_EXECUTABLE,
     WORKER_SETUP_HOOK,
 )
-from roar.services.execution.worker_bootstrap import (
+from roar.execution.runtime.worker_bootstrap import (
     prepare_worker_runtime_env as prepare_framework_worker_runtime_env,
 )
 

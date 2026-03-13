@@ -30,10 +30,10 @@ from roar.execution.framework.contract import (
     WorkerBootstrapAdapter,
 )
 from roar.execution.framework.registry import register_execution_backend
-from roar.services.execution.host_execution import execute_host_run
-from roar.services.execution.worker_bootstrap import build_packaged_worker_runtime_env
+from roar.execution.runtime.host_execution import execute_host_run
+from roar.execution.runtime.worker_bootstrap import build_packaged_worker_runtime_env
 
-_GENERIC_WORKER_SETUP_HOOK = "roar.services.execution.worker_bootstrap.startup"
+_GENERIC_WORKER_SETUP_HOOK = "roar.execution.runtime.worker_bootstrap.startup"
 _GENERIC_WORKER_PY_EXECUTABLE = "roar-worker"
 
 

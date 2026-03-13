@@ -168,7 +168,7 @@ def execute_and_report(
 
     from ...core.interfaces.run import RunContext
     from ...execution.framework.registry import get_execution_backend
-    from ...services.execution.host_execution import ExecutionSetupError
+    from ...execution.runtime.host_execution import ExecutionSetupError
 
     # Create run context
     hash_algos = cast(list[Literal["blake3", "sha256", "sha512", "md5"]], hash_algorithms)

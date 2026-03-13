@@ -5,6 +5,7 @@ import textwrap
 from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
+PTH_FILE = SOURCE_ROOT / "roar_inject.pth"
 
 
 def _run_python(code: str) -> subprocess.CompletedProcess[str]:
@@ -39,7 +40,7 @@ def test_pth_import_does_not_require_pydantic() -> None:
 
         sys.meta_path.insert(0, _BlockPydantic())
         os.environ["ROAR_WRAP"] = "1"
-        importlib.import_module("roar.services.execution.inject.sitecustomize")
+        importlib.import_module("roar.execution.runtime.inject.sitecustomize")
         """
     )
 
@@ -55,10 +56,17 @@ def test_pth_import_chain_succeeds_when_pydantic_available() -> None:
         import os
 
         os.environ["ROAR_WRAP"] = "1"
-        importlib.import_module("roar.services.execution.inject.sitecustomize")
+        importlib.import_module("roar.execution.runtime.inject.sitecustomize")
         """
     )
 
     result = _run_python(code)
 
     assert result.returncode == 0, result.stderr
+
+
+def test_roar_pth_uses_canonical_runtime_inject_module() -> None:
+    payload = PTH_FILE.read_text(encoding="utf-8")
+
+    assert "roar.execution.runtime.inject.sitecustomize" in payload
+    assert "roar.services.execution.inject.sitecustomize" not in payload

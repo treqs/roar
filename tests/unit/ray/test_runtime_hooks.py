@@ -237,11 +237,11 @@ def test_prepare_worker_runtime_env_sets_roar_worker_fields(
 
     assert prepared["py_executable"] == "roar-worker"
     assert (
-        prepared["worker_process_setup_hook"] == "roar.services.execution.worker_bootstrap.startup"
+        prepared["worker_process_setup_hook"] == "roar.execution.runtime.worker_bootstrap.startup"
     )
     assert (
         prepared["env_vars"][runtime_hooks._WORKER_SETUP_HOOK_ENV_VAR]
-        == "roar.services.execution.worker_bootstrap.startup"
+        == "roar.execution.runtime.worker_bootstrap.startup"
     )
 
 
@@ -260,7 +260,7 @@ def test_prepare_worker_runtime_env_ignores_existing_worker_setup_hook(
 
     assert prepared["py_executable"] == "roar-worker"
     assert (
-        prepared["worker_process_setup_hook"] == "roar.services.execution.worker_bootstrap.startup"
+        prepared["worker_process_setup_hook"] == "roar.execution.runtime.worker_bootstrap.startup"
     )
 
 
@@ -346,7 +346,7 @@ def test_patch_ray_init_sets_driver_job_uid_for_workers(
     assert runtime_env["py_executable"] == "roar-worker"
     assert (
         runtime_env["worker_process_setup_hook"]
-        == "roar.services.execution.worker_bootstrap.startup"
+        == "roar.execution.runtime.worker_bootstrap.startup"
     )
     assert runtime_env["env_vars"]["ROAR_DRIVER_JOB_UID"] == "driver-uid-1234"
 
