@@ -67,7 +67,7 @@ def build_packaged_worker_runtime_env(
             from pathlib import Path
 
             import roar
-            from roar.services.execution.tracer_backends import find_preload_library
+            from roar.execution.runtime.tracer_backends import find_preload_library
 
             roar_package_dir = Path(roar.__file__).resolve().parent
             with suppress_tracking():

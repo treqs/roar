@@ -229,7 +229,7 @@ def test_prepare_worker_runtime_env_sets_roar_worker_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "roar.services.execution.tracer_backends.find_preload_library",
+        "roar.execution.runtime.tracer_backends.find_preload_library",
         lambda _package_path: None,
     )
 
@@ -249,7 +249,7 @@ def test_prepare_worker_runtime_env_ignores_existing_worker_setup_hook(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "roar.services.execution.tracer_backends.find_preload_library",
+        "roar.execution.runtime.tracer_backends.find_preload_library",
         lambda _package_path: None,
     )
 

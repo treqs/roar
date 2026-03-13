@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from roar.services.execution import tracer_backends
+from roar.execution.runtime import tracer_backends
 
 READY_SENTINEL = "ROAR_PROXY_READY"
 DEFAULT_PROXY_START_TIMEOUT_SECONDS = 10.0

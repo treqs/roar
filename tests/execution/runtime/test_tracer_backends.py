@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import mock_open, patch
 
-from roar.services.execution import tracer_backends
+from roar.execution.runtime import tracer_backends
 
 
 def test_preload_is_ready_requires_library(tmp_path: Path) -> None:

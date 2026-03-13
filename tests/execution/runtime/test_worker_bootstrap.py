@@ -18,7 +18,7 @@ def test_build_packaged_worker_runtime_env_copies_user_files_and_preload(
     preload_path = tmp_path / "libroar_tracer_preload.so"
     preload_path.write_text("preload", encoding="utf-8")
     monkeypatch.setattr(
-        "roar.services.execution.tracer_backends.find_preload_library",
+        "roar.execution.runtime.tracer_backends.find_preload_library",
         lambda _package_path: str(preload_path),
     )
 
@@ -44,7 +44,7 @@ def test_build_packaged_worker_runtime_env_suppresses_internal_copy_operations(
     preload_path = tmp_path / "libroar_tracer_preload.so"
     preload_path.write_text("preload", encoding="utf-8")
     monkeypatch.setattr(
-        "roar.services.execution.tracer_backends.find_preload_library",
+        "roar.execution.runtime.tracer_backends.find_preload_library",
         lambda _package_path: str(preload_path),
     )
 
@@ -81,7 +81,7 @@ def test_build_packaged_worker_runtime_env_warns_for_non_local_working_dir(
 ) -> None:
     warnings: list[str] = []
     monkeypatch.setattr(
-        "roar.services.execution.tracer_backends.find_preload_library",
+        "roar.execution.runtime.tracer_backends.find_preload_library",
         lambda _package_path: None,
     )
 
@@ -99,7 +99,7 @@ def test_build_packaged_worker_runtime_env_preserves_non_local_working_dir(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "roar.services.execution.tracer_backends.find_preload_library",
+        "roar.execution.runtime.tracer_backends.find_preload_library",
         lambda _package_path: None,
     )
 

@@ -1591,7 +1591,7 @@ def _resolve_preload_library_for_worker_exec() -> str | None:
 
     try:
         import roar
-        from roar.services.execution.tracer_backends import find_preload_library
+        from roar.execution.runtime.tracer_backends import find_preload_library
 
         roar_package_dir = Path(roar.__file__).resolve().parent
         library_path = find_preload_library(roar_package_dir)
