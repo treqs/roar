@@ -478,44 +478,6 @@ class TestRegisterService:
         registered_git_context = service._session_service.register.call_args.args[1]
         assert registered_git_context.repo == tmp_path.resolve().as_uri()
 
-    def test_build_lineage_membership_index_payload_rebuilds_full_component_bloom(self, service):
-        payload = service._build_lineage_membership_index_payload(
-            membership_index={
-                "total_components": 2,
-                "stored_components": 2,
-                "bloom_filter_base64": "AQIDBA==",
-                "bloom_bits": 2048,
-                "bloom_hashes": 12,
-                "bloom_version": 1,
-            },
-            component_count_total=2,
-            components=[
-                {
-                    "relative_path": "part-000.json",
-                    "leaf_kind": "file",
-                    "component_algorithm": "blake3",
-                    "component_digest": "d" * 64,
-                    "component_size": 5,
-                    "component_type": "application/json",
-                },
-                {
-                    "relative_path": "part-001.json",
-                    "leaf_kind": "file",
-                    "component_algorithm": "blake3",
-                    "component_digest": "e" * 64,
-                    "component_size": 8,
-                    "component_type": "application/json",
-                },
-            ],
-        )
-
-        assert payload["total_components"] == 2
-        assert payload["stored_components"] == 2
-        assert payload["bloom_filter_base64"] != "AQIDBA=="
-        assert payload["bloom_bits"] > 0
-        assert payload["bloom_hashes"] > 0
-        assert payload["bloom_version"] == 1
-
     def test_register_collected_lineage_preregisters_composites_before_batch_registration(
         self, service, tmp_path, mock_glaas_client, mock_coordinator
     ) -> None:

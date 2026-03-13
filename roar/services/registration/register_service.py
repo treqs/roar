@@ -21,6 +21,7 @@ from ...application.publish.git import (
 )
 from ...application.publish.registration import (
     CompositeRegistrationCandidate,
+    build_lineage_membership_index_payload,
     ensure_composite_hash_entry,
     extract_composite_digest,
     normalize_registration_hashes,
@@ -28,6 +29,7 @@ from ...application.publish.registration import (
     prepare_batch_registration_artifacts,
     preregister_lineage_composites,
     register_publish_lineage,
+    resolve_lineage_component_count_total,
 )
 from ...application.publish.session import prepare_publish_session
 from ...config import config_get
@@ -43,7 +45,7 @@ from ...execution.framework.registry import (
 )
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
-from ..put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
+from ..put.composite_builder import CompositeArtifactBuilder
 from . import _artifact_ref
 from .coordinator import RegistrationCoordinator
 from .session import SessionRegistrationService
@@ -815,7 +817,7 @@ class RegisterService:
                 db_ctx=db_ctx,
                 lineage_artifacts_by_id=lineage_artifacts_by_id,
             )
-            component_count_total = self._resolve_lineage_component_count_total(
+            component_count_total = resolve_lineage_component_count_total(
                 artifact_component_count=artifact.get("component_count"),
                 membership_index=membership_index,
                 stored_components=len(components),
@@ -827,7 +829,8 @@ class RegisterService:
                 )
                 continue
 
-            membership_payload = self._build_lineage_membership_index_payload(
+            membership_payload = build_lineage_membership_index_payload(
+                composite_builder=self._composite_builder,
                 membership_index=membership_index,
                 component_count_total=component_count_total,
                 components=components,
@@ -961,105 +964,6 @@ class RegisterService:
             row.get("relative_path") or "<unknown>",
         )
         return None
-
-    @staticmethod
-    def _resolve_lineage_component_count_total(
-        artifact_component_count: Any,
-        membership_index: dict[str, Any] | None,
-        stored_components: int,
-    ) -> int:
-        try:
-            artifact_total = int(artifact_component_count)
-        except (TypeError, ValueError):
-            artifact_total = 0
-
-        membership_total = 0
-        if isinstance(membership_index, dict):
-            try:
-                membership_total = int(membership_index.get("total_components", 0))
-            except (TypeError, ValueError):
-                membership_total = 0
-
-        return max(artifact_total, membership_total, stored_components)
-
-    def _build_lineage_membership_index_payload(
-        self,
-        *,
-        membership_index: dict[str, Any] | None,
-        component_count_total: int,
-        components: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        stored_components = len(components)
-        payload: dict[str, Any] = {
-            "total_components": component_count_total,
-            "stored_components": stored_components,
-        }
-
-        if stored_components == component_count_total and stored_components > 0:
-            leaves: list[CompositeLeaf] = []
-            for component in components:
-                digest = component.get("component_digest")
-                if not isinstance(digest, str) or not digest:
-                    continue
-
-                component_size = component.get("component_size")
-                try:
-                    if isinstance(component_size, bool):
-                        normalized_component_size = int(component_size)
-                    elif isinstance(component_size, int | float | str):
-                        normalized_component_size = max(0, int(component_size))
-                    else:
-                        normalized_component_size = 0
-                except (TypeError, ValueError):
-                    normalized_component_size = 0
-
-                component_type_raw = component.get("component_type")
-                component_type = component_type_raw if isinstance(component_type_raw, str) else None
-                leaf_kind_raw = component.get("leaf_kind")
-                leaf_kind = leaf_kind_raw if isinstance(leaf_kind_raw, str) else "file"
-                leaves.append(
-                    CompositeLeaf(
-                        relative_path=str(component.get("relative_path") or ""),
-                        digest=digest.lower(),
-                        size=normalized_component_size,
-                        component_type=component_type,
-                        leaf_kind=leaf_kind,
-                    )
-                )
-
-            if len(leaves) == stored_components:
-                bloom_payload = self._composite_builder._build_membership_index_base(leaves)
-                payload["bloom_filter_base64"] = bloom_payload.get("bloom_filter_base64")
-                payload["bloom_bits"] = bloom_payload.get("bloom_bits")
-                payload["bloom_hashes"] = bloom_payload.get("bloom_hashes")
-                payload["bloom_version"] = bloom_payload.get("bloom_version")
-                return payload
-
-        for key in ("bloom_filter_base64", "bloom_bits", "bloom_hashes", "bloom_version"):
-            value = membership_index.get(key) if isinstance(membership_index, dict) else None
-            if value is None:
-                continue
-            if key in {"bloom_bits", "bloom_hashes", "bloom_version"}:
-                try:
-                    payload[key] = int(value)
-                except (TypeError, ValueError):
-                    continue
-                continue
-            payload[key] = value
-
-        required_bloom_keys = (
-            "bloom_filter_base64",
-            "bloom_bits",
-            "bloom_hashes",
-            "bloom_version",
-        )
-        if not all(key in payload and payload[key] is not None for key in required_bloom_keys):
-            raise ValueError(
-                "Lineage composite membership_index is missing required bloom fields; "
-                "cannot register composite without a complete membership bloom index."
-            )
-
-        return payload
 
     @staticmethod
     def _extract_registration_hashes(artifact: dict[str, Any]) -> list[dict[str, str]]:

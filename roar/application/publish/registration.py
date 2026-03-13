@@ -24,6 +24,98 @@ class CompositeRegistrationCandidate:
     payload: dict[str, Any]
 
 
+def resolve_lineage_component_count_total(
+    artifact_component_count: Any,
+    membership_index: dict[str, Any] | None,
+    stored_components: int,
+) -> int:
+    """Resolve the authoritative component count for a lineage composite."""
+    try:
+        artifact_total = int(artifact_component_count)
+    except (TypeError, ValueError):
+        artifact_total = 0
+
+    membership_total = 0
+    if isinstance(membership_index, dict):
+        try:
+            membership_total = int(membership_index.get("total_components", 0))
+        except (TypeError, ValueError):
+            membership_total = 0
+
+    return max(artifact_total, membership_total, stored_components)
+
+
+def build_lineage_membership_index_payload(
+    *,
+    composite_builder: Any,
+    membership_index: dict[str, Any] | None,
+    component_count_total: int,
+    components: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the membership_index payload for a lineage composite registration."""
+    stored_components = len(components)
+    payload: dict[str, Any] = {
+        "total_components": component_count_total,
+        "stored_components": stored_components,
+    }
+
+    if stored_components == component_count_total and stored_components > 0:
+        from ...services.put.composite_builder import CompositeLeaf
+
+        leaves: list[CompositeLeaf] = []
+        for component in components:
+            digest = component.get("component_digest")
+            if not isinstance(digest, str) or not digest:
+                continue
+            component_type_raw = component.get("component_type")
+            component_type = component_type_raw if isinstance(component_type_raw, str) else None
+            leaf_kind_raw = component.get("leaf_kind")
+            leaf_kind = leaf_kind_raw if isinstance(leaf_kind_raw, str) else "file"
+            leaves.append(
+                CompositeLeaf(
+                    relative_path=str(component.get("relative_path") or ""),
+                    digest=digest.lower(),
+                    size=_normalize_component_size(component.get("component_size")),
+                    component_type=component_type,
+                    leaf_kind=leaf_kind,
+                )
+            )
+
+        if len(leaves) == stored_components:
+            bloom_payload = composite_builder._build_membership_index_base(leaves)
+            payload["bloom_filter_base64"] = bloom_payload.get("bloom_filter_base64")
+            payload["bloom_bits"] = bloom_payload.get("bloom_bits")
+            payload["bloom_hashes"] = bloom_payload.get("bloom_hashes")
+            payload["bloom_version"] = bloom_payload.get("bloom_version")
+            return payload
+
+    for key in ("bloom_filter_base64", "bloom_bits", "bloom_hashes", "bloom_version"):
+        value = membership_index.get(key) if isinstance(membership_index, dict) else None
+        if value is None:
+            continue
+        if key in {"bloom_bits", "bloom_hashes", "bloom_version"}:
+            try:
+                payload[key] = int(value)
+            except (TypeError, ValueError):
+                continue
+            continue
+        payload[key] = value
+
+    required_bloom_keys = (
+        "bloom_filter_base64",
+        "bloom_bits",
+        "bloom_hashes",
+        "bloom_version",
+    )
+    if not all(key in payload and payload[key] is not None for key in required_bloom_keys):
+        raise ValueError(
+            "Lineage composite membership_index is missing required bloom fields; "
+            "cannot register composite without a complete membership bloom index."
+        )
+
+    return payload
+
+
 def normalize_registration_hashes(
     artifact: dict[str, Any],
     *,
@@ -290,3 +382,14 @@ def parse_composite_registration_response(
         return None, "Empty response from GLaaS when registering composite artifact"
 
     return None, "Unexpected response from GLaaS when registering composite artifact"
+
+
+def _normalize_component_size(value: Any) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int | float | str):
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
+    return 0

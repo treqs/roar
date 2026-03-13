@@ -11,9 +11,11 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from roar.application.publish.registration import build_lineage_membership_index_payload
 from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import BatchRegistrationResult, SessionRegistrationResult
 from roar.services.put.backends import MemoryBackend
+from roar.services.put.composite_builder import CompositeArtifactBuilder
 from roar.services.put.service import PutService
 
 
@@ -613,33 +615,11 @@ class TestPutServiceBasic:
         mock_db.jobs.add_input.assert_any_call(42, "art-1", str(model_file))
         mock_db.jobs.add_input.assert_any_call(42, "local-comp-1", str(upstream_root))
 
-    def test_lineage_membership_index_requires_bloom_fields_for_partial_components(
-        self, tmp_path: Path
-    ):
+    def test_lineage_membership_index_requires_bloom_fields_for_partial_components(self):
         """Lineage composites must carry bloom metadata when stored components are partial."""
-        backend = MemoryBackend(bucket="bucket", prefix="")
-
-        mock_db = Mock()
-        mock_db.artifacts = Mock()
-        mock_db.jobs = Mock()
-        mock_db.jobs.create.return_value = (42, "job-uid")
-        mock_db.sessions = Mock()
-        mock_db.sessions.get_active.return_value = {"id": 1}
-        mock_db.sessions.get_next_step_number.return_value = 1
-
-        glaas_deps = create_mock_glaas_deps()
-
-        with patch("roar.services.put.service.get_glaas_url", return_value="http://glaas.test"):
-            service = PutService(
-                db_context=mock_db,
-                backend=backend,
-                destination="memory://test-bucket/models",
-                repo_root=tmp_path,
-                **glaas_deps,
-            )
-
         with pytest.raises(ValueError, match="missing required bloom fields"):
-            service._build_lineage_membership_index_payload(
+            build_lineage_membership_index_payload(
+                composite_builder=CompositeArtifactBuilder(),
                 membership_index=None,
                 component_count_total=2,
                 components=[

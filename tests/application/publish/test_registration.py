@@ -2,16 +2,21 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from roar.application.publish.registration import (
     CompositeRegistrationCandidate,
+    build_lineage_membership_index_payload,
     normalize_registration_hashes,
     normalize_registration_source_type,
     prepare_batch_registration_artifacts,
     preregister_lineage_composites,
     register_publish_lineage,
+    resolve_lineage_component_count_total,
     sync_publish_labels,
 )
 from roar.core.interfaces.registration import BatchRegistrationResult, GitContext
+from roar.services.put.composite_builder import CompositeArtifactBuilder
 
 
 def test_preregister_lineage_composites_records_successes_and_failures() -> None:
@@ -253,3 +258,68 @@ def test_prepare_batch_registration_artifacts_uses_hash_fallback_when_requested(
             "session_hash": "session-1",
         }
     ]
+
+
+def test_resolve_lineage_component_count_total_prefers_best_available_count() -> None:
+    assert resolve_lineage_component_count_total("2", {"total_components": 4}, 3) == 4
+    assert resolve_lineage_component_count_total(None, {"total_components": "5"}, 2) == 5
+    assert resolve_lineage_component_count_total(None, None, 2) == 2
+
+
+def test_build_lineage_membership_index_payload_rebuilds_full_component_bloom() -> None:
+    payload = build_lineage_membership_index_payload(
+        composite_builder=CompositeArtifactBuilder(),
+        membership_index={
+            "total_components": 2,
+            "stored_components": 2,
+            "bloom_filter_base64": "AQIDBA==",
+            "bloom_bits": 2048,
+            "bloom_hashes": 12,
+            "bloom_version": 1,
+        },
+        component_count_total=2,
+        components=[
+            {
+                "relative_path": "part-000.json",
+                "leaf_kind": "file",
+                "component_algorithm": "blake3",
+                "component_digest": "d" * 64,
+                "component_size": 5,
+                "component_type": "application/json",
+            },
+            {
+                "relative_path": "part-001.json",
+                "leaf_kind": "file",
+                "component_algorithm": "blake3",
+                "component_digest": "e" * 64,
+                "component_size": 8,
+                "component_type": "application/json",
+            },
+        ],
+    )
+
+    assert payload["total_components"] == 2
+    assert payload["stored_components"] == 2
+    assert payload["bloom_filter_base64"] != "AQIDBA=="
+    assert payload["bloom_bits"] > 0
+    assert payload["bloom_hashes"] > 0
+    assert payload["bloom_version"] == 1
+
+
+def test_build_lineage_membership_index_payload_rejects_partial_component_set() -> None:
+    with pytest.raises(ValueError, match="missing required bloom fields"):
+        build_lineage_membership_index_payload(
+            composite_builder=CompositeArtifactBuilder(),
+            membership_index=None,
+            component_count_total=2,
+            components=[
+                {
+                    "relative_path": "subset.parquet",
+                    "leaf_kind": "file",
+                    "component_algorithm": "blake3",
+                    "component_digest": "a" * 64,
+                    "component_size": 123,
+                    "component_type": "application/octet-stream",
+                }
+            ],
+        )
