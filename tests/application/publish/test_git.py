@@ -10,6 +10,8 @@ from roar.application.publish.git import (
     build_publish_tag_name,
     create_publish_git_tag,
     ensure_clean_publish_repo,
+    finalize_put_publish_git,
+    prepare_put_publish_git,
     resolve_publish_git_context,
     resolve_publish_git_state,
 )
@@ -77,6 +79,68 @@ def test_build_publish_tag_name_supports_short_form() -> None:
 
     assert build_publish_tag_name(commit) == "roar/abc123def456"
     assert build_publish_tag_name(commit, short=True) == "roar/abc123de"
+
+
+def test_prepare_put_publish_git_returns_git_state_and_expected_tag(tmp_path: Path) -> None:
+    logger = MagicMock()
+    git_state = MagicMock(commit="deadbeef", repo_root=tmp_path)
+
+    with patch("roar.application.publish.git.ensure_clean_publish_repo", return_value=git_state):
+        prepared = prepare_put_publish_git(
+            repo_root=tmp_path,
+            dry_run=False,
+            no_tag=False,
+            logger=logger,
+        )
+
+    assert prepared.git_state is git_state
+    assert prepared.git_commit == "deadbeef"
+    assert prepared.expected_tag == "roar/deadbeef"
+    assert prepared.warnings == ()
+
+
+def test_prepare_put_publish_git_returns_warning_when_git_preflight_fails(tmp_path: Path) -> None:
+    logger = MagicMock()
+
+    with patch(
+        "roar.application.publish.git.ensure_clean_publish_repo",
+        side_effect=RuntimeError("git unavailable"),
+    ):
+        prepared = prepare_put_publish_git(
+            repo_root=tmp_path,
+            dry_run=False,
+            no_tag=False,
+            logger=logger,
+        )
+
+    assert prepared.git_state is None
+    assert prepared.git_commit is None
+    assert prepared.expected_tag is None
+    assert prepared.warnings == ("Git operation failed: git unavailable",)
+
+
+def test_finalize_put_publish_git_returns_created_tag(tmp_path: Path) -> None:
+    logger = MagicMock()
+    git_state = MagicMock(repo_root=tmp_path)
+
+    with patch(
+        "roar.application.publish.git.create_publish_git_tag",
+        return_value=(True, None),
+    ) as create_tag:
+        created_tag, warnings = finalize_put_publish_git(
+            result_success=True,
+            result_dry_run=False,
+            no_tag=False,
+            git_commit="deadbeef",
+            expected_tag="roar/deadbeef",
+            git_state=git_state,
+            repo_root=tmp_path,
+            logger=logger,
+        )
+
+    assert created_tag == "roar/deadbeef"
+    assert warnings == []
+    create_tag.assert_called_once_with(tmp_path, "roar/deadbeef")
 
 
 def test_resolve_publish_git_context_uses_shared_transfer_resolution() -> None:

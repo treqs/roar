@@ -12,7 +12,11 @@ from ...integrations.storage import (
 from ...services.put import PutService
 from ...services.registration.register_service import RegisterResult, RegisterService
 from .collection import collect_register_lineage
-from .git import build_publish_tag_name, create_publish_git_tag, ensure_clean_publish_repo
+from .git import (
+    create_publish_git_tag,
+    finalize_put_publish_git,
+    prepare_put_publish_git,
+)
 from .put_preparation import prepare_put_execution
 from .register_preparation import prepare_register_execution
 from .requests import (
@@ -105,10 +109,14 @@ def put_artifacts(request: PutRequest) -> PutResponse:
 
     backend = resolve_publish_storage_backend(request.destination)
 
-    git_commit: str | None = None
-    expected_tag: str | None = None
-    warnings: list[str] = []
     repo_root = request.repo_root or request.cwd
+    git_state = prepare_put_publish_git(
+        repo_root=repo_root,
+        dry_run=request.dry_run,
+        no_tag=request.no_tag,
+        logger=logger,
+    )
+    warnings = list(git_state.warnings)
 
     with create_database_context(request.roar_dir) as db_ctx:
         runtime = build_publish_runtime(glaas_url=get_glaas_url())
@@ -122,26 +130,6 @@ def put_artifacts(request: PutRequest) -> PutResponse:
             registration_coordinator=runtime.registration_coordinator,
         )
 
-        git_state = None
-        if not request.dry_run:
-            try:
-                git_state = ensure_clean_publish_repo(
-                    repo_root,
-                    error_message=(
-                        "Repository has uncommitted changes.\n"
-                        "Please commit your changes before running 'roar put'.\n"
-                        "This ensures artifacts can be traced to a specific commit."
-                    ),
-                )
-                git_commit = git_state.commit
-                if not request.no_tag:
-                    expected_tag = build_publish_tag_name(git_commit)
-            except ValueError:
-                raise
-            except Exception as exc:
-                logger.debug("Git operation failed during put preflight: %s", exc)
-                warnings.append(f"Git operation failed: {exc}")
-
         prepared = prepare_put_execution(
             db_ctx=db_ctx,
             runtime=runtime,
@@ -149,7 +137,7 @@ def put_artifacts(request: PutRequest) -> PutResponse:
             repo_root=repo_root,
             sources=request.sources,
             destination=request.destination,
-            git_commit=git_commit,
+            git_commit=git_state.git_commit,
             logger=logger,
         )
 
@@ -158,25 +146,21 @@ def put_artifacts(request: PutRequest) -> PutResponse:
             sources=request.sources,
             message=request.message,
             dry_run=request.dry_run,
-            git_commit=git_commit,
-            git_tag=expected_tag,
+            git_commit=git_state.git_commit,
+            git_tag=git_state.expected_tag,
         )
 
-        created_git_tag: str | None = None
-        if result.success and not result.dry_run and not request.no_tag and git_commit:
-            try:
-                tag_name = expected_tag or build_publish_tag_name(git_commit)
-                success, tag_error = create_publish_git_tag(
-                    git_state.repo_root if git_state is not None else repo_root,
-                    tag_name,
-                )
-                if success:
-                    created_git_tag = tag_name
-                elif tag_error:
-                    warnings.append(f"Could not create git tag: {tag_error}")
-            except Exception as exc:
-                logger.debug("Git tag creation failed: %s", exc)
-                warnings.append(f"Could not create git tag: {exc}")
+        created_git_tag, git_tag_warnings = finalize_put_publish_git(
+            result_success=result.success,
+            result_dry_run=result.dry_run,
+            no_tag=request.no_tag,
+            git_commit=git_state.git_commit,
+            expected_tag=git_state.expected_tag,
+            git_state=git_state.git_state,
+            repo_root=repo_root,
+            logger=logger,
+        )
+        warnings.extend(git_tag_warnings)
 
     return PutResponse(
         result=result,

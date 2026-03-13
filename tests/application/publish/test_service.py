@@ -237,10 +237,10 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
     db_ctx = MagicMock()
     put_result = PutResult(success=True, job_id=7, uploaded_files=[], dry_run=False)
     logger = MagicMock()
-    git_state = MagicMock(commit="deadbeef", repo_root=tmp_path)
     runtime = MagicMock()
     backend = MagicMock()
     prepared = MagicMock()
+    prepared_git = MagicMock(git_commit="deadbeef", expected_tag="roar/deadbeef", warnings=())
 
     with (
         patch("roar.application.publish.service.bootstrap"),
@@ -259,10 +259,13 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
             return_value=prepared,
         ) as prepare_put,
         patch("roar.application.publish.service.PutService") as mock_put_cls,
-        patch("roar.application.publish.service.ensure_clean_publish_repo", return_value=git_state),
         patch(
-            "roar.application.publish.service.create_publish_git_tag",
-            return_value=(True, None),
+            "roar.application.publish.service.prepare_put_publish_git",
+            return_value=prepared_git,
+        ),
+        patch(
+            "roar.application.publish.service.finalize_put_publish_git",
+            return_value=("roar/deadbeef", []),
         ),
     ):
         mock_put_cls.return_value.put_prepared.return_value = put_result
@@ -325,7 +328,7 @@ def test_put_artifacts_rejects_dirty_repo_before_put(tmp_path: Path) -> None:
         ),
         patch("roar.application.publish.service.PutService") as mock_put_cls,
         patch(
-            "roar.application.publish.service.ensure_clean_publish_repo",
+            "roar.application.publish.service.prepare_put_publish_git",
             side_effect=ValueError("Repository has uncommitted changes"),
         ),
         pytest.raises(ValueError, match="Repository has uncommitted changes"),
@@ -348,6 +351,7 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
     db_ctx = MagicMock()
     put_result = PutResult(success=True, job_id=3, uploaded_files=[], dry_run=False)
     prepared = MagicMock()
+    prepared_git = MagicMock(git_commit=None, expected_tag=None, warnings=("Git operation failed: git unavailable",))
 
     with (
         patch("roar.application.publish.service.bootstrap"),
@@ -366,8 +370,12 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
         ),
         patch("roar.application.publish.service.PutService") as mock_put_cls,
         patch(
-            "roar.application.publish.service.ensure_clean_publish_repo",
-            side_effect=RuntimeError("git unavailable"),
+            "roar.application.publish.service.prepare_put_publish_git",
+            return_value=prepared_git,
+        ),
+        patch(
+            "roar.application.publish.service.finalize_put_publish_git",
+            return_value=(None, []),
         ),
     ):
         mock_put_cls.return_value.put_prepared.return_value = put_result
@@ -401,6 +409,10 @@ def test_put_artifacts_returns_preparation_error_before_service(tmp_path: Path) 
         patch(
             "roar.application.publish.service.resolve_publish_storage_backend",
             return_value=MagicMock(),
+        ),
+        patch(
+            "roar.application.publish.service.prepare_put_publish_git",
+            return_value=MagicMock(git_commit=None, expected_tag=None, warnings=()),
         ),
         patch("roar.application.publish.service.build_publish_runtime", return_value=MagicMock()),
         patch(
