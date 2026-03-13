@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-COMPOSE_FILE="$ROOT_DIR/tests/e2e/ray/docker-compose.yml"
+COMPOSE_FILE="$ROOT_DIR/tests/backends/ray/e2e/docker-compose.yml"
 RESULTS_DIR="$ROOT_DIR/tests/benchmarks/results"
 
 if command -v python >/dev/null 2>&1; then
