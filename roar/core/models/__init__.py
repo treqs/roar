@@ -9,7 +9,6 @@ All models use Pydantic v2 with strict validation.
 # Core domain models
 from .artifact import Artifact, ArtifactHash
 from .base import ImmutableModel, RoarBaseModel
-from .command import CommandContext, CommandResult
 
 # DAG visualization models
 from .dag import (
@@ -90,8 +89,6 @@ __all__ = [
     "ArtifactResponse",
     "CheckTagRequest",
     "CheckTagResponse",
-    "CommandContext",
-    "CommandResult",
     "CompleteLiveJobRequest",
     "ContainerInfo",
     "CreateDagRequest",

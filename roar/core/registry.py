@@ -5,12 +5,7 @@ Automatically discovers and registers plugins from:
 1. Entry point plugins from external packages
 """
 
-import contextlib
-import importlib
-import pkgutil
-
 from .container import get_container
-from .interfaces.command import ICommand
 from .interfaces.telemetry import ITelemetryProvider
 from .interfaces.vcs import IVCSProvider
 from .logging import get_logger as _get_logger
@@ -82,79 +77,3 @@ def _register_entrypoint_plugin(container, plugin_cls: type) -> None:
         instance = plugin_cls()
         container.register_vcs_provider(instance.name, plugin_cls)
 
-
-# -------------------------------------------------------------------------
-# Command discovery
-# -------------------------------------------------------------------------
-
-
-def discover_commands(package_name: str = "roar.commands") -> None:
-    """
-    Auto-discover and register commands from the commands package.
-
-    Commands are registered by scanning roar.commands.* for classes
-    that implement ICommand.
-
-    Args:
-        package_name: Base package to scan for commands
-    """
-    container = get_container()
-
-    try:
-        package = importlib.import_module(package_name)
-    except ImportError:
-        return
-
-    package_path = getattr(package, "__path__", None)
-    if not package_path:
-        return
-
-    for _importer, modname, _ispkg in pkgutil.iter_modules(package_path):
-        # Skip private modules
-        if modname.startswith("_"):
-            continue
-
-        try:
-            module = importlib.import_module(f"{package_name}.{modname}")
-        except ImportError:
-            continue
-
-        # Find command classes
-        for attr_name in dir(module):
-            attr = getattr(module, attr_name)
-            if not isinstance(attr, type):
-                continue
-
-            if _implements(attr, ICommand):
-                with contextlib.suppress(Exception):
-                    container.register_command(attr)
-
-
-# -------------------------------------------------------------------------
-# Decorator for manual registration
-# -------------------------------------------------------------------------
-
-
-def register_plugin(cls: type) -> type:
-    """
-    Decorator to manually register a plugin class.
-
-    Usage:
-        @register_plugin
-        class MyTelemetryProvider(ITelemetryProvider):
-            ...
-
-    The decorator auto-detects the interface and registers appropriately.
-    """
-    container = get_container()
-
-    if _implements(cls, ITelemetryProvider):
-        instance = cls()
-        container.register_telemetry_provider(instance.name, cls)
-    elif _implements(cls, IVCSProvider):
-        instance = cls()
-        container.register_vcs_provider(instance.name, cls)
-    elif _implements(cls, ICommand):
-        container.register_command(cls)
-
-    return cls

@@ -5,7 +5,6 @@ These protocols define the contracts that implementations must follow,
 enabling dependency inversion and loose coupling throughout the codebase.
 """
 
-from .command import CommandContext, CommandResult, ICommand
 from .config import IConfigProvider
 from .lineage import ILineageCollector, LineageData
 from .logger import ILogger
@@ -29,11 +28,8 @@ from .vcs import IVCSProvider, VCSInfo
 __all__ = [
     "ArtifactRepository",
     "CollectionRepository",
-    "CommandContext",
-    "CommandResult",
     "HashCacheRepository",
     "HashingService",
-    "ICommand",
     "IConfigProvider",
     "ILineageCollector",
     "ILogger",

@@ -32,7 +32,6 @@ __all__ = [
     "ServiceContainer",
     "TracerNotFoundError",
     "bootstrap",
-    "discover_commands",
     "discover_plugins",
     "get_container",
     "is_initialized",
@@ -50,7 +49,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "get_container": (".container", "get_container"),
     "resolve": (".container", "resolve"),
     "try_resolve": (".container", "try_resolve"),
-    "discover_commands": (".registry", "discover_commands"),
     "discover_plugins": (".registry", "discover_plugins"),
     # exceptions
     "CloudDownloadError": (".exceptions", "CloudDownloadError"),

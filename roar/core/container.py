@@ -5,7 +5,7 @@ Lightweight DI with support for:
 - Singleton and transient lifetimes
 - Factory registration
 - Interface-based resolution
-- Plugin registries for extensible components
+- Provider registries for extensible components
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
-    from .interfaces.command import ICommand
     from .interfaces.telemetry import ITelemetryProvider
     from .interfaces.vcs import IVCSProvider
 
@@ -80,7 +79,7 @@ class ServiceContainer:
     Dependency injection container for roar.
 
     Combines DI capabilities with registries for extensible
-    components like telemetry providers and analyzers.
+    components like telemetry and VCS providers.
     """
 
     _instance: ServiceContainer | None = None
@@ -93,8 +92,6 @@ class ServiceContainer:
         # Plugin registries (multiple implementations per interface)
         self._telemetry_providers: dict[str, type[ITelemetryProvider]] = {}
         self._vcs_providers: dict[str, type[IVCSProvider]] = {}
-        self._commands: dict[str, type[ICommand]] = {}
-        self._command_aliases: dict[str, str] = {}
 
     @classmethod
     def get_instance(cls) -> ServiceContainer:
@@ -288,79 +285,6 @@ class ServiceContainer:
     def list_vcs_providers(self) -> list[str]:
         """List registered VCS provider names."""
         return list(self._vcs_providers.keys())
-
-    # -------------------------------------------------------------------------
-    # Command registry
-    # -------------------------------------------------------------------------
-
-    def register_command(
-        self,
-        command_class: type[ICommand],
-    ) -> type[ICommand]:
-        """
-        Register a command class.
-
-        Can be used as a decorator:
-            @container.register_command
-            class StatusCommand(ICommand):
-                ...
-
-        Args:
-            command_class: Command class implementing ICommand
-
-        Returns:
-            The command class (for decorator use)
-        """
-        # Create a temporary instance to get name and aliases
-        # This works because commands shouldn't have required constructor args
-        try:
-            instance = command_class.__new__(command_class)
-            name = instance.name
-            aliases = getattr(instance, "aliases", [])
-        except (TypeError, AttributeError):
-            # Fallback: try to get from class attributes
-            name = getattr(command_class, "name", command_class.__name__.lower())
-            aliases = getattr(command_class, "aliases", [])
-
-        self._commands[name] = command_class
-        for alias in aliases:
-            self._command_aliases[alias] = name
-
-        return command_class
-
-    def get_command(self, name: str) -> type[ICommand] | None:
-        """
-        Get a command class by name or alias.
-
-        Args:
-            name: Command name or alias
-
-        Returns:
-            Command class, or None if not found
-        """
-        # Check aliases first
-        if name in self._command_aliases:
-            name = self._command_aliases[name]
-        return self._commands.get(name)
-
-    def list_commands(self) -> dict[str, type[ICommand]]:
-        """Get all registered commands."""
-        return dict(self._commands)
-
-    def get_command_help_text(self) -> str:
-        """Generate help text for all commands."""
-        lines = []
-        for name, cmd_class in sorted(self._commands.items()):
-            help_text = getattr(cmd_class, "help_text", "")
-            if not help_text:
-                try:
-                    instance = cmd_class.__new__(cmd_class)
-                    help_text = instance.help_text
-                except (TypeError, AttributeError):
-                    pass
-            lines.append(f"  {name:18} {help_text}")
-        return "\n".join(lines)
-
 
 # -------------------------------------------------------------------------
 # Module-level convenience functions
