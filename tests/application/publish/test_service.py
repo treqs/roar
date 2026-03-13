@@ -14,8 +14,13 @@ from roar.services.registration.register_service import RegisterResult
 
 def test_register_lineage_target_delegates_to_register_service(tmp_path: Path) -> None:
     expected = RegisterResult(success=True, session_hash="a" * 64)
+    runtime = MagicMock()
 
-    with patch("roar.application.publish.service.RegisterService") as mock_cls:
+    with (
+        patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
+        patch("roar.application.publish.service.get_glaas_url", return_value="http://localhost:3001"),
+        patch("roar.application.publish.service.RegisterService") as mock_cls,
+    ):
         mock_cls.return_value.register_lineage_target.return_value = expected
 
         response = register_lineage_target(
@@ -28,6 +33,12 @@ def test_register_lineage_target_delegates_to_register_service(tmp_path: Path) -
         )
 
     assert response.result is expected
+    mock_cls.assert_called_once_with(
+        glaas_client=runtime.glaas_client,
+        lineage_collector=runtime.lineage_collector,
+        coordinator=runtime.registration_coordinator,
+        session_service=runtime.session_service,
+    )
     mock_cls.return_value.register_lineage_target.assert_called_once_with(
         target="model.pt",
         roar_dir=tmp_path / ".roar",
@@ -45,6 +56,8 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
     put_result = PutResult(success=True, job_id=7, uploaded_files=[], dry_run=False)
     logger = MagicMock()
     git_state = MagicMock(commit="deadbeef", repo_root=tmp_path)
+    runtime = MagicMock()
+    backend = MagicMock()
 
     with (
         patch("roar.application.publish.service.bootstrap"),
@@ -53,7 +66,8 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
             "roar.application.publish.service.create_database_context",
             return_value=nullcontext(db_ctx),
         ),
-        patch("roar.application.publish.service._get_backend", return_value=MagicMock()),
+        patch("roar.application.publish.service._get_backend", return_value=backend),
+        patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
         patch("roar.application.publish.service.PutService") as mock_put_cls,
         patch("roar.application.publish.service.ensure_clean_publish_repo", return_value=git_state),
         patch(
@@ -74,6 +88,18 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
             )
         )
 
+    mock_put_cls.assert_called_once()
+    assert mock_put_cls.call_args.kwargs == {
+        "db_context": db_ctx,
+        "backend": backend,
+        "destination": "memory://bucket/prefix",
+        "repo_root": tmp_path,
+        "roar_dir": tmp_path / ".roar",
+        "glaas_client": runtime.glaas_client,
+        "lineage_collector": runtime.lineage_collector,
+        "registration_coordinator": runtime.registration_coordinator,
+        "session_service": runtime.session_service,
+    }
     mock_put_cls.return_value.put.assert_called_once_with(
         sources=["model.pt"],
         message="publish",

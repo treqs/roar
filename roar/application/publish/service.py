@@ -5,6 +5,7 @@ from __future__ import annotations
 from ...core.bootstrap import bootstrap
 from ...core.logging import get_logger
 from ...db.context import create_database_context
+from ...glaas_client import get_glaas_url
 from ...services.put import PutService
 from ...services.put.backends import (
     MemoryBackend,
@@ -21,11 +22,18 @@ from .requests import (
     RegisterLineageRequest,
     RegisterLineageResponse,
 )
+from .runtime import build_publish_runtime
 
 
 def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageResponse:
     """Run the `roar register` application workflow."""
-    service = RegisterService()
+    runtime = build_publish_runtime(glaas_url=get_glaas_url())
+    service = RegisterService(
+        glaas_client=runtime.glaas_client,
+        lineage_collector=runtime.lineage_collector,
+        coordinator=runtime.registration_coordinator,
+        session_service=runtime.session_service,
+    )
     result = service.register_lineage_target(
         target=request.target,
         roar_dir=request.roar_dir,
@@ -56,12 +64,17 @@ def put_artifacts(request: PutRequest) -> PutResponse:
         if not active_session:
             raise ValueError("No active session. Run 'roar init' first.")
 
+        runtime = build_publish_runtime(glaas_url=get_glaas_url())
         service = PutService(
             db_context=db_ctx,
             backend=backend,
             destination=request.destination,
             repo_root=repo_root,
             roar_dir=request.roar_dir,
+            glaas_client=runtime.glaas_client,
+            lineage_collector=runtime.lineage_collector,
+            registration_coordinator=runtime.registration_coordinator,
+            session_service=runtime.session_service,
         )
 
         git_state = None
