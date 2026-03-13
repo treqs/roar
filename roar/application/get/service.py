@@ -12,7 +12,8 @@ from ...db.context import create_database_context
 from ...integrations.download import parse_source, resolve_download_backend
 from ...services.execution.job_recording import LocalJobRecorder, LocalRecordedArtifact
 from ...services.get.service import GetService, GetTransferResult
-from .requests import GetRequest, GetResponse, GetResult
+from .requests import GetRequest
+from .results import GetDownloadedFile, GetDryRunItem, GetResponse
 
 
 def get_artifacts(request: GetRequest) -> GetResponse:
@@ -69,7 +70,18 @@ def get_artifacts(request: GetRequest) -> GetResponse:
             git_tag_name = None
             warnings.append(f"Could not create git tag: {exc}")
 
-    return GetResponse(result=result, git_tag=git_tag_name, warnings=warnings)
+    return GetResponse(
+        success=result.success,
+        source=request.source,
+        job_id=result.job_id,
+        job_uid=result.job_uid,
+        downloaded_files=result.downloaded_files,
+        dry_run=result.dry_run,
+        would_download=result.would_download,
+        git_tag=git_tag_name,
+        warnings=warnings,
+        error=result.error,
+    )
 
 
 def _materialize_get_result(
@@ -79,13 +91,23 @@ def _materialize_get_result(
     parsed_source,
     transfer_result: GetTransferResult,
     git_commit: str | None,
-) -> GetResult:
+) -> GetResponse:
     if transfer_result.dry_run or not transfer_result.success:
-        return GetResult(
+        return GetResponse(
             success=transfer_result.success,
-            downloaded_files=transfer_result.downloaded_files,
+            source=request.source,
+            downloaded_files=[
+                _downloaded_file_from_transfer(file_info)
+                for file_info in transfer_result.downloaded_files
+            ],
             dry_run=transfer_result.dry_run,
-            would_download=transfer_result.would_download,
+            would_download=[
+                GetDryRunItem(
+                    remote_url=str(item["remote_url"]),
+                    local_path=str(item["local_path"]),
+                )
+                for item in transfer_result.would_download
+            ],
             error=transfer_result.error,
         )
 
@@ -115,11 +137,25 @@ def _materialize_get_result(
         output_artifacts=output_artifacts,
         exit_code=0,
     )
-    return GetResult(
+    return GetResponse(
         success=True,
+        source=request.source,
         job_id=job_id,
         job_uid=job_uid,
-        downloaded_files=transfer_result.downloaded_files,
+        downloaded_files=[
+            _downloaded_file_from_transfer(file_info)
+            for file_info in transfer_result.downloaded_files
+        ],
+    )
+
+
+def _downloaded_file_from_transfer(file_info: dict[str, object]) -> GetDownloadedFile:
+    size_value = file_info.get("size")
+    return GetDownloadedFile(
+        remote_url=str(file_info["remote_url"]),
+        local_path=str(file_info["local_path"]),
+        hash=str(file_info["hash"]) if file_info.get("hash") is not None else None,
+        size=size_value if isinstance(size_value, int) else None,
     )
 
 

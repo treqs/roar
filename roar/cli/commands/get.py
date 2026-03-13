@@ -139,27 +139,25 @@ def get(
     except ImportError as e:
         raise click.ClickException(str(e)) from e
 
-    result = response.result
-
     if dry_run:
         click.echo("Dry run - would download:")
-        for item in result.would_download:
-            click.echo(f"  {item['remote_url']} -> {item['local_path']}")
-        click.echo(f"\nTotal: {len(result.would_download)} file(s)")
+        for dry_run_item in response.would_download:
+            click.echo(f"  {dry_run_item.remote_url} -> {dry_run_item.local_path}")
+        click.echo(f"\nTotal: {len(response.would_download)} file(s)")
         return
 
-    if not result.success:
-        raise click.ClickException(result.error or "Download failed")
+    if not response.success:
+        raise click.ClickException(response.error or "Download failed")
 
     if response.git_tag:
         click.echo(f"Created git tag: {response.git_tag}")
     for warning in response.warnings:
         click.echo(f"Warning: {warning}", err=True)
 
-    count = len(result.downloaded_files)
-    click.echo(f"Downloaded {count} file(s) from {source}")
-    for item in result.downloaded_files:
-        click.echo(f"  {item['remote_url']} -> {item['local_path']}")
+    count = len(response.downloaded_files)
+    click.echo(f"Downloaded {count} file(s) from {response.source}")
+    for downloaded_file in response.downloaded_files:
+        click.echo(f"  {downloaded_file.remote_url} -> {downloaded_file.local_path}")
 
-    if result.job_id is not None:
-        click.echo(f"\nJob created: step {result.job_id}")
+    if response.job_id is not None:
+        click.echo(f"\nJob created: step {response.job_id}")

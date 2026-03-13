@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
-from roar.application.get.requests import GetResponse, GetResult
+from roar.application.get.results import GetDownloadedFile, GetDryRunItem, GetResponse
 from roar.cli.commands.get import get
 
 
@@ -42,16 +42,15 @@ def test_cli_surfaces_application_errors(tmp_path: Path) -> None:
 def test_cli_prints_dry_run_plan(tmp_path: Path) -> None:
     runner = CliRunner()
     response = GetResponse(
-        result=GetResult(
-            success=True,
-            dry_run=True,
-            would_download=[
-                {
-                    "remote_url": "s3://bucket/model.pt",
-                    "local_path": str(tmp_path / "model.pt"),
-                }
-            ],
-        )
+        success=True,
+        source="s3://bucket/model.pt",
+        dry_run=True,
+        would_download=[
+            GetDryRunItem(
+                remote_url="s3://bucket/model.pt",
+                local_path=str(tmp_path / "model.pt"),
+            )
+        ],
     )
 
     with patch("roar.cli.commands.get.get_artifacts", return_value=response):
@@ -69,16 +68,15 @@ def test_cli_prints_dry_run_plan(tmp_path: Path) -> None:
 def test_cli_prints_success_tag_and_warnings(tmp_path: Path) -> None:
     runner = CliRunner()
     response = GetResponse(
-        result=GetResult(
-            success=True,
-            job_id=7,
-            downloaded_files=[
-                {
-                    "remote_url": "s3://bucket/model.pt",
-                    "local_path": str(tmp_path / "model.pt"),
-                }
-            ],
-        ),
+        success=True,
+        source="s3://bucket/model.pt",
+        job_id=7,
+        downloaded_files=[
+            GetDownloadedFile(
+                remote_url="s3://bucket/model.pt",
+                local_path=str(tmp_path / "model.pt"),
+            )
+        ],
         git_tag="roar/deadbeef",
         warnings=["Could not create git tag: warning"],
     )
