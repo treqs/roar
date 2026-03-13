@@ -40,7 +40,7 @@ def test_prepare_put_execution_builds_session_git_and_source_plan(tmp_path: Path
 
     with (
         patch(
-            "roar.application.publish.put_preparation.resolve_publish_git_context",
+            "roar.application.publish.put_preparation.resolve_roar_git_context",
             return_value=git_context,
         ),
         patch(
@@ -87,7 +87,7 @@ def test_prepare_put_execution_propagates_missing_source(tmp_path: Path) -> None
 
     with (
         patch(
-            "roar.application.publish.put_preparation.resolve_publish_git_context",
+            "roar.application.publish.put_preparation.resolve_roar_git_context",
             return_value=GitContext(repo="repo", branch="main", commit="deadbeef"),
         ),
         patch(

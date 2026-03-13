@@ -9,12 +9,8 @@ from ...glaas_client import get_glaas_url
 from ...integrations.storage import resolve_publish_storage_backend
 from ...services.put import PutService
 from ...services.registration.register_service import RegisterResult, RegisterService
+from ..git import finalize_put_git, finalize_register_git, prepare_put_git
 from .collection import collect_register_lineage
-from .git import (
-    finalize_put_publish_git,
-    finalize_register_publish_git,
-    prepare_put_publish_git,
-)
 from .put_preparation import prepare_put_execution
 from .register_preparation import prepare_register_execution
 from .requests import (
@@ -81,7 +77,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         prepared=prepared,
     )
 
-    finalize_register_publish_git(
+    finalize_register_git(
         result_success=result.success,
         dry_run=request.dry_run,
         git_tag_name=prepared.git_tag_name,
@@ -100,7 +96,7 @@ def put_artifacts(request: PutRequest) -> PutResponse:
     backend = resolve_publish_storage_backend(request.destination)
 
     repo_root = request.repo_root or request.cwd
-    git_state = prepare_put_publish_git(
+    git_state = prepare_put_git(
         repo_root=repo_root,
         dry_run=request.dry_run,
         no_tag=request.no_tag,
@@ -140,7 +136,7 @@ def put_artifacts(request: PutRequest) -> PutResponse:
             git_tag=git_state.expected_tag,
         )
 
-        created_git_tag, git_tag_warnings = finalize_put_publish_git(
+        created_git_tag, git_tag_warnings = finalize_put_git(
             result_success=result.success,
             result_dry_run=result.dry_run,
             no_tag=request.no_tag,

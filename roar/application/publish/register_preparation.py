@@ -8,7 +8,7 @@ from pathlib import Path
 from ...config import config_get
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
-from .git import build_publish_tag_name, ensure_clean_publish_repo, resolve_publish_git_context
+from ..git import build_roar_git_tag_name, ensure_clean_git_repo, resolve_roar_git_context
 from .runtime import PublishRuntime
 from .session import prepare_publish_session
 
@@ -36,7 +36,7 @@ def prepare_register_execution(
     logger: ILogger,
 ) -> PreparedRegisterExecution:
     """Resolve the local context needed to execute a register workflow."""
-    git_context = resolve_publish_git_context(cwd, logger=logger)
+    git_context = resolve_roar_git_context(cwd, logger=logger)
 
     git_tag_name: str | None = None
     git_tag_repo_root: Path | None = None
@@ -46,11 +46,11 @@ def prepare_register_execution(
         tagging_enabled = True
 
     if not dry_run and tagging_enabled and git_context.commit:
-        git_state = ensure_clean_publish_repo(
+        git_state = ensure_clean_git_repo(
             cwd,
             error_message="Cannot register with uncommitted changes. Commit your changes first.",
         )
-        git_tag_name = build_publish_tag_name(git_context.commit, short=True)
+        git_tag_name = build_roar_git_tag_name(git_context.commit, short=True)
         git_tag_repo_root = git_state.repo_root
 
     publish_session = prepare_publish_session(

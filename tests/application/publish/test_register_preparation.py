@@ -27,11 +27,11 @@ def test_prepare_register_execution_builds_session_git_and_tag_plan(tmp_path: Pa
 
     with (
         patch(
-            "roar.application.publish.register_preparation.resolve_publish_git_context",
+            "roar.application.publish.register_preparation.resolve_roar_git_context",
             return_value=git_context,
         ),
         patch(
-            "roar.application.publish.register_preparation.ensure_clean_publish_repo",
+            "roar.application.publish.register_preparation.ensure_clean_git_repo",
             return_value=git_state,
         ) as ensure_clean,
         patch(
@@ -82,11 +82,11 @@ def test_prepare_register_execution_skips_git_tagging_and_glaas_on_dry_run(tmp_p
 
     with (
         patch(
-            "roar.application.publish.register_preparation.resolve_publish_git_context",
+            "roar.application.publish.register_preparation.resolve_roar_git_context",
             return_value=git_context,
         ),
         patch(
-            "roar.application.publish.register_preparation.ensure_clean_publish_repo"
+            "roar.application.publish.register_preparation.ensure_clean_git_repo"
         ) as ensure_clean,
         patch(
             "roar.application.publish.register_preparation.prepare_publish_session",
@@ -115,11 +115,11 @@ def test_prepare_register_execution_propagates_dirty_repo_error(tmp_path: Path) 
 
     with (
         patch(
-            "roar.application.publish.register_preparation.resolve_publish_git_context",
+            "roar.application.publish.register_preparation.resolve_roar_git_context",
             return_value=_git_context(),
         ),
         patch(
-            "roar.application.publish.register_preparation.ensure_clean_publish_repo",
+            "roar.application.publish.register_preparation.ensure_clean_git_repo",
             side_effect=ValueError("dirty repo"),
         ),
         patch("roar.application.publish.register_preparation.config_get", return_value=True),
@@ -141,7 +141,7 @@ def test_prepare_register_execution_propagates_session_preparation_error(tmp_pat
 
     with (
         patch(
-            "roar.application.publish.register_preparation.resolve_publish_git_context",
+            "roar.application.publish.register_preparation.resolve_roar_git_context",
             return_value=_git_context(),
         ),
         patch(

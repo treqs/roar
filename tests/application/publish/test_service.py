@@ -213,7 +213,7 @@ def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -
             "roar.application.publish.service.prepare_register_execution",
             return_value=prepared,
         ),
-        patch("roar.application.publish.service.finalize_register_publish_git") as finalize_register,
+        patch("roar.application.publish.service.finalize_register_git") as finalize_register,
         patch("roar.application.publish.service.RegisterService") as mock_cls,
     ):
         mock_cls.return_value.register_prepared_lineage.return_value = expected
@@ -263,11 +263,11 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
         ) as prepare_put,
         patch("roar.application.publish.service.PutService") as mock_put_cls,
         patch(
-            "roar.application.publish.service.prepare_put_publish_git",
+            "roar.application.publish.service.prepare_put_git",
             return_value=prepared_git,
         ),
         patch(
-            "roar.application.publish.service.finalize_put_publish_git",
+            "roar.application.publish.service.finalize_put_git",
             return_value=("roar/deadbeef", []),
         ),
     ):
@@ -331,7 +331,7 @@ def test_put_artifacts_rejects_dirty_repo_before_put(tmp_path: Path) -> None:
         ),
         patch("roar.application.publish.service.PutService") as mock_put_cls,
         patch(
-            "roar.application.publish.service.prepare_put_publish_git",
+            "roar.application.publish.service.prepare_put_git",
             side_effect=ValueError("Repository has uncommitted changes"),
         ),
         pytest.raises(ValueError, match="Repository has uncommitted changes"),
@@ -373,11 +373,11 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
         ),
         patch("roar.application.publish.service.PutService") as mock_put_cls,
         patch(
-            "roar.application.publish.service.prepare_put_publish_git",
+            "roar.application.publish.service.prepare_put_git",
             return_value=prepared_git,
         ),
         patch(
-            "roar.application.publish.service.finalize_put_publish_git",
+            "roar.application.publish.service.finalize_put_git",
             return_value=(None, []),
         ),
     ):
@@ -414,7 +414,7 @@ def test_put_artifacts_returns_preparation_error_before_service(tmp_path: Path) 
             return_value=MagicMock(),
         ),
         patch(
-            "roar.application.publish.service.prepare_put_publish_git",
+            "roar.application.publish.service.prepare_put_git",
             return_value=MagicMock(git_commit=None, expected_tag=None, warnings=()),
         ),
         patch("roar.application.publish.service.build_publish_runtime", return_value=MagicMock()),

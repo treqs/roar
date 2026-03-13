@@ -13,6 +13,7 @@ from pathlib import Path
 
 import click
 
+from ...application.git import build_roar_git_tag_name, create_roar_git_tag, resolve_git_state
 from ...core.bootstrap import bootstrap
 from ...db.context import create_database_context
 from ...integrations.download import parse_source, resolve_download_backend
@@ -163,9 +164,7 @@ def get(
     git_tag_name = None
     if not dry_run:
         try:
-            from ...application.publish.git import resolve_publish_git_state
-
-            git_commit = resolve_publish_git_state(ctx.repo_root or ctx.cwd).commit
+            git_commit = resolve_git_state(ctx.repo_root or ctx.cwd).commit
             logger.debug("Git commit: %s", git_commit)
         except Exception as e:
             logger.debug("Git operation failed (non-fatal for get): %s", e)
@@ -229,13 +228,11 @@ def get(
         # Create git tag after successful download (opt-in)
         if tag and git_commit:
             try:
-                from ...application.publish.git import (
-                    build_publish_tag_name,
-                    create_publish_git_tag,
+                git_tag_name = build_roar_git_tag_name(git_commit)
+                success, tag_error = create_roar_git_tag(
+                    ctx.repo_root or ctx.cwd,
+                    git_tag_name,
                 )
-
-                git_tag_name = build_publish_tag_name(git_commit)
-                success, tag_error = create_publish_git_tag(ctx.repo_root or ctx.cwd, git_tag_name)
                 if success:
                     logger.debug("Git tag created: %s", git_tag_name)
                     click.echo(f"Created git tag: {git_tag_name}")

@@ -10,11 +10,11 @@ from urllib.parse import urlparse
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
 from ...glaas_client import GlaasClient
+from ..git import resolve_roar_git_context
 from .datasets import (
     detect_additional_publish_composite_roots,
     infer_publish_dataset_identifiers,
 )
-from .git import resolve_publish_git_context
 from .runtime import PublishRuntime
 from .session import prepare_publish_session
 
@@ -57,7 +57,7 @@ def prepare_put_execution(
         raise ValueError("No active session")
 
     session_id = int(active_session["id"])
-    git_context = resolve_publish_git_context(
+    git_context = resolve_roar_git_context(
         repo_root,
         logger=logger,
         git_commit=git_commit,
