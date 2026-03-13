@@ -14,7 +14,7 @@ import pytest
 from roar.core.bootstrap import bootstrap, reset
 from roar.core.container import get_container
 from roar.core.interfaces.logger import ILogger
-from roar.services.logging import NullLogger
+from roar.core.logging import NullLogger
 from roar.services.reproduction.environment_setup import EnvironmentSetupService
 
 # ---------------------------------------------------------------------------

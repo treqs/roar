@@ -38,7 +38,7 @@ def resolve_or_default(
 
     Example:
         >>> from roar.core.interfaces.logger import ILogger
-        >>> from roar.services.logging import NullLogger
+        >>> from roar.core.logging import NullLogger
         >>> logger = resolve_or_default(ILogger, NullLogger)
     """
     try:

@@ -55,7 +55,7 @@ def _register_core_services(container: ServiceContainer, roar_dir: Path | None) 
     """Register core application services."""
     from ..integrations.config import config_get
     from ..presenters.console import ConsolePresenter
-    from ..services.logging import RoarLogger
+    from .logging import RoarLogger
 
     # Register default presenter
     container.register_singleton(IPresenter, implementation=ConsolePresenter())  # type: ignore[type-abstract]
