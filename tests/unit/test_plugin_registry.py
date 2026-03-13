@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from roar.core.bootstrap import reset
 from roar.core.container import get_container
 from roar.core.interfaces.telemetry import ITelemetryProvider, TelemetryRunInfo
-from roar.core.registry import discover_plugins
+from roar.plugins import discover_plugins
 
 
 class _ExampleTelemetryProvider(ITelemetryProvider):

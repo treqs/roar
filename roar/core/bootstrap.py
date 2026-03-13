@@ -8,10 +8,10 @@ This module should be called once at application startup.
 
 from pathlib import Path
 
+from ..plugins import discover_plugins
 from .container import ServiceContainer, get_container
 from .interfaces.logger import ILogger
 from .interfaces.presenter import IPresenter
-from .registry import discover_plugins
 
 _initialized = False
 
