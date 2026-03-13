@@ -12,42 +12,29 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-from ...application.publish.composite_builder import CompositeArtifactBuilder, CompositeBuildResult
+from ...application.publish.composite_builder import CompositeArtifactBuilder
 from ...application.publish.composites import build_publish_composite_results
 from ...application.publish.lineage import LineageCollector
-from ...application.publish.metadata import (
-    build_local_publish_composite_metadata_json,
-    build_publish_composite_dataset_metadata_json,
-    build_put_operation_metadata_json,
-)
+from ...application.publish.metadata import build_put_operation_metadata_json
 from ...application.publish.put_preparation import PreparedPutExecution
 from ...application.publish.registration import (
-    CompositeRegistrationCandidate,
-    build_lineage_composite_candidate,
-    extract_composite_digest,
-    normalize_lineage_component_rows,
-    normalize_registration_hashes,
     normalize_registration_source_type,
-    parse_composite_registration_response,
     prepare_batch_registration_artifacts,
-    preregister_lineage_composites,
     register_publish_lineage,
-    resolve_lineage_component_count_total,
 )
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
-from ...db.context import optional_repo
-from ...glaas_client import GlaasClient
 from ...integrations.storage.base import StorageBackend
-from ...services.registration import (
-    RegistrationCoordinator,
-    _artifact_ref,
-)
+from ...services.registration import RegistrationCoordinator
 from ...services.transfer import (
     DatabaseContext,
     hash_files_blake3,
+)
+from .composites import (
+    preregister_put_lineage_composites_with_glaas,
+    register_put_composites_with_glaas,
 )
 from .job_links import (
     build_put_job_link_inputs,
@@ -274,12 +261,15 @@ class PutService:
         # Register lineage with GLaaS (session already registered above)
         coordinator = self._registration_coordinator or RegistrationCoordinator()
         pre_registration_errors: list[str] = []
-        lineage_composite_registrations = self._register_lineage_composites_with_glaas(
-            client=client,
+        lineage_composite_registrations = preregister_put_lineage_composites_with_glaas(
+            db_ctx=self._db,
+            glaas_client=client,
             lineage_artifacts=lineage.artifacts,
             session_hash=session_hash or "",
             registration_errors=pre_registration_errors,
             dataset_identifiers=dataset_identifiers,
+            composite_builder=self._composite_builder,
+            logger=self._logger,
         )
 
         # Prepare artifacts for registration (add session_hash)
@@ -334,11 +324,13 @@ class PutService:
             additional_composite_roots=additional_composite_roots,
             composite_builder=self._composite_builder,
         )
-        composite_registrations = self._register_composites_with_glaas(
-            client,
-            composite_results,
-            registration_result.errors,
+        composite_registrations = register_put_composites_with_glaas(
+            db_ctx=self._db,
+            glaas_client=client,
+            composite_results=composite_results,
+            registration_errors=registration_result.errors,
             dataset_identifiers=dataset_identifiers,
+            logger=self._logger,
         )
 
         # Build command string
@@ -483,127 +475,6 @@ class PutService:
 
         return payloads
 
-    def _register_lineage_composites_with_glaas(
-        self,
-        client: GlaasClient,
-        lineage_artifacts: list[dict[str, Any]],
-        session_hash: str,
-        registration_errors: list[str],
-        dataset_identifiers: list[dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
-        """
-        Pre-register lineage composite artifacts before coordinator link phase.
-
-        Coordinator phase-4 link resolution requires composite hashes to exist in
-        GLaaS. These lineage composites are not sent through the batch artifacts
-        endpoint because that endpoint cannot persist component metadata.
-        """
-        payloads = self._build_lineage_composite_payloads(
-            lineage_artifacts=lineage_artifacts,
-            session_hash=session_hash,
-            dataset_identifiers=dataset_identifiers,
-        )
-        return preregister_lineage_composites(
-            glaas_client=client,
-            payloads=payloads,
-            registration_errors=registration_errors,
-            logger=self._logger,
-        )
-
-    def _build_lineage_composite_payloads(
-        self,
-        lineage_artifacts: list[dict[str, Any]],
-        session_hash: str,
-        dataset_identifiers: list[dict[str, Any]] | None = None,
-    ) -> list[CompositeRegistrationCandidate]:
-        """Build composite registration payloads from local lineage artifacts."""
-        composites_repo = cast(Any, optional_repo(self._db, "composites"))
-        payloads: list[CompositeRegistrationCandidate] = []
-        seen_hashes: set[str] = set()
-
-        for artifact in lineage_artifacts:
-            hashes = self._extract_registration_hashes(artifact)
-            composite_digest = extract_composite_digest(hashes)
-            if not composite_digest:
-                continue
-            if composite_digest in seen_hashes:
-                continue
-
-            component_rows: list[dict[str, Any]] = []
-            membership_index: dict[str, Any] | None = None
-            artifact_id = artifact.get("id")
-            if composites_repo is not None and isinstance(artifact_id, str) and artifact_id:
-                try:
-                    rows = composites_repo.get_components(artifact_id, limit=5000)
-                    if isinstance(rows, list):
-                        component_rows = [row for row in rows if isinstance(row, dict)]
-                except Exception as exc:  # pragma: no cover - defensive path
-                    self._logger.warning(
-                        "Failed to load local components for lineage composite %s: %s",
-                        composite_digest[:12],
-                        exc,
-                    )
-                try:
-                    raw_membership = composites_repo.get_membership_index(artifact_id)
-                    if isinstance(raw_membership, dict):
-                        membership_index = raw_membership
-                except Exception as exc:  # pragma: no cover - defensive path
-                    self._logger.warning(
-                        "Failed to load local membership index for lineage composite %s: %s",
-                        composite_digest[:12],
-                        exc,
-                    )
-
-            components = normalize_lineage_component_rows(
-                component_rows,
-                resolve_component=self._resolve_lineage_component_for_registration,
-                logger=self._logger,
-            )
-
-            seen_hashes.add(composite_digest)
-            metadata_json = build_publish_composite_dataset_metadata_json(
-                root_path=str(_artifact_ref.artifact_path(artifact) or ""),
-                dataset_identifiers=dataset_identifiers,
-                artifact_metadata=artifact.get("metadata"),
-                components=components,
-                component_count_total=resolve_lineage_component_count_total(
-                    artifact_component_count=artifact.get("component_count"),
-                    membership_index=membership_index,
-                    stored_components=len(components),
-                ),
-            )
-            candidate = build_lineage_composite_candidate(
-                artifact=artifact,
-                composite_digest=composite_digest,
-                hashes=hashes,
-                components=components,
-                membership_index=membership_index,
-                session_hash=session_hash,
-                composite_builder=self._composite_builder,
-                metadata=metadata_json,
-                logger=self._logger,
-            )
-            if candidate is None:
-                continue
-            payloads.append(candidate)
-
-        return payloads
-
-    @staticmethod
-    def _resolve_lineage_component_for_registration(
-        row: dict[str, Any],
-    ) -> tuple[str, str] | None:
-        component_algorithm = row.get("component_algorithm")
-        component_digest = row.get("component_digest")
-        if (
-            isinstance(component_algorithm, str)
-            and component_algorithm.strip()
-            and isinstance(component_digest, str)
-            and component_digest
-        ):
-            return component_algorithm.strip().lower(), component_digest.lower()
-        return None
-
     def _link_local_put_job_artifacts(
         self,
         job_id: int,
@@ -699,10 +570,6 @@ class PutService:
             if link_result.error:
                 registration_errors.append(f"Put job links: {link_result.error}")
 
-    @staticmethod
-    def _extract_registration_hashes(artifact: dict[str, Any]) -> list[dict[str, str]]:
-        return normalize_registration_hashes(artifact)
-
     def _hash_files_batch(self, paths: list[Path]) -> dict[str, str]:
         """Compute BLAKE3 hashes for paths in one backend batch call."""
         if not paths:
@@ -729,94 +596,3 @@ class PutService:
             "created" if created else "existing",
         )
         return artifact_id
-
-    def _persist_local_composite_registration(
-        self,
-        composite: CompositeBuildResult,
-        composite_registration: dict[str, Any],
-        dataset_identifiers: list[dict[str, Any]] | None = None,
-    ) -> str | None:
-        artifacts_repo = cast(Any, optional_repo(self._db, "artifacts"))
-        composites_repo = cast(Any, optional_repo(self._db, "composites"))
-        if artifacts_repo is None or composites_repo is None:
-            return None
-
-        try:
-            metadata = build_local_publish_composite_metadata_json(
-                composite=composite,
-                dataset_identifiers=dataset_identifiers,
-            )
-            local_artifact_id, _created = artifacts_repo.register(
-                hashes={"composite-blake3": composite.digest},
-                size=int(composite.payload.get("size") or 0),
-                path=composite.root_path,
-                source_type=composite.payload.get("source_type"),
-                metadata=metadata,
-            )
-            composites_repo.upsert_details(
-                artifact_id=local_artifact_id,
-                components=list(composite.payload.get("components") or []),
-                component_count_total=composite.component_count_total,
-                membership_index=composite.payload.get("membership_index"),
-            )
-            composite_registration["local_artifact_id"] = local_artifact_id
-            return None
-        except Exception as exc:  # pragma: no cover - defensive best effort
-            self._logger.warning(
-                "Local composite persistence failed for %s: %s",
-                composite.digest[:12],
-                exc,
-            )
-            return str(exc)
-
-    def _register_composites_with_glaas(
-        self,
-        client: GlaasClient,
-        composite_results: list[CompositeBuildResult],
-        registration_errors: list[str],
-        dataset_identifiers: list[dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Register composite artifacts with GLaaS and persist locally."""
-        composite_registrations: list[dict[str, Any]] = []
-        for composite in composite_results:
-            payload = dict(composite.payload)
-            metadata_json = build_publish_composite_dataset_metadata_json(
-                root_path=composite.root_path,
-                dataset_identifiers=dataset_identifiers,
-                components=list(composite.payload.get("components") or []),
-                component_count_total=composite.component_count_total,
-            )
-            if metadata_json is not None:
-                payload["metadata"] = metadata_json
-            response = client.register_composite_artifact(payload)
-            result, error = parse_composite_registration_response(response)
-
-            composite_registration = {
-                "root_path": composite.root_path,
-                "hash": composite.digest,
-                "component_count_total": composite.component_count_total,
-                "component_count_stored": composite.component_count_stored,
-            }
-            if error:
-                composite_registration["registered"] = False
-                composite_registration["error"] = error
-                registration_errors.append(f"Composite {composite.digest[:12]}: {error}")
-            else:
-                composite_registration["registered"] = True
-                if isinstance(result, dict):
-                    if "artifact_id" in result:
-                        composite_registration["artifact_id"] = result["artifact_id"]
-                    if "created" in result:
-                        composite_registration["created"] = result["created"]
-                local_persist_error = self._persist_local_composite_registration(
-                    composite,
-                    composite_registration,
-                    dataset_identifiers=dataset_identifiers,
-                )
-                if local_persist_error:
-                    composite_registration["local_persisted"] = False
-                    composite_registration["local_error"] = local_persist_error
-                else:
-                    composite_registration["local_persisted"] = True
-            composite_registrations.append(composite_registration)
-        return composite_registrations
