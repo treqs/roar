@@ -10,9 +10,15 @@ from ...core.bootstrap import bootstrap
 from ...integrations.config import load_config
 from ...integrations.glaas import GlaasClient
 from ...presenters.console import ConsolePresenter
-from ...services.reproduction import PipelineExecutor, ReproductionService
+from ...services.reproduction import ReproductionService
 from ...services.reproduction.pipeline_metadata import PipelineMetadataParser
 from .requests import ReproduceRequest
+from .results import (
+    ReproducePreviewStepSummary,
+    ReproducePreviewSummary,
+    ReproduceRequirementBlock,
+    ReproduceRunSummary,
+)
 
 if TYPE_CHECKING:
     from ...core.interfaces.presenter import IPresenter
@@ -47,19 +53,22 @@ def reproduce_artifact(
     )
 
     if not request.run_pipeline:
-        _show_preview(
+        preview = build_preview_summary(
             service=service,
             hash_prefix=request.hash_prefix,
             server_url=server_url,
             roar_dir=request.roar_dir,
-            list_requirements=request.list_requirements,
+        )
+        _render_preview_summary(
+            preview,
             presenter=output,
+            list_requirements=request.list_requirements,
         )
         output.print("")
         output.print(
             "To reproduce this artifact (clone repo, create venv, install packages, run pipeline):"
         )
-        output.print(f"  roar reproduce --run {request.hash_prefix}")
+        output.print(f"  {preview.run_hint}")
         return
 
     result = service.reproduce(
@@ -74,7 +83,7 @@ def reproduce_artifact(
         package_sync=request.package_sync,
         list_requirements=request.list_requirements,
     )
-    _render_reproduction_result(result, output)
+    _render_reproduction_result(build_run_summary(result), output)
 
 
 def _load_server_url(cwd: Path) -> str | None:
@@ -105,15 +114,14 @@ def _write_dag_output(
     presenter.print(f"DAG lineage response written to {out_path}")
 
 
-def _show_preview(
+def build_preview_summary(
     *,
     service: ReproductionService,
     hash_prefix: str,
     server_url: str | None,
     roar_dir: Path,
-    list_requirements: bool,
-    presenter: IPresenter,
-) -> None:
+) -> ReproducePreviewSummary:
+    """Build a typed reproduction preview summary."""
     lookup = service.lookup_pipeline_result(hash_prefix, server_url, roar_dir)
     if lookup.error:
         raise ValueError(lookup.error)
@@ -121,54 +129,88 @@ def _show_preview(
     if not pipeline:
         raise ValueError(f"No pipeline found for artifact {hash_prefix}")
 
-    presenter.print(f"Artifact: {pipeline.artifact_hash}")
-    presenter.print(f"Git repo: {pipeline.git_repo or 'Not available'}")
-    presenter.print(f"Git commit: {pipeline.git_commit or 'Not available'}")
-
-    executor = PipelineExecutor(presenter=presenter)
-    executor.preview_steps(pipeline)
-
-    _render_requirement_summary(
-        pipeline=pipeline,
-        list_requirements=list_requirements,
-        presenter=presenter,
+    requirement_blocks = _build_requirement_blocks(pipeline)
+    return ReproducePreviewSummary(
+        artifact_hash=pipeline.artifact_hash,
+        git_repo=pipeline.git_repo,
+        git_commit=pipeline.git_commit,
+        run_hint=f"roar reproduce --run {hash_prefix}",
+        build_steps=[
+            ReproducePreviewStepSummary(
+                phase="build",
+                index=index,
+                command=str(step.get("command", "No command")),
+            )
+            for index, step in enumerate(pipeline.build_steps, 1)
+        ],
+        run_steps=[
+            ReproducePreviewStepSummary(
+                phase="run",
+                index=index,
+                command=str(step.get("command", "No command")),
+            )
+            for index, step in enumerate(pipeline.run_steps, 1)
+        ],
+        requirement_blocks=requirement_blocks,
     )
 
 
-def _render_requirement_summary(
+def _render_preview_summary(
+    summary: ReproducePreviewSummary,
     *,
-    pipeline: PipelineInfo,
     list_requirements: bool,
     presenter: IPresenter,
 ) -> None:
+    presenter.print(f"Artifact: {summary.artifact_hash}")
+    presenter.print(f"Git repo: {summary.git_repo or 'Not available'}")
+    presenter.print(f"Git commit: {summary.git_commit or 'Not available'}")
+    presenter.print("\nPipeline Preview")
+    presenter.print("=" * 40)
+
+    if summary.build_steps:
+        presenter.print(f"\nBuild Steps ({len(summary.build_steps)}):")
+        for step in summary.build_steps:
+            presenter.print(f"  B{step.index}. {step.command}")
+
+    if summary.run_steps:
+        presenter.print(f"\nRun Steps ({len(summary.run_steps)}):")
+        for step in summary.run_steps:
+            presenter.print(f"  {step.index}. {step.command}")
+
+    presenter.print("")
+
+    for block in summary.requirement_blocks:
+        _print_requirement_block(
+            label=block.label,
+            values=block.values,
+            list_requirements=list_requirements,
+            presenter=presenter,
+            suffix=block.suffix,
+        )
+
+
+def _build_requirement_blocks(pipeline: PipelineInfo) -> list[ReproduceRequirementBlock]:
     parser = PipelineMetadataParser()
     summary = parser.summarize_requirements(pipeline.build_steps, pipeline.run_steps)
-
-    _print_requirement_block(
-        label="Build tool packages",
-        values=sorted(summary.build_dpkg),
-        list_requirements=list_requirements,
-        presenter=presenter,
-    )
-    _print_requirement_block(
-        label="Build tool pip packages",
-        values=sorted(summary.build_pip),
-        list_requirements=list_requirements,
-        presenter=presenter,
-    )
-    _print_requirement_block(
-        label="System packages",
-        values=sorted(summary.dpkg),
-        list_requirements=list_requirements,
-        presenter=presenter,
-        suffix="  (requires sudo on Linux)",
-    )
-    _print_requirement_block(
-        label="Pip packages",
-        values=summary.pip,
-        list_requirements=list_requirements,
-        presenter=presenter,
-    )
+    return [
+        ReproduceRequirementBlock(
+            label="Build tool packages",
+            values=sorted(summary.build_dpkg),
+        ),
+        ReproduceRequirementBlock(
+            label="Build tool pip packages",
+            values=sorted(summary.build_pip),
+        ),
+        ReproduceRequirementBlock(
+            label="System packages",
+            values=sorted(summary.dpkg),
+            suffix="  (requires sudo on Linux)",
+        ),
+        ReproduceRequirementBlock(
+            label="Pip packages",
+            values=summary.pip,
+        ),
+    ]
 
 
 def _print_requirement_block(
@@ -196,12 +238,9 @@ def _print_requirement_block(
 
 
 def _render_reproduction_result(
-    result: ReproductionResult,
+    result: ReproduceRunSummary,
     presenter: IPresenter,
 ) -> None:
-    if not result.success:
-        raise ValueError(result.error or "Reproduction failed")
-
     presenter.print("")
     presenter.print("=" * 50)
     presenter.print("Reproduction Complete")
@@ -217,3 +256,15 @@ def _render_reproduction_result(
         presenter.print("Warnings:")
         for warning in result.warnings:
             presenter.print(f"  - {warning}")
+
+
+def build_run_summary(result: ReproductionResult) -> ReproduceRunSummary:
+    """Build a typed reproduction-run summary from the service result."""
+    if not result.success:
+        raise ValueError(result.error or "Reproduction failed")
+    return ReproduceRunSummary(
+        repo_dir=result.repo_dir,
+        steps_run=result.steps_run,
+        steps_total=result.steps_total,
+        warnings=list(result.warnings),
+    )

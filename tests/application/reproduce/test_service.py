@@ -7,7 +7,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from roar.application.reproduce.requests import ReproduceRequest
-from roar.application.reproduce.service import reproduce_artifact
+from roar.application.reproduce.results import ReproducePreviewSummary, ReproduceRunSummary
+from roar.application.reproduce.service import (
+    build_preview_summary,
+    build_run_summary,
+    reproduce_artifact,
+)
 from roar.core.interfaces.reproduction import PipelineLookupResult, ReproductionResult
 
 
@@ -55,14 +60,12 @@ def test_reproduce_preview_uses_application_branching_and_renders_steps(tmp_path
         error=None,
         source="remote",
     )
-    executor = MagicMock()
 
     with (
         patch("roar.application.reproduce.service.bootstrap"),
         patch("roar.application.reproduce.service.load_config", return_value={"glaas": {"url": "http://localhost:3001"}}),
         patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
         patch("roar.application.reproduce.service.ReproductionService", return_value=service),
-        patch("roar.application.reproduce.service.PipelineExecutor", return_value=executor),
     ):
         mock_glaas = MagicMock()
         mock_glaas.is_configured.return_value = True
@@ -71,10 +74,10 @@ def test_reproduce_preview_uses_application_branching_and_renders_steps(tmp_path
         reproduce_artifact(_request(tmp_path), presenter=presenter)
 
     service.reproduce.assert_not_called()
-    executor.preview_steps.assert_called_once()
     printed = "\n".join(call.args[0] for call in presenter.print.call_args_list)
     assert "Artifact: abc123def456789" in printed
     assert "Git repo: https://github.com/test/repo" in printed
+    assert "Pipeline Preview" in printed
     assert "Build tool pip packages (1):" in printed
     assert "Pip packages (1):" in printed
     assert "roar reproduce --run abc123def456" in printed
@@ -128,7 +131,6 @@ def test_reproduce_out_writes_dag_response(tmp_path: Path) -> None:
         patch("roar.application.reproduce.service.load_config", return_value={"glaas": {"url": "http://localhost:3001"}}),
         patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
         patch("roar.application.reproduce.service.ReproductionService", return_value=service),
-        patch("roar.application.reproduce.service.PipelineExecutor", return_value=MagicMock()),
     ):
         mock_glaas = MagicMock()
         mock_glaas.is_configured.return_value = True
@@ -161,3 +163,47 @@ def test_reproduce_out_requires_configured_glaas(tmp_path: Path) -> None:
 def test_reproduce_rejects_short_hash_prefix(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="at least 8 characters"):
         reproduce_artifact(_request(tmp_path, hash_prefix="short"), presenter=MagicMock())
+
+
+def test_build_preview_summary_returns_typed_preview(tmp_path: Path) -> None:
+    service = MagicMock()
+    service.lookup_pipeline_result.return_value = PipelineLookupResult(
+        pipeline=_pipeline(),
+        error=None,
+        source="remote",
+    )
+
+    summary = build_preview_summary(
+        service=service,
+        hash_prefix="abc123def456",
+        server_url="http://localhost:3001",
+        roar_dir=tmp_path / ".roar",
+    )
+
+    assert isinstance(summary, ReproducePreviewSummary)
+    assert summary.artifact_hash == "abc123def456789"
+    assert [step.command for step in summary.build_steps] == ["pip install -r requirements.txt"]
+    assert [step.command for step in summary.run_steps] == ["python train.py"]
+    assert [block.label for block in summary.requirement_blocks] == [
+        "Build tool packages",
+        "Build tool pip packages",
+        "System packages",
+        "Pip packages",
+    ]
+
+
+def test_build_run_summary_returns_typed_completion_summary() -> None:
+    summary = build_run_summary(
+        ReproductionResult(
+            success=True,
+            repo_dir=Path("/tmp/reproduce/repo"),
+            steps_run=2,
+            steps_total=3,
+            warnings=["warn-1"],
+        )
+    )
+
+    assert isinstance(summary, ReproduceRunSummary)
+    assert summary.steps_run == 2
+    assert summary.steps_total == 3
+    assert summary.warnings == ["warn-1"]
