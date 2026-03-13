@@ -9,20 +9,12 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
-
-from sqlalchemy import text
 
 from ...application.publish.composite_builder import CompositeArtifactBuilder
 from ...application.publish.register_preparation import PreparedRegisterExecution
 from ...application.publish.registration import (
-    CompositeRegistrationCandidate,
-    build_lineage_composite_candidate,
-    extract_composite_digest,
-    normalize_lineage_component_rows,
     normalize_registration_hashes,
     prepare_batch_registration_artifacts,
-    preregister_lineage_composites,
     register_publish_lineage,
 )
 from ...config import config_get
@@ -30,9 +22,10 @@ from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
-from ...db.context import create_database_context, optional_repo
+from ...db.context import create_database_context
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
+from .blake3_upgrade import upgrade_s3_etags_to_blake3
 from .coordinator import RegistrationCoordinator
 from .job_preparation import (
     estimate_links,
@@ -40,24 +33,7 @@ from .job_preparation import (
     order_jobs_for_registration,
     refresh_job_artifact_references,
 )
-
-_Blake3Constructor = Callable[[], Any]
-
-try:
-    from blake3 import blake3 as _blake3_import
-except Exception:
-    _blake3_constructor: _Blake3Constructor | None = None
-else:
-    _blake3_constructor = _blake3_import
-
-boto3 = None
-
-def _ensure_boto3():
-    global boto3
-    if boto3 is None:
-        import boto3 as _boto3
-
-        boto3 = _boto3
+from .lineage_composites import has_lineage_composites, preregister_lineage_composites_with_glaas
 
 
 @dataclass
@@ -202,18 +178,25 @@ class RegisterService:
             )
 
         if as_blake3:
-            self.upgrade_s3_etags_to_blake3(roar_dir=roar_dir, lineage=lineage)
+            upgrade_s3_etags_to_blake3(
+                roar_dir=roar_dir,
+                lineage=lineage,
+                logger=self._logger,
+            )
 
         composite_registrations: list[dict[str, Any]] = []
         pre_registration_errors: list[str] = []
-        if self._has_lineage_composites(lineage.artifacts):
+        if has_lineage_composites(lineage.artifacts):
             try:
                 with create_database_context(roar_dir) as db_ctx:
-                    composite_registrations = self._register_lineage_composites_with_glaas(
+                    composite_registrations = preregister_lineage_composites_with_glaas(
+                        glaas_client=self.glaas_client,
                         db_ctx=db_ctx,
                         lineage_artifacts=lineage.artifacts,
                         session_hash=session_hash,
                         registration_errors=pre_registration_errors,
+                        composite_builder=self._composite_builder,
+                        logger=self._logger,
                     )
             except Exception as e:
                 return RegisterResult(
@@ -283,337 +266,6 @@ class RegisterService:
             secrets_detected=detected_secrets,
             secrets_redacted=bool(detected_secrets),
         )
-
-    def upgrade_s3_etags_to_blake3(self, roar_dir: Path, lineage: LineageData) -> None:
-        """
-        Upgrade etag-only S3 artifacts in lineage to include blake3 hashes.
-
-        This keeps existing etag rows and adds a blake3 row via INSERT OR IGNORE.
-        """
-        if not lineage.artifacts:
-            return
-
-        if _blake3_constructor is None:
-            self._logger.warning(
-                "Skipping --as-blake3 upgrade because the blake3 package is not installed."
-            )
-            return
-
-        try:
-            _ensure_boto3()
-        except Exception as e:
-            self._logger.warning("Skipping --as-blake3 upgrade because boto3 is unavailable: %s", e)
-            return
-
-        with create_database_context(roar_dir) as db_ctx:
-            for artifact in lineage.artifacts:
-                if not self._needs_blake3_upgrade(artifact):
-                    continue
-
-                digest = self._ensure_artifact_blake3_digest(
-                    db_ctx=db_ctx,
-                    artifact=artifact,
-                )
-                if digest:
-                    lineage.artifact_hashes.add(digest)
-
-    def _needs_blake3_upgrade(self, artifact: dict) -> bool:
-        hashes = artifact.get("hashes")
-        if not isinstance(hashes, list):
-            return False
-
-        has_etag = False
-        has_blake3 = False
-        for entry in hashes:
-            if not isinstance(entry, dict):
-                continue
-            algorithm = entry.get("algorithm")
-            if not isinstance(algorithm, str):
-                continue
-            normalized = algorithm.strip().lower()
-            if normalized == "etag":
-                has_etag = True
-            elif normalized == "blake3":
-                has_blake3 = True
-
-        return has_etag and not has_blake3
-
-    def _extract_s3_url(self, artifact: dict) -> str | None:
-        for key in ("source_url", "first_seen_path", "path"):
-            value = artifact.get(key)
-            if isinstance(value, str) and value.startswith("s3://"):
-                return value
-        return None
-
-    def _parse_s3_url(self, s3_url: str) -> tuple[str, str] | None:
-        parsed = urlparse(s3_url)
-        bucket = parsed.netloc
-        key = parsed.path.lstrip("/")
-        if parsed.scheme != "s3" or not bucket or not key:
-            return None
-        return bucket, key
-
-    def _compute_s3_blake3_digest(self, s3_client, bucket: str, key: str) -> str | None:
-        if _blake3_constructor is None:
-            return None
-
-        try:
-            response = s3_client.get_object(Bucket=bucket, Key=key)
-            body = response.get("Body")
-            if body is None:
-                return None
-
-            hasher = _blake3_constructor()
-            try:
-                while True:
-                    chunk = body.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    hasher.update(bytes(chunk))
-            finally:
-                close = getattr(body, "close", None)
-                if callable(close):
-                    close()
-            return hasher.hexdigest()
-        except Exception as e:
-            self._logger.warning("Failed to compute blake3 for s3://%s/%s: %s", bucket, key, e)
-            return None
-
-    def _attach_blake3_to_artifact(self, artifact: dict, digest: str) -> None:
-        hashes = artifact.get("hashes")
-        if not isinstance(hashes, list):
-            hashes = []
-            artifact["hashes"] = hashes
-
-        for entry in hashes:
-            if not isinstance(entry, dict):
-                continue
-            if entry.get("algorithm") == "blake3" and entry.get("digest") == digest:
-                artifact["hash"] = digest
-                return
-
-        hashes.append({"algorithm": "blake3", "digest": digest})
-        artifact["hash"] = digest
-
-    def _ensure_artifact_blake3_digest(
-        self,
-        *,
-        db_ctx: Any,
-        artifact: dict[str, Any],
-    ) -> str | None:
-        existing_digest = self._select_hash_by_algorithm(artifact, "blake3")
-        if existing_digest is not None:
-            return existing_digest
-
-        if not self._needs_blake3_upgrade(artifact):
-            return None
-
-        artifact_id = artifact.get("id")
-        if not isinstance(artifact_id, str) or not artifact_id:
-            return None
-
-        s3_url = self._extract_s3_url(artifact)
-        if not s3_url:
-            return None
-
-        parsed = self._parse_s3_url(s3_url)
-        if parsed is None:
-            return None
-        bucket, key = parsed
-
-        try:
-            _ensure_boto3()
-        except Exception as e:
-            self._logger.warning(
-                "Skipping blake3 upgrade for %s because boto3 is unavailable: %s",
-                s3_url,
-                e,
-            )
-            return None
-
-        assert boto3 is not None
-        digest = self._compute_s3_blake3_digest(boto3.client("s3"), bucket, key)
-        if not digest:
-            return None
-
-        db_ctx.session.execute(
-            text(
-                """
-                INSERT OR IGNORE INTO artifact_hashes (artifact_id, algorithm, digest)
-                VALUES (:artifact_id, 'blake3', :digest)
-                """
-            ),
-            {"artifact_id": artifact_id, "digest": digest},
-        )
-
-        has_blake3_row = db_ctx.session.execute(
-            text(
-                """
-                SELECT 1
-                FROM artifact_hashes
-                WHERE artifact_id = :artifact_id
-                  AND algorithm = 'blake3'
-                  AND digest = :digest
-                LIMIT 1
-                """
-            ),
-            {"artifact_id": artifact_id, "digest": digest},
-        ).scalar_one_or_none()
-        if not has_blake3_row:
-            return None
-
-        self._attach_blake3_to_artifact(artifact, digest)
-        return digest
-
-    @staticmethod
-    def _select_hash_by_algorithm(artifact: dict[str, Any], algorithm: str) -> str | None:
-        hashes = artifact.get("hashes")
-        if not isinstance(hashes, list):
-            return None
-
-        target = algorithm.strip().lower()
-        for entry in hashes:
-            if not isinstance(entry, dict):
-                continue
-            current_algorithm = entry.get("algorithm")
-            digest = entry.get("digest")
-            if (
-                isinstance(current_algorithm, str)
-                and current_algorithm.strip().lower() == target
-                and isinstance(digest, str)
-                and digest
-            ):
-                return digest.lower()
-
-        return None
-
-    def _has_lineage_composites(self, artifacts: list[dict[str, Any]]) -> bool:
-        return any(
-            extract_composite_digest(self._extract_registration_hashes(artifact))
-            for artifact in artifacts
-        )
-
-    def _register_lineage_composites_with_glaas(
-        self,
-        *,
-        db_ctx: Any,
-        lineage_artifacts: list[dict[str, Any]],
-        session_hash: str,
-        registration_errors: list[str],
-    ) -> list[dict[str, Any]]:
-        payloads = self._build_lineage_composite_payloads(
-            db_ctx=db_ctx,
-            lineage_artifacts=lineage_artifacts,
-            session_hash=session_hash,
-        )
-        return preregister_lineage_composites(
-            glaas_client=self.glaas_client,
-            payloads=payloads,
-            registration_errors=registration_errors,
-            logger=self._logger,
-        )
-
-    def _build_lineage_composite_payloads(
-        self,
-        *,
-        db_ctx: Any,
-        lineage_artifacts: list[dict[str, Any]],
-        session_hash: str,
-    ) -> list[CompositeRegistrationCandidate]:
-        composites_repo: Any = optional_repo(db_ctx, "composites")
-        lineage_artifacts_by_id = {
-            str(artifact_id): artifact
-            for artifact in lineage_artifacts
-            if isinstance((artifact_id := artifact.get("id")), str) and artifact_id
-        }
-        payloads: list[CompositeRegistrationCandidate] = []
-        seen_hashes: set[str] = set()
-
-        for artifact in lineage_artifacts:
-            hashes = self._extract_registration_hashes(artifact)
-            composite_digest = extract_composite_digest(hashes)
-            if not composite_digest or composite_digest in seen_hashes:
-                continue
-
-            component_rows: list[dict[str, Any]] = []
-            membership_index: dict[str, Any] | None = None
-            artifact_id = artifact.get("id")
-            if composites_repo is not None and isinstance(artifact_id, str) and artifact_id:
-                rows = composites_repo.get_components(artifact_id, limit=5000)
-                if isinstance(rows, list):
-                    component_rows = [row for row in rows if isinstance(row, dict)]
-
-                raw_membership = composites_repo.get_membership_index(artifact_id)
-                if isinstance(raw_membership, dict):
-                    membership_index = raw_membership
-
-            components = normalize_lineage_component_rows(
-                component_rows,
-                resolve_component=lambda row: self._resolve_component_hash_for_registration(
-                    row=row,
-                    db_ctx=db_ctx,
-                    lineage_artifacts_by_id=lineage_artifacts_by_id,
-                ),
-                logger=self._logger,
-            )
-            candidate = build_lineage_composite_candidate(
-                artifact=artifact,
-                composite_digest=composite_digest,
-                hashes=hashes,
-                components=components,
-                membership_index=membership_index,
-                session_hash=session_hash,
-                composite_builder=self._composite_builder,
-                logger=self._logger,
-            )
-            if candidate is None:
-                continue
-            seen_hashes.add(composite_digest)
-            payloads.append(candidate)
-
-        return payloads
-
-    def _resolve_component_hash_for_registration(
-        self,
-        *,
-        row: dict[str, Any],
-        db_ctx: Any,
-        lineage_artifacts_by_id: dict[str, dict[str, Any]],
-    ) -> tuple[str, str] | None:
-        artifact_id = row.get("artifact_id")
-        linked_artifact: dict[str, Any] | None = None
-
-        if isinstance(artifact_id, str) and artifact_id:
-            linked_artifact = lineage_artifacts_by_id.get(artifact_id)
-            if linked_artifact is None:
-                artifacts_repo: Any = optional_repo(db_ctx, "artifacts")
-                if artifacts_repo is not None:
-                    loaded_artifact = artifacts_repo.get(artifact_id)
-                    if isinstance(loaded_artifact, dict):
-                        linked_artifact = loaded_artifact
-                        lineage_artifacts_by_id[artifact_id] = loaded_artifact
-
-        if linked_artifact is not None:
-            blake3_digest = self._select_hash_by_algorithm(linked_artifact, "blake3")
-            if blake3_digest is None:
-                blake3_digest = self._ensure_artifact_blake3_digest(
-                    db_ctx=db_ctx,
-                    artifact=linked_artifact,
-                )
-            if blake3_digest is not None:
-                return "blake3", blake3_digest
-
-        component_algorithm = row.get("component_algorithm")
-        component_digest = row.get("component_digest")
-        if (
-            isinstance(component_algorithm, str)
-            and component_algorithm.strip().lower() == "blake3"
-            and isinstance(component_digest, str)
-            and component_digest
-        ):
-            return "blake3", component_digest.lower()
-
-        return None
 
     @staticmethod
     def _extract_registration_hashes(artifact: dict[str, Any]) -> list[dict[str, str]]:
