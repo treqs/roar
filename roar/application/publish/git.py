@@ -6,7 +6,10 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from ...core.interfaces.logger import ILogger
+from ...core.interfaces.registration import GitContext
 from ...plugins.vcs.git import GitVCSProvider
+from ...services.transfer import resolve_git_context
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,24 @@ def resolve_publish_git_state(path: Path) -> PublishGitState:
         raise ValueError(f"Unable to resolve git commit for repository: {repo_root}")
 
     return PublishGitState(repo_root=Path(repo_root), commit=commit)
+
+
+def resolve_publish_git_context(
+    path: Path,
+    *,
+    logger: ILogger,
+    git_commit: str | None = None,
+) -> GitContext:
+    """Resolve git context for publish workflows using the shared transfer helper."""
+    logger.debug("Resolving git context from %s", path)
+    ctx = resolve_git_context(path, git_commit)
+    logger.debug(
+        "Git context resolved: repo=%s, commit=%s, branch=%s",
+        ctx.repo,
+        ctx.commit[:12] if ctx.commit else None,
+        ctx.branch,
+    )
+    return ctx
 
 
 def build_publish_tag_name(commit: str, *, short: bool = False) -> str:

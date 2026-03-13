@@ -26,6 +26,7 @@ from ...application.publish.git import (
     build_publish_tag_name,
     create_publish_git_tag,
     ensure_clean_publish_repo,
+    resolve_publish_git_context,
 )
 from ...application.publish.lineage import LineageCollector
 from ...application.publish.registration import (
@@ -51,9 +52,7 @@ from ...execution.framework.registry import (
 )
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
-from ...plugins.vcs.git import GitVCSProvider
 from ..put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
-from ..transfer.common import resolve_repo_url_or_local_uri
 from . import _artifact_ref
 from .coordinator import RegistrationCoordinator
 from .session import SessionRegistrationService
@@ -1149,20 +1148,7 @@ class RegisterService:
 
     def _get_git_context(self, cwd: Path) -> GitContext:
         """Get git context from repository."""
-        try:
-            vcs = GitVCSProvider()
-            repo_root = vcs.get_repo_root(str(cwd))
-            if not repo_root:
-                return GitContext(repo=None, commit=None, branch=None)
-
-            return GitContext(
-                repo=resolve_repo_url_or_local_uri(vcs, repo_root, logger=self._logger),
-                commit=vcs.get_commit_hash(repo_root),
-                branch=vcs.get_branch(repo_root),
-            )
-        except Exception as e:
-            self._logger.warning("Failed to get git context: %s", e)
-            return GitContext(repo=None, commit=None, branch=None)
+        return resolve_publish_git_context(cwd, logger=self._logger)
 
     def _estimate_links(self, jobs: list[dict]) -> int:
         """Estimate number of artifact links from jobs."""

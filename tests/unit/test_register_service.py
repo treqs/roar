@@ -9,7 +9,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from roar.core.interfaces.registration import GitContext
 from roar.services.registration.register_service import RegisterResult, RegisterService
+
+
+def _git_context(
+    repo_root: Path,
+    *,
+    repo: str | None = "https://github.com/test/repo",
+    commit: str = "abc123def456",
+    branch: str | None = "main",
+) -> GitContext:
+    return GitContext(repo=repo, commit=commit, branch=branch)
 
 
 class TestRegisterResult:
@@ -412,25 +423,19 @@ class TestRegisterService:
             }
             mock_ctx.return_value = mock_db
 
-            with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
-                mock_vcs = MagicMock()
-                mock_vcs.get_repo_root.return_value = str(tmp_path)
-                mock_vcs.get_remote_url.return_value = "https://github.com/test/repo"
-                mock_vcs.get_commit_hash.return_value = "abc123"
-                mock_vcs.get_branch.return_value = "main"
-                mock_vcs.get_status.return_value = (True, [])
-                mock_git.return_value = mock_vcs
+            with patch(
+                "roar.services.registration.register_service.resolve_publish_git_context",
+                return_value=_git_context(tmp_path, commit="abc123"),
+            ), patch("roar.services.registration.register_service.config_get") as mock_config:
+                mock_config.return_value = False
+                service._session_service.compute_session_hash.return_value = "session-hash-1"
 
-                with patch("roar.services.registration.register_service.config_get") as mock_config:
-                    mock_config.return_value = False
-                    service._session_service.compute_session_hash.return_value = "session-hash-1"
-
-                    result = service.register_artifact_lineage(
-                        artifact_path=artifact_path,
-                        roar_dir=tmp_path / ".roar",
-                        cwd=tmp_path,
-                        dry_run=True,
-                    )
+                result = service.register_artifact_lineage(
+                    artifact_path=artifact_path,
+                    roar_dir=tmp_path / ".roar",
+                    cwd=tmp_path,
+                    dry_run=True,
+                )
 
         assert result.success is True
         mock_db.artifacts.get_by_path.assert_called_once_with(artifact_path)
@@ -472,25 +477,21 @@ class TestRegisterService:
             mock_ctx.return_value = mock_db
 
             # Mock git context retrieval
-            with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
-                mock_vcs = MagicMock()
-                mock_vcs.get_repo_root.return_value = str(tmp_path)
-                mock_vcs.get_remote_url.return_value = "https://github.com/test/repo"
-                mock_vcs.get_commit_hash.return_value = "abc123"
-                mock_vcs.get_branch.return_value = "main"
-                mock_vcs.get_status.return_value = (True, [])  # Clean repo
-                mock_git.return_value = mock_vcs
+            with (
+                patch(
+                    "roar.services.registration.register_service.resolve_publish_git_context",
+                    return_value=_git_context(tmp_path, commit="abc123"),
+                ),
+                patch("roar.services.registration.register_service.config_get") as mock_config,
+            ):
+                mock_config.return_value = False
 
-                # Mock config_get to return False for tagging (skip dirty check)
-                with patch("roar.services.registration.register_service.config_get") as mock_config:
-                    mock_config.return_value = False
-
-                    result = service.register_artifact_lineage(
-                        artifact_path=str(artifact_file),
-                        roar_dir=tmp_path / ".roar",
-                        cwd=tmp_path,
-                        dry_run=True,
-                    )
+                result = service.register_artifact_lineage(
+                    artifact_path=str(artifact_file),
+                    roar_dir=tmp_path / ".roar",
+                    cwd=tmp_path,
+                    dry_run=True,
+                )
 
         assert result.success is True
         assert result.jobs_registered == 2
@@ -568,24 +569,18 @@ class TestRegisterService:
             }
             mock_ctx.return_value = mock_db
 
-            with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
-                mock_vcs = MagicMock()
-                mock_vcs.get_repo_root.return_value = str(tmp_path)
-                mock_vcs.get_remote_url.return_value = "https://github.com/test/repo"
-                mock_vcs.get_commit_hash.return_value = "abc123"
-                mock_vcs.get_branch.return_value = "main"
-                mock_vcs.get_status.return_value = (True, [])
-                mock_git.return_value = mock_vcs
+            with patch(
+                "roar.services.registration.register_service.resolve_publish_git_context",
+                return_value=_git_context(tmp_path, commit="abc123"),
+            ), patch("roar.services.registration.register_service.config_get") as mock_config:
+                mock_config.return_value = False
 
-                with patch("roar.services.registration.register_service.config_get") as mock_config:
-                    mock_config.return_value = False
-
-                    result = service.register_artifact_lineage(
-                        artifact_path=str(artifact_file),
-                        roar_dir=tmp_path / ".roar",
-                        cwd=tmp_path,
-                        dry_run=True,
-                    )
+                result = service.register_artifact_lineage(
+                    artifact_path=str(artifact_file),
+                    roar_dir=tmp_path / ".roar",
+                    cwd=tmp_path,
+                    dry_run=True,
+                )
 
         assert result.success is True
         assert result.jobs_registered == 2
@@ -634,25 +629,21 @@ class TestRegisterService:
             mock_ctx.return_value = mock_db
 
             # Mock git context retrieval
-            with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
-                mock_vcs = MagicMock()
-                mock_vcs.get_repo_root.return_value = str(tmp_path)
-                mock_vcs.get_remote_url.return_value = "https://github.com/test/repo"
-                mock_vcs.get_commit_hash.return_value = "abc123"
-                mock_vcs.get_branch.return_value = "main"
-                mock_vcs.get_status.return_value = (True, [])  # Clean repo
-                mock_git.return_value = mock_vcs
+            with (
+                patch(
+                    "roar.services.registration.register_service.resolve_publish_git_context",
+                    return_value=_git_context(tmp_path, commit="abc123"),
+                ),
+                patch("roar.services.registration.register_service.config_get") as mock_config,
+            ):
+                mock_config.return_value = False
 
-                # Mock config_get to return False for tagging (skip dirty check)
-                with patch("roar.services.registration.register_service.config_get") as mock_config:
-                    mock_config.return_value = False
-
-                    result = service.register_artifact_lineage(
-                        artifact_path=str(artifact_file),
-                        roar_dir=tmp_path / ".roar",
-                        cwd=tmp_path,
-                        dry_run=False,
-                    )
+                result = service.register_artifact_lineage(
+                    artifact_path=str(artifact_file),
+                    roar_dir=tmp_path / ".roar",
+                    cwd=tmp_path,
+                    dry_run=False,
+                )
 
         assert result.success is False
         assert "health" in result.error.lower() or "connection" in result.error.lower()
@@ -686,24 +677,20 @@ class TestRegisterService:
             mock_ctx.return_value = mock_db
 
             # Mock git context retrieval
-            with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
-                mock_vcs = MagicMock()
-                mock_vcs.get_repo_root.return_value = str(tmp_path)
-                mock_vcs.get_remote_url.return_value = "https://github.com/test/repo"
-                mock_vcs.get_commit_hash.return_value = "abc123"
-                mock_vcs.get_branch.return_value = "main"
-                mock_vcs.get_status.return_value = (True, [])  # Clean repo
-                mock_git.return_value = mock_vcs
+            with (
+                patch(
+                    "roar.services.registration.register_service.resolve_publish_git_context",
+                    return_value=_git_context(tmp_path, commit="abc123"),
+                ),
+                patch("roar.services.registration.register_service.config_get") as mock_config,
+            ):
+                mock_config.return_value = False
 
-                # Mock config_get to return False for tagging (skip dirty check)
-                with patch("roar.services.registration.register_service.config_get") as mock_config:
-                    mock_config.return_value = False
-
-                    result = service.register_artifact_lineage(
-                        artifact_path=str(artifact_file),
-                        roar_dir=tmp_path / ".roar",
-                        cwd=tmp_path,
-                    )
+                result = service.register_artifact_lineage(
+                    artifact_path=str(artifact_file),
+                    roar_dir=tmp_path / ".roar",
+                    cwd=tmp_path,
+                )
 
         assert result.success is False
         assert "not configured" in result.error.lower() or "glaas" in result.error.lower()
@@ -747,30 +734,25 @@ class TestRegisterService:
 
             # Mock git context and dirty-repo policy
             with (
-                patch("roar.services.registration.register_service.GitVCSProvider") as mock_git,
+                patch(
+                    "roar.services.registration.register_service.resolve_publish_git_context",
+                    return_value=_git_context(tmp_path),
+                ),
                 patch(
                     "roar.services.registration.register_service.ensure_clean_publish_repo",
                     side_effect=ValueError(
                         "Cannot register with uncommitted changes. Commit your changes first."
                     ),
                 ),
+                patch("roar.services.registration.register_service.config_get") as mock_config,
             ):
-                mock_vcs = MagicMock()
-                mock_vcs.get_repo_root.return_value = str(tmp_path)
-                mock_vcs.get_remote_url.return_value = "https://github.com/test/repo"
-                mock_vcs.get_commit_hash.return_value = "abc123def456"
-                mock_vcs.get_branch.return_value = "main"
-                mock_git.return_value = mock_vcs
+                mock_config.return_value = True  # tagging enabled
 
-                # Mock config to enable tagging
-                with patch("roar.services.registration.register_service.config_get") as mock_config:
-                    mock_config.return_value = True  # tagging enabled
-
-                    result = service.register_artifact_lineage(
-                        artifact_path=str(artifact_file),
-                        roar_dir=tmp_path / ".roar",
-                        cwd=tmp_path,
-                    )
+                result = service.register_artifact_lineage(
+                    artifact_path=str(artifact_file),
+                    roar_dir=tmp_path / ".roar",
+                    cwd=tmp_path,
+                )
 
         assert result.success is False
         assert "uncommitted" in result.error.lower()
@@ -834,7 +816,10 @@ class TestRegisterService:
 
             # Mock git context and shared publish git policy
             with (
-                patch("roar.services.registration.register_service.GitVCSProvider") as mock_git,
+                patch(
+                    "roar.services.registration.register_service.resolve_publish_git_context",
+                    return_value=_git_context(tmp_path),
+                ),
                 patch(
                     "roar.services.registration.register_service.ensure_clean_publish_repo",
                     return_value=MagicMock(),
@@ -843,31 +828,23 @@ class TestRegisterService:
                     "roar.services.registration.register_service.create_publish_git_tag",
                     return_value=(True, None),
                 ) as mock_create_tag,
+                patch("roar.services.registration.register_service.config_get") as mock_config,
             ):
-                mock_vcs = MagicMock()
-                mock_vcs.get_repo_root.return_value = str(tmp_path)
-                mock_vcs.get_remote_url.return_value = "https://github.com/test/repo"
-                mock_vcs.get_commit_hash.return_value = "abc123def456"
-                mock_vcs.get_branch.return_value = "main"
-                mock_git.return_value = mock_vcs
 
-                # Mock config to enable tagging
-                with patch("roar.services.registration.register_service.config_get") as mock_config:
+                def config_side_effect(key):
+                    if key == "registration.tagging.enabled":
+                        return True
+                    elif key == "registration.omit":
+                        return {"enabled": False}  # Disable omit filter
+                    return None
 
-                    def config_side_effect(key):
-                        if key == "registration.tagging.enabled":
-                            return True
-                        elif key == "registration.omit":
-                            return {"enabled": False}  # Disable omit filter
-                        return None
+                mock_config.side_effect = config_side_effect
 
-                    mock_config.side_effect = config_side_effect
-
-                    result = service.register_artifact_lineage(
-                        artifact_path=str(artifact_file),
-                        roar_dir=tmp_path / ".roar",
-                        cwd=tmp_path,
-                    )
+                result = service.register_artifact_lineage(
+                    artifact_path=str(artifact_file),
+                    roar_dir=tmp_path / ".roar",
+                    cwd=tmp_path,
+                )
 
         assert result.success is True
         mock_create_tag.assert_called_once_with(tmp_path, "roar/abc123de")
@@ -898,55 +875,29 @@ class TestRegisterService:
             mock_ctx.return_value = mock_db
 
             # Mock git context
-            with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
-                mock_vcs = MagicMock()
-                mock_vcs.get_repo_root.return_value = str(tmp_path)
-                mock_vcs.get_remote_url.return_value = "https://github.com/test/repo"
-                mock_vcs.get_commit_hash.return_value = "abc123def456"
-                mock_vcs.get_branch.return_value = "main"
-                # Note: get_status not called because tagging is disabled
-                mock_git.return_value = mock_vcs
+            with (
+                patch(
+                    "roar.services.registration.register_service.resolve_publish_git_context",
+                    return_value=_git_context(tmp_path),
+                ),
+                patch(
+                    "roar.services.registration.register_service.ensure_clean_publish_repo"
+                ) as ensure_clean,
+                patch("roar.services.registration.register_service.config_get") as mock_config,
+            ):
+                mock_config.return_value = False  # tagging disabled
 
-                # Mock config to disable tagging
-                with patch("roar.services.registration.register_service.config_get") as mock_config:
-                    mock_config.return_value = False  # tagging disabled
-
-                    # Dry run to avoid full registration flow
-                    result = service.register_artifact_lineage(
-                        artifact_path=str(artifact_file),
-                        roar_dir=tmp_path / ".roar",
-                        cwd=tmp_path,
-                        dry_run=True,
-                    )
+                # Dry run to avoid full registration flow
+                result = service.register_artifact_lineage(
+                    artifact_path=str(artifact_file),
+                    roar_dir=tmp_path / ".roar",
+                    cwd=tmp_path,
+                    dry_run=True,
+                )
 
         # Should succeed in dry-run mode (dirty check was skipped)
         assert result.success is True
-        # get_status should not be called when tagging is disabled
-        mock_vcs.get_status.assert_not_called()
-
-    def test_get_git_context_falls_back_to_local_repo_uri_when_remote_missing(self, tmp_path):
-        """If no origin remote exists, use a local file:// repo URI and warn."""
-        mock_logger = MagicMock()
-        service = RegisterService(logger=mock_logger)
-
-        with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
-            mock_vcs = MagicMock()
-            mock_vcs.get_repo_root.return_value = str(tmp_path)
-            mock_vcs.get_remote_url.return_value = None
-            mock_vcs.get_commit_hash.return_value = "abc123def456"
-            mock_vcs.get_branch.return_value = "main"
-            mock_git.return_value = mock_vcs
-
-            git_context = service._get_git_context(tmp_path)
-
-        assert git_context.repo == tmp_path.resolve().as_uri()
-        assert git_context.commit == "abc123def456"
-        assert git_context.branch == "main"
-        assert mock_logger.warning.call_count >= 1
-        assert any(
-            "No git remote configured" in str(call.args[0])
-            for call in mock_logger.warning.call_args_list
-        )
+        ensure_clean.assert_not_called()
 
     def test_register_artifact_lineage_uses_local_repo_uri_when_remote_missing(
         self,
@@ -1011,28 +962,27 @@ class TestRegisterService:
             mock_ctx.return_value = mock_db
 
             # Mock git context retrieval with missing remote
-            with patch("roar.services.registration.register_service.GitVCSProvider") as mock_git:
-                mock_vcs = MagicMock()
-                mock_vcs.get_repo_root.return_value = str(tmp_path)
-                mock_vcs.get_remote_url.return_value = None
-                mock_vcs.get_commit_hash.return_value = "abc123def456"
-                mock_vcs.get_branch.return_value = "main"
-                mock_vcs.get_status.return_value = (True, [])  # Clean repo
-                mock_git.return_value = mock_vcs
+            with (
+                patch(
+                    "roar.services.registration.register_service.resolve_publish_git_context",
+                    return_value=_git_context(
+                        tmp_path,
+                        repo=tmp_path.resolve().as_uri(),
+                    ),
+                ),
+                patch("roar.services.registration.register_service.config_get") as mock_config,
+            ):
 
-                # Disable tagging + omit filtering for focused behavior
-                with patch("roar.services.registration.register_service.config_get") as mock_config:
+                def config_side_effect(key):
+                    if key == "registration.tagging.enabled":
+                        return False
+                    if key == "registration.omit":
+                        return {"enabled": False}
+                    return None
 
-                    def config_side_effect(key):
-                        if key == "registration.tagging.enabled":
-                            return False
-                        if key == "registration.omit":
-                            return {"enabled": False}
-                        return None
+                mock_config.side_effect = config_side_effect
 
-                    mock_config.side_effect = config_side_effect
-
-                    result = service.register_artifact_lineage(
+                result = service.register_artifact_lineage(
                         artifact_path=str(artifact_file),
                         roar_dir=tmp_path / ".roar",
                         cwd=tmp_path,

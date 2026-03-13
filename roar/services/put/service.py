@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
+from ...application.publish.git import resolve_publish_git_context
 from ...application.publish.lineage import LineageCollector
 from ...application.publish.registration import (
     CompositeRegistrationCandidate,
@@ -44,7 +45,6 @@ from ...services.transfer import (
     DatabaseContext,
     build_operation_metadata_json,
     hash_files_blake3,
-    resolve_git_context,
 )
 from .backends.base import StorageBackend
 from .composite_builder import CompositeArtifactBuilder, CompositeBuildResult, CompositeLeaf
@@ -1121,15 +1121,11 @@ class PutService:
 
     def _get_git_context(self, git_commit: str | None = None) -> GitContext:
         """Get git context from repository."""
-        self._logger.debug("Resolving git context from %s", self._repo_root)
-        ctx = resolve_git_context(self._repo_root, git_commit)
-        self._logger.debug(
-            "Git context resolved: repo=%s, commit=%s, branch=%s",
-            ctx.repo,
-            ctx.commit[:12] if ctx.commit else None,
-            ctx.branch,
+        return resolve_publish_git_context(
+            self._repo_root,
+            logger=self._logger,
+            git_commit=git_commit,
         )
-        return ctx
 
     def _build_composite_payloads(
         self,
