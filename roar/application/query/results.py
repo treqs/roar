@@ -72,6 +72,53 @@ class LogSummary:
 
 
 @dataclass(frozen=True)
+class LabelEntrySummary:
+    key: str
+    display_value: str
+
+    def render(self, *, indent: str = "") -> str:
+        return f"{indent}{self.key}={self.display_value}"
+
+
+@dataclass(frozen=True)
+class LabelCurrentSummary:
+    heading: str | None = None
+    entries: list[LabelEntrySummary] = field(default_factory=list)
+
+    def render(self) -> str:
+        lines: list[str] = []
+        if self.heading:
+            lines.append(self.heading)
+        if not self.entries:
+            lines.append("No labels.")
+            return "\n".join(lines)
+        indent = "  " if self.heading else ""
+        lines.extend(entry.render(indent=indent) for entry in self.entries)
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class LabelHistoryVersionSummary:
+    version: int
+    entries: list[LabelEntrySummary] = field(default_factory=list)
+
+    def render(self) -> str:
+        lines = [f"Version {self.version}:"]
+        lines.extend(entry.render(indent="  ") for entry in self.entries)
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class LabelHistorySummary:
+    versions: list[LabelHistoryVersionSummary] = field(default_factory=list)
+
+    def render(self) -> str:
+        if not self.versions:
+            return "No labels."
+        return "\n\n".join(version.render() for version in self.versions)
+
+
+@dataclass(frozen=True)
 class ShowHashSummary:
     algorithm: str
     digest: str

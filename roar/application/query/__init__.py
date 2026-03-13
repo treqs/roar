@@ -1,7 +1,16 @@
 """Application entrypoints for local query and label workflows."""
 
 from .dag import render_dag
-from .label import copy_labels, label_history, set_labels, show_labels
+from .label import (
+    build_copy_labels_summary,
+    build_label_history_summary,
+    build_set_labels_summary,
+    build_show_labels_summary,
+    copy_labels,
+    label_history,
+    set_labels,
+    show_labels,
+)
 from .lineage import render_lineage
 from .log import render_log
 from .requests import (
@@ -15,14 +24,23 @@ from .requests import (
     ShowQueryRequest,
     StatusQueryRequest,
 )
-from .results import LineageSummary, LogSummary, ShowSummary, StatusSummary
+from .results import (
+    LabelCurrentSummary,
+    LabelHistorySummary,
+    LineageSummary,
+    LogSummary,
+    ShowSummary,
+    StatusSummary,
+)
 from .show import render_show
 from .status import render_status
 
 __all__ = [
     "DagQueryRequest",
     "LabelCopyRequest",
+    "LabelCurrentSummary",
     "LabelHistoryRequest",
+    "LabelHistorySummary",
     "LabelSetRequest",
     "LabelShowRequest",
     "LineageQueryRequest",
@@ -33,6 +51,10 @@ __all__ = [
     "ShowSummary",
     "StatusQueryRequest",
     "StatusSummary",
+    "build_copy_labels_summary",
+    "build_label_history_summary",
+    "build_set_labels_summary",
+    "build_show_labels_summary",
     "copy_labels",
     "label_history",
     "render_dag",
