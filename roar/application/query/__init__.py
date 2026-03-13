@@ -15,6 +15,7 @@ from .requests import (
     ShowQueryRequest,
     StatusQueryRequest,
 )
+from .results import LineageSummary, StatusSummary
 from .show import render_show
 from .status import render_status
 
@@ -25,9 +26,11 @@ __all__ = [
     "LabelSetRequest",
     "LabelShowRequest",
     "LineageQueryRequest",
+    "LineageSummary",
     "LogQueryRequest",
     "ShowQueryRequest",
     "StatusQueryRequest",
+    "StatusSummary",
     "copy_labels",
     "label_history",
     "render_dag",

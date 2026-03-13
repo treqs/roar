@@ -8,10 +8,16 @@ import os
 from ...db.context import create_database_context
 from ...db.hashing.backend import compute_hashes_batch
 from .requests import LineageQueryRequest
+from .results import LineageArtifactSummary, LineageJobSummary, LineageSummary
 
 
 def render_lineage(request: LineageQueryRequest) -> str:
     """Render artifact lineage as JSON."""
+    return json.dumps(build_lineage_summary(request).to_dict(), indent=2)
+
+
+def build_lineage_summary(request: LineageQueryRequest) -> LineageSummary:
+    """Build a typed lineage summary for an artifact."""
     with create_database_context(request.roar_dir) as db_ctx:
         artifact_hash = None
         file_path = None
@@ -50,50 +56,61 @@ def render_lineage(request: LineageQueryRequest) -> str:
 
     target_path = file_path or target_artifact.get("first_seen_path", "")
     jobs_list = [
-        {
-            "job_uid": job.get("job_uid", ""),
-            "step_number": job.get("step_number"),
-            "command": job.get("command", ""),
-            "timestamp": job.get("timestamp", 0),
-            "duration_seconds": job.get("duration_seconds"),
-            "exit_code": job.get("exit_code"),
-            "inputs": job.get("_inputs", []),
-            "outputs": job.get("_outputs", []),
-        }
+        LineageJobSummary(
+            job_uid=str(job.get("job_uid", "")),
+            step_number=job.get("step_number"),
+            command=str(job.get("command", "")),
+            timestamp=job.get("timestamp", 0),
+            duration_seconds=job.get("duration_seconds"),
+            exit_code=job.get("exit_code"),
+            inputs=list(job.get("_inputs", [])),
+            outputs=list(job.get("_outputs", [])),
+        )
         for job in jobs
     ]
 
     seen_hashes: set[str] = set()
-    artifacts_list: list[dict[str, object]] = []
+    artifacts_list: list[LineageArtifactSummary] = []
     for job in jobs:
         for input_artifact in job.get("_inputs", []):
             if input_artifact["hash"] not in seen_hashes:
                 seen_hashes.add(input_artifact["hash"])
-                artifacts_list.append(input_artifact)
+                artifacts_list.append(
+                    LineageArtifactSummary(
+                        hash=str(input_artifact["hash"]),
+                        path=str(input_artifact["path"]),
+                        size=int(input_artifact.get("size", 0)),
+                    )
+                )
         for output_artifact in job.get("_outputs", []):
             if output_artifact["hash"] not in seen_hashes:
                 seen_hashes.add(output_artifact["hash"])
-                artifacts_list.append(output_artifact)
+                artifacts_list.append(
+                    LineageArtifactSummary(
+                        hash=str(output_artifact["hash"]),
+                        path=str(output_artifact["path"]),
+                        size=int(output_artifact.get("size", 0)),
+                    )
+                )
 
     if target_hash not in seen_hashes:
         artifacts_list.append(
-            {
-                "hash": target_hash,
-                "path": target_path,
-                "size": target_artifact.get("size", 0),
-            }
+            LineageArtifactSummary(
+                hash=target_hash,
+                path=target_path,
+                size=int(target_artifact.get("size", 0)),
+            )
         )
 
-    result = {
-        "artifact": {
-            "path": target_path,
-            "hash": target_hash,
-            "size": target_artifact.get("size", 0),
-        },
-        "jobs": jobs_list,
-        "artifacts": artifacts_list,
-    }
-    return json.dumps(result, indent=2)
+    return LineageSummary(
+        artifact=LineageArtifactSummary(
+            hash=target_hash,
+            path=target_path,
+            size=int(target_artifact.get("size", 0)),
+        ),
+        jobs=jobs_list,
+        artifacts=artifacts_list,
+    )
 
 
 def _resolve_artifact_hash(path: str, cwd) -> str | None:

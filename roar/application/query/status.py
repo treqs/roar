@@ -8,16 +8,53 @@ from ...core.bootstrap import bootstrap
 from ...db.context import create_database_context
 from ...presenters.formatting import format_size
 from .requests import StatusQueryRequest
+from .results import StatusArtifactSummary, StatusSummary
 
 
 def render_status(request: StatusQueryRequest) -> str:
     """Render a summary of the active session."""
+    summary = build_status_summary(request)
+    if summary is None:
+        return "No active session."
+    lines = [
+        "DAG:",
+        f"  Build steps: {summary.build_steps}",
+        f"  Run steps:   {summary.run_steps}",
+    ]
+
+    if not summary.artifacts:
+        return "\n".join(lines)
+
+    present = [artifact for artifact in summary.artifacts if artifact.present]
+    missing = [artifact for artifact in summary.artifacts if not artifact.present]
+    lines.append(f"\nTracked artifacts ({len(summary.artifacts)} shown):")
+
+    if present:
+        lines.append("\nPresent:")
+        for artifact in present:
+            hash_prefix = artifact.artifact_hash[:12]
+            size = format_size(artifact.size_bytes)
+            lines.append(f"  {hash_prefix:<20}{size:>6}  {artifact.path}")
+
+    if missing:
+        lines.append("\nMissing:")
+        for artifact in missing:
+            hash_prefix = artifact.artifact_hash[:12]
+            size = format_size(artifact.size_bytes)
+            lines.append(f"  {hash_prefix:<20}{size:>6}  {artifact.path}")
+
+    lines.append(f"\nTotal: {len(present)} present, {len(missing)} missing")
+    return "\n".join(lines)
+
+
+def build_status_summary(request: StatusQueryRequest) -> StatusSummary | None:
+    """Build a typed summary of the active session status."""
     bootstrap(request.roar_dir)
 
     with create_database_context(request.roar_dir) as db_ctx:
         session = db_ctx.sessions.get_active()
         if not session:
-            return "No active session."
+            return None
 
         jobs = db_ctx.jobs.get_by_session(session["id"], limit=10000)
 
@@ -30,48 +67,24 @@ def render_status(request: StatusQueryRequest) -> str:
             else:
                 run_steps.add(step)
 
-        lines = [
-            "DAG:",
-            f"  Build steps: {len(build_steps)}",
-            f"  Run steps:   {len(run_steps)}",
-        ]
-
         seen_artifact_ids: set[int] = set()
-        artifacts: list[dict] = []
+        artifacts: list[StatusArtifactSummary] = []
         for job in jobs:
             for output in db_ctx.jobs.get_outputs(job["id"]):
                 artifact_id = output["artifact_id"]
                 if artifact_id not in seen_artifact_ids:
                     seen_artifact_ids.add(artifact_id)
-                    artifacts.append(output)
+                    artifacts.append(
+                        StatusArtifactSummary(
+                            artifact_hash=str(output["artifact_hash"] or ""),
+                            size_bytes=int(output["size"] or 0),
+                            path=str(output["path"]),
+                            present=Path(output["path"]).exists(),
+                        )
+                    )
 
-    if not artifacts:
-        return "\n".join(lines)
-
-    present = []
-    missing = []
-    for artifact in artifacts:
-        if Path(artifact["path"]).exists():
-            present.append(artifact)
-        else:
-            missing.append(artifact)
-
-    total = len(present) + len(missing)
-    lines.append(f"\nTracked artifacts ({total} shown):")
-
-    if present:
-        lines.append("\nPresent:")
-        for artifact in present:
-            hash_prefix = (artifact["artifact_hash"] or "")[:12]
-            size = format_size(artifact["size"])
-            lines.append(f"  {hash_prefix:<20}{size:>6}  {artifact['path']}")
-
-    if missing:
-        lines.append("\nMissing:")
-        for artifact in missing:
-            hash_prefix = (artifact["artifact_hash"] or "")[:12]
-            size = format_size(artifact["size"])
-            lines.append(f"  {hash_prefix:<20}{size:>6}  {artifact['path']}")
-
-    lines.append(f"\nTotal: {len(present)} present, {len(missing)} missing")
-    return "\n".join(lines)
+    return StatusSummary(
+        build_steps=len(build_steps),
+        run_steps=len(run_steps),
+        artifacts=artifacts,
+    )
