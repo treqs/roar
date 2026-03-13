@@ -44,7 +44,7 @@ def test_tracking_import_delegates_to_runtime_import_controller(
             calls.append((module_name, module.__name__))
 
     monkeypatch.setenv("ROAR_WRAP", "1")
-    monkeypatch.setattr(sitecustomize, "_runtime_import_controller", _FakeController())
+    monkeypatch.setattr(sitecustomize._runtime_tracker, "_runtime_import_controller", _FakeController())
 
     module = sitecustomize.tracking_import("json")
 

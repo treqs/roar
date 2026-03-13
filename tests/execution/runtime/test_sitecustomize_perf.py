@@ -6,6 +6,11 @@ import sys
 import time
 from pathlib import Path
 
+from roar.execution.runtime.inject.tracker import (
+    get_installed_packages,
+    get_used_packages,
+)
+
 INJECT_DIR = Path(__file__).resolve().parents[3] / "roar" / "execution" / "runtime" / "inject"
 
 
@@ -102,23 +107,14 @@ def test_get_used_packages_returns_correct_results():
     _get_used_packages should return the same packages as before,
     using the faster packages_distributions() approach.
     """
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "sitecustomize_pkg_test",
-        str(INJECT_DIR / "sitecustomize.py"),
-    )
-    sc = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(sc)
-
     # Build a minimal modules_files list containing a known package.
     import json
 
     json_file = json.__file__
     modules_files = [json_file] if json_file else []
 
-    installed = sc._get_installed_packages()
-    used = sc._get_used_packages(modules_files, installed)
+    installed = get_installed_packages()
+    used = get_used_packages(modules_files, installed)
 
     # Result should be a dict (possibly empty, but never an error).
     assert isinstance(used, dict), f"Expected dict, got {type(used)}"
