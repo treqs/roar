@@ -4,16 +4,6 @@ import builtins
 
 import pytest
 
-from roar.execution.framework.contract import (
-    ROAR_EXECUTION_BACKEND_ENV,
-    DistributedRuntimeAdapter,
-    DriverBootstrapAdapter,
-    ExecutionBackend,
-    ExecutionCommandPlan,
-    HostExecutionAdapter,
-    RuntimeImportAdapter,
-    WorkerBootstrapAdapter,
-)
 from roar.services.execution.inject import sitecustomize
 from roar.services.execution.inject.support import SuppressTracking
 
@@ -44,105 +34,19 @@ def test_tracking_open_skips_recording_when_suppressed(tmp_path) -> None:
     assert abs_path not in sitecustomize.opened_files
 
 
-def test_tracking_import_initializes_observes_and_patches_matched_backend(
+def test_tracking_import_delegates_to_runtime_import_controller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[str] = []
-    fake_backend = ExecutionBackend(
-        name="fake",
-        priority=10,
-        matches_command=lambda _command: False,
-        plan_command=lambda command: ExecutionCommandPlan(
-            backend_name="fake",
-            command=list(command),
-        ),
-        host_execution=HostExecutionAdapter(execute=lambda _ctx: None),  # type: ignore[arg-type]
-        distributed=DistributedRuntimeAdapter(
-            driver_bootstrap=DriverBootstrapAdapter(
-                build_proxy_fragment=lambda *_args, **_kwargs: None,
-                local_merge=lambda *_args, **_kwargs: None,
-            ),
-            worker_bootstrap=WorkerBootstrapAdapter(
-                py_executable="roar-worker",
-                setup_hook="roar.services.execution.worker_bootstrap.startup",
-                prepare_runtime_env=lambda runtime_env, _job_id, _environ: dict(runtime_env or {}),
-                startup=lambda: None,
-                run_entrypoint=lambda _argv: None,
-            ),
-            runtime_import=RuntimeImportAdapter(
-                module_prefixes=("fake",),
-                initialize_process=lambda: calls.append("initialize"),
-                observe_import=lambda module_name, module: calls.append(f"observe:{module_name}"),
-                patch_module=lambda module_name, module: calls.append(f"patch:{module_name}"),
-            ),
-        ),
-    )
+    calls: list[tuple[str, str]] = []
+
+    class _FakeController:
+        def handle_import(self, module_name: str, module) -> None:
+            calls.append((module_name, module.__name__))
 
     monkeypatch.setenv("ROAR_WRAP", "1")
-    monkeypatch.delenv(ROAR_EXECUTION_BACKEND_ENV, raising=False)
-    monkeypatch.setattr(
-        sitecustomize,
-        "match_execution_backend_for_module",
-        lambda module_name: fake_backend if module_name == "json" else None,
-    )
-    monkeypatch.setattr(
-        sitecustomize,
-        "_resolve_runtime_backend",
-        lambda: fake_backend
-        if sitecustomize.os.environ.get(ROAR_EXECUTION_BACKEND_ENV) == "fake"
-        else None,
-    )
+    monkeypatch.setattr(sitecustomize, "_runtime_import_controller", _FakeController())
 
     module = sitecustomize.tracking_import("json")
 
     assert module.__name__ == "json"
-    assert sitecustomize.os.environ[ROAR_EXECUTION_BACKEND_ENV] == "fake"
-    assert calls == ["initialize", "observe:json", "patch:json"]
-
-
-def test_tracking_import_reuses_initialized_backend_for_unrelated_imports(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[str] = []
-    fake_backend = ExecutionBackend(
-        name="fake",
-        priority=10,
-        matches_command=lambda _command: False,
-        plan_command=lambda command: ExecutionCommandPlan(
-            backend_name="fake",
-            command=list(command),
-        ),
-        host_execution=HostExecutionAdapter(execute=lambda _ctx: None),  # type: ignore[arg-type]
-        distributed=DistributedRuntimeAdapter(
-            driver_bootstrap=DriverBootstrapAdapter(
-                build_proxy_fragment=lambda *_args, **_kwargs: None,
-                local_merge=lambda *_args, **_kwargs: None,
-            ),
-            worker_bootstrap=WorkerBootstrapAdapter(
-                py_executable="roar-worker",
-                setup_hook="roar.services.execution.worker_bootstrap.startup",
-                prepare_runtime_env=lambda runtime_env, _job_id, _environ: dict(runtime_env or {}),
-                startup=lambda: None,
-                run_entrypoint=lambda _argv: None,
-            ),
-            runtime_import=RuntimeImportAdapter(
-                module_prefixes=("fake",),
-                initialize_process=lambda: calls.append("initialize"),
-                observe_import=lambda module_name, module: calls.append(f"observe:{module_name}"),
-                patch_module=lambda module_name, module: calls.append(f"patch:{module_name}"),
-            ),
-        ),
-    )
-
-    monkeypatch.setenv("ROAR_WRAP", "1")
-    monkeypatch.setenv(ROAR_EXECUTION_BACKEND_ENV, "fake")
-    monkeypatch.setattr(sitecustomize, "_initialized_runtime_backends", set())
-    monkeypatch.setattr(sitecustomize, "_resolve_runtime_backend", lambda: fake_backend)
-    monkeypatch.setattr(sitecustomize, "match_execution_backend_for_module", lambda _module_name: None)
-
-    sitecustomize.tracking_import("json")
-    sitecustomize.tracking_import("os")
-
-    assert calls.count("initialize") == 1
-    assert "observe:json" in calls
-    assert calls[-1] == "observe:os"
+    assert calls == [("json", "json")]

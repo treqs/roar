@@ -1,15 +1,10 @@
 import atexit
 import builtins
-import contextlib
 import json
 import os
 import sys
 
-from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV
-from roar.execution.framework.registry import (
-    get_execution_backend,
-    match_execution_backend_for_module,
-)
+from roar.execution.framework.runtime_imports import RuntimeImportController
 from roar.services.execution.inject.support import is_suppressed
 
 # ------------------------------------------------------------------------------
@@ -25,7 +20,7 @@ LOG_FILE = os.environ.get("ROAR_LOG_FILE")
 
 # Directory where this sitecustomize.py lives (to exclude from tracking)
 _ROAR_INJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-_initialized_runtime_backends: set[str] = set()
+_runtime_import_controller = RuntimeImportController(os.environ)
 
 # ------------------------------------------------------------------------------
 # Track open() calls
@@ -47,44 +42,9 @@ def tracking_open(*args, **kwargs):
 builtins.open = tracking_open
 
 # ------------------------------------------------------------------------------
-# Track imports and dispatch to the selected execution backend
+# Track imports and delegate runtime lifecycle to the framework controller
 # ------------------------------------------------------------------------------
 _real_import = builtins.__import__
-
-
-def _resolve_runtime_backend():
-    backend_name = str(os.environ.get(ROAR_EXECUTION_BACKEND_ENV) or "").strip()
-    if not backend_name:
-        return None
-    try:
-        return get_execution_backend(backend_name)
-    except Exception:
-        return None
-
-
-def _initialize_runtime_backend(backend) -> None:
-    distributed = backend.distributed
-    adapter = distributed.runtime_import if distributed is not None else None
-    if adapter is None or backend.name in _initialized_runtime_backends:
-        return
-    initializer = adapter.initialize_process
-    if initializer is None:
-        _initialized_runtime_backends.add(backend.name)
-        return
-    try:
-        initializer()
-    except Exception:
-        return
-    _initialized_runtime_backends.add(backend.name)
-
-
-def _observe_runtime_import(backend, module_name: str, module) -> None:
-    distributed = backend.distributed
-    adapter = distributed.runtime_import if distributed is not None else None
-    if adapter is None or adapter.observe_import is None:
-        return
-    with contextlib.suppress(Exception):
-        adapter.observe_import(module_name, module)
 
 
 def tracking_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -94,23 +54,7 @@ def tracking_import(name, globals=None, locals=None, fromlist=(), level=0):
     if os.environ.get("ROAR_WRAP") != "1":
         return module
 
-    matched_backend = match_execution_backend_for_module(name)
-    if matched_backend is not None:
-        os.environ.setdefault(ROAR_EXECUTION_BACKEND_ENV, matched_backend.name)
-
-    selected_backend = _resolve_runtime_backend()
-    if selected_backend is not None:
-        _initialize_runtime_backend(selected_backend)
-        _observe_runtime_import(selected_backend, name, module)
-
-    if matched_backend is not None:
-        _initialize_runtime_backend(matched_backend)
-        distributed = matched_backend.distributed
-        adapter = distributed.runtime_import if distributed is not None else None
-        if adapter is not None and adapter.patch_module is not None:
-            with contextlib.suppress(Exception):
-                adapter.patch_module(name, module)
-
+    _runtime_import_controller.handle_import(name, module)
     return module
 
 
@@ -240,9 +184,7 @@ def _write_log():
 
 
 if os.environ.get("ROAR_WRAP") == "1":
-    configured_backend = _resolve_runtime_backend()
-    if configured_backend is not None:
-        _initialize_runtime_backend(configured_backend)
+    _runtime_import_controller.initialize_selected_backend()
 
 
 atexit.register(_write_log)
