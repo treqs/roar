@@ -386,7 +386,7 @@ class TestRegisterService:
         """S3 artifact registration should resolve by tracked DB path, not local filesystem."""
         artifact_path = "s3://output-bucket/results/run123/final_report.json"
 
-        from roar.core.interfaces.upload import LineageData
+        from roar.core.interfaces.lineage import LineageData
 
         mock_lineage_collector.collect.return_value = LineageData(
             jobs=[],
@@ -443,7 +443,7 @@ class TestRegisterService:
         artifact_file.write_text("data")
 
         # Mock LineageData
-        from roar.core.interfaces.upload import LineageData
+        from roar.core.interfaces.lineage import LineageData
 
         mock_lineage = LineageData(
             jobs=[{"id": 1, "job_uid": "job1"}, {"id": 2, "job_uid": "job2"}],
@@ -509,7 +509,7 @@ class TestRegisterService:
         artifact_file = tmp_path / "file.csv"
         artifact_file.write_text("data")
 
-        from roar.core.interfaces.upload import LineageData
+        from roar.core.interfaces.lineage import LineageData
 
         mock_lineage = LineageData(
             jobs=[
@@ -605,7 +605,7 @@ class TestRegisterService:
         mock_glaas_client.health_check.side_effect = GlaasConnectionError("Connection refused")
 
         # Mock LineageData
-        from roar.core.interfaces.upload import LineageData
+        from roar.core.interfaces.lineage import LineageData
 
         mock_lineage = LineageData(
             jobs=[{"id": 1, "job_uid": "job1"}],
@@ -783,7 +783,7 @@ class TestRegisterService:
         artifact_file.write_text("data")
 
         # Mock LineageData
-        from roar.core.interfaces.upload import LineageData
+        from roar.core.interfaces.lineage import LineageData
 
         mock_lineage = LineageData(
             jobs=[{"id": 1, "job_uid": "job1"}],
@@ -961,7 +961,7 @@ class TestRegisterService:
         artifact_file.write_text("data")
 
         # Mock LineageData
-        from roar.core.interfaces.upload import LineageData
+        from roar.core.interfaces.lineage import LineageData
 
         mock_lineage = LineageData(
             jobs=[{"id": 1, "job_uid": "job1"}],
@@ -1198,12 +1198,12 @@ class TestRegisterService:
         mock_coordinator,
         mock_session_service,
     ):
+        from roar.core.interfaces.lineage import LineageData
         from roar.core.interfaces.registration import (
             BatchRegistrationResult,
             GitContext,
             SessionRegistrationResult,
         )
-        from roar.core.interfaces.upload import LineageData
 
         primitive_digest = "a" * 64
         composite_digest = "c" * 64

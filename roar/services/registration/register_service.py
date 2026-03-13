@@ -37,9 +37,9 @@ from ...application.publish.registration import (
 )
 from ...application.publish.session import prepare_publish_session
 from ...config import config_get
+from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
-from ...core.interfaces.upload import LineageData
 from ...core.logging import get_logger
 from ...db.context import create_database_context, optional_repo
 from ...db.hashing.backend import compute_hashes_batch

@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import (
     BatchRegistrationResult,
     GitContext,
@@ -19,7 +20,6 @@ from roar.core.interfaces.registration import (
     JobRegistrationResult,
     SessionRegistrationResult,
 )
-from roar.core.interfaces.upload import LineageData
 from roar.services.put.service import PutService
 
 

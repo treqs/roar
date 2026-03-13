@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from blake3 import blake3
 
-from roar.core.interfaces.upload import LineageData
+from roar.core.interfaces.lineage import LineageData
 from roar.db.context import create_database_context
 from roar.services.registration.register_service import RegisterService
 

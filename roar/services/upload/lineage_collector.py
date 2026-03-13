@@ -9,7 +9,7 @@ for registering artifacts with GLaaS.
 from pathlib import Path
 
 from ...core.digests import extract_primary_digest
-from ...core.interfaces.upload import LineageData
+from ...core.interfaces.lineage import LineageData
 from ...db.context import create_database_context
 from ...execution.framework.registry import is_execution_task_job
 

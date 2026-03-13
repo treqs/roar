@@ -11,8 +11,8 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import BatchRegistrationResult, SessionRegistrationResult
-from roar.core.interfaces.upload import LineageData
 from roar.services.put.backends import MemoryBackend
 from roar.services.put.service import PutService
 

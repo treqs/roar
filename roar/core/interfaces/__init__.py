@@ -8,6 +8,7 @@ enabling dependency inversion and loose coupling throughout the codebase.
 from .cloud import ICloudStorageProvider
 from .command import CommandContext, CommandResult, ICommand
 from .config import IConfigProvider
+from .lineage import ILineageCollector, LineageData
 from .logger import ILogger
 from .presenter import IPresenter
 from .repositories import (
@@ -27,25 +28,23 @@ from .telemetry import ITelemetryProvider, TelemetryRunInfo
 from .vcs import IVCSProvider, VCSInfo
 
 __all__ = [
-    # Repository protocols
     "ArtifactRepository",
     "CollectionRepository",
     "CommandContext",
     "CommandResult",
     "HashCacheRepository",
-    # Service protocols
     "HashingService",
-    # Integration protocols
     "ICloudStorageProvider",
-    # Command protocols
     "ICommand",
     "IConfigProvider",
+    "ILineageCollector",
     "ILogger",
     "IPresenter",
     "ITelemetryProvider",
     "IVCSProvider",
     "JobRecordingService",
     "JobRepository",
+    "LineageData",
     "LineageService",
     "SessionRepository",
     "SessionService",
