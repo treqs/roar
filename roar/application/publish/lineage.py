@@ -1,9 +1,7 @@
 """
-Lineage collector service for upload operations.
+Shared publish lineage collection and enrichment.
 
-Extracted from put.py to follow Single Responsibility Principle.
-This service collects all lineage data (jobs, artifacts) needed
-for registering artifacts with GLaaS.
+This module is the canonical home for publish-time lineage traversal.
 """
 
 from pathlib import Path
@@ -41,7 +39,7 @@ def _extract_primary_digest(item: dict) -> str | None:
 
 class LineageCollector:
     """
-    Service for collecting lineage data for artifact upload.
+    Collect lineage data for publish and registration flows.
 
     Collects all jobs and artifacts in the lineage of the target
     artifacts, including:
@@ -67,11 +65,11 @@ class LineageCollector:
         Collect lineage data for the given artifact hashes.
 
         Args:
-            artifact_hashes: List of artifact hashes to trace lineage for
-            roar_dir: Path to .roar directory
+            artifact_hashes: List of artifact hashes to trace lineage for.
+            roar_dir: Path to `.roar`.
 
         Returns:
-            LineageData containing jobs and artifacts in the lineage
+            LineageData containing jobs and artifacts in the lineage.
         """
         with create_database_context(roar_dir) as ctx_db:
             # Get lineage jobs (with input/output hashes populated)

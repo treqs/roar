@@ -27,6 +27,7 @@ from ...application.publish.git import (
     create_publish_git_tag,
     ensure_clean_publish_repo,
 )
+from ...application.publish.lineage import LineageCollector
 from ...application.publish.registration import (
     CompositeRegistrationCandidate,
     ensure_composite_hash_entry,
@@ -53,7 +54,6 @@ from ...glaas_client import GlaasClient
 from ...plugins.vcs.git import GitVCSProvider
 from ..put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
 from ..transfer.common import resolve_repo_url_or_local_uri
-from ..upload.lineage_collector import LineageCollector
 from . import _artifact_ref
 from .coordinator import RegistrationCoordinator
 from .session import SessionRegistrationService

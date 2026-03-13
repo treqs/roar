@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
+from ...application.publish.lineage import LineageCollector
 from ...application.publish.registration import (
     CompositeRegistrationCandidate,
     ensure_composite_hash_entry,
@@ -45,7 +46,6 @@ from ...services.transfer import (
     hash_files_blake3,
     resolve_git_context,
 )
-from ...services.upload.lineage_collector import LineageCollector
 from .backends.base import StorageBackend
 from .composite_builder import CompositeArtifactBuilder, CompositeBuildResult, CompositeLeaf
 from .resolver import ResolvedSource, SourceResolver

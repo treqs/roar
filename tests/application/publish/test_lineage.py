@@ -1,14 +1,14 @@
-"""Unit tests for lineage collector service."""
+"""Unit tests for publish lineage collection."""
 
 import sqlite3
 from unittest.mock import Mock
 
-from roar.db.schema import SCHEMA, run_migrations
-from roar.services.upload.lineage_collector import (
+from roar.application.publish.lineage import (
     LineageCollector,
     _extract_primary_digest,
     compute_io_signature,
 )
+from roar.db.schema import SCHEMA, run_migrations
 
 
 class TestComputeIoSignature:
