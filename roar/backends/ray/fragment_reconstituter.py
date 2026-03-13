@@ -383,12 +383,15 @@ class FragmentReconstituter:
             return
 
         try:
+            from roar.application.publish.composite_builder import (
+                CompositeArtifactBuilder,
+                CompositeLeaf,
+            )
             from roar.services.execution.dataset_identifier import DatasetIdentifierInferer
             from roar.services.execution.job_recording import (
                 ExecutionJobRecorder,
                 RunCompositeMaterializationConfig,
             )
-            from roar.services.put.composite_builder import CompositeArtifactBuilder, CompositeLeaf
         except Exception:
             return
 

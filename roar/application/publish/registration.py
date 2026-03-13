@@ -24,6 +24,114 @@ class CompositeRegistrationCandidate:
     payload: dict[str, Any]
 
 
+def normalize_lineage_component_rows(
+    component_rows: list[dict[str, Any]],
+    *,
+    resolve_component: Any,
+    logger: ILogger,
+) -> list[dict[str, Any]]:
+    """Normalize raw local composite-component rows for registration."""
+    components: list[dict[str, Any]] = []
+
+    for row in component_rows:
+        relative_path = row.get("relative_path")
+        if not isinstance(relative_path, str) or not relative_path:
+            continue
+
+        resolved_component = resolve_component(row)
+        if resolved_component is None:
+            logger.warning(
+                "Skipping lineage composite component %s: missing resolvable blake3 digest",
+                relative_path,
+            )
+            continue
+        component_algorithm, digest = resolved_component
+
+        leaf_kind = row.get("leaf_kind")
+        if not isinstance(leaf_kind, str) or not leaf_kind:
+            leaf_kind = "file"
+
+        component_size = _normalize_component_size(row.get("component_size"))
+
+        component_type = row.get("component_type")
+        if component_type is not None and not isinstance(component_type, str):
+            component_type = None
+
+        components.append(
+            {
+                "relative_path": relative_path,
+                "leaf_kind": leaf_kind,
+                "component_algorithm": component_algorithm,
+                "component_digest": digest.lower(),
+                "component_size": component_size,
+                "component_type": component_type,
+            }
+        )
+
+    return components
+
+
+def build_lineage_composite_candidate(
+    *,
+    artifact: dict[str, Any],
+    composite_digest: str,
+    hashes: list[dict[str, str]],
+    components: list[dict[str, Any]],
+    membership_index: dict[str, Any] | None,
+    session_hash: str,
+    composite_builder: Any,
+    metadata: str | None = None,
+    logger: ILogger,
+) -> CompositeRegistrationCandidate | None:
+    """Build a composite registration candidate from normalized lineage data."""
+    component_count_total = resolve_lineage_component_count_total(
+        artifact_component_count=artifact.get("component_count"),
+        membership_index=membership_index,
+        stored_components=len(components),
+    )
+    if component_count_total <= 0:
+        logger.warning(
+            "Skipping lineage composite %s: missing component_count metadata",
+            composite_digest[:12],
+        )
+        return None
+
+    membership_payload = build_lineage_membership_index_payload(
+        composite_builder=composite_builder,
+        membership_index=membership_index,
+        component_count_total=component_count_total,
+        components=components,
+    )
+    normalized_hashes = ensure_composite_hash_entry(hashes, composite_digest)
+    root_path = _artifact_path(artifact) or ""
+    source_type = normalize_registration_source_type(artifact.get("source_type"))
+    try:
+        size = max(0, int(artifact.get("size", 0)))
+    except (TypeError, ValueError):
+        size = 0
+
+    payload: dict[str, Any] = {
+        "hash": composite_digest,
+        "hashes": normalized_hashes,
+        "size": size,
+        "source_type": source_type,
+        "session_hash": session_hash,
+        "component_count_total": component_count_total,
+        "components": components,
+        "membership_index": membership_payload,
+    }
+    if metadata is not None:
+        payload["metadata"] = metadata
+
+    return CompositeRegistrationCandidate(
+        hash=composite_digest,
+        root_path=str(root_path),
+        component_count_total=component_count_total,
+        component_count_stored=len(components),
+        payload=payload,
+    )
+
+
 def resolve_lineage_component_count_total(
     artifact_component_count: Any,
     membership_index: dict[str, Any] | None,
@@ -60,7 +168,7 @@ def build_lineage_membership_index_payload(
     }
 
     if stored_components == component_count_total and stored_components > 0:
-        from ...services.put.composite_builder import CompositeLeaf
+        from .composite_builder import CompositeLeaf
 
         leaves: list[CompositeLeaf] = []
         for component in components:
@@ -114,6 +222,14 @@ def build_lineage_membership_index_payload(
         )
 
     return payload
+
+
+def _artifact_path(artifact: dict[str, Any]) -> str | None:
+    for key in ("first_seen_path", "path"):
+        value = artifact.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def normalize_registration_hashes(

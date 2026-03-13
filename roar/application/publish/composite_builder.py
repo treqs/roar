@@ -1,5 +1,5 @@
 """
-Composite artifact payload builder for directory-backed put sources.
+Composite artifact payload builder for directory-backed publish sources.
 
 Builds canonical composite-blake3 digests and GLaaS composite registration
 payloads from resolved file leaves.

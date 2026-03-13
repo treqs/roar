@@ -4,9 +4,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from roar.application.publish.composite_builder import CompositeArtifactBuilder
 from roar.application.publish.registration import (
     CompositeRegistrationCandidate,
+    build_lineage_composite_candidate,
     build_lineage_membership_index_payload,
+    normalize_lineage_component_rows,
     normalize_registration_hashes,
     normalize_registration_source_type,
     prepare_batch_registration_artifacts,
@@ -16,7 +19,6 @@ from roar.application.publish.registration import (
     sync_publish_labels,
 )
 from roar.core.interfaces.registration import BatchRegistrationResult, GitContext
-from roar.services.put.composite_builder import CompositeArtifactBuilder
 
 
 def test_preregister_lineage_composites_records_successes_and_failures() -> None:
@@ -323,3 +325,128 @@ def test_build_lineage_membership_index_payload_rejects_partial_component_set() 
                 }
             ],
         )
+
+
+def test_normalize_lineage_component_rows_uses_resolver_and_normalizes_fields() -> None:
+    logger = MagicMock()
+
+    components = normalize_lineage_component_rows(
+        [
+            {
+                "relative_path": "part-000.json",
+                "leaf_kind": "file",
+                "component_size": "5",
+                "component_type": "application/json",
+            },
+            {
+                "relative_path": "part-001.json",
+                "component_size": None,
+            },
+        ],
+        resolve_component=lambda row: (
+            ("blake3", "d" * 64)
+            if row["relative_path"] == "part-000.json"
+            else ("blake3", "E" * 64)
+        ),
+        logger=logger,
+    )
+
+    assert components == [
+        {
+            "relative_path": "part-000.json",
+            "leaf_kind": "file",
+            "component_algorithm": "blake3",
+            "component_digest": "d" * 64,
+            "component_size": 5,
+            "component_type": "application/json",
+        },
+        {
+            "relative_path": "part-001.json",
+            "leaf_kind": "file",
+            "component_algorithm": "blake3",
+            "component_digest": "e" * 64,
+            "component_size": 0,
+            "component_type": None,
+        },
+    ]
+    logger.warning.assert_not_called()
+
+
+def test_normalize_lineage_component_rows_logs_missing_digest() -> None:
+    logger = MagicMock()
+
+    components = normalize_lineage_component_rows(
+        [{"relative_path": "missing.parquet"}],
+        resolve_component=lambda _row: None,
+        logger=logger,
+    )
+
+    assert components == []
+    logger.warning.assert_called_once()
+
+
+def test_build_lineage_composite_candidate_builds_payload_with_metadata() -> None:
+    candidate = build_lineage_composite_candidate(
+        artifact={
+            "first_seen_path": "/tmp/dataset",
+            "component_count": 2,
+            "size": "13",
+            "source_type": "S3",
+        },
+        composite_digest="c" * 64,
+        hashes=[{"algorithm": "composite-blake3", "digest": "c" * 64}],
+        components=[
+            {
+                "relative_path": "part-000.json",
+                "leaf_kind": "file",
+                "component_algorithm": "blake3",
+                "component_digest": "d" * 64,
+                "component_size": 5,
+                "component_type": "application/json",
+            },
+            {
+                "relative_path": "part-001.json",
+                "leaf_kind": "file",
+                "component_algorithm": "blake3",
+                "component_digest": "e" * 64,
+                "component_size": 8,
+                "component_type": "application/json",
+            },
+        ],
+        membership_index=None,
+        session_hash="session-hash",
+        composite_builder=CompositeArtifactBuilder(),
+        metadata='{"dataset": true}',
+        logger=MagicMock(),
+    )
+
+    assert candidate is not None
+    assert candidate.hash == "c" * 64
+    assert candidate.root_path == "/tmp/dataset"
+    assert candidate.component_count_total == 2
+    assert candidate.payload["source_type"] == "s3"
+    assert candidate.payload["size"] == 13
+    assert candidate.payload["metadata"] == '{"dataset": true}'
+
+
+def test_build_lineage_composite_candidate_returns_none_without_component_count() -> None:
+    logger = MagicMock()
+
+    candidate = build_lineage_composite_candidate(
+        artifact={
+            "first_seen_path": "/tmp/dataset",
+            "component_count": None,
+            "size": 13,
+            "source_type": "local",
+        },
+        composite_digest="c" * 64,
+        hashes=[{"algorithm": "composite-blake3", "digest": "c" * 64}],
+        components=[],
+        membership_index=None,
+        session_hash="session-hash",
+        composite_builder=CompositeArtifactBuilder(),
+        logger=logger,
+    )
+
+    assert candidate is None
+    logger.warning.assert_called_once()

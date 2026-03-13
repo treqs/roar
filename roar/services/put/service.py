@@ -17,13 +17,14 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
+from ...application.publish.composite_builder import CompositeArtifactBuilder, CompositeBuildResult
 from ...application.publish.lineage import LineageCollector
 from ...application.publish.put_preparation import PreparedPutExecution
 from ...application.publish.registration import (
     CompositeRegistrationCandidate,
-    build_lineage_membership_index_payload,
-    ensure_composite_hash_entry,
+    build_lineage_composite_candidate,
     extract_composite_digest,
+    normalize_lineage_component_rows,
     normalize_registration_hashes,
     normalize_registration_source_type,
     parse_composite_registration_response,
@@ -50,7 +51,6 @@ from ...services.transfer import (
     hash_files_blake3,
 )
 from .backends.base import StorageBackend
-from .composite_builder import CompositeArtifactBuilder, CompositeBuildResult
 
 _AUTO_COMPOSITE_MIN_CONFIDENCE = 0.80
 
@@ -550,115 +550,55 @@ class PutService:
                         exc,
                     )
 
-            components = self._normalize_lineage_components(component_rows)
-            component_count_total = resolve_lineage_component_count_total(
-                artifact_component_count=artifact.get("component_count"),
-                membership_index=membership_index,
-                stored_components=len(components),
+            components = normalize_lineage_component_rows(
+                component_rows,
+                resolve_component=self._resolve_lineage_component_for_registration,
+                logger=self._logger,
             )
-            if component_count_total <= 0:
-                self._logger.warning(
-                    "Skipping lineage composite %s: missing component_count metadata",
-                    composite_digest[:12],
-                )
-                continue
 
             seen_hashes.add(composite_digest)
-            membership_payload = build_lineage_membership_index_payload(
-                composite_builder=self._composite_builder,
-                membership_index=membership_index,
-                component_count_total=component_count_total,
-                components=components,
-            )
-            normalized_hashes = ensure_composite_hash_entry(hashes, composite_digest)
-            root_path = _artifact_ref.artifact_path(artifact) or ""
-            source_type = normalize_registration_source_type(artifact.get("source_type"))
-            try:
-                size = max(0, int(artifact.get("size", 0)))
-            except (TypeError, ValueError):
-                size = 0
-
-            payload: dict[str, Any] = {
-                "hash": composite_digest,
-                "hashes": normalized_hashes,
-                "size": size,
-                "source_type": source_type,
-                "session_hash": session_hash,
-                "component_count_total": component_count_total,
-                "components": components,
-            }
-            payload["membership_index"] = membership_payload
             metadata_json = self._build_composite_dataset_metadata_json(
-                root_path=str(root_path),
+                root_path=str(_artifact_ref.artifact_path(artifact) or ""),
                 dataset_identifiers=dataset_identifiers,
                 artifact_metadata=artifact.get("metadata"),
                 components=components,
-                component_count_total=component_count_total,
+                component_count_total=resolve_lineage_component_count_total(
+                    artifact_component_count=artifact.get("component_count"),
+                    membership_index=membership_index,
+                    stored_components=len(components),
+                ),
             )
-            if metadata_json is not None:
-                payload["metadata"] = metadata_json
-
-            payloads.append(
-                CompositeRegistrationCandidate(
-                    hash=composite_digest,
-                    root_path=str(root_path),
-                    component_count_total=component_count_total,
-                    component_count_stored=len(components),
-                    payload=payload,
-                )
+            candidate = build_lineage_composite_candidate(
+                artifact=artifact,
+                composite_digest=composite_digest,
+                hashes=hashes,
+                components=components,
+                membership_index=membership_index,
+                session_hash=session_hash,
+                composite_builder=self._composite_builder,
+                metadata=metadata_json,
+                logger=self._logger,
             )
+            if candidate is None:
+                continue
+            payloads.append(candidate)
 
         return payloads
 
     @staticmethod
-    def _normalize_lineage_components(
-        component_rows: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        components: list[dict[str, Any]] = []
-
-        for row in component_rows:
-            relative_path = row.get("relative_path")
-            digest = row.get("component_digest")
-            if not isinstance(relative_path, str) or not relative_path:
-                continue
-            if not isinstance(digest, str) or not digest:
-                continue
-
-            leaf_kind = row.get("leaf_kind")
-            if not isinstance(leaf_kind, str) or not leaf_kind:
-                leaf_kind = "file"
-
-            component_algorithm = row.get("component_algorithm")
-            if not isinstance(component_algorithm, str) or not component_algorithm:
-                component_algorithm = "blake3"
-
-            component_size = row.get("component_size")
-            try:
-                if isinstance(component_size, bool):
-                    size_value = int(component_size)
-                elif isinstance(component_size, int | float | str):
-                    size_value = max(0, int(component_size))
-                else:
-                    size_value = 0
-            except (TypeError, ValueError):
-                size_value = 0
-
-            component_type = row.get("component_type")
-            if component_type is not None and not isinstance(component_type, str):
-                component_type = None
-
-            components.append(
-                {
-                    "relative_path": relative_path,
-                    "leaf_kind": leaf_kind,
-                    "component_algorithm": component_algorithm,
-                    "component_digest": digest.lower(),
-                    "component_size": size_value,
-                    "component_type": component_type,
-                }
-            )
-
-        return components
+    def _resolve_lineage_component_for_registration(
+        row: dict[str, Any],
+    ) -> tuple[str, str] | None:
+        component_algorithm = row.get("component_algorithm")
+        component_digest = row.get("component_digest")
+        if (
+            isinstance(component_algorithm, str)
+            and component_algorithm.strip()
+            and isinstance(component_digest, str)
+            and component_digest
+        ):
+            return component_algorithm.strip().lower(), component_digest.lower()
+        return None
 
     def _link_local_put_job_artifacts(
         self,

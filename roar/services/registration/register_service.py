@@ -13,18 +13,17 @@ from urllib.parse import urlparse
 
 from sqlalchemy import text
 
+from ...application.publish.composite_builder import CompositeArtifactBuilder
 from ...application.publish.register_preparation import PreparedRegisterExecution
 from ...application.publish.registration import (
     CompositeRegistrationCandidate,
-    build_lineage_membership_index_payload,
-    ensure_composite_hash_entry,
+    build_lineage_composite_candidate,
     extract_composite_digest,
+    normalize_lineage_component_rows,
     normalize_registration_hashes,
-    normalize_registration_source_type,
     prepare_batch_registration_artifacts,
     preregister_lineage_composites,
     register_publish_lineage,
-    resolve_lineage_component_count_total,
 )
 from ...config import config_get
 from ...core.interfaces.lineage import LineageData
@@ -39,7 +38,6 @@ from ...execution.framework.registry import (
 )
 from ...filters.omit import OmitFilter, OmitMatch
 from ...glaas_client import GlaasClient
-from ..put.composite_builder import CompositeArtifactBuilder
 from . import _artifact_ref
 from .coordinator import RegistrationCoordinator
 
@@ -733,112 +731,31 @@ class RegisterService:
                 if isinstance(raw_membership, dict):
                     membership_index = raw_membership
 
-            components = self._normalize_lineage_components(
+            components = normalize_lineage_component_rows(
                 component_rows,
-                db_ctx=db_ctx,
-                lineage_artifacts_by_id=lineage_artifacts_by_id,
+                resolve_component=lambda row: self._resolve_component_hash_for_registration(
+                    row=row,
+                    db_ctx=db_ctx,
+                    lineage_artifacts_by_id=lineage_artifacts_by_id,
+                ),
+                logger=self._logger,
             )
-            component_count_total = resolve_lineage_component_count_total(
-                artifact_component_count=artifact.get("component_count"),
-                membership_index=membership_index,
-                stored_components=len(components),
-            )
-            if component_count_total <= 0:
-                self._logger.warning(
-                    "Skipping lineage composite %s: missing component_count metadata",
-                    composite_digest[:12],
-                )
-                continue
-
-            membership_payload = build_lineage_membership_index_payload(
-                composite_builder=self._composite_builder,
-                membership_index=membership_index,
-                component_count_total=component_count_total,
+            candidate = build_lineage_composite_candidate(
+                artifact=artifact,
+                composite_digest=composite_digest,
+                hashes=hashes,
                 components=components,
+                membership_index=membership_index,
+                session_hash=session_hash,
+                composite_builder=self._composite_builder,
+                logger=self._logger,
             )
-            normalized_hashes = ensure_composite_hash_entry(hashes, composite_digest)
-            root_path = _artifact_ref.artifact_path(artifact) or ""
-            source_type = normalize_registration_source_type(artifact.get("source_type"))
-            try:
-                size = max(0, int(artifact.get("size", 0)))
-            except (TypeError, ValueError):
-                size = 0
-
+            if candidate is None:
+                continue
             seen_hashes.add(composite_digest)
-            payloads.append(
-                CompositeRegistrationCandidate(
-                    hash=composite_digest,
-                    root_path=str(root_path),
-                    component_count_total=component_count_total,
-                    component_count_stored=len(components),
-                    payload={
-                        "hash": composite_digest,
-                        "hashes": normalized_hashes,
-                        "size": size,
-                        "source_type": source_type,
-                        "session_hash": session_hash,
-                        "component_count_total": component_count_total,
-                        "components": components,
-                        "membership_index": membership_payload,
-                    },
-                )
-            )
+            payloads.append(candidate)
 
         return payloads
-
-    def _normalize_lineage_components(
-        self,
-        component_rows: list[dict[str, Any]],
-        *,
-        db_ctx: Any,
-        lineage_artifacts_by_id: dict[str, dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        components: list[dict[str, Any]] = []
-
-        for row in component_rows:
-            relative_path = row.get("relative_path")
-            if not isinstance(relative_path, str) or not relative_path:
-                continue
-            resolved_component = self._resolve_component_hash_for_registration(
-                row=row,
-                db_ctx=db_ctx,
-                lineage_artifacts_by_id=lineage_artifacts_by_id,
-            )
-            if resolved_component is None:
-                continue
-            component_algorithm, digest = resolved_component
-
-            leaf_kind = row.get("leaf_kind")
-            if not isinstance(leaf_kind, str) or not leaf_kind:
-                leaf_kind = "file"
-
-            component_size = row.get("component_size")
-            try:
-                if isinstance(component_size, bool):
-                    size_value = int(component_size)
-                elif isinstance(component_size, int | float | str):
-                    size_value = max(0, int(component_size))
-                else:
-                    size_value = 0
-            except (TypeError, ValueError):
-                size_value = 0
-
-            component_type = row.get("component_type")
-            if component_type is not None and not isinstance(component_type, str):
-                component_type = None
-
-            components.append(
-                {
-                    "relative_path": relative_path,
-                    "leaf_kind": leaf_kind,
-                    "component_algorithm": component_algorithm,
-                    "component_digest": digest.lower(),
-                    "component_size": size_value,
-                    "component_type": component_type,
-                }
-            )
-
-        return components
 
     def _resolve_component_hash_for_registration(
         self,
@@ -880,10 +797,6 @@ class RegisterService:
         ):
             return "blake3", component_digest.lower()
 
-        self._logger.warning(
-            "Skipping lineage composite component %s: missing resolvable blake3 digest",
-            row.get("relative_path") or "<unknown>",
-        )
         return None
 
     @staticmethod
