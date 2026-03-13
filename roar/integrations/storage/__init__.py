@@ -1,10 +1,10 @@
 """Cloud/object storage integration adapters for publish and transfer flows."""
 
+from ..resolution import load_backend_class, resolve_backend_for_scheme
 from .base import Destination, StorageBackend, parse_destination
 from .memory import MemoryBackend
 from .noop import NoOpBackend, should_skip_upload
 from .publish import resolve_publish_storage_backend
-from .resolution import load_backend_class, resolve_backend_for_scheme
 
 __all__ = [
     "Destination",

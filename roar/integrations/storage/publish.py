@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from ..resolution import load_backend_class, resolve_backend_for_scheme
 from .base import StorageBackend, parse_destination
 from .memory import MemoryBackend
 from .noop import NoOpBackend, should_skip_upload
-from .resolution import load_backend_class, resolve_backend_for_scheme
 
 
 def resolve_publish_storage_backend(destination: str) -> StorageBackend:

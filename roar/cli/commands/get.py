@@ -15,54 +15,9 @@ import click
 
 from ...core.bootstrap import bootstrap
 from ...db.context import create_database_context
-from ...integrations.storage import load_backend_class, resolve_backend_for_scheme
-from ...services.get.backends import NoOpDownloadBackend, parse_source, should_skip_download
+from ...integrations.download import parse_source, resolve_download_backend
 from ..context import RoarContext
 from ..decorators import require_init
-
-
-def _get_backend(source_url: str):
-    """Get the appropriate download backend for a source URL.
-
-    If ROAR_GET_SKIP_DOWNLOAD=1 is set, returns a NoOpDownloadBackend that
-    simulates downloads without actual data transfer (for testing).
-    """
-    parsed = parse_source(source_url)
-
-    # Check for skip-download mode (for testing)
-    if should_skip_download():
-        return NoOpDownloadBackend(
-            bucket=parsed.bucket,
-            scheme=parsed.scheme,
-        )
-
-    from ...services.get.backends.http import HTTPBackend
-
-    builders = {
-        "http": lambda: HTTPBackend(url=source_url),
-        "https": lambda: HTTPBackend(url=source_url),
-        "s3": lambda: load_backend_class(
-            "roar.services.get.backends.s3",
-            "S3DownloadBackend",
-            "S3 backend requires boto3. Install with: pip install boto3",
-        )(bucket=parsed.bucket),
-        "gs": lambda: load_backend_class(
-            "roar.services.get.backends.gcs",
-            "GCSDownloadBackend",
-            "GCS backend requires google-cloud-storage. Install with: pip install google-cloud-storage",
-        )(bucket=parsed.bucket),
-    }
-
-    try:
-        return resolve_backend_for_scheme(
-            parsed.scheme,
-            builders,
-            f"Unsupported source scheme: {parsed.scheme}",
-        )
-    except ValueError as e:
-        raise click.ClickException(str(e)) from e
-    except ImportError as e:
-        raise click.ClickException(str(e)) from e
 
 
 @click.command("get")
@@ -196,10 +151,12 @@ def get(
 
     # Get download backend
     try:
-        backend = _get_backend(source)
+        backend = resolve_download_backend(source)
         logger.debug("Download backend: %s", type(backend).__name__)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
     except ImportError as e:
-        raise click.ClickException(f"Missing dependency for {source}: {e}") from e
+        raise click.ClickException(str(e)) from e
 
     # Git operations (optional for get)
     git_commit = None
@@ -218,7 +175,9 @@ def get(
         if not dry_run:
             active_session = db_ctx.sessions.get_active()
             if not active_session:
-                raise click.ClickException("No active session. Run 'roar init' first.")
+                raise click.ClickException(
+                    "No active session. Run 'roar reset' or 'roar run' first."
+                )
 
         from ...services.get.service import GetService
 

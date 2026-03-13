@@ -20,7 +20,7 @@ from ...core.logging import get_logger
 from ...core.operation_metadata import build_operation_metadata_json
 from ...db.context import DatabaseContext
 from ...db.hashing import hash_files_blake3
-from .backends.base import DownloadBackend, Source
+from ...integrations.download.base import DownloadBackend, Source
 
 
 @dataclass

@@ -10,7 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from roar.cli.commands.get import _get_backend, get
+from roar.cli.commands.get import get
+from roar.integrations.download import resolve_download_backend
 
 
 @pytest.fixture
@@ -63,36 +64,24 @@ class TestGetBackendSelection:
 
     def test_http_uses_http_backend(self):
         """HTTP URLs use HTTPBackend."""
-        import importlib
-
-        get_module = importlib.import_module("roar.cli.commands.get")
-
-        with patch.object(get_module, "should_skip_download", return_value=False):
-            backend = _get_backend("https://example.com/model.pt")
-            from roar.services.get.backends.http import HTTPBackend
+        with patch("roar.integrations.download.get.should_skip_download", return_value=False):
+            backend = resolve_download_backend("https://example.com/model.pt")
+            from roar.integrations.download.http import HTTPBackend
 
             assert isinstance(backend, HTTPBackend)
 
     def test_skip_download_uses_noop(self):
         """ROAR_GET_SKIP_DOWNLOAD=1 uses NoOpDownloadBackend."""
-        import importlib
-
-        get_module = importlib.import_module("roar.cli.commands.get")
-
-        with patch.object(get_module, "should_skip_download", return_value=True):
-            backend = _get_backend("s3://bucket/model.pt")
-            from roar.services.get.backends.noop import NoOpDownloadBackend
+        with patch("roar.integrations.download.get.should_skip_download", return_value=True):
+            backend = resolve_download_backend("s3://bucket/model.pt")
+            from roar.integrations.download.noop import NoOpDownloadBackend
 
             assert isinstance(backend, NoOpDownloadBackend)
 
     def test_unsupported_scheme_raises_valueerror(self):
         """Unsupported scheme in parse_source raises ValueError (CLI catches it)."""
-        import importlib
-
-        get_module = importlib.import_module("roar.cli.commands.get")
-
         with (
-            patch.object(get_module, "should_skip_download", return_value=False),
+            patch("roar.integrations.download.get.should_skip_download", return_value=False),
             pytest.raises(ValueError, match="Unsupported"),
         ):
-            _get_backend("wandb://project/artifact")
+            resolve_download_backend("wandb://project/artifact")

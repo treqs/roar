@@ -10,8 +10,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from roar.services.get.backends.base import Source
-from roar.services.get.backends.noop import NoOpDownloadBackend
+from roar.integrations.download.base import Source
+from roar.integrations.download.noop import NoOpDownloadBackend
 from roar.services.get.service import GetService
 
 
@@ -30,7 +30,7 @@ def _make_mock_db():
 
 def _make_source(url: str = "s3://my-bucket/models/model.pt") -> Source:
     """Create a Source object for testing."""
-    from roar.services.get.backends.base import parse_source
+    from roar.integrations.download.base import parse_source
 
     return parse_source(url)
 

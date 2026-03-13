@@ -151,6 +151,14 @@ def temp_git_repo(tmp_path: Path):
         capture_output=True,
     )
 
+    # Create an active session for get/dag workflows.
+    subprocess.run(
+        [sys.executable, "-m", "roar", "reset", "-y"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
     return tmp_path
 
 
