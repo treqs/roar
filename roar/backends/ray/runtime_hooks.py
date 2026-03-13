@@ -498,7 +498,7 @@ def patch_driver_phase_subprocess_capture() -> None:
                 child_env = dict(popen_kwargs.get("env") or os.environ)
                 capture["env"] = child_env
                 try:
-                    from roar.services.execution.proxy import ProxyService
+                    from roar.execution.cluster.proxy import ProxyService
 
                     service = ProxyService()
                     handle = service.start_for_run(

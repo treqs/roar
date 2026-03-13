@@ -8,7 +8,7 @@ import uuid
 
 import ray
 
-from roar.services.execution.proxy import ProxyService
+from roar.execution.cluster.proxy import ProxyService
 from tests.benchmarks.ray_bench_utils import (
     MINIO_ACCESS_KEY,
     MINIO_ENDPOINT,

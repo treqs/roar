@@ -7,6 +7,8 @@ import sys
 import time
 from collections.abc import Mapping, Sequence
 
+from roar.execution.cluster.proxy import ProxyHandle, ProxyService, S3LogEntry
+from roar.execution.cluster.proxy_config import local_proxy_port_from_env
 from roar.execution.fragments.transport import emit_fragment_dicts
 from roar.execution.framework.contract import (
     ROAR_EXECUTION_BACKEND_ENV,
@@ -14,8 +16,6 @@ from roar.execution.framework.contract import (
 from roar.execution.framework.registry import (
     get_execution_backend,
 )
-from roar.services.execution.proxy import ProxyHandle, ProxyService, S3LogEntry
-from roar.services.execution.proxy_config import local_proxy_port_from_env
 
 
 def _warn(message: str) -> None:

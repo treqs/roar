@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from roar.cli.context import RoarContext
     from roar.core.models.run import RunContext, RunResult
-    from roar.services.execution.proxy import S3LogEntry
+    from roar.execution.cluster.proxy import S3LogEntry
 
 
 class FragmentReconstituterProtocol(Protocol):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from roar.services.execution.proxy_config import (
+from roar.execution.cluster.proxy_config import (
     DEFAULT_LOCAL_PROXY_PORT,
     local_proxy_endpoint,
     local_proxy_port_from_env,

@@ -6,8 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from roar.db.context import create_database_context as _create_database_context
+from roar.execution.cluster.proxy import S3LogEntry
 from roar.services.execution.job_recording import ExecutionJobRecorder
-from roar.services.execution.proxy import S3LogEntry
 
 
 def test_record_registers_proxy_outputs_before_get_outputs(tmp_path: Path) -> None:
@@ -41,6 +41,8 @@ def test_record_registers_proxy_outputs_before_get_outputs(tmp_path: Path) -> No
         repo_root=str(repo_root),
         roar_dir=roar_dir,
         command=["python", "train.py"],
+        execution_backend="local",
+        execution_role="host",
         step_name="train",
         job_type="run",
         hash_algorithms=["blake3"],

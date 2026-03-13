@@ -19,7 +19,7 @@ def execute_host_run(ctx: RunContext) -> RunResult:
 
     proxy_service = None
     if config_get("proxy.enabled", start_dir=ctx.repo_root):
-        from roar.services.execution.proxy import ProxyService
+        from roar.execution.cluster.proxy import ProxyService
 
         proxy_service = ProxyService()
         if not proxy_service.find_proxy():

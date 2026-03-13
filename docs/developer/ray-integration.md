@@ -150,9 +150,9 @@ This path still matters for nested `ray.init(...)` inside already instrumented j
   - Reuses sidecars only when local ownership claims match the current job and upstream.
   - Returns proxy logs to the driver for reconstitution.
 
-- `roar/services/execution/proxy_config.py`
+- `roar/execution/cluster/proxy_config.py`
   - Shared local proxy port parsing and loopback endpoint helpers.
-- `roar/services/execution/cluster_bridge.py`
+- `roar/execution/cluster/bridge.py`
   - Shared proxy sidecar lifecycle and ownership-claim logic.
   - Encapsulates reuse checks, startup, readiness waiting, and teardown.
 

@@ -358,7 +358,7 @@ class TestProxyGracefulDegradation:
         customise_dir = temp_git_repo.parent / "_sitecustomize"
         customise_dir.mkdir(exist_ok=True)
         (customise_dir / "sitecustomize.py").write_text(
-            "from roar.services.execution.proxy import ProxyService\n"
+            "from roar.execution.cluster.proxy import ProxyService\n"
             "ProxyService.find_proxy = lambda self: None\n"
         )
 

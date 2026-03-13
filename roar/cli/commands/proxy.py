@@ -33,7 +33,7 @@ def proxy(ctx: click.Context) -> None:
 def _proxy_status() -> None:
     """Show current proxy configuration and status."""
     from ...config import get_roar_dir
-    from ...services.execution.proxy import ProxyService
+    from ...execution.cluster.proxy import ProxyService
 
     enabled = config_get("proxy.enabled") or False
     click.echo(f"Proxy enabled: {enabled}")
@@ -86,7 +86,7 @@ def proxy_start() -> None:
     AWS_ENDPOINT_URL to route S3 traffic through the proxy.
     """
     from ...config import get_roar_dir
-    from ...services.execution.proxy import ProxyService
+    from ...execution.cluster.proxy import ProxyService
 
     svc = ProxyService()
     roar_dir = get_roar_dir()
@@ -113,7 +113,7 @@ def proxy_start() -> None:
 def proxy_stop() -> None:
     """Stop the standalone S3 proxy daemon."""
     from ...config import get_roar_dir
-    from ...services.execution.proxy import ProxyService
+    from ...execution.cluster.proxy import ProxyService
 
     svc = ProxyService()
     roar_dir = get_roar_dir()

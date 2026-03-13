@@ -3,6 +3,7 @@ from __future__ import annotations
 import types
 
 from roar.backends.ray.plugin import ray_build_driver_proxy_fragment
+from roar.execution.cluster.proxy import S3LogEntry
 from roar.execution.framework.contract import (
     DistributedRuntimeAdapter,
     DriverBootstrapAdapter,
@@ -12,7 +13,6 @@ from roar.execution.framework.contract import (
     WorkerBootstrapAdapter,
 )
 from roar.execution.runtime import driver_entrypoint
-from roar.services.execution.proxy import S3LogEntry
 
 
 def _set_backend(monkeypatch) -> None:

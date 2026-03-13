@@ -12,7 +12,7 @@ import pytest
 ray = pytest.importorskip("ray")
 
 from roar.backends.ray.node_agent import RoarNodeAgent, _local_proxy_port  # noqa: E402
-from roar.services.execution.cluster_bridge import (  # noqa: E402
+from roar.execution.cluster.bridge import (  # noqa: E402
     LocalProxyClusterBridge,
     proxy_claim_path,
     proxy_claim_root,
@@ -96,15 +96,15 @@ def test_cluster_bridge_refuses_reuse_when_existing_listener_claim_upstream_diff
     )
 
     monkeypatch.setattr(
-        "roar.services.execution.cluster_bridge.can_connect_to_local_proxy",
+        "roar.execution.cluster.bridge.can_connect_to_local_proxy",
         lambda _: True,
     )
     monkeypatch.setattr(
-        "roar.services.execution.cluster_bridge.tracer_backends.find_proxy_binary",
+        "roar.execution.cluster.bridge.tracer_backends.find_proxy_binary",
         lambda _: "/fake/roar-proxy",
     )
     monkeypatch.setattr(
-        "roar.services.execution.cluster_bridge.subprocess.Popen",
+        "roar.execution.cluster.bridge.subprocess.Popen",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected Popen")),
     )
 
@@ -139,15 +139,15 @@ def test_cluster_bridge_reuses_existing_listener_when_claim_matches(
     )
 
     monkeypatch.setattr(
-        "roar.services.execution.cluster_bridge.can_connect_to_local_proxy",
+        "roar.execution.cluster.bridge.can_connect_to_local_proxy",
         lambda _: True,
     )
     monkeypatch.setattr(
-        "roar.services.execution.cluster_bridge.tracer_backends.find_proxy_binary",
+        "roar.execution.cluster.bridge.tracer_backends.find_proxy_binary",
         lambda _: "/fake/roar-proxy",
     )
     monkeypatch.setattr(
-        "roar.services.execution.cluster_bridge.subprocess.Popen",
+        "roar.execution.cluster.bridge.subprocess.Popen",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected Popen")),
     )
 
@@ -172,11 +172,11 @@ def test_cluster_bridge_writes_and_clears_proxy_claim_for_owned_process(
 ) -> None:
     port = 24567
     monkeypatch.setattr(
-        "roar.services.execution.cluster_bridge.can_connect_to_local_proxy",
+        "roar.execution.cluster.bridge.can_connect_to_local_proxy",
         lambda _: False,
     )
     monkeypatch.setattr(
-        "roar.services.execution.cluster_bridge.tracer_backends.find_proxy_binary",
+        "roar.execution.cluster.bridge.tracer_backends.find_proxy_binary",
         lambda _: "/fake/roar-proxy",
     )
 
@@ -185,7 +185,7 @@ def test_cluster_bridge_writes_and_clears_proxy_claim_for_owned_process(
     process.poll.return_value = None
     process.stdout = iter(["ROAR_PROXY_READY port=24567\n"])
     monkeypatch.setattr(
-        "roar.services.execution.cluster_bridge.subprocess.Popen",
+        "roar.execution.cluster.bridge.subprocess.Popen",
         lambda *args, **kwargs: process,
     )
 

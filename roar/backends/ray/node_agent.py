@@ -7,8 +7,8 @@ from typing import Any
 import ray
 
 from roar.backends.ray._agent_names import build_node_agent_name
-from roar.services.execution.cluster_bridge import LocalProxyClusterBridge, SidecarHandle
-from roar.services.execution.proxy_config import local_proxy_port_from_env
+from roar.execution.cluster.bridge import LocalProxyClusterBridge, SidecarHandle
+from roar.execution.cluster.proxy_config import local_proxy_port_from_env
 
 __all__ = ["RoarNodeAgent", "build_node_agent_name"]
 

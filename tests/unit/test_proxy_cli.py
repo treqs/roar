@@ -23,7 +23,7 @@ class TestProxyCli:
         with (
             patch.object(proxy_cli_module, "config_get", return_value=False),
             patch("roar.config.get_roar_dir", return_value="/tmp/.roar"),
-            patch("roar.services.execution.proxy.ProxyService", return_value=mock_svc),
+            patch("roar.execution.cluster.proxy.ProxyService", return_value=mock_svc),
         ):
             result = runner.invoke(proxy_cli_module.proxy)
             assert result.exit_code == 0
@@ -50,7 +50,7 @@ class TestProxyCli:
 
         with (
             patch("roar.config.get_roar_dir", return_value="/tmp/.roar"),
-            patch("roar.services.execution.proxy.ProxyService", return_value=mock_svc),
+            patch("roar.execution.cluster.proxy.ProxyService", return_value=mock_svc),
         ):
             result = runner.invoke(proxy_cli_module.proxy, ["start"])
             assert result.exit_code == 0
@@ -64,7 +64,7 @@ class TestProxyCli:
 
         with (
             patch("roar.config.get_roar_dir", return_value="/tmp/.roar"),
-            patch("roar.services.execution.proxy.ProxyService", return_value=mock_svc),
+            patch("roar.execution.cluster.proxy.ProxyService", return_value=mock_svc),
         ):
             result = runner.invoke(proxy_cli_module.proxy, ["start"])
             assert result.exit_code == 0
@@ -77,7 +77,7 @@ class TestProxyCli:
 
         with (
             patch("roar.config.get_roar_dir", return_value="/tmp/.roar"),
-            patch("roar.services.execution.proxy.ProxyService", return_value=mock_svc),
+            patch("roar.execution.cluster.proxy.ProxyService", return_value=mock_svc),
         ):
             result = runner.invoke(proxy_cli_module.proxy, ["stop"])
             assert result.exit_code == 0
@@ -89,7 +89,7 @@ class TestProxyCli:
 
         with (
             patch("roar.config.get_roar_dir", return_value="/tmp/.roar"),
-            patch("roar.services.execution.proxy.ProxyService", return_value=mock_svc),
+            patch("roar.execution.cluster.proxy.ProxyService", return_value=mock_svc),
         ):
             result = runner.invoke(proxy_cli_module.proxy, ["stop"])
             assert result.exit_code == 0
@@ -103,7 +103,7 @@ class TestProxyCli:
         with (
             patch.object(proxy_cli_module, "config_get", return_value=True),
             patch("roar.config.get_roar_dir", return_value="/tmp/.roar"),
-            patch("roar.services.execution.proxy.ProxyService", return_value=mock_svc),
+            patch("roar.execution.cluster.proxy.ProxyService", return_value=mock_svc),
         ):
             result = runner.invoke(proxy_cli_module.proxy, ["status"])
             assert result.exit_code == 0

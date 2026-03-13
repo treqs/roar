@@ -23,7 +23,7 @@ def fake_s3():
 @pytest.fixture(scope="session")
 def proxy_binary():
     """Locate the roar-proxy binary, skip if not found."""
-    from roar.services.execution.proxy import ProxyService
+    from roar.execution.cluster.proxy import ProxyService
 
     path = ProxyService().find_proxy()
     if path is None:
