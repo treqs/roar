@@ -1,23 +1,21 @@
-"""
-Storage backends for roar put command.
-
-Provides abstraction over various cloud storage providers.
-"""
+"""Cloud/object storage integration adapters for publish and transfer flows."""
 
 from .base import Destination, StorageBackend, parse_destination
 from .memory import MemoryBackend
 from .noop import NoOpBackend, should_skip_upload
+from .resolution import load_backend_class, resolve_backend_for_scheme
 
 __all__ = [
     "Destination",
     "MemoryBackend",
     "NoOpBackend",
     "StorageBackend",
+    "load_backend_class",
     "parse_destination",
+    "resolve_backend_for_scheme",
     "should_skip_upload",
 ]
 
-# Lazy import S3Backend to avoid ImportError when boto3 not installed
 try:
     from .s3 import S3Backend  # noqa: F401
 
@@ -25,7 +23,6 @@ try:
 except ImportError:
     pass
 
-# Lazy import GCSBackend to avoid ImportError when google-cloud-storage not installed
 try:
     from .gcs import GCSBackend  # noqa: F401
 

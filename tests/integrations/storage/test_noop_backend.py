@@ -6,7 +6,7 @@ Tests the skip-upload functionality for testing.
 
 from pathlib import Path
 
-from roar.services.put.backends import NoOpBackend, should_skip_upload
+from roar.integrations.storage import NoOpBackend, should_skip_upload
 
 
 class TestShouldSkipUpload:

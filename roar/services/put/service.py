@@ -38,6 +38,7 @@ from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...db.context import optional_repo
 from ...glaas_client import GlaasClient
+from ...integrations.storage.base import StorageBackend
 from ...services.execution.dataset_identifier import DatasetIdentifierInferer
 from ...services.registration import (
     RegistrationCoordinator,
@@ -50,7 +51,6 @@ from ...services.transfer import (
     build_operation_metadata_json,
     hash_files_blake3,
 )
-from .backends.base import StorageBackend
 
 _AUTO_COMPOSITE_MIN_CONFIDENCE = 0.80
 

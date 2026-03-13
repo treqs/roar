@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from roar.services.put.backends import MemoryBackend, parse_destination
+from roar.integrations.storage import MemoryBackend, parse_destination
 
 
 class TestParseDestination:

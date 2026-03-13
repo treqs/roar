@@ -15,8 +15,8 @@ import click
 
 from ...core.bootstrap import bootstrap
 from ...db.context import create_database_context
+from ...integrations.storage import load_backend_class, resolve_backend_for_scheme
 from ...services.get.backends import NoOpDownloadBackend, parse_source, should_skip_download
-from ...services.transfer import load_backend_class, resolve_backend_for_scheme
 from ..context import RoarContext
 from ..decorators import require_init
 

@@ -12,7 +12,7 @@ import pytest
 # Skip all tests in this module if google-cloud-storage is not installed
 google_cloud_storage = pytest.importorskip("google.cloud.storage")
 
-from roar.services.put.backends.gcs import GCSBackend  # noqa: E402
+from roar.integrations.storage.gcs import GCSBackend  # noqa: E402
 
 
 class TestGCSBackendUpload:
@@ -24,7 +24,7 @@ class TestGCSBackendUpload:
         test_file = tmp_path / "model.pt"
         test_file.write_bytes(b"model data")
 
-        with patch("roar.services.put.backends.gcs.storage") as mock_storage:
+        with patch("roar.integrations.storage.gcs.storage") as mock_storage:
             mock_client = Mock()
             mock_bucket = Mock()
             mock_blob = Mock()
@@ -49,7 +49,7 @@ class TestGCSBackendUpload:
         test_file = tmp_path / "model.pt"
         test_file.write_bytes(b"model data")
 
-        with patch("roar.services.put.backends.gcs.storage") as mock_storage:
+        with patch("roar.integrations.storage.gcs.storage") as mock_storage:
             mock_client = Mock()
             mock_bucket = Mock()
             mock_blob = Mock()
@@ -70,7 +70,7 @@ class TestGCSBackendUpload:
         test_file = tmp_path / "checkpoint.pt"
         test_file.write_bytes(b"checkpoint")
 
-        with patch("roar.services.put.backends.gcs.storage") as mock_storage:
+        with patch("roar.integrations.storage.gcs.storage") as mock_storage:
             mock_client = Mock()
             mock_bucket = Mock()
             mock_blob = Mock()
@@ -92,7 +92,7 @@ class TestGCSBackendExists:
 
     def test_exists_returns_true_when_blob_exists(self):
         """Exists returns True when blob is in GCS."""
-        with patch("roar.services.put.backends.gcs.storage") as mock_storage:
+        with patch("roar.integrations.storage.gcs.storage") as mock_storage:
             mock_client = Mock()
             mock_bucket = Mock()
             mock_blob = Mock()
@@ -112,7 +112,7 @@ class TestGCSBackendExists:
 
     def test_exists_returns_false_when_blob_missing(self):
         """Exists returns False when blob is not in GCS."""
-        with patch("roar.services.put.backends.gcs.storage") as mock_storage:
+        with patch("roar.integrations.storage.gcs.storage") as mock_storage:
             mock_client = Mock()
             mock_bucket = Mock()
             mock_blob = Mock()
@@ -134,7 +134,7 @@ class TestGCSBackendAuth:
 
     def test_uses_application_default_credentials(self):
         """Backend uses Application Default Credentials (ADC)."""
-        with patch("roar.services.put.backends.gcs.storage") as mock_storage:
+        with patch("roar.integrations.storage.gcs.storage") as mock_storage:
             mock_client = Mock()
             mock_storage.Client.return_value = mock_client
 
@@ -150,7 +150,7 @@ class TestGCSBackendAuth:
         test_file = tmp_path / "model.pt"
         test_file.write_bytes(b"data")
 
-        with patch("roar.services.put.backends.gcs.storage") as mock_storage:
+        with patch("roar.integrations.storage.gcs.storage") as mock_storage:
             mock_client = Mock()
             mock_bucket = Mock()
             mock_blob = Mock()

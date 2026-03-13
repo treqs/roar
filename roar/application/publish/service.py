@@ -6,15 +6,16 @@ from ...core.bootstrap import bootstrap
 from ...core.logging import get_logger
 from ...db.context import create_database_context
 from ...glaas_client import get_glaas_url
-from ...services.put import PutService
-from ...services.put.backends import (
+from ...integrations.storage import (
     MemoryBackend,
     NoOpBackend,
+    load_backend_class,
     parse_destination,
+    resolve_backend_for_scheme,
     should_skip_upload,
 )
+from ...services.put import PutService
 from ...services.registration.register_service import RegisterResult, RegisterService
-from ...services.transfer import load_backend_class, resolve_backend_for_scheme
 from .collection import collect_register_lineage
 from .git import build_publish_tag_name, create_publish_git_tag, ensure_clean_publish_repo
 from .put_preparation import prepare_put_execution
@@ -203,12 +204,12 @@ def _get_backend(destination: str):
 
     builders = {
         "s3": lambda: load_backend_class(
-            "roar.services.put.backends.s3",
+            "roar.integrations.storage.s3",
             "S3Backend",
             "S3 backend requires boto3. Install with: pip install boto3",
         )(bucket=parsed.bucket, prefix=parsed.prefix),
         "gs": lambda: load_backend_class(
-            "roar.services.put.backends.gcs",
+            "roar.integrations.storage.gcs",
             "GCSBackend",
             "GCS backend requires google-cloud-storage. Install with: pip install google-cloud-storage",
         )(bucket=parsed.bucket, prefix=parsed.prefix),
