@@ -76,4 +76,3 @@ def _register_entrypoint_plugin(container, plugin_cls: type) -> None:
     elif _implements(plugin_cls, IVCSProvider):
         instance = plugin_cls()
         container.register_vcs_provider(instance.name, plugin_cls)
-
