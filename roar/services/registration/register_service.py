@@ -13,12 +13,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy import text
 
-from ...application.publish.git import (
-    build_publish_tag_name,
-    create_publish_git_tag,
-    ensure_clean_publish_repo,
-    resolve_publish_git_context,
-)
+from ...application.publish.register_preparation import PreparedRegisterExecution
 from ...application.publish.registration import (
     CompositeRegistrationCandidate,
     build_lineage_membership_index_payload,
@@ -31,7 +26,6 @@ from ...application.publish.registration import (
     register_publish_lineage,
     resolve_lineage_component_count_total,
 )
-from ...application.publish.session import prepare_publish_session
 from ...config import config_get
 from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
@@ -48,7 +42,6 @@ from ...glaas_client import GlaasClient
 from ..put.composite_builder import CompositeArtifactBuilder
 from . import _artifact_ref
 from .coordinator import RegistrationCoordinator
-from .session import SessionRegistrationService
 
 _Blake3Constructor = Callable[[], Any]
 
@@ -107,7 +100,6 @@ class RegisterService:
         self,
         glaas_client: GlaasClient | None = None,
         coordinator: RegistrationCoordinator | None = None,
-        session_service: SessionRegistrationService | None = None,
         composite_builder: CompositeArtifactBuilder | None = None,
         omit_filter: OmitFilter | None = None,
         logger: ILogger | None = None,
@@ -118,13 +110,11 @@ class RegisterService:
         Args:
             glaas_client: GLaaS client for API communication
             coordinator: Registration coordinator for 4-phase pattern
-            session_service: Service for session registration
             omit_filter: Filter for detecting and redacting secrets
             logger: Logger instance. If None, resolves from DI container.
         """
         self._glaas_client = glaas_client
         self._coordinator = coordinator
-        self._session_service = session_service
         self._composite_builder = composite_builder or CompositeArtifactBuilder()
         self._omit_filter = omit_filter
 
@@ -149,24 +139,17 @@ class RegisterService:
         """Get or create registration coordinator."""
         return self._coordinator or RegistrationCoordinator()
 
-    @cached_property
-    def session_service(self) -> SessionRegistrationService:
-        """Get or create session service."""
-        return self._session_service or SessionRegistrationService()
-
-    def register_collected_lineage(
+    def register_prepared_lineage(
         self,
         *,
         lineage: LineageData,
         roar_dir: Path,
-        cwd: Path,
-        session_id: int | None,
         artifact_hash: str,
         dry_run: bool,
         as_blake3: bool,
         skip_confirmation: bool,
         confirm_callback: Callable[[list[str]], bool] | None,
-        session_hash_override: str | None = None,
+        prepared: PreparedRegisterExecution,
     ) -> RegisterResult:
         """Register already-collected local lineage with GLaaS."""
         self._logger.debug(
@@ -174,42 +157,9 @@ class RegisterService:
             len(lineage.jobs),
             len(lineage.artifacts),
         )
-
-        # Step 5: Get git context
-        git_context = self._get_git_context(cwd)
-        if not git_context.repo or not git_context.commit:
-            self._logger.warning(
-                "Missing git context: repo=%s, commit=%s", git_context.repo, git_context.commit
-            )
-
-        # Step 5.5: Check for uncommitted changes (required for tagging)
-        tagging_enabled = config_get("registration.tagging.enabled")
-        if tagging_enabled is None:
-            tagging_enabled = True
-        if tagging_enabled and git_context.commit:
-            try:
-                ensure_clean_publish_repo(
-                    cwd,
-                    error_message="Cannot register with uncommitted changes. Commit your changes first.",
-                )
-            except ValueError as exc:
-                return RegisterResult(
-                    success=False,
-                    artifact_hash=artifact_hash,
-                    error=str(exc),
-                )
-
-        publish_session = prepare_publish_session(
-            glaas_client=self.glaas_client,
-            session_service=self.session_service,
-            roar_dir=roar_dir,
-            session_id=session_id,
-            git_context=git_context,
-            logger=self._logger,
-            register_with_glaas=False,
-            session_hash_override=session_hash_override,
-        )
-        session_hash = publish_session.session_hash
+        git_context = prepared.git_context
+        session_hash = prepared.session_hash
+        session_id = prepared.session_id
 
         omit_filter = self.omit_filter
         detected_secrets: list[str] = []
@@ -257,25 +207,6 @@ class RegisterService:
 
         if as_blake3:
             self.upgrade_s3_etags_to_blake3(roar_dir=roar_dir, lineage=lineage)
-
-        try:
-            prepare_publish_session(
-                glaas_client=self.glaas_client,
-                session_service=self.session_service,
-                roar_dir=roar_dir,
-                session_id=session_id,
-                git_context=git_context,
-                logger=self._logger,
-                register_with_glaas=True,
-                configured_error="GLaaS not configured. Run 'roar config set glaas.url <url>' first.",
-                session_hash_override=session_hash,
-            )
-        except ValueError as exc:
-            return RegisterResult(
-                success=False,
-                session_hash=session_hash,
-                error=str(exc),
-            )
 
         composite_registrations: list[dict[str, Any]] = []
         pre_registration_errors: list[str] = []
@@ -335,12 +266,6 @@ class RegisterService:
                 session_id=None,
                 label_artifacts=lineage.artifacts,
             )
-
-        if tagging_enabled and git_context.commit:
-            tag_name = build_publish_tag_name(git_context.commit, short=True)
-            success, tag_error = create_publish_git_tag(cwd, tag_name)
-            if not success:
-                self._logger.debug("Failed to create git tag: %s", tag_error)
 
         composite_registered = sum(1 for item in composite_registrations if item.get("registered"))
         composite_failed = sum(1 for item in composite_registrations if not item.get("registered"))
@@ -660,10 +585,6 @@ class RegisterService:
                 return digest.lower()
 
         return None
-
-    def _get_git_context(self, cwd: Path) -> GitContext:
-        """Get git context from repository."""
-        return resolve_publish_git_context(cwd, logger=self._logger)
 
     def _estimate_links(self, jobs: list[dict]) -> int:
         """Estimate number of artifact links from jobs."""

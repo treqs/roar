@@ -18,6 +18,7 @@ from ...services.transfer import load_backend_class, resolve_backend_for_scheme
 from .collection import collect_register_lineage
 from .git import build_publish_tag_name, create_publish_git_tag, ensure_clean_publish_repo
 from .put_preparation import prepare_put_execution
+from .register_preparation import prepare_register_execution
 from .requests import (
     PutRequest,
     PutResponse,
@@ -30,11 +31,11 @@ from .targets import resolve_register_lineage_target
 
 def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageResponse:
     """Run the `roar register` application workflow."""
+    logger = get_logger()
     runtime = build_publish_runtime(glaas_url=get_glaas_url())
     service = RegisterService(
         glaas_client=runtime.glaas_client,
         coordinator=runtime.registration_coordinator,
-        session_service=runtime.session_service,
     )
     resolved_target = resolve_register_lineage_target(
         request.target,
@@ -47,23 +48,57 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         cwd=request.cwd,
         lineage_collector=runtime.lineage_collector,
         session_service=runtime.session_service,
-        logger=get_logger(),
+        logger=logger,
     )
     if collected_lineage is None:
         return RegisterLineageResponse(result=RegisterResult(success=False, error=error))
 
-    result = service.register_collected_lineage(
+    try:
+        prepared = prepare_register_execution(
+            runtime=runtime,
+            roar_dir=request.roar_dir,
+            cwd=request.cwd,
+            session_id=collected_lineage.session_id,
+            dry_run=request.dry_run,
+            session_hash_override=collected_lineage.session_hash_override,
+            logger=logger,
+        )
+    except ValueError as exc:
+        return RegisterLineageResponse(
+            result=RegisterResult(
+                success=False,
+                artifact_hash=collected_lineage.artifact_hash,
+                error=str(exc),
+            )
+        )
+
+    result = service.register_prepared_lineage(
         lineage=collected_lineage.lineage,
         roar_dir=request.roar_dir,
-        cwd=request.cwd,
-        session_id=collected_lineage.session_id,
         artifact_hash=collected_lineage.artifact_hash,
         dry_run=request.dry_run,
         as_blake3=request.as_blake3,
         skip_confirmation=request.skip_confirmation,
         confirm_callback=request.confirm_callback,
-        session_hash_override=collected_lineage.session_hash_override,
+        prepared=prepared,
     )
+
+    if (
+        result.success
+        and not request.dry_run
+        and prepared.git_tag_name
+        and prepared.git_tag_repo_root is not None
+    ):
+        try:
+            success, tag_error = create_publish_git_tag(
+                prepared.git_tag_repo_root,
+                prepared.git_tag_name,
+            )
+            if not success and tag_error:
+                logger.debug("Failed to create git tag: %s", tag_error)
+        except Exception as exc:
+            logger.debug("Failed to create git tag: %s", exc)
+
     return RegisterLineageResponse(result=result)
 
 

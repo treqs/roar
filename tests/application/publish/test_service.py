@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from roar.application.publish.register_preparation import PreparedRegisterExecution
 from roar.application.publish.requests import PutRequest, RegisterLineageRequest
 from roar.application.publish.service import put_artifacts, register_lineage_target
 from roar.application.publish.targets import ResolvedRegisterTarget
@@ -23,6 +24,14 @@ def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:
     collected.session_id = 7
     collected.artifact_hash = "a" * 64
     collected.session_hash_override = None
+    prepared = PreparedRegisterExecution(
+        git_context=MagicMock(),
+        session_id=7,
+        session_hash="a" * 64,
+        session_url="https://glaas.local/dag/session",
+        git_tag_name=None,
+        git_tag_repo_root=None,
+    )
 
     with (
         patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
@@ -39,9 +48,13 @@ def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:
             "roar.application.publish.service.collect_register_lineage",
             return_value=(collected, None),
         ) as collect_lineage,
+        patch(
+            "roar.application.publish.service.prepare_register_execution",
+            return_value=prepared,
+        ) as prepare_register,
         patch("roar.application.publish.service.RegisterService") as mock_cls,
     ):
-        mock_cls.return_value.register_collected_lineage.return_value = expected
+        mock_cls.return_value.register_prepared_lineage.return_value = expected
 
         response = register_lineage_target(
             RegisterLineageRequest(
@@ -56,7 +69,6 @@ def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:
     mock_cls.assert_called_once_with(
         glaas_client=runtime.glaas_client,
         coordinator=runtime.registration_coordinator,
-        session_service=runtime.session_service,
     )
     collect_lineage.assert_called_once_with(
         target=ResolvedRegisterTarget(kind="artifact_path", value="model.pt"),
@@ -66,17 +78,24 @@ def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:
         session_service=runtime.session_service,
         logger=logger,
     )
-    mock_cls.return_value.register_collected_lineage.assert_called_once_with(
-        lineage=collected.lineage,
+    prepare_register.assert_called_once_with(
+        runtime=runtime,
         roar_dir=tmp_path / ".roar",
         cwd=tmp_path,
         session_id=7,
+        dry_run=True,
+        session_hash_override=None,
+        logger=logger,
+    )
+    mock_cls.return_value.register_prepared_lineage.assert_called_once_with(
+        lineage=collected.lineage,
+        roar_dir=tmp_path / ".roar",
         artifact_hash="a" * 64,
         dry_run=True,
         as_blake3=False,
         skip_confirmation=False,
         confirm_callback=None,
-        session_hash_override=None,
+        prepared=prepared,
     )
 
 
@@ -108,7 +127,110 @@ def test_register_lineage_target_returns_collection_error(tmp_path: Path) -> Non
         )
 
     assert response.result == RegisterResult(success=False, error="File not found: missing.csv")
-    mock_cls.return_value.register_collected_lineage.assert_not_called()
+    mock_cls.return_value.register_prepared_lineage.assert_not_called()
+
+
+def test_register_lineage_target_returns_preparation_error(tmp_path: Path) -> None:
+    runtime = MagicMock()
+    logger = MagicMock()
+    collected = MagicMock()
+    collected.lineage = LineageData(jobs=[], artifacts=[], artifact_hashes=set(), pipeline={"id": 7})
+    collected.session_id = 7
+    collected.artifact_hash = "a" * 64
+    collected.session_hash_override = None
+
+    with (
+        patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
+        patch("roar.application.publish.service.get_logger", return_value=logger),
+        patch(
+            "roar.application.publish.service.get_glaas_url",
+            return_value="http://localhost:3001",
+        ),
+        patch(
+            "roar.application.publish.service.resolve_register_lineage_target",
+            return_value=ResolvedRegisterTarget(kind="artifact_path", value="model.pt"),
+        ),
+        patch(
+            "roar.application.publish.service.collect_register_lineage",
+            return_value=(collected, None),
+        ),
+        patch(
+            "roar.application.publish.service.prepare_register_execution",
+            side_effect=ValueError("GLaaS not configured"),
+        ),
+        patch("roar.application.publish.service.RegisterService") as mock_cls,
+    ):
+        response = register_lineage_target(
+            RegisterLineageRequest(
+                target="model.pt",
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+            )
+        )
+
+    assert response.result == RegisterResult(
+        success=False,
+        artifact_hash="a" * 64,
+        error="GLaaS not configured",
+    )
+    mock_cls.return_value.register_prepared_lineage.assert_not_called()
+
+
+def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -> None:
+    expected = RegisterResult(success=True, session_hash="a" * 64)
+    runtime = MagicMock()
+    logger = MagicMock()
+    collected = MagicMock()
+    collected.lineage = LineageData(jobs=[], artifacts=[], artifact_hashes=set(), pipeline={"id": 7})
+    collected.session_id = 7
+    collected.artifact_hash = "a" * 64
+    collected.session_hash_override = None
+    prepared = PreparedRegisterExecution(
+        git_context=MagicMock(),
+        session_id=7,
+        session_hash="a" * 64,
+        session_url="https://glaas.local/dag/session",
+        git_tag_name="roar/deadbeef",
+        git_tag_repo_root=tmp_path,
+    )
+
+    with (
+        patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
+        patch("roar.application.publish.service.get_logger", return_value=logger),
+        patch(
+            "roar.application.publish.service.get_glaas_url",
+            return_value="http://localhost:3001",
+        ),
+        patch(
+            "roar.application.publish.service.resolve_register_lineage_target",
+            return_value=ResolvedRegisterTarget(kind="artifact_path", value="model.pt"),
+        ),
+        patch(
+            "roar.application.publish.service.collect_register_lineage",
+            return_value=(collected, None),
+        ),
+        patch(
+            "roar.application.publish.service.prepare_register_execution",
+            return_value=prepared,
+        ),
+        patch(
+            "roar.application.publish.service.create_publish_git_tag",
+            return_value=(True, None),
+        ) as create_tag,
+        patch("roar.application.publish.service.RegisterService") as mock_cls,
+    ):
+        mock_cls.return_value.register_prepared_lineage.return_value = expected
+
+        response = register_lineage_target(
+            RegisterLineageRequest(
+                target="model.pt",
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+            )
+        )
+
+    assert response.result is expected
+    create_tag.assert_called_once_with(tmp_path, "roar/deadbeef")
 
 
 def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) -> None:
