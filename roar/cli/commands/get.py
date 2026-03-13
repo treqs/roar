@@ -206,10 +206,9 @@ def get(
     git_tag_name = None
     if not dry_run:
         try:
-            from ...services.put import GitOperations
+            from ...application.publish.git import resolve_publish_git_state
 
-            git_ops = GitOperations(repo_root=ctx.repo_root or ctx.cwd)
-            git_commit = git_ops.get_current_commit()
+            git_commit = resolve_publish_git_state(ctx.repo_root or ctx.cwd).commit
             logger.debug("Git commit: %s", git_commit)
         except Exception as e:
             logger.debug("Git operation failed (non-fatal for get): %s", e)
@@ -271,12 +270,18 @@ def get(
         # Create git tag after successful download (opt-in)
         if tag and git_commit:
             try:
-                from ...services.put import GitOperations
+                from ...application.publish.git import (
+                    build_publish_tag_name,
+                    create_publish_git_tag,
+                )
 
-                git_ops = GitOperations(repo_root=ctx.repo_root or ctx.cwd)
-                git_tag_name = git_ops.create_tag(git_commit)
-                logger.debug("Git tag created: %s", git_tag_name)
-                click.echo(f"Created git tag: {git_tag_name}")
+                git_tag_name = build_publish_tag_name(git_commit)
+                success, tag_error = create_publish_git_tag(ctx.repo_root or ctx.cwd, git_tag_name)
+                if success:
+                    logger.debug("Git tag created: %s", git_tag_name)
+                    click.echo(f"Created git tag: {git_tag_name}")
+                elif tag_error:
+                    raise ValueError(tag_error)
             except Exception as e:
                 logger.debug("Git tag creation failed: %s", e)
                 click.echo(f"Warning: Could not create git tag: {e}", err=True)

@@ -357,6 +357,14 @@ print("Finetuning complete!")
         )
         before_tags = set(before.stdout.strip().split("\n")) if before.stdout.strip() else set()
 
+        init_session = subprocess.run(
+            [sys.executable, "-m", "roar", "run", sys.executable, "-c", "print('warmup')"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        assert init_session.returncode == 0
+
         result = subprocess.run(
             [
                 sys.executable,
