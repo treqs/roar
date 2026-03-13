@@ -55,17 +55,43 @@ class BenchmarkCase:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Benchmark roar-proxy against live S3 from the local machine.")
-    parser.add_argument("--bucket", help="S3 bucket to use. If omitted with --create-bucket, a unique bucket is created.")
-    parser.add_argument("--create-bucket", action="store_true", help="Create the benchmark bucket if it does not already exist.")
-    parser.add_argument("--keep-bucket", action="store_true", help="Keep the auto-created bucket instead of deleting it.")
-    parser.add_argument("--binary", default=None, help="Path to roar-proxy binary. Defaults to the local release build if present.")
-    parser.add_argument("--iterations", type=int, default=5, help="Measurement iterations per case.")
+    parser = argparse.ArgumentParser(
+        description="Benchmark roar-proxy against live S3 from the local machine."
+    )
+    parser.add_argument(
+        "--bucket",
+        help="S3 bucket to use. If omitted with --create-bucket, a unique bucket is created.",
+    )
+    parser.add_argument(
+        "--create-bucket",
+        action="store_true",
+        help="Create the benchmark bucket if it does not already exist.",
+    )
+    parser.add_argument(
+        "--keep-bucket",
+        action="store_true",
+        help="Keep the auto-created bucket instead of deleting it.",
+    )
+    parser.add_argument(
+        "--binary",
+        default=None,
+        help="Path to roar-proxy binary. Defaults to the local release build if present.",
+    )
+    parser.add_argument(
+        "--iterations", type=int, default=5, help="Measurement iterations per case."
+    )
     parser.add_argument("--warmups", type=int, default=2, help="Warmup requests per case.")
-    parser.add_argument("--range-ratio", type=float, default=0.25, help="Range GET size as a fraction of the object size.")
+    parser.add_argument(
+        "--range-ratio",
+        type=float,
+        default=0.25,
+        help="Range GET size as a fraction of the object size.",
+    )
     parser.add_argument("--range-min-bytes", type=int, default=16 * 1024)
     parser.add_argument("--range-cap-bytes", type=int, default=1024 * 1024)
-    parser.add_argument("--prefix", default=None, help="Object key prefix. Defaults to a unique run prefix.")
+    parser.add_argument(
+        "--prefix", default=None, help="Object key prefix. Defaults to a unique run prefix."
+    )
     parser.add_argument(
         "--seed",
         type=int,
@@ -257,7 +283,9 @@ def measure_cases(
         for case in schedule:
             run_paired_round(
                 case,
-                direct_first=measurement_order_by_case[(case.label, case.operation_name)][round_index],
+                direct_first=measurement_order_by_case[(case.label, case.operation_name)][
+                    round_index
+                ],
                 result=results[(case.label, case.operation_name)],
             )
 
@@ -297,8 +325,12 @@ def start_proxy(binary: str, *, timing: bool, buffer_bytes: int | None) -> Proxy
         for line in stream:
             sink.append(line.rstrip("\n"))
 
-    handle.stdout_thread = threading.Thread(target=_reader, args=("stdout", handle.stdout_lines), daemon=True)
-    handle.stderr_thread = threading.Thread(target=_reader, args=("stderr", handle.stderr_lines), daemon=True)
+    handle.stdout_thread = threading.Thread(
+        target=_reader, args=("stdout", handle.stdout_lines), daemon=True
+    )
+    handle.stderr_thread = threading.Thread(
+        target=_reader, args=("stderr", handle.stderr_lines), daemon=True
+    )
     handle.stdout_thread.start()
     handle.stderr_thread.start()
 
@@ -307,7 +339,9 @@ def start_proxy(binary: str, *, timing: bool, buffer_bytes: int | None) -> Proxy
         if any(line.startswith("ROAR_PROXY_READY") for line in handle.stdout_lines):
             return handle
         if proc.poll() is not None:
-            raise RuntimeError(f"proxy exited early with code {proc.returncode}: {' | '.join(handle.stderr_lines)}")
+            raise RuntimeError(
+                f"proxy exited early with code {proc.returncode}: {' | '.join(handle.stderr_lines)}"
+            )
         time.sleep(0.05)
 
     proc.kill()
