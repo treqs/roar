@@ -1,11 +1,11 @@
 """
-Reproduction services for roar.
+Reproduction mechanics for roar.
 
-This package provides services for artifact reproduction,
-extracted from the reproduce command to follow SOLID principles.
+This package provides the concrete mechanics used by the application
+reproduce workflow.
 
 Services:
-- ReproductionService: Orchestrates reproduction workflow
+- ReproductionService: Pipeline lookup, environment prep, execution wiring
 - EnvironmentSetupService: Git clone, venv, package installation
 - PipelineExecutor: Execute pipeline steps
 """

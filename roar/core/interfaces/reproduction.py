@@ -55,36 +55,6 @@ class EnvironmentInfo:
 
 
 @runtime_checkable
-class IReproductionService(Protocol):
-    """Protocol for reproduction orchestration service."""
-
-    def reproduce(
-        self,
-        hash_prefix: str,
-        server_url: str | None,
-        run_pipeline: bool,
-        auto_confirm: bool,
-        roar_dir: Path,
-        cwd: Path,
-    ) -> ReproductionResult:
-        """
-        Reproduce an artifact from its hash.
-
-        Args:
-            hash_prefix: Artifact hash prefix to reproduce
-            server_url: GLaaS server URL
-            run_pipeline: Whether to run the pipeline after setup
-            auto_confirm: Auto-confirm prompts
-            roar_dir: Path to .roar directory
-            cwd: Current working directory
-
-        Returns:
-            ReproductionResult with success status
-        """
-        ...
-
-
-@runtime_checkable
 class IEnvironmentSetupService(Protocol):
     """Protocol for environment setup service."""
 

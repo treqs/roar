@@ -52,13 +52,18 @@ def reproduce_artifact(
         presenter=output,
     )
 
+    pipeline = _resolve_pipeline(
+        service=service,
+        hash_prefix=request.hash_prefix,
+        server_url=server_url,
+        roar_dir=request.roar_dir,
+    )
+    preview = build_preview_summary(
+        pipeline,
+        hash_prefix=request.hash_prefix,
+    )
+
     if not request.run_pipeline:
-        preview = build_preview_summary(
-            service=service,
-            hash_prefix=request.hash_prefix,
-            server_url=server_url,
-            roar_dir=request.roar_dir,
-        )
         _render_preview_summary(
             preview,
             presenter=output,
@@ -71,19 +76,69 @@ def reproduce_artifact(
         output.print(f"  {preview.run_hint}")
         return
 
-    result = service.reproduce(
-        hash_prefix=request.hash_prefix,
-        server_url=server_url,
-        run_pipeline=True,
-        auto_confirm=request.auto_confirm,
-        roar_dir=request.roar_dir,
-        cwd=request.cwd,
-        dpkg_any_version=request.dpkg_any_version,
-        pip_any_version=request.pip_any_version,
-        package_sync=request.package_sync,
-        list_requirements=request.list_requirements,
+    if not pipeline.git_repo:
+        raise ValueError("Cannot reproduce: no git repository URL available")
+
+    output.print(f"Found artifact: {pipeline.artifact_hash}")
+    output.print(f"Git repo: {pipeline.git_repo or 'Not available'}")
+    output.print(f"Git commit: {pipeline.git_commit or 'Not available'}")
+    output.print(f"Build steps: {len(pipeline.build_steps)}")
+    output.print(f"Run steps: {len(pipeline.run_steps)}")
+
+    if request.list_requirements:
+        for block in preview.requirement_blocks:
+            _print_requirement_block(
+                label=block.label,
+                values=block.values,
+                list_requirements=True,
+                presenter=output,
+                suffix=block.suffix,
+            )
+
+    if not request.auto_confirm and not output.confirm("Proceed with reproduction?", default=True):
+        raise ValueError("Reproduction cancelled by user")
+
+    try:
+        environment = service.prepare_environment(
+            pipeline,
+            request.cwd,
+            request.auto_confirm,
+            dpkg_any_version=request.dpkg_any_version,
+            pip_any_version=request.pip_any_version,
+            package_sync=request.package_sync,
+        )
+    except RuntimeError as exc:
+        raise ValueError(f"Environment setup failed: {exc}") from exc
+
+    output.print(f"Environment ready: {environment.repo_dir}")
+    _render_pipeline_steps(preview, presenter=output)
+
+    if not request.auto_confirm and not output.confirm("Run the pipeline?", default=True):
+        _render_reproduction_result(
+            ReproduceRunSummary(
+                repo_dir=environment.repo_dir,
+                steps_run=0,
+                steps_total=pipeline.total_steps,
+                warnings=["Pipeline not executed (user chose to skip)"],
+            ),
+            output,
+        )
+        return
+
+    steps_run, steps_total = service.execute_pipeline(
+        pipeline,
+        environment,
+        request.auto_confirm,
     )
-    _render_reproduction_result(build_run_summary(result), output)
+    _render_reproduction_result(
+        ReproduceRunSummary(
+            repo_dir=environment.repo_dir,
+            steps_run=steps_run,
+            steps_total=steps_total,
+            warnings=[],
+        ),
+        output,
+    )
 
 
 def _load_server_url(cwd: Path) -> str | None:
@@ -114,21 +169,29 @@ def _write_dag_output(
     presenter.print(f"DAG lineage response written to {out_path}")
 
 
-def build_preview_summary(
+def _resolve_pipeline(
     *,
     service: ReproductionService,
     hash_prefix: str,
     server_url: str | None,
     roar_dir: Path,
-) -> ReproducePreviewSummary:
-    """Build a typed reproduction preview summary."""
+) -> PipelineInfo:
+    """Resolve the target pipeline for reproduction."""
     lookup = service.lookup_pipeline_result(hash_prefix, server_url, roar_dir)
     if lookup.error:
         raise ValueError(lookup.error)
     pipeline = lookup.pipeline
     if not pipeline:
         raise ValueError(f"No pipeline found for artifact {hash_prefix}")
+    return pipeline
 
+
+def build_preview_summary(
+    pipeline: PipelineInfo,
+    *,
+    hash_prefix: str,
+) -> ReproducePreviewSummary:
+    """Build a typed reproduction preview summary."""
     requirement_blocks = _build_requirement_blocks(pipeline)
     return ReproducePreviewSummary(
         artifact_hash=pipeline.artifact_hash,
@@ -211,6 +274,27 @@ def _build_requirement_blocks(pipeline: PipelineInfo) -> list[ReproduceRequireme
             values=summary.pip,
         ),
     ]
+
+
+def _render_pipeline_steps(
+    summary: ReproducePreviewSummary,
+    *,
+    presenter: IPresenter,
+) -> None:
+    presenter.print("\nPipeline Preview")
+    presenter.print("=" * 40)
+
+    if summary.build_steps:
+        presenter.print(f"\nBuild Steps ({len(summary.build_steps)}):")
+        for step in summary.build_steps:
+            presenter.print(f"  B{step.index}. {step.command}")
+
+    if summary.run_steps:
+        presenter.print(f"\nRun Steps ({len(summary.run_steps)}):")
+        for step in summary.run_steps:
+            presenter.print(f"  {step.index}. {step.command}")
+
+    presenter.print("")
 
 
 def _print_requirement_block(

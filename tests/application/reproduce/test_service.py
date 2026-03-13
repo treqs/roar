@@ -13,7 +13,11 @@ from roar.application.reproduce.service import (
     build_run_summary,
     reproduce_artifact,
 )
-from roar.core.interfaces.reproduction import PipelineLookupResult, ReproductionResult
+from roar.core.interfaces.reproduction import (
+    EnvironmentInfo,
+    PipelineLookupResult,
+    ReproductionResult,
+)
 
 
 def _request(tmp_path: Path, **overrides) -> ReproduceRequest:
@@ -73,7 +77,8 @@ def test_reproduce_preview_uses_application_branching_and_renders_steps(tmp_path
 
         reproduce_artifact(_request(tmp_path), presenter=presenter)
 
-    service.reproduce.assert_not_called()
+    service.prepare_environment.assert_not_called()
+    service.execute_pipeline.assert_not_called()
     printed = "\n".join(call.args[0] for call in presenter.print.call_args_list)
     assert "Artifact: abc123def456789" in printed
     assert "Git repo: https://github.com/test/repo" in printed
@@ -86,13 +91,18 @@ def test_reproduce_preview_uses_application_branching_and_renders_steps(tmp_path
 def test_reproduce_run_executes_full_reproduction_and_renders_completion(tmp_path: Path) -> None:
     presenter = MagicMock()
     service = MagicMock()
-    service.reproduce.return_value = ReproductionResult(
-        success=True,
-        repo_dir=tmp_path / "reproduce" / "repo",
-        steps_run=2,
-        steps_total=2,
-        warnings=["Could not pin package"],
+    service.lookup_pipeline_result.return_value = PipelineLookupResult(
+        pipeline=_pipeline(),
+        error=None,
+        source="remote",
     )
+    service.prepare_environment.return_value = EnvironmentInfo(
+        repo_dir=tmp_path / "reproduce" / "repo",
+        venv_dir=tmp_path / "reproduce" / "repo" / ".venv",
+        python_version="3.11.0",
+        packages=[],
+    )
+    service.execute_pipeline.return_value = (2, 2)
 
     with (
         patch("roar.application.reproduce.service.bootstrap"),
@@ -106,14 +116,13 @@ def test_reproduce_run_executes_full_reproduction_and_renders_completion(tmp_pat
 
         reproduce_artifact(_request(tmp_path, run_pipeline=True, auto_confirm=True), presenter=presenter)
 
-    service.reproduce.assert_called_once()
-    call_kwargs = service.reproduce.call_args.kwargs
-    assert call_kwargs["run_pipeline"] is True
-    assert call_kwargs["auto_confirm"] is True
+    service.prepare_environment.assert_called_once()
+    service.execute_pipeline.assert_called_once()
     printed = "\n".join(call.args[0] for call in presenter.print.call_args_list)
+    assert "Found artifact: abc123def456789" in printed
+    assert "Environment ready:" in printed
     assert "Reproduction Complete" in printed
     assert "Steps run: 2/2" in printed
-    assert "Could not pin package" in printed
 
 
 def test_reproduce_out_writes_dag_response(tmp_path: Path) -> None:
@@ -166,18 +175,9 @@ def test_reproduce_rejects_short_hash_prefix(tmp_path: Path) -> None:
 
 
 def test_build_preview_summary_returns_typed_preview(tmp_path: Path) -> None:
-    service = MagicMock()
-    service.lookup_pipeline_result.return_value = PipelineLookupResult(
-        pipeline=_pipeline(),
-        error=None,
-        source="remote",
-    )
-
     summary = build_preview_summary(
-        service=service,
+        _pipeline(),
         hash_prefix="abc123def456",
-        server_url="http://localhost:3001",
-        roar_dir=tmp_path / ".roar",
     )
 
     assert isinstance(summary, ReproducePreviewSummary)
@@ -207,3 +207,39 @@ def test_build_run_summary_returns_typed_completion_summary() -> None:
     assert summary.steps_run == 2
     assert summary.steps_total == 3
     assert summary.warnings == ["warn-1"]
+
+
+def test_reproduce_run_skip_after_environment_renders_warning_summary(tmp_path: Path) -> None:
+    presenter = MagicMock()
+    presenter.confirm.side_effect = [True, False]
+    service = MagicMock()
+    service.lookup_pipeline_result.return_value = PipelineLookupResult(
+        pipeline=_pipeline(),
+        error=None,
+        source="remote",
+    )
+    service.prepare_environment.return_value = EnvironmentInfo(
+        repo_dir=tmp_path / "reproduce" / "repo",
+        venv_dir=None,
+        python_version=None,
+        packages=[],
+    )
+
+    with (
+        patch("roar.application.reproduce.service.bootstrap"),
+        patch(
+            "roar.application.reproduce.service.load_config",
+            return_value={"glaas": {"url": "http://localhost:3001"}},
+        ),
+        patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
+        patch("roar.application.reproduce.service.ReproductionService", return_value=service),
+    ):
+        mock_glaas = MagicMock()
+        mock_glaas.is_configured.return_value = True
+        mock_glaas_cls.return_value = mock_glaas
+
+        reproduce_artifact(_request(tmp_path, run_pipeline=True), presenter=presenter)
+
+    service.execute_pipeline.assert_not_called()
+    printed = "\n".join(call.args[0] for call in presenter.print.call_args_list)
+    assert "Pipeline not executed (user chose to skip)" in printed

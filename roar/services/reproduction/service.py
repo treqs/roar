@@ -10,12 +10,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ...core.interfaces.reproduction import (
-    EnvironmentInfo,
-    PipelineInfo,
-    PipelineLookupResult,
-    ReproductionResult,
-)
+from ...core.interfaces.reproduction import EnvironmentInfo, PipelineInfo, PipelineLookupResult
 from ...presenters import NullPresenter
 from ...utils.git_url import urls_match
 from .environment_setup import EnvironmentSetupService
@@ -30,22 +25,16 @@ class ReproductionService:
     """
     Service for orchestrating artifact reproduction.
 
-    Coordinates:
+    Provides reproduction mechanics:
     - Artifact lookup (local or GLaaS)
-    - Pipeline retrieval
-    - Environment setup (git clone, venv, packages)
+    - Environment setup (git reuse or clone, venv, packages)
     - Pipeline execution
 
     Usage:
         service = ReproductionService(glaas_client, presenter)
-        result = service.reproduce(
-            hash_prefix="abc123",
-            server_url="https://glaas.example.com",
-            run_pipeline=True,
-            auto_confirm=True,
-            roar_dir=Path(".roar"),
-            cwd=Path.cwd(),
-        )
+        pipeline = service.lookup_pipeline_result("abc123", "https://glaas.example.com", Path(".roar"))
+        environment = service.prepare_environment(pipeline.pipeline, Path.cwd(), auto_confirm=True)
+        steps_run, steps_total = service.execute_pipeline(pipeline.pipeline, environment, auto_confirm=True)
     """
 
     def __init__(
@@ -67,142 +56,43 @@ class ReproductionService:
         self._env_setup = EnvironmentSetupService(self._presenter, roar_executable=roar_exe)
         self._executor = PipelineExecutor(self._presenter, roar_executable=roar_exe)
 
-    def reproduce(
+    def prepare_environment(
         self,
-        hash_prefix: str,
-        server_url: str | None,
-        run_pipeline: bool,
-        auto_confirm: bool,
-        roar_dir: Path,
+        pipeline: PipelineInfo,
         cwd: Path,
+        auto_confirm: bool,
+        *,
         dpkg_any_version: bool = False,
         pip_any_version: bool = False,
         package_sync: bool = False,
-        list_requirements: bool = False,
-    ) -> ReproductionResult:
-        """
-        Reproduce an artifact from its hash.
-
-        Args:
-            hash_prefix: Artifact hash prefix to reproduce
-            server_url: GLaaS server URL (overrides config)
-            run_pipeline: Whether to run the pipeline after setup
-            auto_confirm: Auto-confirm prompts
-            roar_dir: Path to .roar directory
-            cwd: Current working directory
-
-        Returns:
-            ReproductionResult with success status
-        """
-        warnings: list[str] = []
-
-        # Look up artifact and get pipeline
-        lookup = self.lookup_pipeline_result(hash_prefix, server_url, roar_dir)
-        if lookup.error:
-            return ReproductionResult(success=False, error=lookup.error)
-
-        pipeline = lookup.pipeline
-        if not pipeline:
-            return ReproductionResult(
-                success=False,
-                error=f"No pipeline found for artifact {hash_prefix}",
-            )
-
-        # Show pipeline preview
-        self._print(f"Found artifact: {pipeline.artifact_hash}")
-        self._print(f"Git repo: {pipeline.git_repo or 'Not available'}")
-        self._print(f"Git commit: {pipeline.git_commit or 'Not available'}")
-        self._print(f"Build steps: {len(pipeline.build_steps)}")
-        self._print(f"Run steps: {len(pipeline.run_steps)}")
-
-        # Check if we can reproduce
-        if not pipeline.git_repo:
-            return ReproductionResult(
-                success=False,
-                error="Cannot reproduce: no git repository URL available",
-            )
-
-        # Show full package lists if requested
-        if list_requirements:
-            requirements = self._env_setup.get_requirement_summary(pipeline)
-            build_dpkg_packages = requirements.build_dpkg
-            dpkg_packages = requirements.dpkg
-            pip_packages = requirements.pip
-            if build_dpkg_packages:
-                self._print(f"\nBuild tool packages ({len(build_dpkg_packages)}):")
-                for name in sorted(build_dpkg_packages):
-                    self._print(f"  - {name}")
-            if dpkg_packages:
-                self._print(f"\nSystem packages ({len(dpkg_packages)}):")
-                for name in sorted(dpkg_packages):
-                    self._print(f"  - {name}")
-            if pip_packages:
-                self._print(f"\nPip packages ({len(pip_packages)}):")
-                for pkg in sorted(pip_packages):
-                    self._print(f"  - {pkg}")
-
-        # Confirm reproduction
-        if not auto_confirm and not self._presenter.confirm(
-            "Proceed with reproduction?", default=True
-        ):
-            return ReproductionResult(
-                success=False,
-                error="Reproduction cancelled by user",
-            )
-
-        # Check if current repo matches the artifact remote
+    ) -> EnvironmentInfo:
+        """Reuse or create a reproduction environment for the given pipeline."""
         environment = self._try_reuse_current_repo(cwd, pipeline)
+        if environment is not None:
+            return environment
 
-        if environment is None:
-            # Set up environment via clone
-            target_dir = cwd / "reproduce"
-            self._print(f"\nSetting up environment in {target_dir}...")
+        target_dir = cwd / "reproduce"
+        self._print(f"\nSetting up environment in {target_dir}...")
+        return self._env_setup.setup(
+            pipeline,
+            target_dir,
+            auto_confirm,
+            dpkg_any_version=dpkg_any_version,
+            pip_any_version=pip_any_version,
+            package_sync=package_sync,
+        )
 
-            try:
-                environment = self._env_setup.setup(
-                    pipeline,
-                    target_dir,
-                    auto_confirm,
-                    dpkg_any_version=dpkg_any_version,
-                    pip_any_version=pip_any_version,
-                    package_sync=package_sync,
-                )
-            except RuntimeError as e:
-                return ReproductionResult(
-                    success=False,
-                    error=f"Environment setup failed: {e}",
-                )
-
-        self._print(f"Environment ready: {environment.repo_dir}")
-
-        # Execute pipeline if requested
-        steps_run = 0
-        steps_total = pipeline.total_steps
-
-        if run_pipeline:
-            self._executor.preview_steps(pipeline)
-
-            if not auto_confirm and not self._presenter.confirm("Run the pipeline?", default=True):
-                return ReproductionResult(
-                    success=True,
-                    repo_dir=environment.repo_dir,
-                    steps_run=0,
-                    steps_total=steps_total,
-                    warnings=["Pipeline not executed (user chose to skip)"],
-                )
-
-            steps_run, steps_total = self._executor.execute(
-                pipeline,
-                environment,
-                auto_confirm,
-            )
-
-        return ReproductionResult(
-            success=True,
-            repo_dir=environment.repo_dir,
-            steps_run=steps_run,
-            steps_total=steps_total,
-            warnings=warnings,
+    def execute_pipeline(
+        self,
+        pipeline: PipelineInfo,
+        environment: EnvironmentInfo,
+        auto_confirm: bool,
+    ) -> tuple[int, int]:
+        """Execute recorded pipeline steps in the prepared environment."""
+        return self._executor.execute(
+            pipeline,
+            environment,
+            auto_confirm,
         )
 
     def _try_reuse_current_repo(
