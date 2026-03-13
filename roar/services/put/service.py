@@ -10,12 +10,10 @@ roar put ALWAYS registers lineage with GLaaS. This is not optional.
 from __future__ import annotations
 
 import json
-import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlparse
 
 from ...application.publish.composite_builder import CompositeArtifactBuilder, CompositeBuildResult
 from ...application.publish.lineage import LineageCollector
@@ -39,7 +37,6 @@ from ...core.logging import get_logger
 from ...db.context import optional_repo
 from ...glaas_client import GlaasClient
 from ...integrations.storage.base import StorageBackend
-from ...services.execution.dataset_identifier import DatasetIdentifierInferer
 from ...services.registration import (
     RegistrationCoordinator,
     _artifact_ref,
@@ -105,7 +102,6 @@ class PutService:
         lineage_collector: LineageCollector | None = None,
         registration_coordinator: RegistrationCoordinator | None = None,
         composite_builder: CompositeArtifactBuilder | None = None,
-        dataset_identifier_inferer: DatasetIdentifierInferer | None = None,
     ):
         """
         Initialize put service.
@@ -119,7 +115,6 @@ class PutService:
             lineage_collector: Lineage collector (optional, for testing).
             registration_coordinator: Registration coordinator (optional, for testing).
             composite_builder: Composite builder (optional, for testing).
-            dataset_identifier_inferer: Dataset identifier inferer (optional, for testing).
         """
         self._db = db_context
         self._backend = backend
@@ -131,7 +126,6 @@ class PutService:
         self._lineage_collector = lineage_collector
         self._registration_coordinator = registration_coordinator
         self._composite_builder = composite_builder or CompositeArtifactBuilder()
-        self._dataset_identifier_inferer = dataset_identifier_inferer or DatasetIdentifierInferer()
 
         self._logger.debug(
             "PutService initialized: destination=%s, repo_root=%s, roar_dir=%s, backend=%s",
@@ -183,6 +177,8 @@ class PutService:
         resolved = prepared.resolved_sources
         destination_type = prepared.destination_type
         composite_source_type = prepared.composite_source_type
+        dataset_identifiers = prepared.dataset_identifiers
+        additional_composite_roots = prepared.additional_composite_roots
 
         self._logger.debug("Prepared session: id=%s, hash=%s", session_id, session_hash[:12])
         self._logger.debug(
@@ -277,8 +273,6 @@ class PutService:
         # Register lineage with GLaaS (session already registered above)
         coordinator = self._registration_coordinator or RegistrationCoordinator()
         pre_registration_errors: list[str] = []
-        dataset_identifiers = self._infer_dataset_identifiers(sources, resolved)
-
         lineage_composite_registrations = self._register_lineage_composites_with_glaas(
             client=client,
             lineage_artifacts=lineage.artifacts,
@@ -337,6 +331,7 @@ class PutService:
             session_hash=session_hash or "",
             source_type=composite_source_type,
             dataset_identifiers=dataset_identifiers,
+            additional_composite_roots=additional_composite_roots,
         )
         composite_registrations = self._register_composites_with_glaas(
             client,
@@ -739,6 +734,7 @@ class PutService:
         session_hash: str,
         source_type: str | None,
         dataset_identifiers: list[dict[str, Any]],
+        additional_composite_roots: dict[Path, list[ResolvedSource]],
     ) -> list[CompositeBuildResult]:
         grouped_by_root: dict[Path, list[ResolvedSource]] = {}
         for source in resolved:
@@ -746,10 +742,7 @@ class PutService:
                 continue
             grouped_by_root.setdefault(source.source_root, []).append(source)
 
-        for root_path, sources in self._detect_additional_composite_roots(
-            resolved,
-            dataset_identifiers,
-        ).items():
+        for root_path, sources in additional_composite_roots.items():
             grouped_by_root.setdefault(root_path, sources)
 
         results: list[CompositeBuildResult] = []
@@ -764,82 +757,6 @@ class PutService:
             if result:
                 results.append(result)
         return results
-
-    def _infer_dataset_identifiers(
-        self,
-        source_specs: list[str],
-        resolved: list[ResolvedSource],
-    ) -> list[dict[str, Any]]:
-        paths: list[str] = []
-
-        for source in source_specs:
-            if "://" in source:
-                paths.append(source)
-                continue
-
-            source_path = Path(source)
-            if not source_path.is_absolute():
-                source_path = self._repo_root / source_path
-            paths.append(os.path.abspath(str(source_path)))
-
-        for item in resolved:
-            paths.append(str(item.path))
-            if item.source_root is not None:
-                paths.append(str(item.source_root))
-
-        unique_paths = [path for path in dict.fromkeys(paths) if path]
-        return self._dataset_identifier_inferer.infer(
-            unique_paths,
-            repo_root=str(self._repo_root),
-        )
-
-    def _detect_additional_composite_roots(
-        self,
-        resolved: list[ResolvedSource],
-        dataset_identifiers: list[dict[str, Any]],
-    ) -> dict[Path, list[ResolvedSource]]:
-        ungrouped = [source for source in resolved if source.source_root is None]
-        if len(ungrouped) < 2:
-            return {}
-
-        grouped: dict[Path, list[ResolvedSource]] = {}
-        assigned_paths: set[str] = set()
-
-        for candidate in dataset_identifiers:
-            confidence = candidate.get("confidence")
-            if not isinstance(confidence, (int, float)):
-                continue
-            if float(confidence) < _AUTO_COMPOSITE_MIN_CONFIDENCE:
-                continue
-
-            dataset_id = str(candidate.get("dataset_id", ""))
-            parsed = urlparse(dataset_id)
-            if parsed.scheme != "file" or not parsed.path:
-                continue
-
-            root = Path(parsed.path)
-            matches = [
-                source
-                for source in ungrouped
-                if str(source.path) not in assigned_paths and source.path.is_relative_to(root)
-            ]
-            if len(matches) < 2:
-                continue
-
-            grouped[root] = matches
-            assigned_paths.update(str(source.path) for source in matches)
-
-        fallback_by_parent: dict[Path, list[ResolvedSource]] = {}
-        for source in ungrouped:
-            if str(source.path) in assigned_paths:
-                continue
-            fallback_by_parent.setdefault(source.path.parent, []).append(source)
-
-        for parent, sources in fallback_by_parent.items():
-            if len(sources) >= 2:
-                grouped[parent] = sources
-
-        return grouped
 
     def _persist_local_composite_registration(
         self,

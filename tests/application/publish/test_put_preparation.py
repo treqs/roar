@@ -47,6 +47,14 @@ def test_prepare_put_execution_builds_session_git_and_source_plan(tmp_path: Path
             "roar.application.publish.put_preparation.prepare_publish_session",
             return_value=prepared_session,
         ),
+        patch(
+            "roar.application.publish.put_preparation.infer_publish_dataset_identifiers",
+            return_value=[],
+        ),
+        patch(
+            "roar.application.publish.put_preparation.detect_additional_publish_composite_roots",
+            return_value={},
+        ),
     ):
         prepared = prepare_put_execution(
             db_ctx=db_ctx,

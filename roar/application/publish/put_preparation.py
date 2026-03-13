@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
 from ...glaas_client import GlaasClient
+from .datasets import (
+    detect_additional_publish_composite_roots,
+    infer_publish_dataset_identifiers,
+)
 from .git import resolve_publish_git_context
 from .runtime import PublishRuntime
 from .session import prepare_publish_session
@@ -30,6 +34,8 @@ class PreparedPutExecution:
     resolved_sources: list[ResolvedSource]
     destination_type: str
     composite_source_type: str | None
+    dataset_identifiers: list[dict[str, Any]] = field(default_factory=list)
+    additional_composite_roots: dict[Path, list[ResolvedSource]] = field(default_factory=dict)
 
 
 def prepare_put_execution(
@@ -72,6 +78,15 @@ def prepare_put_execution(
         job_repo=db_ctx.jobs,
     )
     resolved_sources = resolver.resolve(sources)
+    dataset_identifiers = infer_publish_dataset_identifiers(
+        repo_root=repo_root,
+        source_specs=sources,
+        resolved_sources=resolved_sources,
+    )
+    additional_composite_roots = detect_additional_publish_composite_roots(
+        resolved_sources=resolved_sources,
+        dataset_identifiers=dataset_identifiers,
+    )
 
     destination_type = _destination_type(destination)
     composite_source_type = destination_type if destination_type in {"s3", "gs", "https"} else None
@@ -85,6 +100,8 @@ def prepare_put_execution(
         resolved_sources=resolved_sources,
         destination_type=destination_type,
         composite_source_type=composite_source_type,
+        dataset_identifiers=dataset_identifiers,
+        additional_composite_roots=additional_composite_roots,
     )
 
 
