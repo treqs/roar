@@ -42,3 +42,16 @@ def test_packaged_roar_worker_entrypoint_uses_canonical_runtime_module() -> None
     scripts = pyproject["project"]["scripts"]
 
     assert scripts["roar-worker"] == "roar.execution.runtime.worker_bootstrap:main"
+
+
+def test_shared_test_tooling_uses_backend_agnostic_product_path_globs() -> None:
+    pyproject = tomllib.loads(
+        (Path(__file__).resolve().parents[3] / "pyproject.toml").read_text(encoding="utf-8")
+    )
+
+    addopts = pyproject["tool"]["pytest"]["ini_options"]["addopts"]
+    per_file_ignores = pyproject["tool"]["ruff"]["lint"]["per-file-ignores"]
+
+    assert "--ignore-glob=tests/backends/*/e2e" in addopts
+    assert "--ignore-glob=tests/backends/*/live" in addopts
+    assert "tests/backends/*/e2e/jobs/**/*.py" in per_file_ignores
