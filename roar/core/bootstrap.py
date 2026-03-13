@@ -8,6 +8,7 @@ This module should be called once at application startup.
 
 from pathlib import Path
 
+from ..integrations import register_telemetry_provider, register_vcs_provider, reset_integrations
 from ..plugins import discover_plugins
 from .container import ServiceContainer, get_container
 from .interfaces.logger import ILogger
@@ -42,7 +43,7 @@ def bootstrap(roar_dir: Path | None = None) -> ServiceContainer:
     _register_core_services(container, roar_dir)
 
     # Register built-in integrations that should not depend on plugin discovery.
-    _register_builtin_integrations(container)
+    _register_builtin_integrations()
 
     # Discover and register plugins
     discover_plugins()
@@ -89,13 +90,13 @@ def _register_database_services(container: ServiceContainer, roar_dir: Path) -> 
     # No global singleton registration needed since contexts are lightweight
 
 
-def _register_builtin_integrations(container: ServiceContainer) -> None:
+def _register_builtin_integrations() -> None:
     """Register built-in integrations that are part of the core product path."""
     from ..integrations.git import GitVCSProvider
     from ..integrations.telemetry import WandBTelemetryProvider
 
-    container.register_vcs_provider("git", GitVCSProvider)
-    container.register_telemetry_provider("wandb", WandBTelemetryProvider)
+    register_vcs_provider("git", GitVCSProvider)
+    register_telemetry_provider("wandb", WandBTelemetryProvider)
 
 
 def reset() -> None:
@@ -106,6 +107,7 @@ def reset() -> None:
     """
     global _initialized
     ServiceContainer.reset()
+    reset_integrations()
     _initialized = False
 
 

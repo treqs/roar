@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .... import analyzers
-from ....core.container import get_container
 from ....core.interfaces.logger import ILogger
 from ....core.interfaces.provenance import (
     IDataLoader,
@@ -286,7 +285,9 @@ class ProvenanceService:
     def _get_git_info(self, repo_root: str) -> dict[str, Any]:
         """Get git info via VCS provider."""
         try:
-            vcs = get_container().get_vcs_provider("git")
+            from ....integrations import get_vcs_provider
+
+            vcs = get_vcs_provider("git")
             vcs_info = vcs.get_info(repo_root)
         except KeyError:
             # Defensive fallback if explicit git provider registration was skipped.

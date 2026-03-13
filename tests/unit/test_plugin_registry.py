@@ -3,8 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from roar.core.bootstrap import reset
-from roar.core.container import get_container
 from roar.core.interfaces.telemetry import ITelemetryProvider, TelemetryRunInfo
+from roar.integrations import list_telemetry_providers
 from roar.plugins import discover_plugins
 
 
@@ -42,5 +42,4 @@ def test_discover_plugins_registers_entrypoint_telemetry(monkeypatch) -> None:
 
     discover_plugins()
 
-    container = get_container()
-    assert "example" in container.list_telemetry_providers()
+    assert "example" in list_telemetry_providers()

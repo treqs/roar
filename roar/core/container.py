@@ -1,21 +1,9 @@
-"""
-Dependency injection container for roar.
-
-Lightweight DI with support for:
-- Singleton and transient lifetimes
-- Factory registration
-- Interface-based resolution
-- Provider registries for extensible components
-"""
+"""Dependency injection container for roar core services."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, TypeVar
-
-if TYPE_CHECKING:
-    from .interfaces.telemetry import ITelemetryProvider
-    from .interfaces.vcs import IVCSProvider
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
@@ -78,20 +66,15 @@ class ServiceContainer:
     """
     Dependency injection container for roar.
 
-    Combines DI capabilities with registries for extensible
-    components like telemetry and VCS providers.
+    Provides DI capabilities for core application services.
     """
 
     _instance: ServiceContainer | None = None
 
     def __init__(self) -> None:
-        """Initialize the container with empty registries."""
+        """Initialize the container with empty providers."""
         # Dynamic provider storage (interface -> provider)
         self._providers: dict[type, _Provider] = {}
-
-        # Plugin registries (multiple implementations per interface)
-        self._telemetry_providers: dict[str, type[ITelemetryProvider]] = {}
-        self._vcs_providers: dict[str, type[IVCSProvider]] = {}
 
     @classmethod
     def get_instance(cls) -> ServiceContainer:
@@ -203,88 +186,6 @@ class ServiceContainer:
             provider: The new provider to use
         """
         self._providers[interface] = provider
-
-    # -------------------------------------------------------------------------
-    # Telemetry provider registry
-    # -------------------------------------------------------------------------
-
-    def register_telemetry_provider(
-        self,
-        name: str,
-        provider_class: type[ITelemetryProvider],
-    ) -> None:
-        """
-        Register a telemetry provider.
-
-        Args:
-            name: Provider name (e.g., 'wandb', 'mlflow')
-            provider_class: Provider class implementing ITelemetryProvider
-        """
-        self._telemetry_providers[name] = provider_class
-
-    def get_telemetry_provider(self, name: str) -> ITelemetryProvider:
-        """
-        Get a telemetry provider instance by name.
-
-        Args:
-            name: Provider name
-
-        Returns:
-            Provider instance
-
-        Raises:
-            KeyError: If no provider registered
-        """
-        if name not in self._telemetry_providers:
-            raise KeyError(f"No telemetry provider registered: {name}")
-        return self._telemetry_providers[name]()
-
-    def get_all_telemetry_providers(self) -> dict[str, ITelemetryProvider]:
-        """Get instances of all registered telemetry providers."""
-        return {name: cls() for name, cls in self._telemetry_providers.items()}
-
-    def list_telemetry_providers(self) -> list[str]:
-        """List registered telemetry provider names."""
-        return list(self._telemetry_providers.keys())
-
-    # -------------------------------------------------------------------------
-    # VCS provider registry
-    # -------------------------------------------------------------------------
-
-    def register_vcs_provider(
-        self,
-        name: str,
-        provider_class: type[IVCSProvider],
-    ) -> None:
-        """
-        Register a VCS provider.
-
-        Args:
-            name: Provider name (e.g., 'git', 'hg')
-            provider_class: Provider class implementing IVCSProvider
-        """
-        self._vcs_providers[name] = provider_class
-
-    def get_vcs_provider(self, name: str = "git") -> IVCSProvider:
-        """
-        Get a VCS provider instance.
-
-        Args:
-            name: Provider name (default: 'git')
-
-        Returns:
-            Provider instance
-
-        Raises:
-            KeyError: If no provider registered
-        """
-        if name not in self._vcs_providers:
-            raise KeyError(f"No VCS provider registered: {name}")
-        return self._vcs_providers[name]()
-
-    def list_vcs_providers(self) -> list[str]:
-        """List registered VCS provider names."""
-        return list(self._vcs_providers.keys())
 
 # -------------------------------------------------------------------------
 # Module-level convenience functions

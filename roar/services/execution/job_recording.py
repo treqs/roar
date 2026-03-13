@@ -44,12 +44,11 @@ def collect_telemetry(
     repo_root: str, start_time: float, end_time: float, allow_incomplete: bool = False
 ) -> dict[str, Any] | None:
     """Collect telemetry from registered providers (best effort)."""
-    from ...core.container import get_container
+    from ...integrations import get_all_telemetry_providers
 
     telemetry_data: dict[str, Any] = {}
     try:
-        container = get_container()
-        providers = container.get_all_telemetry_providers()
+        providers = get_all_telemetry_providers()
         for name, provider in providers.items():
             if provider.is_available():
                 runs = provider.detect_runs(repo_root, start_time, end_time)

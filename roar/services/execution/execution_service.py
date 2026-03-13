@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ...core.container import get_container
 from ...core.interfaces.run import RunContext, RunResult
 from ...execution.framework.registry import get_execution_backend
 from .coordinator import RunCoordinator
@@ -193,7 +192,9 @@ class ExecutionService:
         """Get VCS provider."""
         if self._vcs_provider:
             return self._vcs_provider
-        return get_container().get_vcs_provider("git")
+        from ...integrations import get_vcs_provider
+
+        return get_vcs_provider("git")
 
     def _get_coordinator(self) -> RunCoordinator:
         """Get run coordinator, creating if needed."""

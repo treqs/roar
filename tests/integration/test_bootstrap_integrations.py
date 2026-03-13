@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from roar.core.bootstrap import bootstrap, reset
-from roar.core.container import get_container
+from roar.integrations import list_telemetry_providers, list_vcs_providers
 
 
 def test_bootstrap_registers_builtin_integrations(tmp_path):
@@ -11,6 +11,5 @@ def test_bootstrap_registers_builtin_integrations(tmp_path):
     reset()
     bootstrap(roar_dir)
 
-    container = get_container()
-    assert "git" in container.list_vcs_providers()
-    assert "wandb" in container.list_telemetry_providers()
+    assert "git" in list_vcs_providers()
+    assert "wandb" in list_telemetry_providers()

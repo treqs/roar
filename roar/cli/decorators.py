@@ -189,10 +189,9 @@ def require_clean_git(f: F) -> F:
 
         # Get VCS provider and check status
         try:
-            from ..core.container import get_container
+            from ..integrations import get_vcs_provider
 
-            container = get_container()
-            vcs = container.get_vcs_provider("git")
+            vcs = get_vcs_provider("git")
             clean, changes = vcs.get_status(str(ctx.repo_root))
 
             if not clean:
