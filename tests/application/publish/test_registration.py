@@ -6,8 +6,10 @@ from roar.application.publish.registration import (
     CompositeRegistrationCandidate,
     normalize_registration_source_type,
     preregister_lineage_composites,
+    register_publish_lineage,
     sync_publish_labels,
 )
+from roar.core.interfaces.registration import BatchRegistrationResult, GitContext
 
 
 def test_preregister_lineage_composites_records_successes_and_failures() -> None:
@@ -64,6 +66,67 @@ def test_preregister_lineage_composites_records_successes_and_failures() -> None
     ]
     assert errors == [f"Lineage composite {('b' * 64)[:12]}: duplicate hash"]
     logger.debug.assert_called_once()
+
+
+def test_register_publish_lineage_prepends_errors_and_syncs_labels() -> None:
+    coordinator = MagicMock()
+    coordinator.register_lineage.return_value = BatchRegistrationResult(
+        session_registered=True,
+        jobs_created=2,
+        jobs_failed=0,
+        artifacts_registered=3,
+        artifacts_failed=0,
+        links_created=4,
+        links_failed=0,
+        errors=["batch-error"],
+    )
+    client = MagicMock()
+
+    with patch("roar.application.publish.registration.sync_publish_labels") as sync_labels:
+        result = register_publish_lineage(
+            coordinator=coordinator,
+            glaas_client=client,
+            session_hash="session-hash",
+            git_context=GitContext(repo="repo", branch="main", commit="deadbeef"),
+            jobs=[{"job_uid": "job-1"}],
+            artifacts=[{"hashes": [{"algorithm": "blake3", "digest": "a" * 64}]}],
+            db_ctx=MagicMock(),
+            session_id=7,
+            label_artifacts=[{"hash": "a" * 64}],
+            pre_registration_errors=["pre-error"],
+        )
+
+    assert result.errors == ["pre-error", "batch-error"]
+    sync_labels.assert_called_once()
+
+
+def test_register_publish_lineage_skips_label_sync_without_session_context() -> None:
+    coordinator = MagicMock()
+    coordinator.register_lineage.return_value = BatchRegistrationResult(
+        session_registered=True,
+        jobs_created=0,
+        jobs_failed=0,
+        artifacts_registered=0,
+        artifacts_failed=0,
+        links_created=0,
+        links_failed=0,
+        errors=[],
+    )
+
+    with patch("roar.application.publish.registration.sync_publish_labels") as sync_labels:
+        register_publish_lineage(
+            coordinator=coordinator,
+            glaas_client=MagicMock(),
+            session_hash="session-hash",
+            git_context=GitContext(repo="repo", branch="main", commit="deadbeef"),
+            jobs=[],
+            artifacts=[],
+            db_ctx=None,
+            session_id=None,
+            label_artifacts=[],
+        )
+
+    sync_labels.assert_not_called()
 
 
 def test_sync_publish_labels_appends_error_when_sync_fails() -> None:

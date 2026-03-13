@@ -25,7 +25,7 @@ from ...application.publish.registration import (
     normalize_registration_source_type,
     parse_composite_registration_response,
     preregister_lineage_composites,
-    sync_publish_labels,
+    register_publish_lineage,
 )
 from ...application.publish.session import prepare_publish_session
 from ...core.interfaces.registration import GitContext
@@ -342,26 +342,20 @@ class PutService:
             len(lineage.jobs),
             len(prepared_artifacts),
         )
-        registration_result = coordinator.register_lineage(
+        registration_result = register_publish_lineage(
+            coordinator=coordinator,
+            glaas_client=client,
             session_hash=session_hash or "",
             git_context=git_context,
             jobs=lineage.jobs,
             artifacts=prepared_artifacts,
-        )
-        if pre_registration_errors:
-            registration_result.errors = pre_registration_errors + registration_result.errors
-
-        sync_publish_labels(
-            glaas_client=client,
             db_ctx=self._db,
             session_id=int(session_id),
-            session_hash=session_hash or "",
-            jobs=lineage.jobs,
-            artifacts=[
+            label_artifacts=[
                 *lineage.artifacts,
                 *[{"id": u.artifact_id, "hash": u.hash} for u in uploads],
             ],
-            errors=registration_result.errors,
+            pre_registration_errors=pre_registration_errors,
         )
 
         self._logger.debug(

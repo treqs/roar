@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ...core.interfaces.logger import ILogger
+from ...core.interfaces.registration import BatchRegistrationResult, GitContext
 from ...glaas_client import GlaasClient
 from ...services.labels import collect_label_sync_payloads
 
@@ -21,6 +22,44 @@ class CompositeRegistrationCandidate:
     component_count_total: int
     component_count_stored: int
     payload: dict[str, Any]
+
+
+def register_publish_lineage(
+    *,
+    coordinator: Any,
+    glaas_client: GlaasClient,
+    session_hash: str,
+    git_context: GitContext,
+    jobs: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
+    db_ctx: Any | None,
+    session_id: int | None,
+    label_artifacts: list[dict[str, Any]],
+    pre_registration_errors: list[str] | None = None,
+) -> BatchRegistrationResult:
+    """Run the shared publish registration phase and optional label sync."""
+    batch_result: BatchRegistrationResult = coordinator.register_lineage(
+        session_hash=session_hash,
+        git_context=git_context,
+        jobs=jobs,
+        artifacts=artifacts,
+    )
+
+    if pre_registration_errors:
+        batch_result.errors = [*pre_registration_errors, *batch_result.errors]
+
+    if session_id is not None and db_ctx is not None:
+        sync_publish_labels(
+            glaas_client=glaas_client,
+            db_ctx=db_ctx,
+            session_id=session_id,
+            session_hash=session_hash,
+            jobs=jobs,
+            artifacts=label_artifacts,
+            errors=batch_result.errors,
+        )
+
+    return batch_result
 
 
 def preregister_lineage_composites(

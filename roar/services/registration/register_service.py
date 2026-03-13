@@ -34,13 +34,13 @@ from ...application.publish.registration import (
     extract_composite_digest,
     normalize_registration_source_type,
     preregister_lineage_composites,
-    sync_publish_labels,
+    register_publish_lineage,
 )
 from ...application.publish.session import prepare_publish_session
 from ...config import config_get
 from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
-from ...core.interfaces.registration import BatchRegistrationResult, GitContext
+from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...db.context import create_database_context, optional_repo
 from ...db.hashing.backend import compute_hashes_batch
@@ -662,24 +662,31 @@ class RegisterService:
 
         self._refresh_job_artifact_references(lineage.jobs, lineage.artifacts)
 
-        batch_result: BatchRegistrationResult = self.coordinator.register_lineage(
-            session_hash=session_hash,
-            git_context=git_context,
-            jobs=registration_jobs,
-            artifacts=self._prepare_artifacts(lineage.artifacts, session_hash),
-        )
-
         if session_id is not None:
             with create_database_context(roar_dir) as db_ctx:
-                sync_publish_labels(
+                batch_result = register_publish_lineage(
+                    coordinator=self.coordinator,
                     glaas_client=self.glaas_client,
+                    session_hash=session_hash,
+                    git_context=git_context,
+                    jobs=registration_jobs,
+                    artifacts=self._prepare_artifacts(lineage.artifacts, session_hash),
                     db_ctx=db_ctx,
                     session_id=session_id,
-                    session_hash=session_hash,
-                    jobs=lineage.jobs,
-                    artifacts=lineage.artifacts,
-                    errors=batch_result.errors,
+                    label_artifacts=lineage.artifacts,
                 )
+        else:
+            batch_result = register_publish_lineage(
+                coordinator=self.coordinator,
+                glaas_client=self.glaas_client,
+                session_hash=session_hash,
+                git_context=git_context,
+                jobs=registration_jobs,
+                artifacts=self._prepare_artifacts(lineage.artifacts, session_hash),
+                db_ctx=None,
+                session_id=None,
+                label_artifacts=lineage.artifacts,
+            )
 
         if tagging_enabled and git_context.commit:
             tag_name = build_publish_tag_name(git_context.commit, short=True)
