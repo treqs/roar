@@ -8,6 +8,7 @@ import pytest
 
 from roar.application.publish.requests import PutRequest, RegisterLineageRequest
 from roar.application.publish.service import put_artifacts, register_lineage_target
+from roar.application.publish.targets import ResolvedRegisterTarget
 from roar.services.put.service import PutResult
 from roar.services.registration.register_service import RegisterResult
 
@@ -19,9 +20,13 @@ def test_register_lineage_target_delegates_to_register_service(tmp_path: Path) -
     with (
         patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
         patch("roar.application.publish.service.get_glaas_url", return_value="http://localhost:3001"),
+        patch(
+            "roar.application.publish.service.resolve_register_lineage_target",
+            return_value=ResolvedRegisterTarget(kind="artifact_path", value="model.pt"),
+        ),
         patch("roar.application.publish.service.RegisterService") as mock_cls,
     ):
-        mock_cls.return_value.register_lineage_target.return_value = expected
+        mock_cls.return_value.register_artifact_lineage.return_value = expected
 
         response = register_lineage_target(
             RegisterLineageRequest(
@@ -39,8 +44,8 @@ def test_register_lineage_target_delegates_to_register_service(tmp_path: Path) -
         coordinator=runtime.registration_coordinator,
         session_service=runtime.session_service,
     )
-    mock_cls.return_value.register_lineage_target.assert_called_once_with(
-        target="model.pt",
+    mock_cls.return_value.register_artifact_lineage.assert_called_once_with(
+        artifact_path="model.pt",
         roar_dir=tmp_path / ".roar",
         cwd=tmp_path,
         dry_run=True,
@@ -48,6 +53,56 @@ def test_register_lineage_target_delegates_to_register_service(tmp_path: Path) -
         skip_confirmation=False,
         confirm_callback=None,
     )
+
+
+def test_register_lineage_target_dispatches_step_reference(tmp_path: Path) -> None:
+    runtime = MagicMock()
+
+    with (
+        patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
+        patch("roar.application.publish.service.get_glaas_url", return_value="http://localhost:3001"),
+        patch(
+            "roar.application.publish.service.resolve_register_lineage_target",
+            return_value=ResolvedRegisterTarget(kind="step_reference", value="@4"),
+        ),
+        patch("roar.application.publish.service.RegisterService") as mock_cls,
+    ):
+        mock_cls.return_value.register_step_lineage.return_value = RegisterResult(success=True)
+
+        register_lineage_target(
+            RegisterLineageRequest(
+                target="@4",
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+            )
+        )
+
+    mock_cls.return_value.register_step_lineage.assert_called_once()
+
+
+def test_register_lineage_target_dispatches_job_uid(tmp_path: Path) -> None:
+    runtime = MagicMock()
+
+    with (
+        patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
+        patch("roar.application.publish.service.get_glaas_url", return_value="http://localhost:3001"),
+        patch(
+            "roar.application.publish.service.resolve_register_lineage_target",
+            return_value=ResolvedRegisterTarget(kind="job_uid", value="deadbeef"),
+        ),
+        patch("roar.application.publish.service.RegisterService") as mock_cls,
+    ):
+        mock_cls.return_value.register_job_lineage.return_value = RegisterResult(success=True)
+
+        register_lineage_target(
+            RegisterLineageRequest(
+                target="deadbeef",
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+            )
+        )
+
+    mock_cls.return_value.register_job_lineage.assert_called_once()
 
 
 def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) -> None:

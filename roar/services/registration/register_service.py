@@ -12,7 +12,6 @@ Orchestrates the workflow:
 """
 
 import os
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -40,6 +39,10 @@ from ...application.publish.registration import (
     register_publish_lineage,
 )
 from ...application.publish.session import prepare_publish_session
+from ...application.publish.targets import (
+    parse_register_step_reference,
+    resolve_publish_artifact_path,
+)
 from ...config import config_get
 from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
@@ -69,10 +72,6 @@ else:
     _blake3_constructor = _blake3_import
 
 boto3 = None
-
-_STEP_REFERENCE_RE = re.compile(r"^@(?:B)?\d+$", re.IGNORECASE)
-_SESSION_HASH_RE = re.compile(r"^[a-f0-9]{8,64}$")
-_HEX_IDENTIFIER_RE = re.compile(r"^[a-f0-9]{4,64}$", re.IGNORECASE)
 
 def _ensure_boto3():
     global boto3
@@ -179,86 +178,6 @@ class RegisterService:
         """Get or create session service."""
         return self._session_service or SessionRegistrationService()
 
-    def register_lineage_target(
-        self,
-        target: str,
-        roar_dir: Path,
-        cwd: Path,
-        dry_run: bool = False,
-        as_blake3: bool = False,
-        skip_confirmation: bool = False,
-        confirm_callback: Callable[[list[str]], bool] | None = None,
-    ) -> RegisterResult:
-        """Register lineage for an artifact path/hash, step reference, job UID, or session hash."""
-        normalized_target = target.strip()
-        if self._is_step_reference(normalized_target):
-            return self.register_step_lineage(
-                step_reference=normalized_target,
-                roar_dir=roar_dir,
-                cwd=cwd,
-                dry_run=dry_run,
-                as_blake3=as_blake3,
-                skip_confirmation=skip_confirmation,
-                confirm_callback=confirm_callback,
-            )
-
-        resolved_path = self._resolve_path(normalized_target, cwd)
-        if resolved_path and (self._is_s3_url(normalized_target) or os.path.exists(resolved_path)):
-            return self.register_artifact_lineage(
-                artifact_path=normalized_target,
-                roar_dir=roar_dir,
-                cwd=cwd,
-                dry_run=dry_run,
-                as_blake3=as_blake3,
-                skip_confirmation=skip_confirmation,
-                confirm_callback=confirm_callback,
-            )
-
-        resolved_job_uid = self._resolve_job_target(normalized_target, roar_dir)
-        if resolved_job_uid is not None:
-            return self.register_job_lineage(
-                job_uid=resolved_job_uid,
-                roar_dir=roar_dir,
-                cwd=cwd,
-                dry_run=dry_run,
-                as_blake3=as_blake3,
-                skip_confirmation=skip_confirmation,
-                confirm_callback=confirm_callback,
-            )
-
-        resolved_artifact_hash = self._resolve_artifact_hash_target(normalized_target, roar_dir)
-        if resolved_artifact_hash is not None:
-            return self.register_artifact_hash_lineage(
-                artifact_hash=resolved_artifact_hash,
-                roar_dir=roar_dir,
-                cwd=cwd,
-                dry_run=dry_run,
-                as_blake3=as_blake3,
-                skip_confirmation=skip_confirmation,
-                confirm_callback=confirm_callback,
-            )
-
-        if self._looks_like_session_hash(normalized_target):
-            return self.register_session_lineage(
-                session_hash=normalized_target,
-                roar_dir=roar_dir,
-                cwd=cwd,
-                dry_run=dry_run,
-                as_blake3=as_blake3,
-                skip_confirmation=skip_confirmation,
-                confirm_callback=confirm_callback,
-            )
-
-        return self.register_artifact_lineage(
-            artifact_path=normalized_target,
-            roar_dir=roar_dir,
-            cwd=cwd,
-            dry_run=dry_run,
-            as_blake3=as_blake3,
-            skip_confirmation=skip_confirmation,
-            confirm_callback=confirm_callback,
-        )
-
     def register_step_lineage(
         self,
         step_reference: str,
@@ -270,7 +189,7 @@ class RegisterService:
         confirm_callback: Callable[[list[str]], bool] | None = None,
     ) -> RegisterResult:
         """Register lineage for a local DAG step reference like ``@4``."""
-        parsed = self._parse_step_reference(step_reference)
+        parsed = parse_register_step_reference(step_reference)
         if parsed is None:
             return RegisterResult(success=False, error=f"Invalid DAG reference: {step_reference}")
         step_number, is_build = parsed
@@ -400,7 +319,7 @@ class RegisterService:
             RegisterResult with success status and counts
         """
         # Step 1: Resolve artifact path
-        resolved_path = self._resolve_path(artifact_path, cwd)
+        resolved_path = resolve_publish_artifact_path(artifact_path, cwd)
         if not resolved_path:
             return RegisterResult(
                 success=False,
@@ -864,57 +783,6 @@ class RegisterService:
             float(job.get("timestamp") or 0.0),
             int(job.get("id") or 0),
         )
-
-    def _is_step_reference(self, target: str) -> bool:
-        return bool(_STEP_REFERENCE_RE.match(target))
-
-    def _looks_like_session_hash(self, target: str) -> bool:
-        return bool(_SESSION_HASH_RE.match(target))
-
-    def _looks_like_hex_identifier(self, target: str) -> bool:
-        return bool(_HEX_IDENTIFIER_RE.match(target))
-
-    def _resolve_job_target(self, target: str, roar_dir: Path) -> str | None:
-        if not self._looks_like_hex_identifier(target) or len(target) > 12:
-            return None
-
-        with create_database_context(roar_dir) as db_ctx:
-            job = db_ctx.jobs.get_by_uid(target)
-        if not job:
-            return None
-
-        job_uid = job.get("job_uid")
-        return str(job_uid) if isinstance(job_uid, str) and job_uid else None
-
-    def _resolve_artifact_hash_target(self, target: str, roar_dir: Path) -> str | None:
-        if not self._looks_like_hex_identifier(target) or len(target) < 64:
-            return None
-
-        with create_database_context(roar_dir) as db_ctx:
-            artifact = db_ctx.artifacts.get_by_prefix(target)
-        if not artifact:
-            return None
-
-        return self._select_primary_hash(artifact)
-
-    def _parse_step_reference(self, reference: str) -> tuple[int, bool] | None:
-        if not self._is_step_reference(reference):
-            return None
-        step_ref = reference[1:]
-        is_build = step_ref.upper().startswith("B")
-        if is_build:
-            step_ref = step_ref[1:]
-        if not step_ref.isdigit():
-            return None
-        return int(step_ref), is_build
-
-    def _resolve_path(self, path: str, cwd: Path) -> str | None:
-        """Resolve artifact path to absolute path."""
-        if os.path.isabs(path):
-            return path
-        if self._is_s3_url(path):
-            return path
-        return str(cwd / path)
 
     def _is_s3_url(self, path: str) -> bool:
         parsed = urlparse(path)

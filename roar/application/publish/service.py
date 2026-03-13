@@ -23,6 +23,7 @@ from .requests import (
     RegisterLineageResponse,
 )
 from .runtime import build_publish_runtime
+from .targets import resolve_register_lineage_target
 
 
 def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageResponse:
@@ -34,15 +35,61 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         coordinator=runtime.registration_coordinator,
         session_service=runtime.session_service,
     )
-    result = service.register_lineage_target(
-        target=request.target,
-        roar_dir=request.roar_dir,
+    resolved_target = resolve_register_lineage_target(
+        request.target,
         cwd=request.cwd,
-        dry_run=request.dry_run,
-        as_blake3=request.as_blake3,
-        skip_confirmation=request.skip_confirmation,
-        confirm_callback=request.confirm_callback,
+        roar_dir=request.roar_dir,
     )
+    if resolved_target.kind == "step_reference":
+        result = service.register_step_lineage(
+            step_reference=resolved_target.value,
+            roar_dir=request.roar_dir,
+            cwd=request.cwd,
+            dry_run=request.dry_run,
+            as_blake3=request.as_blake3,
+            skip_confirmation=request.skip_confirmation,
+            confirm_callback=request.confirm_callback,
+        )
+    elif resolved_target.kind == "job_uid":
+        result = service.register_job_lineage(
+            job_uid=resolved_target.value,
+            roar_dir=request.roar_dir,
+            cwd=request.cwd,
+            dry_run=request.dry_run,
+            as_blake3=request.as_blake3,
+            skip_confirmation=request.skip_confirmation,
+            confirm_callback=request.confirm_callback,
+        )
+    elif resolved_target.kind == "artifact_hash":
+        result = service.register_artifact_hash_lineage(
+            artifact_hash=resolved_target.value,
+            roar_dir=request.roar_dir,
+            cwd=request.cwd,
+            dry_run=request.dry_run,
+            as_blake3=request.as_blake3,
+            skip_confirmation=request.skip_confirmation,
+            confirm_callback=request.confirm_callback,
+        )
+    elif resolved_target.kind == "session_hash":
+        result = service.register_session_lineage(
+            session_hash=resolved_target.value,
+            roar_dir=request.roar_dir,
+            cwd=request.cwd,
+            dry_run=request.dry_run,
+            as_blake3=request.as_blake3,
+            skip_confirmation=request.skip_confirmation,
+            confirm_callback=request.confirm_callback,
+        )
+    else:
+        result = service.register_artifact_lineage(
+            artifact_path=resolved_target.value,
+            roar_dir=request.roar_dir,
+            cwd=request.cwd,
+            dry_run=request.dry_run,
+            as_blake3=request.as_blake3,
+            skip_confirmation=request.skip_confirmation,
+            confirm_callback=request.confirm_callback,
+        )
     return RegisterLineageResponse(result=result)
 
 
