@@ -30,6 +30,7 @@ from ...application.publish.registration import (
     preregister_lineage_composites,
     sync_publish_labels,
 )
+from ...application.publish.session import prepare_publish_session
 from ...config import config_get
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
@@ -554,11 +555,17 @@ class RegisterService:
                         error="Cannot register with uncommitted changes. Commit your changes first.",
                     )
 
-        session_hash = session_hash_override or self.session_service.compute_session_hash(
-            roar_dir=str(roar_dir),
+        publish_session = prepare_publish_session(
+            glaas_client=self.glaas_client,
+            session_service=self.session_service,
+            roar_dir=roar_dir,
             session_id=session_id,
+            git_context=git_context,
+            logger=self._logger,
+            register_with_glaas=False,
+            session_hash_override=session_hash_override,
         )
-        self._logger.debug("Session hash: %s", session_hash[:12])
+        session_hash = publish_session.session_hash
 
         omit_filter = self.omit_filter
         detected_secrets: list[str] = []
@@ -607,26 +614,23 @@ class RegisterService:
         if as_blake3:
             self.upgrade_s3_etags_to_blake3(roar_dir=roar_dir, lineage=lineage)
 
-        if not self.glaas_client.is_configured():
-            return RegisterResult(
-                success=False,
-                error="GLaaS not configured. Run 'roar config set glaas.url <url>' first.",
-            )
-
         try:
-            self.glaas_client.health_check()
-        except Exception as e:
-            return RegisterResult(
-                success=False,
-                error=f"GLaaS health check failed: {e}",
+            prepare_publish_session(
+                glaas_client=self.glaas_client,
+                session_service=self.session_service,
+                roar_dir=roar_dir,
+                session_id=session_id,
+                git_context=git_context,
+                logger=self._logger,
+                register_with_glaas=True,
+                configured_error="GLaaS not configured. Run 'roar config set glaas.url <url>' first.",
+                session_hash_override=session_hash,
             )
-
-        session_result = self.session_service.register(session_hash, git_context)
-        if not session_result.success:
+        except ValueError as exc:
             return RegisterResult(
                 success=False,
                 session_hash=session_hash,
-                error=f"Session registration failed: {session_result.error}",
+                error=str(exc),
             )
 
         composite_registrations: list[dict[str, Any]] = []

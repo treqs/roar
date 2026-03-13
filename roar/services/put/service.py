@@ -26,6 +26,7 @@ from ...application.publish.registration import (
     preregister_lineage_composites,
     sync_publish_labels,
 )
+from ...application.publish.session import prepare_publish_session
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...db.context import optional_repo
@@ -187,15 +188,6 @@ class PutService:
         # Get or create GLaaS client
         client = self._glaas_client or GlaasClient(glaas_url)
 
-        # Health check GLaaS
-        self._logger.debug("Running GLaaS health check against %s", glaas_url)
-        try:
-            client.health_check()
-            self._logger.debug("GLaaS health check passed")
-        except Exception as e:
-            self._logger.debug("GLaaS health check failed: %s", e)
-            raise ValueError(f"GLaaS health check failed: {e}") from e
-
         # Check for active session
         active_session = self._db.sessions.get_active()
         if active_session is None:
@@ -213,24 +205,17 @@ class PutService:
             git_context.branch,
         )
 
-        # Compute session hash and register session with GLaaS
         session_service = self._session_service or SessionRegistrationService(client)
-        session_hash = session_service.compute_session_hash(
-            roar_dir=str(self._roar_dir),
+        publish_session = prepare_publish_session(
+            glaas_client=client,
+            session_service=session_service,
+            roar_dir=self._roar_dir,
             session_id=session_id,
+            git_context=git_context,
+            logger=self._logger,
+            register_with_glaas=True,
         )
-        self._logger.debug("Session hash: %s", session_hash[:12])
-
-        # Register session with GLaaS (must happen before job/artifact registration)
-        self._logger.debug("Registering session with GLaaS")
-        session_result = session_service.register(session_hash, git_context)
-        if not session_result.success:
-            self._logger.debug("Session registration failed: %s", session_result.error)
-            raise ValueError(f"Session registration failed: {session_result.error}")
-        self._logger.debug(
-            "Session registered: url=%s",
-            session_result.session_url,
-        )
+        session_hash = publish_session.session_hash
 
         # Resolve sources to files
         resolver = SourceResolver(
@@ -252,7 +237,7 @@ class PutService:
             return PutResult(
                 success=True,
                 session_hash=session_hash,
-                session_url=session_result.session_url,
+                session_url=publish_session.session_url,
                 dry_run=True,
                 would_upload=[{"path": str(r.path), "exists": r.exists} for r in resolved],
             )
@@ -490,7 +475,7 @@ class PutService:
                 job_id=job_id,
                 job_uid=job_uid,
                 session_hash=session_hash,
-                session_url=session_result.session_url,
+                session_url=publish_session.session_url,
                 uploaded_files=uploaded_files,
                 composites_registered=composite_registrations,
                 error=registration_error,
@@ -506,7 +491,7 @@ class PutService:
             job_id=job_id,
             job_uid=job_uid,
             session_hash=session_hash,
-            session_url=session_result.session_url,
+            session_url=publish_session.session_url,
             uploaded_files=uploaded_files,
             composites_registered=composite_registrations,
         )
