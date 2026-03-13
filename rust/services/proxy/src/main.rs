@@ -19,7 +19,9 @@ use clap::Parser;
 use forward::ForwardState;
 use s3::{LogMeta, S3OpType, S3Operation};
 
-const DEFAULT_RESPONSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+// Buffer small and medium GET responses, but stream large objects to avoid
+// turning full downloads into extra proxy-side serialization work.
+const DEFAULT_RESPONSE_BUFFER_BYTES: usize = 1024 * 1024;
 
 #[derive(Parser)]
 #[command(

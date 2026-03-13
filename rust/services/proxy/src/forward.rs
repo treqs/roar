@@ -45,7 +45,7 @@ pub struct S3Response {
 impl S3Response {
     /// Consume the response body as a byte stream (memory-efficient, default).
     pub fn into_body_stream(self) -> Body {
-        Body::from_stream(self.inner.bytes_stream())
+        Body::new(reqwest::Body::from(self.inner))
     }
 
     /// Buffer the full response body in memory.
