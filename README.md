@@ -20,12 +20,12 @@ Requires Python 3.10+.
 
 ### Platform Support
 
-| Platform      | Status         |
-| ------------- | -------------- |
-| Linux x86_64  | ✅ Full support |
-| Linux aarch64 | ✅ Full support |
+| Platform      | Status                                                      |
+| ------------- | ----------------------------------------------------------- |
+| Linux x86_64  | ✅ Full support                                             |
+| Linux aarch64 | ✅ Full support                                             |
 | macOS         | 🚧 Experimental ([limitations](#macos-tracing-limitations)) |
-| Windows       | Coming soon    |
+| Windows       | Coming soon                                                 |
 
 PyPI wheels are published for Linux and macOS (`x86_64` and `arm64`).
 
@@ -61,11 +61,11 @@ roar run python evaluate.py --model model.pt --output metrics.json
 
 ### Backends
 
-| Backend | Binary | Platforms | Notes |
-| --- | --- | --- | --- |
-| eBPF | `roar-tracer-ebpf` | Linux | Fastest, but requires permissions and kernel support. |
+| Backend | Binary                                           | Platforms    | Notes                                                                                                                                                                                                      |
+| ------- | ------------------------------------------------ | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| eBPF    | `roar-tracer-ebpf`                               | Linux        | Fastest, but requires permissions and kernel support.                                                                                                                                                      |
 | preload | `roar-tracer-preload` + `libroar_tracer_preload` | macOS, Linux | Uses `DYLD_INSERT_LIBRARIES` (macOS) or `LD_PRELOAD` (Linux). Not compatible with processes that ignore preload env vars (e.g., SIP/hardened runtime on macOS), or fully-static binaries (common with Go). |
-| ptrace | `roar-tracer` | Linux | Slowest, broadest compatibility on Linux. |
+| ptrace  | `roar-tracer`                                    | Linux        | Slowest, broadest compatibility on Linux.                                                                                                                                                                  |
 
 ### Building
 
@@ -213,19 +213,19 @@ roar config set <key> <value>
 
 Run `roar config list` to see all available options with descriptions. Common options:
 
-| Key                            | Default              | Description                             |
-| ------------------------------ | -------------------- | --------------------------------------- |
-| `output.track_repo_files`      | false                | Include repo files in provenance        |
-| `output.quiet`                 | false                | Suppress written files report           |
-| `filters.ignore_system_reads`  | true                 | Ignore /sys, /etc, /sbin reads          |
-| `filters.ignore_package_reads` | true                 | Ignore installed package reads          |
-| `filters.ignore_torch_cache`   | true                 | Ignore torch/triton cache               |
-| `filters.ignore_tmp_files`     | true                 | Ignore /tmp files                       |
+| Key                            | Default                | Description                             |
+| ------------------------------ | ---------------------- | --------------------------------------- |
+| `output.track_repo_files`      | false                  | Include repo files in provenance        |
+| `output.quiet`                 | false                  | Suppress written files report           |
+| `filters.ignore_system_reads`  | true                   | Ignore /sys, /etc, /sbin reads          |
+| `filters.ignore_package_reads` | true                   | Ignore installed package reads          |
+| `filters.ignore_torch_cache`   | true                   | Ignore torch/triton cache               |
+| `filters.ignore_tmp_files`     | true                   | Ignore /tmp files                       |
 | `glaas.url`                    | <https://api.glaas.ai> | GLaaS server URL                        |
 | `glaas.web_url`                | <https://glaas.ai>     | GLaaS web UI URL                        |
-| `registration.omit.enabled`    | true                 | Enable secret filtering                 |
-| `hash.primary`                 | blake3               | Primary hash algorithm                  |
-| `logging.level`                | warning              | Log level (debug, info, warning, error) |
+| `registration.omit.enabled`    | true                   | Enable secret filtering                 |
+| `hash.primary`                 | blake3                 | Primary hash algorithm                  |
+| `logging.level`                | warning                | Log level (debug, info, warning, error) |
 
 ### `roar dag`
 
@@ -273,6 +273,7 @@ roar register s3://bucket/run/out   # Register a tracked remote S3 artifact
 ```
 
 **Supported targets:**
+
 - Local artifact path: `model.pt`, `./outputs/metrics.json`
 - Tracked artifact hash: primitive or composite
 - Local job UID: full UID or unique prefix
@@ -293,11 +294,13 @@ roar put @2 s3://bucket/outputs/ -m "Step 2 outputs"
 ```
 
 **Options:**
+
 - `-m, --message` — Description of the upload (required)
 - `--dry-run` — Preview without uploading
 - `--no-tag` — Skip git tagging
 
 **Source formats:**
+
 - File path: `model.pt`, `./data/output.csv`
 - Directory: `./checkpoints/` (uploads all files recursively)
 - Job reference: `@2` (uploads outputs from step 2)
@@ -315,6 +318,7 @@ roar get s3://bucket/checkpoints/ ./local/ # Download all files under prefix
 ```
 
 **Options:**
+
 - `-m, --message` — Annotation for this download
 - `--hash` — Expected BLAKE3 hash (for verification)
 - `--tag` — Create a git tag for this download
@@ -362,6 +366,7 @@ roar pop -y           # Pop without confirmation (skip prompt)
 ```
 
 **What it does:**
+
 - Removes the last job from the session history
 - Deletes output artifacts created by that job (unless they're packages/system files)
 - Does not affect the original input files
@@ -447,6 +452,9 @@ roar auth register
 # Test authentication
 roar auth test
 ```
+
+> [!TIP]
+> Roar activity can be registered without authentication. Unauthenticated registrations are attributed to a public "anonymous" user, but are not guaranteed persistence. For persistent attribution, we recommend setting up `roar auth`.
 
 ## Development
 
