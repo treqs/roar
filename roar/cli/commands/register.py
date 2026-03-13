@@ -8,8 +8,9 @@ Registers artifact, job, step, or session lineage with GLaaS.
 
 import click
 
+from ...application.publish.requests import RegisterLineageRequest
+from ...application.publish.service import register_lineage_target
 from ...config import config_get
-from ...services.registration.register_service import RegisterService
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -80,19 +81,18 @@ def register(ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3:
 
         roar register outputs/metrics.json  # Register from subdirectory
     """
-    # Create service
-    service = RegisterService()
-
-    # Register the requested lineage target
-    result = service.register_lineage_target(
-        target=target,
-        roar_dir=ctx.roar_dir,
-        cwd=ctx.cwd,
-        dry_run=dry_run,
-        as_blake3=as_blake3,
-        skip_confirmation=yes,
-        confirm_callback=_confirm_secrets if not yes else None,
+    response = register_lineage_target(
+        RegisterLineageRequest(
+            target=target,
+            roar_dir=ctx.roar_dir,
+            cwd=ctx.cwd,
+            dry_run=dry_run,
+            as_blake3=as_blake3,
+            skip_confirmation=yes,
+            confirm_callback=_confirm_secrets if not yes else None,
+        )
     )
+    result = response.result
 
     if not result.success:
         if result.aborted_by_user:

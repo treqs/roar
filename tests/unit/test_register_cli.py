@@ -31,11 +31,8 @@ def test_register_cli_accepts_s3_uri(tmp_path):
     ctx.cwd = tmp_path
     ctx.is_initialized = True
 
-    with patch("roar.cli.commands.register.RegisterService") as mock_service_cls:
-        service = MagicMock()
-        service.register_lineage_target.return_value = _fake_result()
-        mock_service_cls.return_value = service
-
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        mock_register.return_value = MagicMock(result=_fake_result())
         with patch("roar.cli.commands.register.config_get", return_value="https://glaas.local"):
             result = runner.invoke(
                 register,
@@ -44,9 +41,9 @@ def test_register_cli_accepts_s3_uri(tmp_path):
             )
 
     assert result.exit_code == 0, result.output
-    service.register_lineage_target.assert_called_once()
-    called_artifact_path = service.register_lineage_target.call_args.kwargs["target"]
-    assert called_artifact_path == "s3://output-bucket/results/run123/final_report.json"
+    mock_register.assert_called_once()
+    request = mock_register.call_args.args[0]
+    assert request.target == "s3://output-bucket/results/run123/final_report.json"
 
 
 def test_register_cli_accepts_step_reference(tmp_path):
@@ -58,17 +55,14 @@ def test_register_cli_accepts_step_reference(tmp_path):
     ctx.cwd = tmp_path
     ctx.is_initialized = True
 
-    with patch("roar.cli.commands.register.RegisterService") as mock_service_cls:
-        service = MagicMock()
-        service.register_lineage_target.return_value = _fake_result()
-        mock_service_cls.return_value = service
-
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        mock_register.return_value = MagicMock(result=_fake_result())
         with patch("roar.cli.commands.register.config_get", return_value="https://glaas.local"):
             result = runner.invoke(register, ["@4", "--yes"], obj=ctx)
 
     assert result.exit_code == 0, result.output
-    service.register_lineage_target.assert_called_once()
-    assert service.register_lineage_target.call_args.kwargs["target"] == "@4"
+    mock_register.assert_called_once()
+    assert mock_register.call_args.args[0].target == "@4"
 
 
 def test_register_cli_accepts_session_hash(tmp_path):
@@ -81,14 +75,11 @@ def test_register_cli_accepts_session_hash(tmp_path):
     ctx.is_initialized = True
 
     session_hash = "c" * 64
-    with patch("roar.cli.commands.register.RegisterService") as mock_service_cls:
-        service = MagicMock()
-        service.register_lineage_target.return_value = _fake_result()
-        mock_service_cls.return_value = service
-
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        mock_register.return_value = MagicMock(result=_fake_result())
         with patch("roar.cli.commands.register.config_get", return_value="https://glaas.local"):
             result = runner.invoke(register, [session_hash, "--yes"], obj=ctx)
 
     assert result.exit_code == 0, result.output
-    service.register_lineage_target.assert_called_once()
-    assert service.register_lineage_target.call_args.kwargs["target"] == session_hash
+    mock_register.assert_called_once()
+    assert mock_register.call_args.args[0].target == session_hash

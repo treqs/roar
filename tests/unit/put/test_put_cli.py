@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import importlib
-from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from click.testing import CliRunner
 
+from roar.application.publish.requests import PutResponse
 from roar.cli.commands.put import put
 from roar.services.put.service import PutResult
 
@@ -27,26 +27,15 @@ def _make_ctx(tmp_path: Path) -> SimpleNamespace:
     )
 
 
-def _make_db_ctx(active_hash: str = "local_session_hash") -> MagicMock:
-    db_ctx = MagicMock()
-    db_ctx.sessions.get_active.return_value = {"id": 1, "hash": active_hash}
-    return db_ctx
-
-
-def _make_git_ops() -> MagicMock:
-    git_ops = MagicMock()
-    git_ops.has_uncommitted_changes.return_value = False
-    git_ops.get_current_commit.return_value = "deadbeef"
-    return git_ops
+def _make_response(result: PutResult, *, git_tag: str | None = None) -> PutResponse:
+    return PutResponse(result=result, git_tag=git_tag, warnings=[])
 
 
 def test_put_uses_service_session_url_for_dag_link(tmp_path: Path) -> None:
     runner = CliRunner()
     ctx = _make_ctx(tmp_path)
-    db_ctx = _make_db_ctx(active_hash="wrong_local_hash")
-
-    service = MagicMock()
-    service.put.return_value = PutResult(
+    response = _make_response(
+        PutResult(
         success=True,
         job_id=7,
         uploaded_files=[
@@ -57,13 +46,11 @@ def test_put_uses_service_session_url_for_dag_link(tmp_path: Path) -> None:
         ],
         session_hash="correct_hash",
         session_url="https://glaas.example/dag/correct_hash",
+        )
     )
 
     with (
-        patch.object(put_module, "bootstrap"),
-        patch.object(put_module, "create_database_context", return_value=nullcontext(db_ctx)),
-        patch.object(put_module, "PutService", return_value=service),
-        patch.object(put_module, "GitOperations", return_value=_make_git_ops()),
+        patch.object(put_module, "put_artifacts", return_value=response),
         patch.object(put_module, "config_get", return_value="https://glaas.example"),
     ):
         result = runner.invoke(
@@ -80,10 +67,8 @@ def test_put_uses_service_session_url_for_dag_link(tmp_path: Path) -> None:
 def test_put_falls_back_to_web_url_plus_service_session_hash(tmp_path: Path) -> None:
     runner = CliRunner()
     ctx = _make_ctx(tmp_path)
-    db_ctx = _make_db_ctx(active_hash="wrong_local_hash")
-
-    service = MagicMock()
-    service.put.return_value = PutResult(
+    response = _make_response(
+        PutResult(
         success=True,
         job_id=8,
         uploaded_files=[
@@ -94,13 +79,11 @@ def test_put_falls_back_to_web_url_plus_service_session_hash(tmp_path: Path) -> 
         ],
         session_hash="service_hash_only",
         session_url=None,
+        )
     )
 
     with (
-        patch.object(put_module, "bootstrap"),
-        patch.object(put_module, "create_database_context", return_value=nullcontext(db_ctx)),
-        patch.object(put_module, "PutService", return_value=service),
-        patch.object(put_module, "GitOperations", return_value=_make_git_ops()),
+        patch.object(put_module, "put_artifacts", return_value=response),
         patch.object(put_module, "config_get", return_value="https://glaas.example"),
     ):
         result = runner.invoke(
@@ -117,12 +100,11 @@ def test_put_falls_back_to_web_url_plus_service_session_hash(tmp_path: Path) -> 
 def test_put_prints_registered_composite_summary(tmp_path: Path) -> None:
     runner = CliRunner()
     ctx = _make_ctx(tmp_path)
-    db_ctx = _make_db_ctx()
     dataset_root = tmp_path / "dataset"
     composite_hash = "a" * 64
 
-    service = MagicMock()
-    service.put.return_value = PutResult(
+    response = _make_response(
+        PutResult(
         success=True,
         job_id=10,
         uploaded_files=[
@@ -142,13 +124,11 @@ def test_put_prints_registered_composite_summary(tmp_path: Path) -> None:
         ],
         session_hash="session_hash",
         session_url="https://glaas.example/dag/session_hash",
+        )
     )
 
     with (
-        patch.object(put_module, "bootstrap"),
-        patch.object(put_module, "create_database_context", return_value=nullcontext(db_ctx)),
-        patch.object(put_module, "PutService", return_value=service),
-        patch.object(put_module, "GitOperations", return_value=_make_git_ops()),
+        patch.object(put_module, "put_artifacts", return_value=response),
         patch.object(put_module, "config_get", return_value="https://glaas.example"),
     ):
         result = runner.invoke(
@@ -168,11 +148,10 @@ def test_put_prints_registered_composite_summary(tmp_path: Path) -> None:
 def test_put_warns_when_local_composite_persistence_fails(tmp_path: Path) -> None:
     runner = CliRunner()
     ctx = _make_ctx(tmp_path)
-    db_ctx = _make_db_ctx()
     dataset_root = tmp_path / "dataset"
 
-    service = MagicMock()
-    service.put.return_value = PutResult(
+    response = _make_response(
+        PutResult(
         success=True,
         job_id=11,
         uploaded_files=[
@@ -194,13 +173,11 @@ def test_put_warns_when_local_composite_persistence_fails(tmp_path: Path) -> Non
         ],
         session_hash="session_hash",
         session_url="https://glaas.example/dag/session_hash",
+        )
     )
 
     with (
-        patch.object(put_module, "bootstrap"),
-        patch.object(put_module, "create_database_context", return_value=nullcontext(db_ctx)),
-        patch.object(put_module, "PutService", return_value=service),
-        patch.object(put_module, "GitOperations", return_value=_make_git_ops()),
+        patch.object(put_module, "put_artifacts", return_value=response),
         patch.object(put_module, "config_get", return_value="https://glaas.example"),
     ):
         result = runner.invoke(
