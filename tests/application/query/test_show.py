@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import roar.application.query.show as show_module
 from roar.application.query import ShowQueryRequest, render_show
+from roar.application.query.results import ShowArtifactSummary, ShowJobSummary, ShowSessionSummary
 
 
 def _request(tmp_path: Path, ref: str | None) -> ShowQueryRequest:
@@ -30,6 +31,7 @@ def test_render_show_artifact_by_full_hash(tmp_path: Path) -> None:
             "size": 1024,
             "first_seen_at": 1700000000.0,
             "first_seen_path": "/data/model.pkl",
+            "metadata": '{"dataset":{"dataset_id":"mnist"}}',
             "hashes": [
                 {"algorithm": "blake3", "digest": full_hash},
                 {"algorithm": "sha256", "digest": "sha256hash" * 6},
@@ -38,11 +40,12 @@ def test_render_show_artifact_by_full_hash(tmp_path: Path) -> None:
         db_ctx.artifacts.get_locations.return_value = [{"path": "/data/model.pkl"}]
         db_ctx.artifacts.get_jobs.return_value = {"produced_by": [], "consumed_by": []}
 
-        rendered = render_show(_request(tmp_path, full_hash))
+        summary = show_module.build_show_summary(_request(tmp_path, full_hash))
 
-    assert "Artifact:" in rendered
-    assert "artifact-123" in rendered
-    assert "sha256" in rendered.lower()
+    assert isinstance(summary, ShowArtifactSummary)
+    assert summary.id == "artifact-123"
+    assert summary.metadata == {"dataset": {"dataset_id": "mnist"}}
+    assert {hash_summary.algorithm for hash_summary in summary.hashes} == {"blake3", "sha256"}
 
 
 def test_render_show_relative_path_resolves_to_absolute_lookup(tmp_path: Path) -> None:
@@ -85,10 +88,11 @@ def test_render_show_job_uid_takes_precedence_for_short_hex_refs(tmp_path: Path)
         db_ctx.jobs.get_inputs.return_value = []
         db_ctx.jobs.get_outputs.return_value = []
 
-        rendered = render_show(_request(tmp_path, "deadbeef"))
+        summary = show_module.build_show_summary(_request(tmp_path, "deadbeef"))
 
-    assert "Job: deadbeef" in rendered
-    assert "python train.py" in rendered
+    assert isinstance(summary, ShowJobSummary)
+    assert summary.job_uid == "deadbeef"
+    assert summary.command == "python train.py"
 
 
 def test_render_show_without_ref_returns_active_session_summary(tmp_path: Path) -> None:
@@ -115,11 +119,12 @@ def test_render_show_without_ref_returns_active_session_summary(tmp_path: Path) 
             }
         ]
 
-        rendered = render_show(_request(tmp_path, None))
+        summary = show_module.build_show_summary(_request(tmp_path, None))
 
-    assert "Session: sess1234" in rendered
-    assert "Jobs (1):" in rendered
-    assert "python preprocess.py" in rendered
+    assert isinstance(summary, ShowSessionSummary)
+    assert summary.hash == "sess1234"
+    assert len(summary.jobs) == 1
+    assert summary.jobs[0].command == "python preprocess.py"
 
 
 def test_render_show_job_step_without_active_session_returns_message(tmp_path: Path) -> None:

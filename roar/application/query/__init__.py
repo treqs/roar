@@ -15,7 +15,7 @@ from .requests import (
     ShowQueryRequest,
     StatusQueryRequest,
 )
-from .results import LineageSummary, StatusSummary
+from .results import LineageSummary, LogSummary, ShowSummary, StatusSummary
 from .show import render_show
 from .status import render_status
 
@@ -28,7 +28,9 @@ __all__ = [
     "LineageQueryRequest",
     "LineageSummary",
     "LogQueryRequest",
+    "LogSummary",
     "ShowQueryRequest",
+    "ShowSummary",
     "StatusQueryRequest",
     "StatusSummary",
     "copy_labels",
