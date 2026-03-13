@@ -37,7 +37,7 @@ def _patch_coordinator_deps(coord):
     """Return a combined context manager that patches coordinator dependencies."""
     return (
         patch("os.path.exists", return_value=True),
-        patch("roar.config.load_config", return_value={}),
+        patch("roar.integrations.config.load_config", return_value={}),
     )
 
 
@@ -49,7 +49,7 @@ class TestProxyLifecycle:
 
         with (
             patch("os.path.exists", return_value=True),
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.load_config", return_value={}),
             patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
             patch.object(coord, "_record_job", return_value=(1, "abc123", [], [], [], [])),
             patch.object(coord, "_backup_previous_outputs"),
@@ -136,7 +136,7 @@ class TestProxyLifecycle:
         with (
             patch("secrets.token_hex", return_value="runuid12"),
             patch("os.path.exists", return_value=True),
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.load_config", return_value={}),
             patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
             patch.object(
                 coord, "_record_job", return_value=(1, "abc123", [], [], [], [])
@@ -166,7 +166,7 @@ class TestProxyLifecycle:
         mock_prov.collect.return_value = {"data": {"read_files": [], "written_files": []}}
         with (
             patch("os.path.exists", return_value=True),
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.load_config", return_value={}),
             patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
             patch.object(coord, "_record_job", return_value=(1, "abc123", [], [], [], [])),
             patch.object(coord, "_backup_previous_outputs"),
@@ -210,7 +210,7 @@ class TestProxyLifecycle:
 
         with (
             patch.object(coord, "_backup_previous_outputs"),
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.load_config", return_value={}),
             patch("os.path.exists", return_value=False),
             patch.object(coord, "_cleanup_logs"),
         ):
@@ -228,7 +228,7 @@ class TestEndpointUrlChaining:
 
         with (
             patch("os.path.exists", return_value=True),
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.load_config", return_value={}),
             patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
             patch.object(coord, "_record_job", return_value=(1, "abc123", [], [], [], [])),
             patch.object(coord, "_backup_previous_outputs"),

@@ -11,8 +11,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import ConfigDict, Field, PrivateAttr, field_validator
 
-from ..tracer_modes import TracerMode
-from .base import RoarBaseModel
+from ...core.models.base import RoarBaseModel
+from ...core.tracer_modes import TracerMode
 
 # Type aliases
 HashAlgorithm = Literal["blake3", "sha256", "sha512", "md5"]

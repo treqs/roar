@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from roar.config import load_config
+from roar.integrations.config import load_config
 
 
 def test_load_config_includes_ray_defaults(tmp_path) -> None:

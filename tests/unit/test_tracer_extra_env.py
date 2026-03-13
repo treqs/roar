@@ -25,7 +25,7 @@ class TestTracerExtraEnv:
 
         with (
             patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.access.load_config", return_value={}),
         ):
             svc.execute(
                 command=["python", "train.py"],
@@ -52,7 +52,7 @@ class TestTracerExtraEnv:
 
         with (
             patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.access.load_config", return_value={}),
         ):
             svc.execute(
                 command=["python", "train.py"],
@@ -80,7 +80,7 @@ class TestTracerExtraEnv:
 
         with (
             patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.access.load_config", return_value={}),
         ):
             svc.execute(
                 command=["python", "train.py"],
@@ -107,7 +107,7 @@ class TestTracerExtraEnv:
 
         with (
             patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.access.load_config", return_value={}),
         ):
             svc.execute(
                 command=["python", "train.py"],
@@ -133,7 +133,7 @@ class TestTracerExtraEnv:
 
         with (
             patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.access.load_config", return_value={}),
         ):
             svc.execute(
                 command=["python", "train.py"],

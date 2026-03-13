@@ -53,7 +53,7 @@ def bootstrap(roar_dir: Path | None = None) -> ServiceContainer:
 
 def _register_core_services(container: ServiceContainer, roar_dir: Path | None) -> None:
     """Register core application services."""
-    from ..config import config_get
+    from ..integrations.config import config_get
     from ..presenters.console import ConsolePresenter
     from ..services.logging import RoarLogger
 

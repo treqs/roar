@@ -125,7 +125,7 @@ class RoarContext:
             Configuration dictionary (empty if not found/error)
         """
         try:
-            from ..config import load_config
+            from ..integrations.config import load_config
 
             return load_config(start_dir=str(start_dir) if start_dir else None)
         except Exception:

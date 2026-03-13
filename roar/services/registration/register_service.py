@@ -17,12 +17,12 @@ from ...application.publish.registration import (
     prepare_batch_registration_artifacts,
     register_publish_lineage,
 )
-from ...config import config_get
 from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
 from ...core.logging import get_logger
 from ...db.context import create_database_context
 from ...filters.omit import OmitFilter
+from ...integrations.config import config_get
 from ...integrations.glaas import GlaasClient
 from .blake3_upgrade import upgrade_s3_etags_to_blake3
 from .coordinator import RegistrationCoordinator

@@ -11,7 +11,7 @@ class ExecutionSetupError(RuntimeError):
 
 
 def execute_host_run(ctx: RunContext) -> RunResult:
-    from roar.config import config_get
+    from roar.integrations.config import config_get
     from roar.core.bootstrap import bootstrap
     from roar.services.execution.coordinator import RunCoordinator
 

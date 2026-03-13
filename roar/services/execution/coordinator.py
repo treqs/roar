@@ -192,9 +192,9 @@ class RunCoordinator:
             sys.exit(130)
 
         # Heavy imports deferred to after tracer fork
-        from ...config import load_config
         from ...core.bootstrap import bootstrap
         from ...core.interfaces.run import RunResult
+        from ...integrations.config import load_config
         from .provenance import ProvenanceService
 
         bootstrap(ctx.roar_dir)

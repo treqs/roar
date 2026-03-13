@@ -18,7 +18,7 @@ def _get_logger():
 
 def get_glaas_url() -> str | None:
     """Get GLaaS server URL from config or environment."""
-    from ...config import config_get
+    from ..config import config_get
 
     url = os.environ.get("GLAAS_URL")
     if not url:
@@ -46,7 +46,7 @@ def _detect_key_type(key_path: Path) -> str:
 
 def find_ssh_private_key() -> tuple[str, Path] | None:
     """Find SSH private key for signing. Returns (key_type, path) or None."""
-    from ...config import config_get
+    from ..config import config_get
 
     env_key = os.environ.get("ROAR_SSH_KEY")
     if env_key:
@@ -73,7 +73,7 @@ def find_ssh_private_key() -> tuple[str, Path] | None:
 
 def find_ssh_pubkey() -> tuple[str, str, Path] | None:
     """Find SSH public key. Returns (key_type, content, path) or None."""
-    from ...config import config_get
+    from ..config import config_get
 
     env_key = os.environ.get("ROAR_SSH_KEY")
     if env_key:

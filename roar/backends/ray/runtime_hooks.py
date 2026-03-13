@@ -972,7 +972,7 @@ def _node_resource_key(ray_module: ModuleType, node_id: str) -> str | None:
 
 def _load_explicit_ray_pip_install(start_dir: str) -> bool | None:
     try:
-        from roar.core.settings import find_config_file
+        from roar.integrations.config import find_config_file
     except Exception:
         return None
 

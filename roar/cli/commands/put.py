@@ -13,7 +13,7 @@ import click
 
 from ...application.publish.requests import PutRequest
 from ...application.publish.service import put_artifacts
-from ...config import config_get
+from ...integrations.config import config_get
 from ..context import RoarContext
 from ..decorators import require_init
 

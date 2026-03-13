@@ -79,7 +79,7 @@ def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
     except Exception:
         pass
 
-    from ...config import load_config
+    from ...integrations.config import load_config
 
     config = load_config(start_dir=str(repo_root) if repo_root else None)
     return config.get("output", {}).get("quiet", False)
@@ -87,7 +87,7 @@ def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
 
 def get_hash_algorithms(cli_algorithms: list[str] | None = None) -> list[str]:
     """Get hash algorithms from CLI or config."""
-    from ...config import get_hash_algorithms as config_get_hash_algorithms
+    from ...integrations.config import get_hash_algorithms as config_get_hash_algorithms
 
     return config_get_hash_algorithms(
         operation="run",

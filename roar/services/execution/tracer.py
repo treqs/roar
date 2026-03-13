@@ -48,7 +48,7 @@ class TracerService:
     def _get_tracer_mode(self) -> str:
         """Get the configured tracer mode (auto, ebpf, preload, ptrace)."""
         try:
-            from ...config import config_get
+            from ...integrations.config import config_get
 
             mode = config_get("tracer.default")
             if isinstance(mode, str) and is_valid_tracer_mode(mode):
@@ -60,7 +60,7 @@ class TracerService:
     def _get_fallback_enabled(self) -> bool:
         """Get whether tracer fallback is enabled."""
         try:
-            from ...config import config_get
+            from ...integrations.config import config_get
 
             value = config_get("tracer.fallback_enabled")
             if isinstance(value, bool):
@@ -266,7 +266,7 @@ class TracerService:
 
         # Inject persistent env vars from .roar/config.toml [env] section
         try:
-            from ...config import load_config
+            from ...integrations.config import load_config
 
             config = load_config()
             config_env = config.get("env", {})

@@ -15,17 +15,18 @@ from pathlib import Path
 import pytest
 
 from roar.cli.commands.init import DEFAULT_CONFIG_TEMPLATE
-from roar.config import (
+from roar.integrations.config import (
     CONFIGURABLE_KEYS,
     VALID_HASH_ALGORITHMS,
     _get_default_config,
     config_get,
     config_set,
+    find_config_file,
     get_roar_dir,
     load_config,
+    load_settings,
     save_config,
 )
-from roar.core.settings import find_config_file, load_settings
 
 
 class TestRoarInit:

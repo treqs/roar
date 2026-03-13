@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ...config import load_config
 from ...core.bootstrap import bootstrap
+from ...integrations.config import load_config
 from ...integrations.glaas import GlaasClient
 from ...presenters.console import ConsolePresenter
 from ...services.reproduction import PipelineExecutor, ReproductionService

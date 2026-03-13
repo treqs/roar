@@ -6,9 +6,9 @@ Wraps OmitFilter with the ISecretFilter protocol for use in registration service
 
 from typing import Any
 
-from ...config import config_get
 from ...core.interfaces.registration import ISecretFilter
 from ...filters.omit import OmitFilter
+from ...integrations.config import config_get
 
 
 class SecretFilterService(ISecretFilter):

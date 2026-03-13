@@ -2,8 +2,13 @@
 
 from unittest.mock import patch
 
-from roar.config import CONFIGURABLE_KEYS, config_get, save_config
-from roar.core.models.config import ProxyConfig, RoarConfig
+from roar.integrations.config import (
+    CONFIGURABLE_KEYS,
+    ProxyConfig,
+    RoarConfig,
+    config_get,
+    save_config,
+)
 
 
 class TestProxyConfigModel:
@@ -40,22 +45,25 @@ class TestProxyConfigGetSet:
         roar_dir = tmp_path / ".roar"
         roar_dir.mkdir()
 
-        with patch("roar.config.load_config") as mock_load:
+        with patch("roar.integrations.config.access.load_config") as mock_load:
             mock_load.return_value = RoarConfig().to_dict()
             result = config_get("proxy.enabled")
         assert result is False
 
     def test_config_set_can_enable(self, tmp_path):
-        from roar.config import config_set
+        from roar.integrations.config import config_set
 
         roar_dir = tmp_path / ".roar"
         roar_dir.mkdir()
         config_path = roar_dir / "config.toml"
 
         with (
-            patch("roar.config.load_config") as mock_load,
-            patch("roar.config.get_config_path_for_write", return_value=config_path),
-            patch("roar.config.save_config") as mock_save,
+            patch("roar.integrations.config.access.load_config") as mock_load,
+            patch(
+                "roar.integrations.config.access.get_config_path_for_write",
+                return_value=config_path,
+            ),
+            patch("roar.integrations.config.access.save_config") as mock_save,
         ):
             mock_load.return_value = RoarConfig().to_dict()
             _path, value = config_set("proxy.enabled", "true")

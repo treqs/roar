@@ -9,7 +9,7 @@ This module provides:
 - Custom exception hierarchy
 
 All public names are lazily imported on first access to keep
-``import roar.core.settings`` (and similar lightweight imports) fast.
+lightweight core imports fast.
 """
 
 __all__ = [

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import click
 
-from ...config import config_get
+from ...integrations.config import config_get
 
 
 def _find_ssh_pubkey() -> tuple[str, str, str] | None:

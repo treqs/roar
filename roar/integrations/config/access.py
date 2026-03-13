@@ -4,8 +4,8 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from .core.settings import find_config_file, find_roar_dir, load_settings
-from .core.tracer_modes import VALID_TRACER_MODES
+from ...core.tracer_modes import VALID_TRACER_MODES
+from .loader import find_config_file, find_roar_dir, load_settings
 
 # Valid hash algorithms
 VALID_HASH_ALGORITHMS = {"blake3", "sha256", "sha512", "md5"}
@@ -210,7 +210,7 @@ CONFIGURABLE_KEYS: Mapping[str, dict[str, Any]] = _ConfigurableKeysView()
 
 def _get_default_config() -> dict:
     """Get default config from Pydantic models."""
-    from .core.models.config import RoarConfig
+    from .schema import RoarConfig
 
     return RoarConfig().to_dict()
 

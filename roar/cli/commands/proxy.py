@@ -6,7 +6,7 @@ Usage: roar proxy [enable|disable|start|stop|status]
 
 import click
 
-from ...config import config_get, config_set
+from ...integrations.config import config_get, config_set
 
 
 @click.group("proxy", invoke_without_command=True)
@@ -32,8 +32,8 @@ def proxy(ctx: click.Context) -> None:
 
 def _proxy_status() -> None:
     """Show current proxy configuration and status."""
-    from ...config import get_roar_dir
     from ...execution.cluster.proxy import ProxyService
+    from ...integrations.config import get_roar_dir
 
     enabled = config_get("proxy.enabled") or False
     click.echo(f"Proxy enabled: {enabled}")
@@ -85,8 +85,8 @@ def proxy_start() -> None:
     The daemon runs in the background. Use its port with
     AWS_ENDPOINT_URL to route S3 traffic through the proxy.
     """
-    from ...config import get_roar_dir
     from ...execution.cluster.proxy import ProxyService
+    from ...integrations.config import get_roar_dir
 
     svc = ProxyService()
     roar_dir = get_roar_dir()
@@ -112,8 +112,8 @@ def proxy_start() -> None:
 @proxy.command("stop")
 def proxy_stop() -> None:
     """Stop the standalone S3 proxy daemon."""
-    from ...config import get_roar_dir
     from ...execution.cluster.proxy import ProxyService
+    from ...integrations.config import get_roar_dir
 
     svc = ProxyService()
     roar_dir = get_roar_dir()

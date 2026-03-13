@@ -20,7 +20,7 @@ class PreviousOutputBackupService:
     """Backup outputs from the previous execution of the same script."""
 
     def backup_previous_outputs(self, ctx: RunContext, logger: ILogger) -> None:
-        from ...config import config_get
+        from ...integrations.config import config_get
 
         if not config_get("reversible.enabled"):
             return

@@ -76,7 +76,7 @@ class RunCompositeMaterializationConfig:
     @classmethod
     def from_repo_root(cls, repo_root: str) -> RunCompositeMaterializationConfig:
         try:
-            from ...config import load_config
+            from ...integrations.config import load_config
 
             config = load_config(start_dir=repo_root)
         except Exception:
@@ -655,7 +655,7 @@ class ExecutionJobRecorder:
 
         # Include persistent env vars in metadata for reproduction.
         try:
-            from ...config import load_config
+            from ...integrations.config import load_config
 
             config = load_config(start_dir=ctx.repo_root)
             env_vars = config.get("env", {})

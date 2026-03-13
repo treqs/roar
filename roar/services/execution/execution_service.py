@@ -129,7 +129,7 @@ class ExecutionService:
         if explicit_quiet is not None:
             return explicit_quiet
 
-        from ...config import load_config
+        from ...integrations.config import load_config
 
         config = load_config(start_dir=str(repo_root) if repo_root else None)
         return config.get("output", {}).get("quiet", False)

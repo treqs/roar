@@ -19,7 +19,8 @@ except ImportError:
 from pydantic import PrivateAttr, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 
-from .models.config import (
+from ...core.logging import get_logger
+from .schema import (
     AnalyzersConfig,
     CleanupConfig,
     CompositesConfig,
@@ -33,12 +34,6 @@ from .models.config import (
     ReversibleConfig,
     TracerConfig,
 )
-
-
-def _get_logger():
-    from .logging import get_logger
-
-    return get_logger()
 
 
 def _infer_search_stop(start: Path) -> Path:
@@ -87,9 +82,9 @@ def find_config_file(start_dir: str | None = None, stop_dir: str | None = None) 
                 if "tool" in data and "roar" in data["tool"]:
                     return pyproject
             except tomllib.TOMLDecodeError as e:
-                _get_logger().debug("Failed to parse pyproject.toml at %s: %s", pyproject, e)
+                get_logger().debug("Failed to parse pyproject.toml at %s: %s", pyproject, e)
             except OSError as e:
-                _get_logger().debug("Failed to read pyproject.toml at %s: %s", pyproject, e)
+                get_logger().debug("Failed to read pyproject.toml at %s: %s", pyproject, e)
         if parent.resolve() == stop_path:
             break
 
@@ -162,10 +157,10 @@ class TomlConfigSource(PydanticBaseSettingsSource):
             self._data["_config_file"] = str(path)
 
         except tomllib.TOMLDecodeError as e:
-            _get_logger().warning("Failed to parse config file %s: %s", path, e)
+            get_logger().warning("Failed to parse config file %s: %s", path, e)
             self._data["_config_error"] = f"Failed to parse config file: {e}"
         except OSError as e:
-            _get_logger().warning("Failed to read config file %s: %s", path, e)
+            get_logger().warning("Failed to read config file %s: %s", path, e)
             self._data["_config_error"] = f"Failed to read config file: {e}"
 
         return self._data

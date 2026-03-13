@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...config import config_get
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
+from ...integrations.config import config_get
 from ..git import build_roar_git_tag_name, ensure_clean_git_repo, resolve_roar_git_context
 from .runtime import PublishRuntime
 from .session import prepare_publish_session

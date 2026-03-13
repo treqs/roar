@@ -58,7 +58,7 @@ def _apply_reconstitution_filters(
     project_dir: str,
 ) -> list[TaskFragment]:
     try:
-        from roar.config import load_config
+        from roar.integrations.config import load_config
         from roar.services.execution.provenance.file_filter import (
             FileFilterService,
             _get_editable_install_dirs,

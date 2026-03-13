@@ -5,9 +5,9 @@ Handles parsing of command-line arguments with clean data structures.
 Follows SRP: only handles argument parsing.
 """
 
-from ...config import get_hash_algorithms
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.run import RunArguments
+from ...integrations.config import get_hash_algorithms
 
 
 class RunArgumentParser:

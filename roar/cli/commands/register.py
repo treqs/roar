@@ -10,7 +10,7 @@ import click
 
 from ...application.publish.requests import RegisterLineageRequest
 from ...application.publish.service import register_lineage_target
-from ...config import config_get
+from ...integrations.config import config_get
 from ..context import RoarContext
 from ..decorators import require_init
 

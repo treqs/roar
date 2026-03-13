@@ -58,7 +58,7 @@ def normalize_ray_backend_config(section: Mapping[str, Any] | None) -> dict[str,
 
 def load_ray_backend_config(start_dir: str | None = None) -> dict[str, Any]:
     try:
-        from roar.config import load_config
+        from roar.integrations.config import load_config
 
         config = load_config(start_dir=start_dir)
     except Exception:
