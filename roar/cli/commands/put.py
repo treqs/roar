@@ -105,25 +105,23 @@ def put(
     except Exception as e:  # pragma: no cover - defensive CLI boundary
         raise click.ClickException(f"Unexpected error during put: {e}") from e
 
-    result = response.result
-
     for warning in response.warnings:
         click.echo(f"Warning: {warning}", err=True)
 
     # Handle dry run output
-    if dry_run:
+    if response.dry_run:
         click.echo("Dry run - would upload:")
-        for item in result.would_upload:
-            click.echo(f"  {item['path']}")
-        click.echo(f"\nTotal: {len(result.would_upload)} file(s)")
+        for dry_run_item in response.would_upload:
+            click.echo(f"  {dry_run_item.path}")
+        click.echo(f"\nTotal: {len(response.would_upload)} file(s)")
         return
 
     # Check for registration errors
-    if not result.success:
-        click.echo(f"Published {len(result.uploaded_files)} file(s) to {destination}")
+    if not response.success:
+        click.echo(f"Published {len(response.uploaded_files)} file(s) to {response.destination}")
         click.echo("\nWarning: Registration completed with errors:", err=True)
-        if result.error:
-            for error in result.error.split("; "):
+        if response.error:
+            for error in response.error.split("; "):
                 click.echo(f"  - {error}", err=True)
         raise click.ClickException("Registration completed with errors")
 
@@ -131,40 +129,40 @@ def put(
         click.echo(f"Created git tag: {response.git_tag}")
 
     # Success output
-    click.echo(f"Published {len(result.uploaded_files)} file(s) to {destination}")
-    for item in result.uploaded_files:
-        click.echo(f"  {item['local_path']} -> {item['remote_url']}")
-    if result.composites_registered:
-        click.echo(f"\nRegistered {len(result.composites_registered)} composite artifact(s):")
-        for composite in result.composites_registered:
-            root_path = composite.get("root_path", "(unknown)")
-            digest = composite.get("hash")
+    click.echo(f"Published {len(response.uploaded_files)} file(s) to {response.destination}")
+    for uploaded_file in response.uploaded_files:
+        click.echo(f"  {uploaded_file.local_path} -> {uploaded_file.remote_url}")
+    if response.composites_registered:
+        click.echo(f"\nRegistered {len(response.composites_registered)} composite artifact(s):")
+        for composite in response.composites_registered:
+            root_path = composite.root_path or "(unknown)"
+            digest = composite.hash
             digest_preview = (
                 f"{digest[:12]}..." if isinstance(digest, str) and len(digest) > 12 else digest
             )
-            stored = composite.get("component_count_stored")
-            total = composite.get("component_count_total")
+            stored = composite.component_count_stored
+            total = composite.component_count_total
             component_summary = ""
             if isinstance(stored, int) and isinstance(total, int):
                 component_summary = f" ({stored}/{total} components stored)"
-            artifact_id = composite.get("artifact_id")
+            artifact_id = composite.artifact_id
             artifact_suffix = (
                 f" id={artifact_id}" if isinstance(artifact_id, str) and artifact_id else ""
             )
             click.echo(f"  {root_path} -> {digest_preview}{component_summary}{artifact_suffix}")
-            if composite.get("local_persisted") is False:
-                local_error = composite.get("local_error")
+            if composite.local_persisted is False:
+                local_error = composite.local_error
                 detail = f": {local_error}" if isinstance(local_error, str) and local_error else ""
                 click.echo(
                     f"Warning: local composite metadata was not persisted for {root_path}{detail}",
                     err=True,
                 )
-    click.echo(f"\nJob created: step {result.job_id}")
+    click.echo(f"\nJob created: step {response.job_id}")
     if response.git_tag:
         click.echo(f"Git tag: {response.git_tag}")
     # Show GLaaS registration info
     web_url = config_get("glaas.web_url") or "https://glaas.ai"
-    session_hash = result.session_hash or ""
-    session_url = result.session_url or (f"{web_url}/dag/{session_hash}" if session_hash else "")
+    session_hash = response.session_hash or ""
+    session_url = response.session_url or (f"{web_url}/dag/{session_hash}" if session_hash else "")
     click.echo("\nRegistered with GLaaS:")
     click.echo(f"  View: {session_url}")

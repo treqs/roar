@@ -9,9 +9,8 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from roar.application.publish.requests import PutResponse
+from roar.application.publish.results import PutCompositeRegistration, PutResponse, PutUploadedFile
 from roar.cli.commands.put import put
-from roar.services.put.service import PutResult
 
 put_module = importlib.import_module("roar.cli.commands.put")
 
@@ -27,26 +26,29 @@ def _make_ctx(tmp_path: Path) -> SimpleNamespace:
     )
 
 
-def _make_response(result: PutResult, *, git_tag: str | None = None) -> PutResponse:
-    return PutResponse(result=result, git_tag=git_tag, warnings=[])
+def _make_response(
+    *,
+    destination: str = "memory://bucket/prefix",
+    git_tag: str | None = None,
+    **overrides,
+) -> PutResponse:
+    return PutResponse(destination=destination, git_tag=git_tag, warnings=[], **overrides)
 
 
 def test_put_uses_service_session_url_for_dag_link(tmp_path: Path) -> None:
     runner = CliRunner()
     ctx = _make_ctx(tmp_path)
     response = _make_response(
-        PutResult(
         success=True,
         job_id=7,
         uploaded_files=[
-            {
-                "local_path": str(tmp_path / "model.pt"),
-                "remote_url": "memory://bucket/prefix/model.pt",
-            }
+            PutUploadedFile(
+                local_path=str(tmp_path / "model.pt"),
+                remote_url="memory://bucket/prefix/model.pt",
+            )
         ],
         session_hash="correct_hash",
         session_url="https://glaas.example/dag/correct_hash",
-        )
     )
 
     with (
@@ -68,18 +70,16 @@ def test_put_falls_back_to_web_url_plus_service_session_hash(tmp_path: Path) -> 
     runner = CliRunner()
     ctx = _make_ctx(tmp_path)
     response = _make_response(
-        PutResult(
         success=True,
         job_id=8,
         uploaded_files=[
-            {
-                "local_path": str(tmp_path / "artifact.bin"),
-                "remote_url": "memory://bucket/prefix/artifact.bin",
-            }
+            PutUploadedFile(
+                local_path=str(tmp_path / "artifact.bin"),
+                remote_url="memory://bucket/prefix/artifact.bin",
+            )
         ],
         session_hash="service_hash_only",
         session_url=None,
-        )
     )
 
     with (
@@ -104,27 +104,25 @@ def test_put_prints_registered_composite_summary(tmp_path: Path) -> None:
     composite_hash = "a" * 64
 
     response = _make_response(
-        PutResult(
         success=True,
         job_id=10,
         uploaded_files=[
-            {
-                "local_path": str(tmp_path / "artifact.bin"),
-                "remote_url": "memory://bucket/prefix/artifact.bin",
-            }
+            PutUploadedFile(
+                local_path=str(tmp_path / "artifact.bin"),
+                remote_url="memory://bucket/prefix/artifact.bin",
+            )
         ],
         composites_registered=[
-            {
-                "root_path": str(dataset_root),
-                "hash": composite_hash,
-                "component_count_stored": 2,
-                "component_count_total": 4,
-                "artifact_id": "comp-123",
-            }
+            PutCompositeRegistration(
+                root_path=str(dataset_root),
+                hash=composite_hash,
+                component_count_stored=2,
+                component_count_total=4,
+                artifact_id="comp-123",
+            )
         ],
         session_hash="session_hash",
         session_url="https://glaas.example/dag/session_hash",
-        )
     )
 
     with (
@@ -151,29 +149,27 @@ def test_put_warns_when_local_composite_persistence_fails(tmp_path: Path) -> Non
     dataset_root = tmp_path / "dataset"
 
     response = _make_response(
-        PutResult(
         success=True,
         job_id=11,
         uploaded_files=[
-            {
-                "local_path": str(tmp_path / "artifact.bin"),
-                "remote_url": "memory://bucket/prefix/artifact.bin",
-            }
+            PutUploadedFile(
+                local_path=str(tmp_path / "artifact.bin"),
+                remote_url="memory://bucket/prefix/artifact.bin",
+            )
         ],
         composites_registered=[
-            {
-                "root_path": str(dataset_root),
-                "hash": "b" * 64,
-                "component_count_stored": 1,
-                "component_count_total": 1,
-                "registered": True,
-                "local_persisted": False,
-                "local_error": "sqlite busy",
-            }
+            PutCompositeRegistration(
+                root_path=str(dataset_root),
+                hash="b" * 64,
+                component_count_stored=1,
+                component_count_total=1,
+                registered=True,
+                local_persisted=False,
+                local_error="sqlite busy",
+            )
         ],
         session_hash="session_hash",
         session_url="https://glaas.example/dag/session_hash",
-        )
     )
 
     with (

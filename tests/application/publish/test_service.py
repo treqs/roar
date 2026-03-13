@@ -8,6 +8,7 @@ import pytest
 
 from roar.application.publish.register_preparation import PreparedRegisterExecution
 from roar.application.publish.requests import PutRequest, RegisterLineageRequest
+from roar.application.publish.results import PutResponse, RegisterLineageResponse
 from roar.application.publish.service import put_artifacts, register_lineage_target
 from roar.application.publish.targets import ResolvedRegisterTarget
 from roar.core.interfaces.lineage import LineageData
@@ -65,7 +66,7 @@ def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:
             )
         )
 
-    assert response.result is expected
+    assert response == RegisterLineageResponse(success=True, session_hash="a" * 64)
     mock_cls.assert_called_once_with(
         glaas_client=runtime.glaas_client,
         coordinator=runtime.registration_coordinator,
@@ -126,7 +127,7 @@ def test_register_lineage_target_returns_collection_error(tmp_path: Path) -> Non
             )
         )
 
-    assert response.result == RegisterResult(success=False, error="File not found: missing.csv")
+    assert response == RegisterLineageResponse(success=False, error="File not found: missing.csv")
     mock_cls.return_value.register_prepared_lineage.assert_not_called()
 
 
@@ -168,7 +169,7 @@ def test_register_lineage_target_returns_preparation_error(tmp_path: Path) -> No
             )
         )
 
-    assert response.result == RegisterResult(
+    assert response == RegisterLineageResponse(
         success=False,
         artifact_hash="a" * 64,
         error="GLaaS not configured",
@@ -226,7 +227,7 @@ def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -
             )
         )
 
-    assert response.result is expected
+    assert response == RegisterLineageResponse(success=True, session_hash="a" * 64)
     finalize_register.assert_called_once_with(
         result_success=True,
         dry_run=False,
@@ -312,9 +313,14 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
         git_commit="deadbeef",
         git_tag="roar/deadbeef",
     )
-    assert response.result is put_result
-    assert response.git_tag == "roar/deadbeef"
-    assert response.warnings == []
+    assert response == PutResponse(
+        success=True,
+        destination="memory://bucket/prefix",
+        job_id=7,
+        dry_run=False,
+        git_tag="roar/deadbeef",
+        warnings=[],
+    )
 
 
 def test_put_artifacts_rejects_dirty_repo_before_put(tmp_path: Path) -> None:
@@ -394,9 +400,13 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
             )
         )
 
-    assert response.result is put_result
-    assert response.git_tag is None
-    assert response.warnings == ["Git operation failed: git unavailable"]
+    assert response == PutResponse(
+        success=True,
+        destination="memory://bucket/prefix",
+        job_id=3,
+        dry_run=False,
+        warnings=["Git operation failed: git unavailable"],
+    )
 
 
 def test_put_artifacts_returns_preparation_error_before_service(tmp_path: Path) -> None:
