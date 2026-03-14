@@ -5,9 +5,6 @@ from typing import Any
 
 __all__ = [
     "DAGReferenceResolver",
-    "ExecutionRequest",
-    "ExecutionService",
-    "GitValidationResult",
     "ProcessSignalHandler",
     "ProxyService",
     "RunArgumentParser",
@@ -17,9 +14,6 @@ __all__ = [
 
 _LAZY_IMPORTS = {
     "DAGReferenceResolver": (".dag_resolver", "DAGReferenceResolver"),
-    "ExecutionRequest": (".execution_service", "ExecutionRequest"),
-    "ExecutionService": (".execution_service", "ExecutionService"),
-    "GitValidationResult": (".execution_service", "GitValidationResult"),
     "ProcessSignalHandler": (".signal_handler", "ProcessSignalHandler"),
     "ProxyService": (".proxy", "ProxyService"),
     "RunArgumentParser": (".args", "RunArgumentParser"),
