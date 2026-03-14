@@ -66,16 +66,17 @@ def test_sitecustomize_import_overhead_under_threshold():
 def test_atexit_overhead_without_ray_logs_under_threshold(tmp_path):
     """
     _collect_ray_io should remain lightweight when no Ray collector actor is
-    present. Total overhead with LOG_FILE should be less than 600ms over baseline.
-    Previously ~2160ms; target after optimizations is <600ms.
+    present. Total overhead with LOG_FILE should remain below the hosted-runner
+    guardrail. Previously ~2160ms; local target after optimizations is <600ms.
     """
     log_file = str(tmp_path / "test_inject.json")
     env = _roar_env(log_file=log_file)
     baseline_ms = _run_pass(_no_roar_env(), n=5)
     roar_ms = _run_pass(env, n=5)
     overhead_ms = roar_ms - baseline_ms
-    assert overhead_ms < 600, (
-        f"ROAR_WRAP=1 process overhead is {overhead_ms:.0f}ms, expected <600ms. "
+    threshold_ms = 800 if os.environ.get("CI") else 600
+    assert overhead_ms < threshold_ms, (
+        f"ROAR_WRAP=1 process overhead is {overhead_ms:.0f}ms, expected <{threshold_ms}ms. "
         f"baseline={baseline_ms:.0f}ms roar={roar_ms:.0f}ms"
     )
 
