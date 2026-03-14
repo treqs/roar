@@ -4,6 +4,15 @@ This guide shows how to add a backend on top of Roar's execution framework.
 
 The framework is intentionally broader than Ray. It owns command planning, backend registration, host execution, distributed runtime bootstrapping, fragment-session finalization, and backend config discovery. A backend should plug into those contracts instead of pushing new backend-specific conditionals into shared code.
 
+Current package landmarks:
+
+- workflow orchestration lives in `roar.application.*`
+- execution/runtime contracts live in `roar.execution.*`
+- backend implementations live in `roar.backends.*`
+- external adapters and optional provider discovery live in `roar.integrations.*`
+
+There is no tracked `roar.services.*` or `roar.plugins.*` layer anymore. New extension points should be added to the canonical packages above rather than recreating a generic compatibility bucket.
+
 See also:
 
 - `docs/developer/ray-integration.md`
@@ -273,7 +282,7 @@ If a backend does not need distributed behavior, leave `distributed=None`.
 
 Built-in backends are discovered from `roar.backends.*.plugin`.
 
-External backends are discovered through the `roar.execution_backends` entrypoint group:
+External execution backends are discovered through the `roar.execution_backends` entrypoint group:
 
 ```toml
 [project.entry-points."roar.execution_backends"]
@@ -285,6 +294,8 @@ Your `register()` function can return:
 - one `ExecutionBackend`
 - `None`
 - a list or tuple of `ExecutionBackend` values
+
+Optional non-backend providers such as telemetry or VCS integrations are a separate concern and belong under `roar.integrations`, not `roar.backends`.
 
 ## 8. Backend-Owned Config
 

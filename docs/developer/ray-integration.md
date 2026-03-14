@@ -11,9 +11,15 @@ The canonical extension points now live under:
 
 - `roar.execution.framework.*` for the shared backend framework
 - `roar.backends.ray.*` for the concrete Ray adapter
+- `roar.integrations.*` for GLaaS, config, storage/download, git, telemetry, and optional provider discovery
 
 The Ray submit path now lives entirely under `roar.backends.ray.*`, and the shared
 execution framework now lives under `roar.execution.framework.*`.
+
+Tracked transitional namespaces from earlier refactor phases are gone:
+
+- no tracked `roar.services.*`
+- no tracked `roar.plugins.*`
 
 If you want to add another backend on top of this framework, start with `docs/developer/execution-backend-adapter.md`.
 
