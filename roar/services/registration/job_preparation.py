@@ -10,7 +10,7 @@ from ...execution.framework.registry import (
     is_execution_submit_job,
     is_execution_task_job,
 )
-from . import _artifact_ref
+from ...integrations.glaas.registration import _artifact_ref
 
 
 def normalize_jobs_for_registration(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:

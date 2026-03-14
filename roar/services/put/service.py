@@ -28,8 +28,8 @@ from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...db.context import DatabaseContext
 from ...db.hashing import hash_files_blake3
+from ...integrations.glaas.registration import RegistrationCoordinator
 from ...integrations.storage.base import StorageBackend
-from ...services.registration import RegistrationCoordinator
 from .composites import (
     preregister_put_lineage_composites_with_glaas,
     register_put_composites_with_glaas,

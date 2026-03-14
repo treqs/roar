@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ...integrations.glaas import GlaasClient
-from ...services.registration import RegistrationCoordinator, SessionRegistrationService
+from ...integrations.glaas.registration import (
+    RegistrationCoordinator,
+    SessionRegistrationService,
+)
 from .lineage import LineageCollector
 
 

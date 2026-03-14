@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from roar.integrations.glaas import GlaasClient
-from roar.services.registration.session import SessionRegistrationService
+from roar.integrations.glaas.registration.session import SessionRegistrationService
 from tests.backends.ray.e2e.conftest import (
     HOST_GLAAS_URL,
     init_host_project,

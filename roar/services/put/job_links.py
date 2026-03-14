@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...application.publish.registration import normalize_registration_hashes
-from ..registration import _artifact_ref
+from ...integrations.glaas.registration import _artifact_ref
 
 
 def collect_local_composite_outputs(

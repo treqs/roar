@@ -24,8 +24,8 @@ from ...db.context import create_database_context
 from ...filters.omit import OmitFilter
 from ...integrations.config import config_get
 from ...integrations.glaas import GlaasClient
+from ...integrations.glaas.registration import RegistrationCoordinator
 from .blake3_upgrade import upgrade_s3_etags_to_blake3
-from .coordinator import RegistrationCoordinator
 from .job_preparation import (
     estimate_links,
     normalize_jobs_for_registration,

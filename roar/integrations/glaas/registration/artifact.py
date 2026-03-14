@@ -8,14 +8,14 @@ import json
 from functools import cached_property
 from typing import Any
 
-from ...core.interfaces.logger import ILogger
-from ...core.interfaces.registration import (
+from ....core.interfaces.logger import ILogger
+from ....core.interfaces.registration import (
     ArtifactRegistrationResult,
     IArtifactRegistrar,
 )
-from ...core.logging import get_logger
-from ...core.validation import validate_artifact_registration
-from ...integrations.glaas import GlaasClient
+from ....core.logging import get_logger
+from ....core.validation import validate_artifact_registration
+from ..client import GlaasClient
 from . import _artifact_ref
 
 # Server body-parser limit is ~100KB, use 90KB for safety margin

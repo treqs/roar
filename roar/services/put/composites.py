@@ -22,7 +22,7 @@ from ...application.publish.registration import (
 from ...core.interfaces.logger import ILogger
 from ...db.context import optional_repo
 from ...integrations.glaas import GlaasClient
-from ..registration import _artifact_ref
+from ...integrations.glaas.registration import _artifact_ref
 
 
 def preregister_put_lineage_composites_with_glaas(

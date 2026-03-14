@@ -243,7 +243,7 @@ def _active_session_id(repo: Path) -> int:
 
 
 def _compute_active_session_hash(repo: Path) -> str:
-    from roar.services.registration.session import SessionRegistrationService
+    from roar.integrations.glaas.registration.session import SessionRegistrationService
 
     session_id = _active_session_id(repo)
     return SessionRegistrationService().compute_session_hash(

@@ -8,17 +8,17 @@ import json
 from functools import cached_property
 from typing import Any
 
-from ...core.interfaces.logger import ILogger
-from ...core.interfaces.registration import (
+from ....core.interfaces.logger import ILogger
+from ....core.interfaces.registration import (
     GitContext,
     IJobRegistrar,
     ISecretFilter,
     JobLinkResult,
     JobRegistrationResult,
 )
-from ...core.logging import get_logger
-from ...core.validation import validate_job_registration
-from ...integrations.glaas import GlaasClient
+from ....core.logging import get_logger
+from ....core.validation import validate_job_registration
+from ..client import GlaasClient
 from . import _artifact_ref
 
 # Maximum artifacts per request to avoid exceeding server body-parser limits (~100KB-1MB)

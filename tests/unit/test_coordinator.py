@@ -15,7 +15,7 @@ from roar.core.interfaces.registration import (
     JobLinkResult,
     JobRegistrationResult,
 )
-from roar.services.registration.coordinator import RegistrationCoordinator
+from roar.integrations.glaas.registration.coordinator import RegistrationCoordinator
 
 
 class TestRegisterLineage:

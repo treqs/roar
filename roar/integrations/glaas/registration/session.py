@@ -9,15 +9,15 @@ import hashlib
 from functools import cached_property
 from pathlib import Path
 
-from ...core.interfaces.logger import ILogger
-from ...core.interfaces.registration import (
+from ....core.interfaces.logger import ILogger
+from ....core.interfaces.registration import (
     GitContext,
     ISessionRegistrar,
     SessionRegistrationResult,
 )
-from ...core.logging import get_logger
-from ...core.validation import validate_session_registration
-from ...integrations.glaas import GlaasClient
+from ....core.logging import get_logger
+from ....core.validation import validate_session_registration
+from ..client import GlaasClient
 
 
 class SessionRegistrationService(ISessionRegistrar):

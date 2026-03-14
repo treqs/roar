@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 
 import pytest
 
-from roar.services.registration.session import SessionRegistrationService
+from roar.integrations.glaas.registration.session import SessionRegistrationService
 from tests.live_glaas import test_composite_live as composite_live
 
 pytest_plugins = ("tests.live_glaas.test_composite_live",)
