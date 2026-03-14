@@ -37,7 +37,7 @@ class SQLAlchemyJobRepository(JobRepository):
         Args:
             session: SQLAlchemy session
             artifact_repository: Repository for artifact lookups (injected)
-            logger: Logger instance. If None, resolves from DI container.
+            logger: Logger instance. If None, uses the configured process logger.
         """
         self._session = session
         self._artifact_repository = artifact_repository

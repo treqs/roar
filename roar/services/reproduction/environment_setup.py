@@ -66,7 +66,7 @@ class EnvironmentSetupService:
 
     @property
     def logger(self) -> "ILogger":
-        """Lazy-load logger from container."""
+        """Resolve the configured logger lazily."""
         if self._logger is None:
             from ...core.logging import get_logger
 

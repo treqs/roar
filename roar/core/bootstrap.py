@@ -13,13 +13,13 @@ def bootstrap(roar_dir: Path | None = None) -> None:
     """
     Bootstrap the roar application.
 
-    Initializes the DI container with:
-    - Core services (database, hashing, etc.)
+    Initializes core process-wide runtime state:
+    - Configured logging
     - Built-in integrations (git, telemetry)
     - Optional plugins discovered from the plugin registry
 
     Args:
-        roar_dir: Optional path to .roar directory
+        roar_dir: Optional path to .roar directory (reserved for future bootstrap needs)
 
     """
     global _initialized

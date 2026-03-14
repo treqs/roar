@@ -52,7 +52,7 @@ class RegistrationCoordinator(IRegistrationCoordinator):
             session_service: Session registration service
             artifact_service: Artifact registration service
             job_service: Job registration service
-            logger: Logger instance. If None, resolves from DI container.
+            logger: Logger instance. If None, uses the configured process logger.
         """
         self._session_service = session_service
         self._artifact_service = artifact_service

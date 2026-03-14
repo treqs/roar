@@ -85,7 +85,7 @@ class ArtifactRegistrationService(IArtifactRegistrar):
 
         Args:
             client: GLaaS client for server communication. If None, creates one.
-            logger: Logger instance. If None, resolves from DI container.
+            logger: Logger instance. If None, uses the configured process logger.
         """
         self._client = client
 

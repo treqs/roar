@@ -55,7 +55,7 @@ class JobRegistrationService(IJobRegistrar):
         Args:
             client: GLaaS client for server communication. If None, creates one.
             secret_filter: Optional secret filter for redacting sensitive data.
-            logger: Logger instance. If None, resolves from DI container.
+            logger: Logger instance. If None, uses the configured process logger.
         """
         self._client = client
         self._secret_filter = secret_filter

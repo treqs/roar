@@ -85,7 +85,7 @@ class RegisterService:
             glaas_client: GLaaS client for API communication
             coordinator: Registration coordinator for 4-phase pattern
             omit_filter: Filter for detecting and redacting secrets
-            logger: Logger instance. If None, resolves from DI container.
+            logger: Logger instance. If None, uses the configured process logger.
         """
         self._glaas_client = glaas_client
         self._coordinator = coordinator
