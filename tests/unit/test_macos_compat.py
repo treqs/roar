@@ -21,16 +21,16 @@ class TestRuntimeCollectorMacOS:
 
     @pytest.fixture
     def service(self):
-        from roar.services.execution.provenance.runtime_collector import RuntimeCollectorService
+        from roar.execution.provenance.runtime_collector import RuntimeCollectorService
 
         svc = RuntimeCollectorService()
         svc._logger = MagicMock()
         return svc
 
-    @patch("roar.services.execution.provenance.runtime_collector.sys")
-    @patch("roar.services.execution.provenance.runtime_collector.subprocess.run")
+    @patch("roar.execution.provenance.runtime_collector.sys")
+    @patch("roar.execution.provenance.runtime_collector.subprocess.run")
     def test_hardware_fingerprint_uses_ioreg(self, mock_run, mock_sys):
-        from roar.services.execution.provenance.runtime_collector import RuntimeCollectorService
+        from roar.execution.provenance.runtime_collector import RuntimeCollectorService
 
         mock_sys.platform = "darwin"
         ioreg_output = '  | {\n  |   "IOPlatformUUID" = "ABCD-1234-EFGH-5678"\n  | }\n'
@@ -45,14 +45,14 @@ class TestRuntimeCollectorMacOS:
         call_args = mock_run.call_args[0][0]
         assert call_args[0] == "ioreg"
 
-    @patch("roar.services.execution.provenance.runtime_collector.sys")
+    @patch("roar.execution.provenance.runtime_collector.sys")
     def test_hardware_fingerprint_linux_path_not_called_on_darwin(self, mock_sys):
         """On darwin, /etc/machine-id and /sys/bus/pci should not be read."""
-        from roar.services.execution.provenance.runtime_collector import RuntimeCollectorService
+        from roar.execution.provenance.runtime_collector import RuntimeCollectorService
 
         mock_sys.platform = "darwin"
         with patch(
-            "roar.services.execution.provenance.runtime_collector.subprocess.run"
+            "roar.execution.provenance.runtime_collector.subprocess.run"
         ) as mock_run:
             result_obj = MagicMock()
             result_obj.returncode = 1
@@ -65,7 +65,7 @@ class TestRuntimeCollectorMacOS:
                 fp = RuntimeCollectorService._hardware_fingerprint()
             assert fp  # still produces a fingerprint (from empty parts)
 
-    @patch("roar.services.execution.provenance.runtime_collector.sys")
+    @patch("roar.execution.provenance.runtime_collector.sys")
     def test_get_cpu_info_darwin(self, mock_sys, service):
         mock_sys.platform = "darwin"
         with patch.object(service, "_run_command") as mock_cmd:
@@ -83,7 +83,7 @@ class TestRuntimeCollectorMacOS:
         assert result["count"] == 12
         assert "architecture" in result
 
-    @patch("roar.services.execution.provenance.runtime_collector.sys")
+    @patch("roar.execution.provenance.runtime_collector.sys")
     def test_get_memory_info_darwin(self, mock_sys, service):
         mock_sys.platform = "darwin"
 
@@ -109,7 +109,7 @@ class TestRuntimeCollectorMacOS:
         # (100000 + 50000) * 16384 / 1024 / 1024 = 2343 MB (approx)
         assert result["available_mb"] > 0
 
-    @patch("roar.services.execution.provenance.runtime_collector.sys")
+    @patch("roar.execution.provenance.runtime_collector.sys")
     def test_get_gpu_info_darwin_system_profiler(self, mock_sys, service):
         mock_sys.platform = "darwin"
 
@@ -143,7 +143,7 @@ class TestRuntimeCollectorMacOS:
         assert len(result) == 1
         assert result[0]["name"] == "Apple M2 Pro"
 
-    @patch("roar.services.execution.provenance.runtime_collector.sys")
+    @patch("roar.execution.provenance.runtime_collector.sys")
     def test_get_gpu_info_darwin_with_vram(self, mock_sys, service):
         mock_sys.platform = "darwin"
 
@@ -167,7 +167,7 @@ class TestRuntimeCollectorMacOS:
         assert result[0]["name"] == "AMD Radeon Pro 5500M"
         assert result[0]["memory_mb"] == 4096
 
-    @patch("roar.services.execution.provenance.runtime_collector.sys")
+    @patch("roar.execution.provenance.runtime_collector.sys")
     def test_get_vm_info_darwin_in_vm(self, mock_sys, service):
         mock_sys.platform = "darwin"
         with patch.object(service, "_run_command") as mock_cmd:
@@ -178,7 +178,7 @@ class TestRuntimeCollectorMacOS:
         assert result is not None
         assert result["hypervisor"] == "unknown"
 
-    @patch("roar.services.execution.provenance.runtime_collector.sys")
+    @patch("roar.execution.provenance.runtime_collector.sys")
     def test_get_vm_info_darwin_not_in_vm(self, mock_sys, service):
         mock_sys.platform = "darwin"
         with patch.object(service, "_run_command") as mock_cmd:
@@ -188,7 +188,7 @@ class TestRuntimeCollectorMacOS:
 
         assert result is None
 
-    @patch("roar.services.execution.provenance.runtime_collector.sys")
+    @patch("roar.execution.provenance.runtime_collector.sys")
     @patch.dict("os.environ", {}, clear=True)
     def test_get_container_info_darwin_skips_proc(self, mock_sys, service):
         mock_sys.platform = "darwin"
@@ -198,7 +198,7 @@ class TestRuntimeCollectorMacOS:
         # No /proc/self/cgroup on macOS, no env vars set → None
         assert result is None
 
-    @patch("roar.services.execution.provenance.runtime_collector.sys")
+    @patch("roar.execution.provenance.runtime_collector.sys")
     @patch.dict("os.environ", {"KUBERNETES_SERVICE_HOST": "10.0.0.1"})
     def test_get_container_info_darwin_env_vars_still_work(self, mock_sys, service):
         mock_sys.platform = "darwin"
@@ -215,11 +215,11 @@ class TestRuntimeCollectorMacOS:
 
 
 class TestPackageCollectorMacOS:
-    @patch("roar.services.execution.provenance.package_collector.sys")
+    @patch("roar.execution.provenance.package_collector.sys")
     def test_collect_dpkg_packages_returns_empty_on_darwin(self, mock_sys):
         mock_sys.platform = "darwin"
 
-        from roar.services.execution.provenance.package_collector import PackageCollectorService
+        from roar.execution.provenance.package_collector import PackageCollectorService
 
         svc = PackageCollectorService()
         svc._logger = MagicMock()
@@ -231,12 +231,12 @@ class TestPackageCollectorMacOS:
         )
         assert result == {}
 
-    @patch("roar.services.execution.provenance.package_collector.sys")
+    @patch("roar.execution.provenance.package_collector.sys")
     def test_collect_dpkg_packages_runs_on_linux(self, mock_sys):
         """Ensure the guard only activates on non-Linux."""
         mock_sys.platform = "linux"
 
-        from roar.services.execution.provenance.package_collector import PackageCollectorService
+        from roar.execution.provenance.package_collector import PackageCollectorService
 
         svc = PackageCollectorService()
         svc._logger = MagicMock()
@@ -260,7 +260,7 @@ class TestPackageCollectorMacOS:
 class TestBuildToolCollectorMacOS:
     @pytest.fixture
     def service(self):
-        from roar.services.execution.provenance.build_tool_collector import (
+        from roar.execution.provenance.build_tool_collector import (
             BuildToolCollectorService,
         )
 
@@ -268,8 +268,8 @@ class TestBuildToolCollectorMacOS:
         svc._logger = MagicMock()
         return svc
 
-    @patch("roar.services.execution.provenance.build_tool_collector.sys")
-    @patch("roar.services.execution.provenance.build_tool_collector.shutil.which")
+    @patch("roar.execution.provenance.build_tool_collector.sys")
+    @patch("roar.execution.provenance.build_tool_collector.shutil.which")
     def test_collect_returns_basenames_on_darwin(self, mock_which, mock_sys, service):
         mock_sys.platform = "darwin"
         processes = [
@@ -286,8 +286,8 @@ class TestBuildToolCollectorMacOS:
         assert result["cmake"] == ""
         assert result["gcc"] == ""
 
-    @patch("roar.services.execution.provenance.build_tool_collector.sys")
-    @patch("roar.services.execution.provenance.build_tool_collector.shutil.which")
+    @patch("roar.execution.provenance.build_tool_collector.sys")
+    @patch("roar.execution.provenance.build_tool_collector.shutil.which")
     def test_collect_no_dpkg_subprocess_on_darwin(self, mock_which, mock_sys, service):
         """Ensure dpkg is never called on darwin."""
         mock_sys.platform = "darwin"
@@ -295,7 +295,7 @@ class TestBuildToolCollectorMacOS:
         mock_which.return_value = "/usr/bin/cmake"
 
         with patch(
-            "roar.services.execution.provenance.build_tool_collector.subprocess.run"
+            "roar.execution.provenance.build_tool_collector.subprocess.run"
         ) as mock_run:
             service.collect(processes, sys_prefix="/some/venv")
             mock_run.assert_not_called()
@@ -387,7 +387,7 @@ class TestFileClassifierMacOS:
 
 class TestFileFilterServiceMacOS:
     def test_system_read_prefixes_include_macos(self):
-        from roar.services.execution.provenance.file_filter import FileFilterService
+        from roar.execution.provenance.file_filter import FileFilterService
 
         prefixes = FileFilterService.SYSTEM_READ_PREFIXES
         assert "/System/" in prefixes
@@ -398,7 +398,7 @@ class TestFileFilterServiceMacOS:
         assert "/private/var/log/" in prefixes
 
     def test_write_noise_prefixes_include_macos(self):
-        from roar.services.execution.provenance.file_filter import FileFilterService
+        from roar.execution.provenance.file_filter import FileFilterService
 
         prefixes = FileFilterService.WRITE_NOISE_PREFIXES
         assert "/System/" in prefixes
@@ -408,7 +408,7 @@ class TestFileFilterServiceMacOS:
         assert "/private/var/log/" in prefixes
 
     def test_is_system_read_macos_path(self):
-        from roar.services.execution.provenance.file_filter import FileFilterService
+        from roar.execution.provenance.file_filter import FileFilterService
 
         svc = FileFilterService()
         assert svc._is_system_read("/System/Library/Frameworks/Security.framework/Security")
@@ -416,7 +416,7 @@ class TestFileFilterServiceMacOS:
         assert svc._is_system_read("/Applications/Xcode.app/Contents/MacOS/Xcode")
 
     def test_is_write_noise_macos_path(self):
-        from roar.services.execution.provenance.file_filter import FileFilterService
+        from roar.execution.provenance.file_filter import FileFilterService
 
         svc = FileFilterService()
         svc._logger = MagicMock()
@@ -430,14 +430,14 @@ class TestFileFilterServiceMacOS:
         assert svc._is_write_noise("/private/var/log/something")
 
     def test_is_tmp_path_linux(self):
-        from roar.services.execution.provenance.file_filter import FileFilterService
+        from roar.execution.provenance.file_filter import FileFilterService
 
         assert FileFilterService._is_tmp_path("/tmp/foo.txt")
         assert FileFilterService._is_tmp_path("/tmp/subdir/bar")
         assert not FileFilterService._is_tmp_path("/home/user/tmp/foo")
 
     def test_is_tmp_path_macos(self):
-        from roar.services.execution.provenance.file_filter import FileFilterService
+        from roar.execution.provenance.file_filter import FileFilterService
 
         assert FileFilterService._is_tmp_path("/private/var/folders/xx/T/tmp123")
         assert FileFilterService._is_tmp_path("/private/var/folders/ab/cdef/T/foo")
@@ -453,7 +453,7 @@ class TestFileFilterServiceMacOS:
 class TestAssemblerMacOS:
     @pytest.fixture
     def service(self):
-        from roar.services.execution.provenance.assembler import ProvenanceAssemblerService
+        from roar.execution.provenance.assembler import ProvenanceAssemblerService
 
         svc = ProvenanceAssemblerService()
         svc._logger = MagicMock()
@@ -466,7 +466,7 @@ class TestAssemblerMacOS:
         )
 
     def test_dylib_in_code_extensions(self):
-        from roar.services.execution.provenance.assembler import ProvenanceAssemblerService
+        from roar.execution.provenance.assembler import ProvenanceAssemblerService
 
         assert ".dylib" in ProvenanceAssemblerService.CODE_EXTENSIONS
 

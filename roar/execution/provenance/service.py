@@ -7,9 +7,9 @@ Coordinates all provenance collection services to produce the final output.
 from datetime import datetime, timezone
 from typing import Any
 
-from .... import analyzers
-from ....core.interfaces.logger import ILogger
-from ....core.interfaces.provenance import (
+from ... import analyzers
+from ...core.interfaces.logger import ILogger
+from ...core.interfaces.provenance import (
     IDataLoader,
     IFileFilterService,
     IPackageCollector,
@@ -18,7 +18,7 @@ from ....core.interfaces.provenance import (
     IRuntimeCollector,
     ProvenanceContext,
 )
-from ....filters import FileClassifier
+from ...filters import FileClassifier
 from .assembler import ProvenanceAssemblerService
 from .build_pip_collector import BuildPipCollectorService
 from .build_tool_collector import BuildToolCollectorService
@@ -76,7 +76,7 @@ class ProvenanceService:
     def logger(self) -> ILogger:
         """Get logger, resolving from container or creating NullLogger."""
         if self._logger is None:
-            from ....core.logging import get_logger
+            from ...core.logging import get_logger
 
             self._logger = get_logger()
         return self._logger
@@ -285,13 +285,13 @@ class ProvenanceService:
     def _get_git_info(self, repo_root: str) -> dict[str, Any]:
         """Get git info via VCS provider."""
         try:
-            from ....integrations import get_vcs_provider
+            from ...integrations import get_vcs_provider
 
             vcs = get_vcs_provider("git")
             vcs_info = vcs.get_info(repo_root)
         except KeyError:
             # Defensive fallback if explicit git provider registration was skipped.
-            from ....integrations.git import GitVCSProvider
+            from ...integrations.git import GitVCSProvider
 
             vcs_info = GitVCSProvider().get_info(repo_root)
 

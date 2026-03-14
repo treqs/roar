@@ -195,7 +195,7 @@ class RunCoordinator:
         from ...core.bootstrap import bootstrap
         from ...core.interfaces.run import RunResult
         from ...integrations.config import load_config
-        from ...services.execution.provenance import ProvenanceService
+        from ..provenance import ProvenanceService
 
         bootstrap(ctx.roar_dir)
         config = load_config(start_dir=ctx.repo_root)

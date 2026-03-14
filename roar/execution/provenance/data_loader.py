@@ -10,8 +10,8 @@ import sys
 
 import msgpack
 
-from ....core.interfaces.logger import ILogger
-from ....core.interfaces.provenance import PythonInjectData, TracerData
+from ...core.interfaces.logger import ILogger
+from ...core.interfaces.provenance import PythonInjectData, TracerData
 
 
 class DataLoaderService:
@@ -25,7 +25,7 @@ class DataLoaderService:
     def logger(self) -> ILogger:
         """Get logger, resolving from container or creating NullLogger."""
         if self._logger is None:
-            from ....core.logging import get_logger
+            from ...core.logging import get_logger
 
             self._logger = get_logger()
         return self._logger

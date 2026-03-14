@@ -11,7 +11,7 @@ import subprocess
 import sys
 from typing import Any
 
-from ....core.interfaces.logger import ILogger
+from ...core.interfaces.logger import ILogger
 
 KNOWN_BUILD_TOOLS: frozenset[str] = frozenset(
     {
@@ -51,7 +51,7 @@ class BuildToolCollectorService:
     def logger(self) -> ILogger:
         """Get logger, resolving from container or creating NullLogger."""
         if self._logger is None:
-            from ....core.logging import get_logger
+            from ...core.logging import get_logger
 
             self._logger = get_logger()
         return self._logger

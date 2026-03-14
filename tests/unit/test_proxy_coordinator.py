@@ -50,7 +50,7 @@ class TestProxyLifecycle:
         with (
             patch("os.path.exists", return_value=True),
             patch("roar.integrations.config.load_config", return_value={}),
-            patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
+            patch("roar.execution.provenance.ProvenanceService", return_value=mock_prov),
             patch.object(coord, "_record_job", return_value=(1, "abc123", [], [], [], [])),
             patch.object(coord, "_backup_previous_outputs"),
             patch.object(coord, "_cleanup_logs"),
@@ -137,7 +137,7 @@ class TestProxyLifecycle:
             patch("secrets.token_hex", return_value="runuid12"),
             patch("os.path.exists", return_value=True),
             patch("roar.integrations.config.load_config", return_value={}),
-            patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
+            patch("roar.execution.provenance.ProvenanceService", return_value=mock_prov),
             patch.object(
                 coord, "_record_job", return_value=(1, "abc123", [], [], [], [])
             ) as mock_record,
@@ -167,7 +167,7 @@ class TestProxyLifecycle:
         with (
             patch("os.path.exists", return_value=True),
             patch("roar.integrations.config.load_config", return_value={}),
-            patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
+            patch("roar.execution.provenance.ProvenanceService", return_value=mock_prov),
             patch.object(coord, "_record_job", return_value=(1, "abc123", [], [], [], [])),
             patch.object(coord, "_backup_previous_outputs"),
             patch.object(coord, "_cleanup_logs"),
@@ -229,7 +229,7 @@ class TestEndpointUrlChaining:
         with (
             patch("os.path.exists", return_value=True),
             patch("roar.integrations.config.load_config", return_value={}),
-            patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
+            patch("roar.execution.provenance.ProvenanceService", return_value=mock_prov),
             patch.object(coord, "_record_job", return_value=(1, "abc123", [], [], [], [])),
             patch.object(coord, "_backup_previous_outputs"),
             patch.object(coord, "_cleanup_logs"),

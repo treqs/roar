@@ -58,11 +58,11 @@ def _apply_reconstitution_filters(
     project_dir: str,
 ) -> list[TaskFragment]:
     try:
-        from roar.integrations.config import load_config
-        from roar.services.execution.provenance.file_filter import (
+        from roar.execution.provenance.file_filter import (
             FileFilterService,
             _get_editable_install_dirs,
         )
+        from roar.integrations.config import load_config
     except Exception:
         return [fragment for fragment in fragments if _should_keep_fragment(fragment)]
 

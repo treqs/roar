@@ -4,7 +4,7 @@ from pathlib import Path
 
 import msgpack
 
-from roar.services.execution.provenance.data_loader import DataLoaderService
+from roar.execution.provenance.data_loader import DataLoaderService
 
 
 def _write_msgpack(path: Path, payload: dict) -> None:

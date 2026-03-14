@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ....core.interfaces.logger import ILogger
-from ....core.interfaces.provenance import PythonInjectData
+from ...core.interfaces.logger import ILogger
+from ...core.interfaces.provenance import PythonInjectData
 
 _DPKG_CACHE_FILENAME = "dpkg_lib_cache.json"
 _DPKG_STATUS_PATH = "/var/lib/dpkg/status"
@@ -30,7 +30,7 @@ class PackageCollectorService:
     def logger(self) -> ILogger:
         """Get logger, resolving from container or creating NullLogger."""
         if self._logger is None:
-            from ....core.logging import get_logger
+            from ...core.logging import get_logger
 
             self._logger = get_logger()
         return self._logger
