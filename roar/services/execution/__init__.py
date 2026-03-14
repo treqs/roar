@@ -6,7 +6,6 @@ from typing import Any
 __all__ = [
     "ProcessSignalHandler",
     "ProxyService",
-    "RunArgumentParser",
     "RunCoordinator",
     "TracerService",
 ]
@@ -14,7 +13,6 @@ __all__ = [
 _LAZY_IMPORTS = {
     "ProcessSignalHandler": (".signal_handler", "ProcessSignalHandler"),
     "ProxyService": (".proxy", "ProxyService"),
-    "RunArgumentParser": (".args", "RunArgumentParser"),
     "RunCoordinator": (".coordinator", "RunCoordinator"),
     "TracerService": (".tracer", "TracerService"),
 }
