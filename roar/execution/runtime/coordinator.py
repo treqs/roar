@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from ...core.interfaces.logger import ILogger
     from ...core.interfaces.presenter import IPresenter
     from ...core.interfaces.run import RunContext, RunResult
-    from .proxy import ProxyService
+    from ..cluster.proxy import ProxyService
 
 
 class RunCoordinator:
@@ -195,7 +195,7 @@ class RunCoordinator:
         from ...core.bootstrap import bootstrap
         from ...core.interfaces.run import RunResult
         from ...integrations.config import load_config
-        from .provenance import ProvenanceService
+        from ...services.execution.provenance import ProvenanceService
 
         bootstrap(ctx.roar_dir)
         config = load_config(start_dir=ctx.repo_root)

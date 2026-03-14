@@ -10,8 +10,8 @@ from pathlib import Path
 import click
 
 from ...core.tracer_modes import TRACER_MODE_VALUES, is_valid_tracer_mode
+from ...execution.runtime import tracer_backends
 from ...integrations.config import config_get, config_set
-from ...services.execution import tracer_backends
 
 REQUIRED_CAPS = "cap_bpf,cap_perfmon,cap_sys_resource,cap_sys_ptrace,cap_dac_read_search+ep"
 EXPECTED_CAP_NAMES = tracer_backends.EXPECTED_EBPF_CAP_NAMES

@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from roar.services.execution.tracer import TracerService
+from roar.execution.runtime.tracer import TracerService
 
 
 def _make_signal_handler():

@@ -32,7 +32,7 @@ class TracerService:
             package_path: Path to the roar package (for finding tracer binary)
             logger: Logger for internal diagnostics
         """
-        # Go up 3 levels: execution -> services -> roar
+        # Go up 3 levels: runtime -> execution -> roar
         self._package_path = package_path or Path(__file__).parent.parent.parent
         self._logger = logger
 

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from roar.core.exceptions import TracerNotFoundError
 from roar.execution.cluster.proxy import ProxyHandle
-from roar.services.execution.coordinator import RunCoordinator
+from roar.execution.runtime.coordinator import RunCoordinator
 
 
 def _make_ctx():
