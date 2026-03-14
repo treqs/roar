@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from ..services.labels import render_label_lines
+from ..application.labels import render_label_lines
 from .formatting import format_duration, format_size, format_timestamp
 
 

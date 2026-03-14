@@ -1,8 +1,8 @@
 """
-Local label services.
+Shared application-layer label helpers and workflows.
 
-Handles target resolution, versioned patch semantics, copy semantics,
-and formatting helpers used by the CLI and presenters.
+Owns local label parsing, rendering, target resolution, and label-sync payload
+construction for the CLI and publish flows.
 """
 
 from __future__ import annotations
