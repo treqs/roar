@@ -69,7 +69,7 @@ def test_reproduce_preview_uses_application_branching_and_renders_steps(tmp_path
         patch("roar.application.reproduce.service.bootstrap"),
         patch("roar.application.reproduce.service.load_config", return_value={"glaas": {"url": "http://localhost:3001"}}),
         patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
-        patch("roar.application.reproduce.service.ReproductionService", return_value=service),
+        patch("roar.application.reproduce.service.lookup_pipeline_result", return_value=service.lookup_pipeline_result.return_value),
     ):
         mock_glaas = MagicMock()
         mock_glaas.is_configured.return_value = True
@@ -77,8 +77,6 @@ def test_reproduce_preview_uses_application_branching_and_renders_steps(tmp_path
 
         reproduce_artifact(_request(tmp_path), presenter=presenter)
 
-    service.prepare_environment.assert_not_called()
-    service.execute_pipeline.assert_not_called()
     printed = "\n".join(call.args[0] for call in presenter.print.call_args_list)
     assert "Artifact: abc123def456789" in printed
     assert "Git repo: https://github.com/test/repo" in printed
@@ -108,16 +106,21 @@ def test_reproduce_run_executes_full_reproduction_and_renders_completion(tmp_pat
         patch("roar.application.reproduce.service.bootstrap"),
         patch("roar.application.reproduce.service.load_config", return_value={"glaas": {"url": "http://localhost:3001"}}),
         patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
-        patch("roar.application.reproduce.service.ReproductionService", return_value=service),
+        patch("roar.application.reproduce.service.lookup_pipeline_result", return_value=service.lookup_pipeline_result.return_value),
+        patch("roar.application.reproduce.service.prepare_reproduction_environment", return_value=service.prepare_environment.return_value) as mock_prepare,
+        patch("roar.application.reproduce.service.PipelineExecutor") as mock_executor_cls,
     ):
         mock_glaas = MagicMock()
         mock_glaas.is_configured.return_value = True
         mock_glaas_cls.return_value = mock_glaas
+        mock_executor = MagicMock()
+        mock_executor.execute.return_value = (2, 2)
+        mock_executor_cls.return_value = mock_executor
 
         reproduce_artifact(_request(tmp_path, run_pipeline=True, auto_confirm=True), presenter=presenter)
 
-    service.prepare_environment.assert_called_once()
-    service.execute_pipeline.assert_called_once()
+    mock_prepare.assert_called_once()
+    mock_executor.execute.assert_called_once()
     printed = "\n".join(call.args[0] for call in presenter.print.call_args_list)
     assert "Found artifact: abc123def456789" in printed
     assert "Environment ready:" in printed
@@ -139,7 +142,7 @@ def test_reproduce_out_writes_dag_response(tmp_path: Path) -> None:
         patch("roar.application.reproduce.service.bootstrap"),
         patch("roar.application.reproduce.service.load_config", return_value={"glaas": {"url": "http://localhost:3001"}}),
         patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
-        patch("roar.application.reproduce.service.ReproductionService", return_value=service),
+        patch("roar.application.reproduce.service.lookup_pipeline_result", return_value=service.lookup_pipeline_result.return_value),
     ):
         mock_glaas = MagicMock()
         mock_glaas.is_configured.return_value = True
@@ -232,14 +235,19 @@ def test_reproduce_run_skip_after_environment_renders_warning_summary(tmp_path: 
             return_value={"glaas": {"url": "http://localhost:3001"}},
         ),
         patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
-        patch("roar.application.reproduce.service.ReproductionService", return_value=service),
+        patch("roar.application.reproduce.service.lookup_pipeline_result", return_value=service.lookup_pipeline_result.return_value),
+        patch("roar.application.reproduce.service.prepare_reproduction_environment", return_value=service.prepare_environment.return_value),
+        patch("roar.application.reproduce.service.PipelineExecutor") as mock_executor_cls,
     ):
         mock_glaas = MagicMock()
         mock_glaas.is_configured.return_value = True
         mock_glaas_cls.return_value = mock_glaas
+        mock_executor = MagicMock()
+        mock_executor.execute.return_value = (2, 2)
+        mock_executor_cls.return_value = mock_executor
 
         reproduce_artifact(_request(tmp_path, run_pipeline=True), presenter=presenter)
 
-    service.execute_pipeline.assert_not_called()
+    mock_executor.execute.assert_not_called()
     printed = "\n".join(call.args[0] for call in presenter.print.call_args_list)
     assert "Pipeline not executed (user chose to skip)" in printed

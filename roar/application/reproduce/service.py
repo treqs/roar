@@ -10,8 +10,10 @@ from ...core.bootstrap import bootstrap
 from ...integrations.config import load_config
 from ...integrations.glaas import GlaasClient
 from ...presenters.console import ConsolePresenter
-from ...services.reproduction import ReproductionService
+from ...services.reproduction.pipeline_executor import PipelineExecutor
 from ...services.reproduction.pipeline_metadata import PipelineMetadataParser
+from .environment import prepare_reproduction_environment
+from .lookup import lookup_pipeline_result
 from .requests import ReproduceRequest
 from .results import (
     ReproducePreviewStepSummary,
@@ -47,16 +49,11 @@ def reproduce_artifact(
             output,
         )
 
-    service = ReproductionService(
-        glaas_client=glaas_client,
-        presenter=output,
-    )
-
     pipeline = _resolve_pipeline(
-        service=service,
         hash_prefix=request.hash_prefix,
         server_url=server_url,
         roar_dir=request.roar_dir,
+        glaas_client=glaas_client,
     )
     preview = build_preview_summary(
         pipeline,
@@ -99,10 +96,11 @@ def reproduce_artifact(
         raise ValueError("Reproduction cancelled by user")
 
     try:
-        environment = service.prepare_environment(
-            pipeline,
-            request.cwd,
-            request.auto_confirm,
+        environment = prepare_reproduction_environment(
+            pipeline=pipeline,
+            cwd=request.cwd,
+            presenter=output,
+            auto_confirm=request.auto_confirm,
             dpkg_any_version=request.dpkg_any_version,
             pip_any_version=request.pip_any_version,
             package_sync=request.package_sync,
@@ -125,7 +123,7 @@ def reproduce_artifact(
         )
         return
 
-    steps_run, steps_total = service.execute_pipeline(
+    steps_run, steps_total = PipelineExecutor(presenter=output).execute(
         pipeline,
         environment,
         request.auto_confirm,
@@ -171,13 +169,18 @@ def _write_dag_output(
 
 def _resolve_pipeline(
     *,
-    service: ReproductionService,
     hash_prefix: str,
     server_url: str | None,
     roar_dir: Path,
+    glaas_client: GlaasClient | None,
 ) -> PipelineInfo:
     """Resolve the target pipeline for reproduction."""
-    lookup = service.lookup_pipeline_result(hash_prefix, server_url, roar_dir)
+    lookup = lookup_pipeline_result(
+        hash_prefix=hash_prefix,
+        roar_dir=roar_dir,
+        server_url=server_url,
+        glaas_client=glaas_client,
+    )
     if lookup.error:
         raise ValueError(lookup.error)
     pipeline = lookup.pipeline
