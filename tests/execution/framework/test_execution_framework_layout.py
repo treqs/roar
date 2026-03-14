@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10 CI
+    import tomli as tomllib
 
 from roar.backends.local.plugin import LOCAL_EXECUTION_BACKEND
 from roar.backends.ray.plugin import RAY_EXECUTION_BACKEND
