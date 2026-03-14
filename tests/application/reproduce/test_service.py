@@ -67,9 +67,15 @@ def test_reproduce_preview_uses_application_branching_and_renders_steps(tmp_path
 
     with (
         patch("roar.application.reproduce.service.bootstrap"),
-        patch("roar.application.reproduce.service.load_config", return_value={"glaas": {"url": "http://localhost:3001"}}),
+        patch(
+            "roar.application.reproduce.service.load_config",
+            return_value={"glaas": {"url": "http://localhost:3001"}},
+        ),
         patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
-        patch("roar.application.reproduce.service.lookup_pipeline_result", return_value=service.lookup_pipeline_result.return_value),
+        patch(
+            "roar.application.reproduce.service.lookup_pipeline_result",
+            return_value=service.lookup_pipeline_result.return_value,
+        ),
     ):
         mock_glaas = MagicMock()
         mock_glaas.is_configured.return_value = True
@@ -104,10 +110,19 @@ def test_reproduce_run_executes_full_reproduction_and_renders_completion(tmp_pat
 
     with (
         patch("roar.application.reproduce.service.bootstrap"),
-        patch("roar.application.reproduce.service.load_config", return_value={"glaas": {"url": "http://localhost:3001"}}),
+        patch(
+            "roar.application.reproduce.service.load_config",
+            return_value={"glaas": {"url": "http://localhost:3001"}},
+        ),
         patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
-        patch("roar.application.reproduce.service.lookup_pipeline_result", return_value=service.lookup_pipeline_result.return_value),
-        patch("roar.application.reproduce.service.prepare_reproduction_environment", return_value=service.prepare_environment.return_value) as mock_prepare,
+        patch(
+            "roar.application.reproduce.service.lookup_pipeline_result",
+            return_value=service.lookup_pipeline_result.return_value,
+        ),
+        patch(
+            "roar.application.reproduce.service.prepare_reproduction_environment",
+            return_value=service.prepare_environment.return_value,
+        ) as mock_prepare,
         patch("roar.application.reproduce.service.PipelineExecutor") as mock_executor_cls,
     ):
         mock_glaas = MagicMock()
@@ -117,7 +132,9 @@ def test_reproduce_run_executes_full_reproduction_and_renders_completion(tmp_pat
         mock_executor.execute.return_value = (2, 2)
         mock_executor_cls.return_value = mock_executor
 
-        reproduce_artifact(_request(tmp_path, run_pipeline=True, auto_confirm=True), presenter=presenter)
+        reproduce_artifact(
+            _request(tmp_path, run_pipeline=True, auto_confirm=True), presenter=presenter
+        )
 
     mock_prepare.assert_called_once()
     mock_executor.execute.assert_called_once()
@@ -140,9 +157,15 @@ def test_reproduce_out_writes_dag_response(tmp_path: Path) -> None:
 
     with (
         patch("roar.application.reproduce.service.bootstrap"),
-        patch("roar.application.reproduce.service.load_config", return_value={"glaas": {"url": "http://localhost:3001"}}),
+        patch(
+            "roar.application.reproduce.service.load_config",
+            return_value={"glaas": {"url": "http://localhost:3001"}},
+        ),
         patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
-        patch("roar.application.reproduce.service.lookup_pipeline_result", return_value=service.lookup_pipeline_result.return_value),
+        patch(
+            "roar.application.reproduce.service.lookup_pipeline_result",
+            return_value=service.lookup_pipeline_result.return_value,
+        ),
     ):
         mock_glaas = MagicMock()
         mock_glaas.is_configured.return_value = True
@@ -161,7 +184,9 @@ def test_reproduce_out_requires_configured_glaas(tmp_path: Path) -> None:
 
     with (
         patch("roar.application.reproduce.service.bootstrap"),
-        patch("roar.application.reproduce.service.load_config", return_value={"glaas": {"url": ""}}),
+        patch(
+            "roar.application.reproduce.service.load_config", return_value={"glaas": {"url": ""}}
+        ),
         patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
     ):
         mock_glaas = MagicMock()
@@ -169,7 +194,9 @@ def test_reproduce_out_requires_configured_glaas(tmp_path: Path) -> None:
         mock_glaas_cls.return_value = mock_glaas
 
         with pytest.raises(ValueError, match="--out requires a configured GLaaS server"):
-            reproduce_artifact(_request(tmp_path, out_path=str(tmp_path / "dag.json")), presenter=presenter)
+            reproduce_artifact(
+                _request(tmp_path, out_path=str(tmp_path / "dag.json")), presenter=presenter
+            )
 
 
 def test_reproduce_rejects_short_hash_prefix(tmp_path: Path) -> None:
@@ -235,8 +262,14 @@ def test_reproduce_run_skip_after_environment_renders_warning_summary(tmp_path: 
             return_value={"glaas": {"url": "http://localhost:3001"}},
         ),
         patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
-        patch("roar.application.reproduce.service.lookup_pipeline_result", return_value=service.lookup_pipeline_result.return_value),
-        patch("roar.application.reproduce.service.prepare_reproduction_environment", return_value=service.prepare_environment.return_value),
+        patch(
+            "roar.application.reproduce.service.lookup_pipeline_result",
+            return_value=service.lookup_pipeline_result.return_value,
+        ),
+        patch(
+            "roar.application.reproduce.service.prepare_reproduction_environment",
+            return_value=service.prepare_environment.return_value,
+        ),
         patch("roar.application.reproduce.service.PipelineExecutor") as mock_executor_cls,
     ):
         mock_glaas = MagicMock()

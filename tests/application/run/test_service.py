@@ -102,7 +102,7 @@ def test_run_command_resolves_dag_reference_and_can_abort_on_stale_upstream(
     db_ctx.__exit__.return_value = None
     resolved = SimpleNamespace(
         step_number=2,
-        command='python train.py --epochs=20',
+        command="python train.py --epochs=20",
         is_build=False,
         stale_upstream=[1],
     )
@@ -121,9 +121,7 @@ def test_run_command_resolves_dag_reference_and_can_abort_on_stale_upstream(
         patch("roar.application.run.service.execute_and_report") as mock_exec,
     ):
         resolver_cls.return_value.resolve.return_value = (resolved, None)
-        exit_code = run_command(
-            _run_request(tmp_path, args=("@2", "--epochs=20"))
-        )
+        exit_code = run_command(_run_request(tmp_path, args=("@2", "--epochs=20")))
 
     assert exit_code == 0
     mock_exec.assert_not_called()

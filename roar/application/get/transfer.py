@@ -250,9 +250,7 @@ class GetService:
         return GetTransferResult(
             success=True,
             dry_run=True,
-            would_download=[
-                self._build_dry_run_entry(pending) for pending in pending_downloads
-            ],
+            would_download=[self._build_dry_run_entry(pending) for pending in pending_downloads],
         )
 
     def _execute_pending_downloads(

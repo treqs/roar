@@ -195,7 +195,9 @@ def prepare_worker_env_vars(
     )
 
 
-def prepare_worker_runtime_env(runtime_env: Mapping[str, Any] | None, job_id: str) -> dict[str, Any]:
+def prepare_worker_runtime_env(
+    runtime_env: Mapping[str, Any] | None, job_id: str
+) -> dict[str, Any]:
     backend_name = str(os.environ.get(ROAR_EXECUTION_BACKEND_ENV) or "").strip()
     if not backend_name:
         raise RuntimeError(f"{ROAR_EXECUTION_BACKEND_ENV} is required for worker bootstrap")
@@ -213,7 +215,9 @@ def prepare_worker_runtime_env(runtime_env: Mapping[str, Any] | None, job_id: st
     return runtime_env_out
 
 
-def sanitize_worker_runtime_env_for_ray(ray_module: ModuleType, runtime_env: Mapping[str, Any]) -> dict[str, Any]:
+def sanitize_worker_runtime_env_for_ray(
+    ray_module: ModuleType, runtime_env: Mapping[str, Any]
+) -> dict[str, Any]:
     runtime_env_out = dict(runtime_env or {})
     if not runtime_env_out.get("worker_process_setup_hook"):
         return runtime_env_out
@@ -885,7 +889,9 @@ def _emit_driver_phase_fragment(
         emit_fragment(fragment)
 
 
-def _ray_node_poller_loop(ray_module: ModuleType, seen_node_ids: set[str], poll_interval: float) -> None:
+def _ray_node_poller_loop(
+    ray_module: ModuleType, seen_node_ids: set[str], poll_interval: float
+) -> None:
     while not _ray_node_poller_stop.wait(poll_interval):
         _prime_new_ray_nodes(ray_module, seen_node_ids)
 

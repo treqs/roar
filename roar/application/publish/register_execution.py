@@ -170,7 +170,9 @@ class RegisterService:
                 omit_filter=omit_filter,
             )
 
-        registration_jobs = order_jobs_for_registration(normalize_jobs_for_registration(lineage.jobs))
+        registration_jobs = order_jobs_for_registration(
+            normalize_jobs_for_registration(lineage.jobs)
+        )
 
         if dry_run:
             return RegisterResult(

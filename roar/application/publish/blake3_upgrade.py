@@ -213,7 +213,9 @@ def ensure_artifact_blake3_digest(
     try:
         ensure_boto3()
     except Exception as exc:
-        logger.warning("Skipping blake3 upgrade for %s because boto3 is unavailable: %s", s3_url, exc)
+        logger.warning(
+            "Skipping blake3 upgrade for %s because boto3 is unavailable: %s", s3_url, exc
+        )
         return None
 
     assert boto3 is not None

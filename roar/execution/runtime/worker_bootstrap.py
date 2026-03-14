@@ -39,9 +39,7 @@ def build_packaged_worker_runtime_env(
     prepared_working_dir: str | None = None
     working_dir_merger = merge_working_dir or default_merge_working_dir
     suppress_tracking = (
-        suppress_tracking_factory
-        if suppress_tracking_factory is not None
-        else SuppressTracking
+        suppress_tracking_factory if suppress_tracking_factory is not None else SuppressTracking
     )
     warn_user = warn or warn_runtime
 

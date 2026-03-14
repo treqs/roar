@@ -139,6 +139,7 @@ def register() -> ExecutionBackend:
     register_execution_backend(RAY_EXECUTION_BACKEND)
     return RAY_EXECUTION_BACKEND
 
+
 __all__ = [
     "RAY_EXECUTION_BACKEND",
     "ray_build_driver_proxy_fragment",

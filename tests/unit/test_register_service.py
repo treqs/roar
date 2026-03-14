@@ -185,7 +185,9 @@ class TestRegisterService:
             "job_type": "ray_task",
         }
 
-        normalized = normalize_jobs_for_registration([submit_job, noise_job, phase_job, shutdown_job])
+        normalized = normalize_jobs_for_registration(
+            [submit_job, noise_job, phase_job, shutdown_job]
+        )
 
         assert [job["job_uid"] for job in normalized] == ["local-submit", "phase-job"]
         jobs_by_uid = {job["job_uid"]: job for job in normalized}
@@ -306,7 +308,9 @@ class TestRegisterService:
         )
 
         with (
-            patch("roar.application.publish.register_execution.create_database_context") as mock_ctx,
+            patch(
+                "roar.application.publish.register_execution.create_database_context"
+            ) as mock_ctx,
             patch("roar.application.publish.register_execution.config_get", return_value=False),
         ):
             mock_db = MagicMock()

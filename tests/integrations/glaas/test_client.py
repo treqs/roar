@@ -152,7 +152,10 @@ class TestOptionalAuth:
         client = GlaasClient(base_url="http://localhost:9999")
 
         with (
-            patch("roar.integrations.glaas.client.make_auth_header", return_value="SSH-SIG test-signature"),
+            patch(
+                "roar.integrations.glaas.client.make_auth_header",
+                return_value="SSH-SIG test-signature",
+            ),
             patch("urllib.request.urlopen") as mock_urlopen,
         ):
             mock_response = MagicMock()
@@ -184,7 +187,10 @@ class TestOptionalAuth:
         unauthorized.read = MagicMock(return_value=b'{"detail":"Unauthorized"}')
 
         with (
-            patch("roar.integrations.glaas.client.make_auth_header", return_value="SSH-SIG test-signature"),
+            patch(
+                "roar.integrations.glaas.client.make_auth_header",
+                return_value="SSH-SIG test-signature",
+            ),
             patch("urllib.request.urlopen") as mock_urlopen,
         ):
             mock_response = MagicMock()
@@ -228,7 +234,10 @@ class TestOptionalAuth:
         forbidden.read = MagicMock(return_value=b'{"detail":"Forbidden"}')
 
         with (
-            patch("roar.integrations.glaas.client.make_auth_header", return_value="SSH-SIG test-signature"),
+            patch(
+                "roar.integrations.glaas.client.make_auth_header",
+                return_value="SSH-SIG test-signature",
+            ),
             patch("urllib.request.urlopen") as mock_urlopen,
         ):
             mock_urlopen.side_effect = [unauthorized, forbidden]

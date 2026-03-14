@@ -263,7 +263,9 @@ def test_iter_execution_backends_loads_builtin_modules_once(monkeypatch) -> None
 
     monkeypatch.setattr(module, "_registered_execution_backends", [])
     monkeypatch.setattr(module, "_execution_backends_discovered", False)
-    monkeypatch.setattr(module, "_BUILTIN_EXECUTION_BACKEND_MODULES", ("roar.backends.fake.plugin",))
+    monkeypatch.setattr(
+        module, "_BUILTIN_EXECUTION_BACKEND_MODULES", ("roar.backends.fake.plugin",)
+    )
     monkeypatch.setattr(module, "_iter_execution_backend_entrypoints", lambda: ())
 
     def _fake_import_module(name: str):

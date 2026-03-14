@@ -34,7 +34,9 @@ def _init_repo(tmp_path: Path) -> Path:
     )
     (tmp_path / "file.txt").write_text("content")
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"], cwd=tmp_path, check=True, capture_output=True
+    )
     return tmp_path
 
 

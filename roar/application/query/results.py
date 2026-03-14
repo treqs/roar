@@ -145,7 +145,9 @@ class ShowSessionSummary:
     labels: dict[str, Any] | None = None
     jobs: list[ShowSessionJobSummary] = field(default_factory=list)
 
-    def to_renderer_args(self) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any] | None]:
+    def to_renderer_args(
+        self,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any] | None]:
         session = {
             "hash": self.hash,
             "created_at": self.created_at,

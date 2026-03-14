@@ -21,7 +21,9 @@ def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:
     runtime = MagicMock()
     logger = MagicMock()
     collected = MagicMock()
-    collected.lineage = LineageData(jobs=[], artifacts=[], artifact_hashes=set(), pipeline={"id": 7})
+    collected.lineage = LineageData(
+        jobs=[], artifacts=[], artifact_hashes=set(), pipeline={"id": 7}
+    )
     collected.session_id = 7
     collected.artifact_hash = "a" * 64
     collected.session_hash_override = None
@@ -135,7 +137,9 @@ def test_register_lineage_target_returns_preparation_error(tmp_path: Path) -> No
     runtime = MagicMock()
     logger = MagicMock()
     collected = MagicMock()
-    collected.lineage = LineageData(jobs=[], artifacts=[], artifact_hashes=set(), pipeline={"id": 7})
+    collected.lineage = LineageData(
+        jobs=[], artifacts=[], artifact_hashes=set(), pipeline={"id": 7}
+    )
     collected.session_id = 7
     collected.artifact_hash = "a" * 64
     collected.session_hash_override = None
@@ -182,7 +186,9 @@ def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -
     runtime = MagicMock()
     logger = MagicMock()
     collected = MagicMock()
-    collected.lineage = LineageData(jobs=[], artifacts=[], artifact_hashes=set(), pipeline={"id": 7})
+    collected.lineage = LineageData(
+        jobs=[], artifacts=[], artifact_hashes=set(), pipeline={"id": 7}
+    )
     collected.session_id = 7
     collected.artifact_hash = "a" * 64
     collected.session_hash_override = None
@@ -360,7 +366,9 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
     db_ctx = MagicMock()
     put_result = PutResult(success=True, job_id=3, uploaded_files=[], dry_run=False)
     prepared = MagicMock()
-    prepared_git = MagicMock(git_commit=None, expected_tag=None, warnings=("Git operation failed: git unavailable",))
+    prepared_git = MagicMock(
+        git_commit=None, expected_tag=None, warnings=("Git operation failed: git unavailable",)
+    )
 
     with (
         patch("roar.application.publish.service.bootstrap"),

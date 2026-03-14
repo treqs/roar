@@ -503,7 +503,8 @@ class TestPlatformDetection:
         """Should return True on Linux with apt-get."""
         with (
             patch(
-                "roar.execution.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch(
                 "roar.execution.reproduction.environment_setup.shutil.which",
@@ -523,7 +524,8 @@ class TestPlatformDetection:
         """Should return False when apt-get is not available."""
         with (
             patch(
-                "roar.execution.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch("roar.execution.reproduction.environment_setup.shutil.which", return_value=None),
         ):
@@ -554,7 +556,8 @@ class TestEnvironmentValidation:
 
         with (
             patch(
-                "roar.execution.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch(
                 "roar.execution.reproduction.environment_setup.platform.machine",
@@ -580,7 +583,8 @@ class TestEnvironmentValidation:
 
         with (
             patch(
-                "roar.execution.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch(
                 "roar.execution.reproduction.environment_setup.platform.machine",
@@ -607,7 +611,8 @@ class TestEnvironmentValidation:
 
         with (
             patch(
-                "roar.execution.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch(
                 "roar.execution.reproduction.environment_setup.platform.machine",
@@ -634,7 +639,8 @@ class TestEnvironmentValidation:
 
         with (
             patch(
-                "roar.execution.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch(
                 "roar.execution.reproduction.environment_setup.platform.machine",
@@ -654,7 +660,8 @@ class TestEnvironmentValidation:
 
         with (
             patch(
-                "roar.execution.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch(
                 "roar.execution.reproduction.environment_setup.platform.machine",

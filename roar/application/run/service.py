@@ -94,9 +94,7 @@ def _execute_tracked_command(
     backend_name = planned.backend_name
     execution_role = str(planned.execution_role or "").strip()
     if not execution_role:
-        raise ValueError(
-            f"Execution backend '{backend_name}' did not provide an execution role."
-        )
+        raise ValueError(f"Execution backend '{backend_name}' did not provide an execution role.")
 
     exit_code = execute_and_report(
         roar_dir=roar_dir,
@@ -175,9 +173,7 @@ def _resolve_dag_reference(
     presenter = ConsolePresenter()
     report = RunReportPresenter(presenter)
     if resolved.stale_upstream:
-        if not report.show_upstream_stale_warning(
-            resolved.step_number, resolved.stale_upstream
-        ):
+        if not report.show_upstream_stale_warning(resolved.step_number, resolved.stale_upstream):
             presenter.print("Aborted.")
             return None
         presenter.print("")

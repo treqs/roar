@@ -45,7 +45,9 @@ def render_show(request: ShowQueryRequest) -> str:
         job, inputs, outputs, labels = summary.to_renderer_args()
         return renderer.render_job(job, inputs, outputs, labels=labels)
 
-    artifact, locations, related_jobs, labels, composite_summary, components = summary.to_renderer_args()
+    artifact, locations, related_jobs, labels, composite_summary, components = (
+        summary.to_renderer_args()
+    )
     return renderer.render_artifact(
         artifact,
         locations,

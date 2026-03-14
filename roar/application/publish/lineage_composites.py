@@ -20,7 +20,9 @@ from .blake3_upgrade import ensure_artifact_blake3_digest, select_hash_by_algori
 
 def has_lineage_composites(artifacts: list[dict[str, Any]]) -> bool:
     """Return whether any lineage artifact is a composite."""
-    return any(extract_composite_digest(extract_registration_hashes(artifact)) for artifact in artifacts)
+    return any(
+        extract_composite_digest(extract_registration_hashes(artifact)) for artifact in artifacts
+    )
 
 
 def preregister_lineage_composites_with_glaas(

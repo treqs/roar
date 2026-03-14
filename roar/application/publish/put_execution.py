@@ -44,6 +44,7 @@ from .results import PutCompositeRegistration, PutDryRunItem, PutUploadedFile
 
 _AUTO_COMPOSITE_MIN_CONFIDENCE = 0.80
 
+
 @dataclass
 class PutResult:
     """Result of a put operation."""
@@ -183,9 +184,7 @@ class PutService:
                 session_hash=session_hash,
                 session_url=prepared.session_url,
                 dry_run=True,
-                would_upload=[
-                    PutDryRunItem(path=str(r.path), exists=r.exists) for r in resolved
-                ],
+                would_upload=[PutDryRunItem(path=str(r.path), exists=r.exists) for r in resolved],
             )
 
         # Process each file: hash, create artifact, upload
@@ -298,11 +297,11 @@ class PutService:
             jobs=lineage.jobs,
             artifacts=prepared_artifacts,
             db_ctx=self._db,
-                session_id=int(session_id),
-                label_artifacts=[
-                    *lineage.artifacts,
-                    *[{"id": u.artifact_id, "hash": u.hash} for u in uploads],
-                ],
+            session_id=int(session_id),
+            label_artifacts=[
+                *lineage.artifacts,
+                *[{"id": u.artifact_id, "hash": u.hash} for u in uploads],
+            ],
             pre_registration_errors=pre_registration_errors,
         )
 
@@ -335,9 +334,7 @@ class PutService:
         )
         composite_result_items = [
             PutCompositeRegistration(
-                root_path=(
-                    str(item["root_path"]) if item.get("root_path") is not None else None
-                ),
+                root_path=(str(item["root_path"]) if item.get("root_path") is not None else None),
                 hash=str(item["hash"]) if item.get("hash") is not None else None,
                 component_count_stored=(
                     int(item["component_count_stored"])

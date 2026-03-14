@@ -39,9 +39,7 @@ def normalize_jobs_for_registration(jobs: list[dict[str, Any]]) -> list[dict[str
 
 def order_jobs_for_registration(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Order jobs so parents are registered before their children."""
-    jobs_by_uid = {
-        str(job["job_uid"]): job for job in jobs if isinstance(job.get("job_uid"), str)
-    }
+    jobs_by_uid = {str(job["job_uid"]): job for job in jobs if isinstance(job.get("job_uid"), str)}
     ordered: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -139,7 +137,9 @@ def _infer_local_parent_uid(
 
 def _is_local_parent_candidate(job: dict[str, Any]) -> bool:
     job_type = str(job.get("job_type", "") or "")
-    return not is_execution_task_job(job) and not is_execution_noise_job(job) and job_type != "build"
+    return (
+        not is_execution_task_job(job) and not is_execution_noise_job(job) and job_type != "build"
+    )
 
 
 def _parent_candidate_sort_key(job: dict[str, Any]) -> tuple[int, int, float, int]:

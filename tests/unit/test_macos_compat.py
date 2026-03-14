@@ -51,9 +51,7 @@ class TestRuntimeCollectorMacOS:
         from roar.execution.provenance.runtime_collector import RuntimeCollectorService
 
         mock_sys.platform = "darwin"
-        with patch(
-            "roar.execution.provenance.runtime_collector.subprocess.run"
-        ) as mock_run:
+        with patch("roar.execution.provenance.runtime_collector.subprocess.run") as mock_run:
             result_obj = MagicMock()
             result_obj.returncode = 1
             result_obj.stdout = ""
@@ -294,9 +292,7 @@ class TestBuildToolCollectorMacOS:
         processes = [{"command": ["/usr/bin/cmake", ".."]}]
         mock_which.return_value = "/usr/bin/cmake"
 
-        with patch(
-            "roar.execution.provenance.build_tool_collector.subprocess.run"
-        ) as mock_run:
+        with patch("roar.execution.provenance.build_tool_collector.subprocess.run") as mock_run:
             service.collect(processes, sys_prefix="/some/venv")
             mock_run.assert_not_called()
 

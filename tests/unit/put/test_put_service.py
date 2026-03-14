@@ -259,7 +259,9 @@ class TestPutService:
         assert result.success is True
         hash_batch.assert_called_once()
 
-    def test_put_prepared_directory_source_registers_composite_artifact(self, tmp_path: Path) -> None:
+    def test_put_prepared_directory_source_registers_composite_artifact(
+        self, tmp_path: Path
+    ) -> None:
         dataset_dir = tmp_path / "dataset"
         dataset_dir.mkdir()
         (dataset_dir / "a.txt").write_text("a", encoding="utf-8")
@@ -402,9 +404,7 @@ class TestPutService:
         assert result.success is True
         assert result.dry_run is True
         assert result.session_hash == "session_hash_abc123"
-        assert result.would_upload == [
-            PutDryRunItem(path=str(model_file.resolve()), exists=True)
-        ]
+        assert result.would_upload == [PutDryRunItem(path=str(model_file.resolve()), exists=True)]
         backend.upload.assert_not_called()
 
     def test_put_prepared_stores_urls_in_job_metadata(self, tmp_path: Path) -> None:

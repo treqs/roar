@@ -28,7 +28,9 @@ def test_detect_lineage_secrets_scans_git_command_and_string_metadata() -> None:
             artifact_hashes=set(),
             pipeline=None,
         ),
-        git_context=GitContext(repo="https://token@example.com/repo.git", branch="main", commit="deadbeef"),
+        git_context=GitContext(
+            repo="https://token@example.com/repo.git", branch="main", commit="deadbeef"
+        ),
         omit_filter=omit_filter,
     )
 
