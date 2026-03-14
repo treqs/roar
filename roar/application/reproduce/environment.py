@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 from ...core.interfaces.reproduction import EnvironmentInfo, PipelineInfo
-from ...services.reproduction.environment_setup import EnvironmentSetupService
+from ...execution.reproduction.environment_setup import EnvironmentSetupService
 from ...utils.git_url import urls_match
 
 

@@ -13,7 +13,7 @@ import pytest
 
 from roar.core.bootstrap import bootstrap, reset
 from roar.core.logging import NullLogger, get_logger
-from roar.services.reproduction.environment_setup import EnvironmentSetupService
+from roar.execution.reproduction.environment_setup import EnvironmentSetupService
 
 # ---------------------------------------------------------------------------
 # Helpers

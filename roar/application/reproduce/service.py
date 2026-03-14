@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...core.bootstrap import bootstrap
+from ...execution.reproduction.pipeline_executor import PipelineExecutor
+from ...execution.reproduction.pipeline_metadata import PipelineMetadataParser
 from ...integrations.config import load_config
 from ...integrations.glaas import GlaasClient
 from ...presenters.console import ConsolePresenter
-from ...services.reproduction.pipeline_executor import PipelineExecutor
-from ...services.reproduction.pipeline_metadata import PipelineMetadataParser
 from .environment import prepare_reproduction_environment
 from .lookup import lookup_pipeline_result
 from .requests import ReproduceRequest
