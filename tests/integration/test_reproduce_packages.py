@@ -12,9 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from roar.core.bootstrap import bootstrap, reset
-from roar.core.container import get_container
-from roar.core.interfaces.logger import ILogger
-from roar.core.logging import NullLogger
+from roar.core.logging import NullLogger, get_logger
 from roar.services.reproduction.environment_setup import EnvironmentSetupService
 
 # ---------------------------------------------------------------------------
@@ -317,9 +315,7 @@ class TestDebugLoggingAvailable:
 
         bootstrap(roar_dir)
 
-        container = get_container()
-        logger = container.try_resolve(ILogger)
-        assert logger is not None
+        logger = get_logger()
         assert not isinstance(logger, NullLogger)
 
     def test_logger_is_null_without_bootstrap(self):

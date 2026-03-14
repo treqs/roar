@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from ...core.bootstrap import bootstrap
-from ...core.di import try_resolve
-from ...core.interfaces.logger import ILogger
+from ...core.logging import get_logger
 from ...db.context import create_database_context, optional_repo
 from ...presenters.show_renderer import ShowRenderer
 from .requests import ShowQueryRequest
@@ -112,8 +111,8 @@ def build_show_summary(request: ShowQueryRequest) -> ShowSummary:
         raise ShowQueryError(f"Unknown reference format: {request.ref}")
 
 
-def _logger() -> ILogger | None:
-    return try_resolve(ILogger)  # type: ignore[type-abstract]
+def _logger():
+    return get_logger()
 
 
 def _safe_json_loads(raw: str, context: str) -> dict | None:

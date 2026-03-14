@@ -1,8 +1,4 @@
-"""Logging utilities for roar.
-
-Provides concrete logger implementations plus a centralized way to get
-the configured logger instance.
-"""
+"""Logging utilities for roar."""
 
 from __future__ import annotations
 
@@ -13,6 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 from .interfaces.logger import ILogger
+
+_ACTIVE_LOGGER: ILogger | None = None
 
 if TYPE_CHECKING:
     from typing import Any
@@ -114,20 +112,27 @@ class NullLogger(ILogger):
 
 
 def get_logger() -> ILogger:
-    """Get the configured logger instance.
+    """Get the configured logger instance or a NullLogger before bootstrap."""
+    return _ACTIVE_LOGGER or NullLogger()  # type: ignore[type-abstract]
 
-    Resolves from DI container if available, otherwise returns NullLogger.
-    This is the single entry point for logger resolution across the codebase.
 
-    Usage:
-        from roar.core.logging import get_logger
+def configure_logger(
+    *,
+    level: str = "warning",
+    console_enabled: bool = False,
+    file_enabled: bool = True,
+) -> ILogger:
+    """Configure and cache the process-wide logger."""
+    global _ACTIVE_LOGGER
+    _ACTIVE_LOGGER = RoarLogger(
+        level=level,
+        console_enabled=console_enabled,
+        file_enabled=file_enabled,
+    )
+    return _ACTIVE_LOGGER
 
-        logger = get_logger()
-        logger.debug("Processing %s", item)
 
-    Returns:
-        ILogger instance
-    """
-    from .di import resolve_or_default
-
-    return resolve_or_default(ILogger, NullLogger)  # type: ignore[type-abstract]
+def reset_logger() -> None:
+    """Reset the cached logger for tests and fresh bootstrap."""
+    global _ACTIVE_LOGGER
+    _ACTIVE_LOGGER = None
