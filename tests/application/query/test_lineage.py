@@ -42,9 +42,9 @@ def test_build_lineage_summary_returns_typed_graph(tmp_path: Path) -> None:
     with patch("roar.application.query.lineage.create_database_context") as mock_db:
         mock_db.return_value.__enter__.return_value = SimpleNamespace(
             artifacts=SimpleNamespace(
-                get_by_hash=lambda artifact_hash, algorithm=None: db_artifact
-                if algorithm == "blake3"
-                else None
+                get_by_hash=lambda artifact_hash, algorithm=None: (
+                    db_artifact if algorithm == "blake3" else None
+                )
             ),
             lineage=SimpleNamespace(
                 get_filtered_lineage=lambda artifact_id, max_depth: (
