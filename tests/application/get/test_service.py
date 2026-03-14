@@ -9,7 +9,7 @@ import pytest
 from roar.application.get.requests import GetRequest
 from roar.application.get.results import GetResponse
 from roar.application.get.service import get_artifacts
-from roar.services.get.service import GetTransferResult
+from roar.application.get.transfer import GetTransferResult
 
 
 def _request(tmp_path: Path, **overrides) -> GetRequest:

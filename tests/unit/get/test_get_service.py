@@ -10,9 +10,9 @@ from unittest.mock import patch
 
 import pytest
 
+from roar.application.get.transfer import GetService
 from roar.integrations.download.base import Source, parse_source
 from roar.integrations.download.noop import NoOpDownloadBackend
-from roar.services.get.service import GetService
 
 
 def _make_source(url: str = "s3://my-bucket/models/model.pt") -> Source:
@@ -179,7 +179,7 @@ def test_prefix_hashes_all_files_in_single_batch_call(tmp_path: Path) -> None:
         calls["count"] += 1
         return {str(path): blake3.blake3(Path(path).read_bytes()).hexdigest() for path in paths}
 
-    with patch("roar.services.get.service.hash_files_blake3", side_effect=fake_hashes):
+    with patch("roar.application.get.transfer.hash_files_blake3", side_effect=fake_hashes):
         result = service.get(destination=tmp_path / "out", is_prefix=True)
 
     assert result.success is True
