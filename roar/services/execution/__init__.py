@@ -4,7 +4,6 @@ from importlib import import_module
 from typing import Any
 
 __all__ = [
-    "DAGReferenceResolver",
     "ProcessSignalHandler",
     "ProxyService",
     "RunArgumentParser",
@@ -13,7 +12,6 @@ __all__ = [
 ]
 
 _LAZY_IMPORTS = {
-    "DAGReferenceResolver": (".dag_resolver", "DAGReferenceResolver"),
     "ProcessSignalHandler": (".signal_handler", "ProcessSignalHandler"),
     "ProxyService": (".proxy", "ProxyService"),
     "RunArgumentParser": (".args", "RunArgumentParser"),

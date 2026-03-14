@@ -11,7 +11,7 @@ from ...db.context import create_database_context
 from ...execution.framework.planning import plan_execution_command
 from ...presenters.console import ConsolePresenter
 from ...presenters.run_report import RunReportPresenter
-from ...services.execution.dag_resolver import DAGReferenceResolver
+from .dag_references import DAGReferenceResolver
 from .execution import (
     execute_and_report,
     get_hash_algorithms,
