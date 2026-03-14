@@ -29,7 +29,7 @@ def test_get_single_file_returns_downloaded_file_facts(tmp_path: Path) -> None:
 
     assert result.success is True
     assert len(result.downloaded_files) == 1
-    assert result.downloaded_files[0]["local_path"] == str(dest)
+    assert result.downloaded_files[0].local_path == str(dest)
     assert dest.exists()
     assert dest.read_bytes() == b"model data here"
 
@@ -60,7 +60,7 @@ def test_get_destination_into_directory_uses_original_filename(tmp_path: Path) -
 
     expected_path = dest_dir / "model.pt"
     assert expected_path.exists()
-    assert result.downloaded_files[0]["local_path"] == str(expected_path)
+    assert result.downloaded_files[0].local_path == str(expected_path)
 
 
 def test_dry_run_does_not_download_files(tmp_path: Path) -> None:
@@ -72,7 +72,7 @@ def test_dry_run_does_not_download_files(tmp_path: Path) -> None:
     assert result.success is True
     assert result.dry_run is True
     assert len(result.would_download) == 1
-    assert result.would_download[0]["remote_url"] == "s3://my-bucket/models/model.pt"
+    assert result.would_download[0].remote_url == "s3://my-bucket/models/model.pt"
     assert not (tmp_path / "model.pt").exists()
 
 

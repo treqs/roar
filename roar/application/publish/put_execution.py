@@ -40,6 +40,7 @@ from .put_composites import (
     preregister_put_lineage_composites_with_glaas,
     register_put_composites_with_glaas,
 )
+from .results import PutCompositeRegistration, PutDryRunItem, PutUploadedFile
 
 _AUTO_COMPOSITE_MIN_CONFIDENCE = 0.80
 
@@ -52,10 +53,10 @@ class PutResult:
     job_uid: str | None = None
     session_hash: str | None = None
     session_url: str | None = None
-    uploaded_files: list[dict[str, Any]] = field(default_factory=list)
+    uploaded_files: list[PutUploadedFile] = field(default_factory=list)
     dry_run: bool = False
-    would_upload: list[dict[str, Any]] = field(default_factory=list)
-    composites_registered: list[dict[str, Any]] = field(default_factory=list)
+    would_upload: list[PutDryRunItem] = field(default_factory=list)
+    composites_registered: list[PutCompositeRegistration] = field(default_factory=list)
     error: str | None = None
 
 
@@ -182,7 +183,9 @@ class PutService:
                 session_hash=session_hash,
                 session_url=prepared.session_url,
                 dry_run=True,
-                would_upload=[{"path": str(r.path), "exists": r.exists} for r in resolved],
+                would_upload=[
+                    PutDryRunItem(path=str(r.path), exists=r.exists) for r in resolved
+                ],
             )
 
         # Process each file: hash, create artifact, upload
@@ -229,12 +232,12 @@ class PutService:
 
         # Derive downstream views from the single uploads list
         uploaded_files = [
-            {
-                "local_path": u.local_path,
-                "remote_url": u.remote_url,
-                "artifact_id": u.artifact_id,
-                "hash": u.hash,
-            }
+            PutUploadedFile(
+                local_path=u.local_path,
+                remote_url=u.remote_url,
+                artifact_id=u.artifact_id,
+                hash=u.hash,
+            )
             for u in uploads
         ]
         artifact_urls = {u.artifact_id: u.remote_url for u in uploads}
@@ -295,11 +298,11 @@ class PutService:
             jobs=lineage.jobs,
             artifacts=prepared_artifacts,
             db_ctx=self._db,
-            session_id=int(session_id),
-            label_artifacts=[
-                *lineage.artifacts,
-                *[{"id": u.artifact_id, "hash": u.hash} for u in uploads],
-            ],
+                session_id=int(session_id),
+                label_artifacts=[
+                    *lineage.artifacts,
+                    *[{"id": u.artifact_id, "hash": u.hash} for u in uploads],
+                ],
             pre_registration_errors=pre_registration_errors,
         )
 
@@ -330,6 +333,37 @@ class PutService:
             dataset_identifiers=dataset_identifiers,
             logger=self._logger,
         )
+        composite_result_items = [
+            PutCompositeRegistration(
+                root_path=(
+                    str(item["root_path"]) if item.get("root_path") is not None else None
+                ),
+                hash=str(item["hash"]) if item.get("hash") is not None else None,
+                component_count_stored=(
+                    int(item["component_count_stored"])
+                    if item.get("component_count_stored") is not None
+                    else None
+                ),
+                component_count_total=(
+                    int(item["component_count_total"])
+                    if item.get("component_count_total") is not None
+                    else None
+                ),
+                artifact_id=(
+                    str(item["artifact_id"]) if item.get("artifact_id") is not None else None
+                ),
+                registered=bool(item["registered"]) if item.get("registered") is not None else None,
+                local_persisted=(
+                    bool(item["local_persisted"])
+                    if item.get("local_persisted") is not None
+                    else None
+                ),
+                local_error=(
+                    str(item["local_error"]) if item.get("local_error") is not None else None
+                ),
+            )
+            for item in composite_registrations
+        ]
 
         # Build command string
         source_str = " ".join(sources) if sources else "(session outputs)"
@@ -421,7 +455,7 @@ class PutService:
                 session_hash=session_hash,
                 session_url=prepared.session_url,
                 uploaded_files=uploaded_files,
-                composites_registered=composite_registrations,
+                composites_registered=composite_result_items,
                 error=registration_error,
             )
 
@@ -437,7 +471,7 @@ class PutService:
             session_hash=session_hash,
             session_url=prepared.session_url,
             uploaded_files=uploaded_files,
-            composites_registered=composite_registrations,
+            composites_registered=composite_result_items,
         )
 
     @staticmethod
@@ -539,7 +573,7 @@ class PutService:
         coordinator: RegistrationCoordinator,
         session_hash: str,
         job_uid: str,
-        uploaded_files: list[dict[str, Any]],
+        uploaded_files: list[PutUploadedFile],
         lineage_artifacts: list[dict[str, Any]],
         composite_registrations: list[dict[str, Any]],
         registration_errors: list[str],

@@ -13,11 +13,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from ...core.logging import get_logger
 from ...db.hashing import hash_files_blake3
 from ...integrations.download.base import DownloadBackend, Source
+from .results import GetDownloadedFile, GetDryRunItem
 
 
 @dataclass
@@ -25,9 +25,9 @@ class GetTransferResult:
     """Mechanical result of a get transfer."""
 
     success: bool
-    downloaded_files: list[dict[str, Any]] = field(default_factory=list)
+    downloaded_files: list[GetDownloadedFile] = field(default_factory=list)
     dry_run: bool = False
-    would_download: list[dict[str, Any]] = field(default_factory=list)
+    would_download: list[GetDryRunItem] = field(default_factory=list)
     error: str | None = None
 
 
@@ -224,27 +224,24 @@ class GetService:
         pending.tmp_path.rename(pending.local_path)
 
     @staticmethod
-    def _build_dry_run_entry(pending: _PendingDownload) -> dict[str, str]:
-        return {
-            "remote_url": pending.remote_url,
-            "local_path": str(pending.local_path),
-        }
+    def _build_dry_run_entry(pending: _PendingDownload) -> GetDryRunItem:
+        return GetDryRunItem(
+            remote_url=pending.remote_url,
+            local_path=str(pending.local_path),
+        )
 
     @staticmethod
     def _build_downloaded_file_entry(
         pending: _PendingDownload,
         file_hash: str,
         file_size: int,
-    ) -> dict[str, Any]:
-        file_info: dict[str, Any] = {
-            "remote_url": pending.remote_url,
-            "local_path": str(pending.local_path),
-            "hash": file_hash,
-            "size": file_size,
-        }
-        if pending.relative_key is not None:
-            file_info["relative_key"] = pending.relative_key
-        return file_info
+    ) -> GetDownloadedFile:
+        return GetDownloadedFile(
+            remote_url=pending.remote_url,
+            local_path=str(pending.local_path),
+            hash=file_hash,
+            size=file_size,
+        )
 
     def _build_dry_run_result(
         self,
@@ -265,7 +262,7 @@ class GetService:
         failure_context: str,
         expected_hash: str | None = None,
     ) -> GetTransferResult:
-        downloaded_files: list[dict[str, Any]] = []
+        downloaded_files: list[GetDownloadedFile] = []
         try:
             for pending in pending_downloads:
                 self._download_to_tmp(pending)

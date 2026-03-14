@@ -12,7 +12,7 @@ from ...db.context import create_database_context
 from ...execution.recording import LocalJobRecorder, LocalRecordedArtifact
 from ...integrations.download import parse_source, resolve_download_backend
 from .requests import GetRequest
-from .results import GetDownloadedFile, GetDryRunItem, GetResponse
+from .results import GetDownloadedFile, GetResponse
 from .transfer import GetService, GetTransferResult
 
 
@@ -96,18 +96,9 @@ def _materialize_get_result(
         return GetResponse(
             success=transfer_result.success,
             source=request.source,
-            downloaded_files=[
-                _downloaded_file_from_transfer(file_info)
-                for file_info in transfer_result.downloaded_files
-            ],
+            downloaded_files=transfer_result.downloaded_files,
             dry_run=transfer_result.dry_run,
-            would_download=[
-                GetDryRunItem(
-                    remote_url=str(item["remote_url"]),
-                    local_path=str(item["local_path"]),
-                )
-                for item in transfer_result.would_download
-            ],
+            would_download=transfer_result.would_download,
             error=transfer_result.error,
         )
 
@@ -120,9 +111,9 @@ def _materialize_get_result(
     recorder = LocalJobRecorder()
     output_artifacts = [
         LocalRecordedArtifact(
-            path=str(file_info["local_path"]),
-            hashes={"blake3": str(file_info["hash"])},
-            size=int(file_info["size"]),
+            path=file_info.local_path,
+            hashes={"blake3": str(file_info.hash)},
+            size=int(file_info.size or 0),
         )
         for file_info in transfer_result.downloaded_files
     ]
@@ -142,20 +133,7 @@ def _materialize_get_result(
         source=request.source,
         job_id=job_id,
         job_uid=job_uid,
-        downloaded_files=[
-            _downloaded_file_from_transfer(file_info)
-            for file_info in transfer_result.downloaded_files
-        ],
-    )
-
-
-def _downloaded_file_from_transfer(file_info: dict[str, object]) -> GetDownloadedFile:
-    size_value = file_info.get("size")
-    return GetDownloadedFile(
-        remote_url=str(file_info["remote_url"]),
-        local_path=str(file_info["local_path"]),
-        hash=str(file_info["hash"]) if file_info.get("hash") is not None else None,
-        size=size_value if isinstance(size_value, int) else None,
+        downloaded_files=transfer_result.downloaded_files,
     )
 
 
@@ -170,13 +148,12 @@ def _build_get_operation_metadata_json(
     *,
     request: GetRequest,
     parsed_source,
-    downloaded_files: list[dict[str, object]],
+    downloaded_files: list[GetDownloadedFile],
     git_commit: str | None,
 ) -> str:
     artifact_urls: dict[str, str] = {}
     for file_info in downloaded_files:
-        path = str(file_info["local_path"])
-        artifact_urls[path] = str(file_info["remote_url"])
+        artifact_urls[file_info.local_path] = file_info.remote_url
 
     return build_operation_metadata_json(
         "get",

@@ -18,10 +18,7 @@ from .requests import (
     RegisterLineageRequest,
 )
 from .results import (
-    PutCompositeRegistration,
-    PutDryRunItem,
     PutResponse,
-    PutUploadedFile,
     RegisterLineageResponse,
 )
 from .runtime import build_publish_runtime
@@ -170,55 +167,9 @@ def put_artifacts(request: PutRequest) -> PutResponse:
         session_hash=result.session_hash,
         session_url=result.session_url,
         dry_run=result.dry_run,
-        uploaded_files=[
-            PutUploadedFile(
-                local_path=str(item.get("local_path", "")),
-                remote_url=str(item.get("remote_url", "")),
-                artifact_id=(
-                    str(item["artifact_id"]) if item.get("artifact_id") is not None else None
-                ),
-                hash=str(item["hash"]) if item.get("hash") is not None else None,
-            )
-            for item in result.uploaded_files
-        ],
-        would_upload=[
-            PutDryRunItem(
-                path=str(item.get("path", "")),
-                exists=bool(item.get("exists", False)),
-            )
-            for item in result.would_upload
-        ],
-        composites_registered=[
-            PutCompositeRegistration(
-                root_path=(
-                    str(item["root_path"]) if item.get("root_path") is not None else None
-                ),
-                hash=str(item["hash"]) if item.get("hash") is not None else None,
-                component_count_stored=(
-                    int(item["component_count_stored"])
-                    if item.get("component_count_stored") is not None
-                    else None
-                ),
-                component_count_total=(
-                    int(item["component_count_total"])
-                    if item.get("component_count_total") is not None
-                    else None
-                ),
-                artifact_id=(
-                    str(item["artifact_id"]) if item.get("artifact_id") is not None else None
-                ),
-                registered=bool(item["registered"]) if item.get("registered") is not None else None,
-                local_persisted=(
-                    bool(item["local_persisted"])
-                    if item.get("local_persisted") is not None
-                    else None
-                ),
-                local_error=(
-                    str(item["local_error"]) if item.get("local_error") is not None else None
-                ),
-            )
-            for item in result.composites_registered
-        ],
+        uploaded_files=result.uploaded_files,
+        would_upload=result.would_upload,
+        composites_registered=result.composites_registered,
         git_tag=created_git_tag,
         warnings=warnings,
         error=result.error,

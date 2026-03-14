@@ -6,6 +6,7 @@ from typing import Any
 
 from ...application.publish.registration import normalize_registration_hashes
 from ...integrations.glaas.registration import _artifact_ref
+from .results import PutUploadedFile
 
 
 def collect_local_composite_outputs(
@@ -58,15 +59,15 @@ def build_put_job_link_outputs(
 def build_put_job_link_inputs(
     *,
     coordinator: Any,
-    uploaded_files: list[dict[str, Any]],
+    uploaded_files: list[PutUploadedFile],
     lineage_artifacts: list[dict[str, Any]],
 ) -> tuple[list[dict[str, str]], list[str]]:
     """Resolve GLaaS input link payloads for uploaded files and lineage composites."""
     candidates: list[dict[str, Any]] = []
 
     for uploaded in uploaded_files:
-        digest = uploaded.get("hash")
-        path = uploaded.get("local_path")
+        digest = uploaded.hash
+        path = uploaded.local_path
         if isinstance(digest, str) and digest and isinstance(path, str) and path:
             candidates.append({"hash": digest, "path": path})
 
@@ -74,15 +75,15 @@ def build_put_job_link_inputs(
         if artifact.get("kind") != "composite":
             continue
 
-        path = _artifact_ref.artifact_path(artifact)
-        if not isinstance(path, str) or not path:
+        artifact_path = _artifact_ref.artifact_path(artifact)
+        if not isinstance(artifact_path, str) or not artifact_path:
             continue
 
         hashes = normalize_registration_hashes(artifact)
         if not hashes:
             continue
 
-        candidates.append({"hashes": hashes, "path": path})
+        candidates.append({"hashes": hashes, "path": artifact_path})
 
     return resolve_put_job_link_input_candidates(coordinator=coordinator, candidates=candidates)
 

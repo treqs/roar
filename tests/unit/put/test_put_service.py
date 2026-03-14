@@ -12,6 +12,7 @@ from roar.application.publish.composite_builder import CompositeArtifactBuilder
 from roar.application.publish.put_execution import PutService
 from roar.application.publish.put_preparation import PreparedPutExecution
 from roar.application.publish.registration import build_lineage_membership_index_payload
+from roar.application.publish.results import PutDryRunItem
 from roar.application.publish.source_resolution import ResolvedSource
 from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import (
@@ -151,7 +152,7 @@ class TestPutService:
         assert result.success is True
         assert result.job_id == 42
         assert len(result.uploaded_files) == 1
-        assert result.uploaded_files[0]["local_path"] == str(model_file.resolve())
+        assert result.uploaded_files[0].local_path == str(model_file.resolve())
         call_kwargs = service._db.jobs.create.call_args.kwargs
         assert call_kwargs["session_id"] == 1
         assert call_kwargs["step_number"] == 3
@@ -401,7 +402,9 @@ class TestPutService:
         assert result.success is True
         assert result.dry_run is True
         assert result.session_hash == "session_hash_abc123"
-        assert result.would_upload == [{"path": str(model_file.resolve()), "exists": True}]
+        assert result.would_upload == [
+            PutDryRunItem(path=str(model_file.resolve()), exists=True)
+        ]
         backend.upload.assert_not_called()
 
     def test_put_prepared_stores_urls_in_job_metadata(self, tmp_path: Path) -> None:

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from roar.application.get.requests import GetRequest
-from roar.application.get.results import GetResponse
+from roar.application.get.results import GetDownloadedFile, GetDryRunItem, GetResponse
 from roar.application.get.service import get_artifacts
 from roar.application.get.transfer import GetTransferResult
 
@@ -38,12 +38,12 @@ def test_get_artifacts_resolves_backend_and_executes_service(tmp_path: Path) -> 
     service.get.return_value = GetTransferResult(
         success=True,
         downloaded_files=[
-            {
-                "remote_url": "s3://bucket/model.pt",
-                "local_path": str(tmp_path / "model.pt"),
-                "hash": "abc123",
-                "size": 5,
-            }
+            GetDownloadedFile(
+                remote_url="s3://bucket/model.pt",
+                local_path=str(tmp_path / "model.pt"),
+                hash="abc123",
+                size=5,
+            )
         ],
     )
     recorder = MagicMock()
@@ -77,12 +77,12 @@ def test_get_artifacts_builds_get_metadata_for_shared_recorder(tmp_path: Path) -
     service.get.return_value = GetTransferResult(
         success=True,
         downloaded_files=[
-            {
-                "remote_url": "s3://bucket/model.pt",
-                "local_path": str(tmp_path / "model.pt"),
-                "hash": "abc123",
-                "size": 5,
-            }
+            GetDownloadedFile(
+                remote_url="s3://bucket/model.pt",
+                local_path=str(tmp_path / "model.pt"),
+                hash="abc123",
+                size=5,
+            )
         ],
     )
     recorder = MagicMock()
@@ -113,7 +113,11 @@ def test_get_artifacts_skips_active_session_check_on_dry_run(tmp_path: Path) -> 
     db_ctx.__enter__.return_value = db_ctx
     db_ctx.__exit__.return_value = None
     service = MagicMock()
-    service.get.return_value = GetTransferResult(success=True, dry_run=True, would_download=[])
+    service.get.return_value = GetTransferResult(
+        success=True,
+        dry_run=True,
+        would_download=[GetDryRunItem(remote_url="s3://bucket/model.pt", local_path="model.pt")],
+    )
 
     with (
         patch("roar.application.get.service.bootstrap"),
