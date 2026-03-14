@@ -2,8 +2,12 @@
 
 from pathlib import Path
 
-from ..integrations import register_telemetry_provider, register_vcs_provider, reset_integrations
-from ..plugins import discover_plugins
+from ..integrations import (
+    discover_optional_integrations,
+    register_telemetry_provider,
+    register_vcs_provider,
+    reset_integrations,
+)
 from .logging import configure_logger, reset_logger
 
 _initialized = False
@@ -16,7 +20,7 @@ def bootstrap(roar_dir: Path | None = None) -> None:
     Initializes core process-wide runtime state:
     - Configured logging
     - Built-in integrations (git, telemetry)
-    - Optional plugins discovered from the plugin registry
+    - Optional integrations discovered from entry points
 
     Args:
         roar_dir: Optional path to .roar directory (reserved for future bootstrap needs)
@@ -32,8 +36,8 @@ def bootstrap(roar_dir: Path | None = None) -> None:
     # Register built-in integrations that should not depend on plugin discovery.
     _register_builtin_integrations()
 
-    # Discover and register plugins
-    discover_plugins()
+    # Discover and register optional integrations
+    discover_optional_integrations()
 
     _initialized = True
     return

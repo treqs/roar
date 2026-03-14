@@ -1,5 +1,6 @@
 """Integration adapters and provider registries for external systems."""
 
+from .discovery import discover_optional_integrations
 from .registry import (
     get_all_telemetry_providers,
     get_integration_registry,
@@ -13,6 +14,7 @@ from .registry import (
 )
 
 __all__ = [
+    "discover_optional_integrations",
     "get_all_telemetry_providers",
     "get_integration_registry",
     "get_telemetry_provider",

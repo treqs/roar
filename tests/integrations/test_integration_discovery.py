@@ -5,8 +5,7 @@ from types import SimpleNamespace
 from roar.core.bootstrap import reset
 from roar.core.interfaces.telemetry import ITelemetryProvider
 from roar.core.models.telemetry import TelemetryRunInfo
-from roar.integrations import list_telemetry_providers
-from roar.plugins import discover_plugins
+from roar.integrations import discover_optional_integrations, list_telemetry_providers
 
 
 class _ExampleTelemetryProvider(ITelemetryProvider):
@@ -27,11 +26,11 @@ class _ExampleTelemetryProvider(ITelemetryProvider):
         return None
 
 
-def test_discover_plugins_registers_entrypoint_telemetry(monkeypatch) -> None:
+def test_discover_optional_integrations_registers_entrypoint_telemetry(monkeypatch) -> None:
     reset()
 
     def fake_entry_points(*, group: str):
-        assert group == "roar.plugins"
+        assert group == "roar.integrations"
         return [
             SimpleNamespace(
                 name="example",
@@ -41,6 +40,6 @@ def test_discover_plugins_registers_entrypoint_telemetry(monkeypatch) -> None:
 
     monkeypatch.setattr("importlib.metadata.entry_points", fake_entry_points)
 
-    discover_plugins()
+    discover_optional_integrations()
 
     assert "example" in list_telemetry_providers()

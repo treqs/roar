@@ -1,4 +1,4 @@
-"""Core public API for bootstrap, plugin discovery, and exceptions."""
+"""Core public API for bootstrap and exceptions."""
 
 __all__ = [
     "CloudDownloadError",
@@ -19,7 +19,6 @@ __all__ = [
     "RoarValidationError",
     "TracerNotFoundError",
     "bootstrap",
-    "discover_plugins",
     "is_initialized",
     "reset",
 ]
@@ -29,7 +28,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "bootstrap": (".bootstrap", "bootstrap"),
     "is_initialized": (".bootstrap", "is_initialized"),
     "reset": (".bootstrap", "reset"),
-    "discover_plugins": (".registry", "discover_plugins"),
     # exceptions
     "CloudDownloadError": (".exceptions", "CloudDownloadError"),
     "CloudUploadError": (".exceptions", "CloudUploadError"),
