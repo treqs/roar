@@ -17,7 +17,7 @@ import sys
 from typing import Any
 
 from ...core.interfaces.logger import ILogger
-from ...core.interfaces.provenance import PythonInjectData, RuntimeInfo, TracerData
+from ...core.models.provenance import PythonInjectData, RuntimeInfo, TracerData
 
 _CACHE_FILENAME = "runtime_cache.json"
 

@@ -11,7 +11,8 @@ from pathlib import Path
 
 from ...core.exceptions import TracerNotFoundError
 from ...core.interfaces.logger import ILogger
-from ...core.interfaces.run import ISignalHandler, TracerResult
+from ...core.interfaces.run import ISignalHandler
+from ...core.models.run import TracerResult
 from ...core.tracer_modes import TRACER_BACKEND_ORDER, is_valid_tracer_mode
 from ...execution.runtime import tracer_backends
 

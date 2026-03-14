@@ -8,7 +8,7 @@ for DAG step replay functionality.
 import re
 
 from ...core.interfaces.logger import ILogger
-from ...core.interfaces.run import ResolvedStep
+from ...core.models.run import ResolvedStep
 
 
 class DAGReferenceResolver:

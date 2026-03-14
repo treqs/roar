@@ -5,16 +5,18 @@ This module defines the interfaces and data structures used by the provenance
 collection system following the dependency inversion principle.
 """
 
-from typing import Any, Protocol, runtime_checkable
+from __future__ import annotations
 
-# Re-export models for backward compatibility
-from roar.core.models.provenance import (
-    FilteredFiles,
-    ProvenanceContext,
-    PythonInjectData,
-    RuntimeInfo,
-    TracerData,
-)
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from roar.core.models.provenance import (
+        FilteredFiles,
+        ProvenanceContext,
+        PythonInjectData,
+        RuntimeInfo,
+        TracerData,
+    )
 
 
 @runtime_checkable

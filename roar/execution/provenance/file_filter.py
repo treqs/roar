@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from ...core.interfaces.logger import ILogger
-from ...core.interfaces.provenance import FilteredFiles, PythonInjectData, TracerData
+from ...core.models.provenance import FilteredFiles, PythonInjectData, TracerData
 
 
 def _get_editable_install_dirs() -> frozenset[str]:

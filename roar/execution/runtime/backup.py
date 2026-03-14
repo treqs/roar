@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ...core.interfaces.logger import ILogger
-    from ...core.interfaces.run import RunContext
+    from ...core.models.run import RunContext
 
 
 class PreviousOutputBackupService:

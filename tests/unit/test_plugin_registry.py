@@ -3,7 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from roar.core.bootstrap import reset
-from roar.core.interfaces.telemetry import ITelemetryProvider, TelemetryRunInfo
+from roar.core.interfaces.telemetry import ITelemetryProvider
+from roar.core.models.telemetry import TelemetryRunInfo
 from roar.integrations import list_telemetry_providers
 from roar.plugins import discover_plugins
 

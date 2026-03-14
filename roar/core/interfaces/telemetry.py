@@ -5,10 +5,13 @@ Enables pluggable experiment tracking providers (W&B, MLflow, Neptune, etc.)
 following the Open/Closed Principle.
 """
 
-from abc import ABC, abstractmethod
+from __future__ import annotations
 
-# Re-export models for backward compatibility
-from roar.core.models.telemetry import TelemetryRunInfo
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from roar.core.models.telemetry import TelemetryRunInfo
 
 
 class ITelemetryProvider(ABC):

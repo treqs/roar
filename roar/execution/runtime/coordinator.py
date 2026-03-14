@@ -22,7 +22,7 @@ from .tracer import TracerService
 if TYPE_CHECKING:
     from ...core.interfaces.logger import ILogger
     from ...core.interfaces.presenter import IPresenter
-    from ...core.interfaces.run import RunContext, RunResult
+    from ...core.models.run import RunContext, RunResult
     from ..cluster.proxy import ProxyService
 
 
@@ -169,7 +169,7 @@ class RunCoordinator:
                 tracer_result.interrupted,
             )
         except TracerNotFoundError as e:
-            from ...core.interfaces.run import RunResult
+            from ...core.models.run import RunResult
 
             stop_proxy_if_running()
             self.logger.debug("Tracer not found: %s", e)
@@ -193,7 +193,7 @@ class RunCoordinator:
 
         # Heavy imports deferred to after tracer fork
         from ...core.bootstrap import bootstrap
-        from ...core.interfaces.run import RunResult
+        from ...core.models.run import RunResult
         from ...integrations.config import load_config
         from ..provenance import ProvenanceService
 

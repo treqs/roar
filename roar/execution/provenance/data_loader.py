@@ -11,7 +11,7 @@ import sys
 import msgpack
 
 from ...core.interfaces.logger import ILogger
-from ...core.interfaces.provenance import PythonInjectData, TracerData
+from ...core.models.provenance import PythonInjectData, TracerData
 
 
 class DataLoaderService:

@@ -8,7 +8,7 @@ import contextlib
 import subprocess
 from pathlib import Path
 
-from ...core.interfaces.vcs import VCSInfo
+from ...core.models.vcs import VCSInfo
 from .base import BaseVCSProvider
 
 

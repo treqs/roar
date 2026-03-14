@@ -16,8 +16,8 @@ from ...core.interfaces.provenance import (
     IProcessSummarizer,
     IProvenanceAssembler,
     IRuntimeCollector,
-    ProvenanceContext,
 )
+from ...core.models.provenance import ProvenanceContext
 from ...filters import FileClassifier
 from .assembler import ProvenanceAssemblerService
 from .build_pip_collector import BuildPipCollectorService

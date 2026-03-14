@@ -7,7 +7,7 @@ Detects and extracts W&B run information from jobs.
 import os
 import re
 
-from ...core.interfaces.telemetry import TelemetryRunInfo
+from ...core.models.telemetry import TelemetryRunInfo
 from .base import BaseTelemetryProvider
 
 # Cache for wandb run URLs to avoid repeated API calls

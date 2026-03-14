@@ -2,7 +2,8 @@
 
 from abc import abstractmethod
 
-from ...core.interfaces.vcs import IVCSProvider, VCSInfo
+from ...core.interfaces.vcs import IVCSProvider
+from ...core.models.vcs import VCSInfo
 
 
 class BaseVCSProvider(IVCSProvider):

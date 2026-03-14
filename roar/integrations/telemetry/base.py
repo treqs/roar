@@ -6,7 +6,8 @@ Defines the interface for telemetry/experiment tracking providers.
 
 from abc import abstractmethod
 
-from ...core.interfaces.telemetry import ITelemetryProvider, TelemetryRunInfo
+from ...core.interfaces.telemetry import ITelemetryProvider
+from ...core.models.telemetry import TelemetryRunInfo
 
 # Re-export TelemetryRunInfo as TelemetryRun for convenience
 TelemetryRun = TelemetryRunInfo

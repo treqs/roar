@@ -22,8 +22,8 @@ from .services import (
     LineageService,
     SessionService,
 )
-from .telemetry import ITelemetryProvider, TelemetryRunInfo
-from .vcs import IVCSProvider, VCSInfo
+from .telemetry import ITelemetryProvider
+from .vcs import IVCSProvider
 
 __all__ = [
     "ArtifactRepository",
@@ -42,6 +42,4 @@ __all__ = [
     "LineageService",
     "SessionRepository",
     "SessionService",
-    "TelemetryRunInfo",
-    "VCSInfo",
 ]

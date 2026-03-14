@@ -30,7 +30,7 @@ from .dataset_identifier import DatasetIdentifierInferer
 from .dataset_metadata import build_dataset_metadata, find_matching_identifier
 
 if TYPE_CHECKING:
-    from ...core.interfaces.run import RunContext
+    from ...core.models.run import RunContext
     from ..cluster.proxy import S3LogEntry
 
 

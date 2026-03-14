@@ -5,24 +5,17 @@ These protocols define the contracts for services that handle
 command execution with provenance tracking.
 """
 
-from typing import Protocol, runtime_checkable
+from __future__ import annotations
 
-# Re-export models for backward compatibility
-from roar.core.models.run import (
-    ResolvedStep,
-    RunContext,
-    RunResult,
-    TracerResult,
-)
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from roar.core.models.run import ResolvedStep, RunResult
 
 __all__ = [
     "IDAGResolver",
     "IRunReportPresenter",
     "ISignalHandler",
-    "ResolvedStep",
-    "RunContext",
-    "RunResult",
-    "TracerResult",
 ]
 
 
@@ -50,7 +43,7 @@ class ISignalHandler(Protocol):
         """Get number of times interrupted."""
         ...
 
-    def set_log_files(self, log_files: "list[str]") -> None:
+    def set_log_files(self, log_files: list[str]) -> None:
         """Set log files to clean up on abort."""
         ...
 

@@ -7,7 +7,7 @@ Assembles the final provenance output from collected data.
 from typing import Any
 
 from ...core.interfaces.logger import ILogger
-from ...core.interfaces.provenance import ProvenanceContext, RuntimeInfo
+from ...core.models.provenance import ProvenanceContext, RuntimeInfo
 
 
 class ProvenanceAssemblerService:

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ...core.interfaces.logger import ILogger
-from ...core.interfaces.provenance import PythonInjectData
+from ...core.models.provenance import PythonInjectData
 
 _DPKG_CACHE_FILENAME = "dpkg_lib_cache.json"
 _DPKG_STATUS_PATH = "/var/lib/dpkg/status"
