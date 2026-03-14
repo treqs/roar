@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from roar.application.publish.secrets import detect_lineage_secrets, filter_lineage_secrets
 from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import GitContext
-from roar.services.registration.secrets import detect_lineage_secrets, filter_lineage_secrets
 
 
 def test_detect_lineage_secrets_scans_git_command_and_string_metadata() -> None:

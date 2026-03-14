@@ -3,14 +3,14 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from roar.application.publish.register_preparation import PreparedRegisterExecution
-from roar.core.interfaces.lineage import LineageData
-from roar.core.interfaces.registration import BatchRegistrationResult, GitContext
-from roar.services.registration.job_preparation import (
+from roar.application.publish.job_preparation import (
     normalize_jobs_for_registration,
     order_jobs_for_registration,
 )
-from roar.services.registration.register_service import RegisterResult, RegisterService
+from roar.application.publish.register_execution import RegisterResult, RegisterService
+from roar.application.publish.register_preparation import PreparedRegisterExecution
+from roar.core.interfaces.lineage import LineageData
+from roar.core.interfaces.registration import BatchRegistrationResult, GitContext
 
 
 def _git_context(
@@ -192,7 +192,7 @@ class TestRegisterService:
         assert jobs_by_uid["phase-job"]["parent_job_uid"] == "local-submit"
 
     def test_register_prepared_lineage_dry_run(self, tmp_path: Path) -> None:
-        with patch("roar.services.registration.register_service.config_get", return_value=False):
+        with patch("roar.application.publish.register_execution.config_get", return_value=False):
             result = self.service.register_prepared_lineage(
                 lineage=_lineage_data(
                     jobs=[{"id": 1, "job_uid": "job1"}, {"id": 2, "job_uid": "job2"}],
@@ -217,7 +217,7 @@ class TestRegisterService:
     def test_register_prepared_lineage_dry_run_filters_known_ray_noise_jobs(
         self, tmp_path: Path
     ) -> None:
-        with patch("roar.services.registration.register_service.config_get", return_value=False):
+        with patch("roar.application.publish.register_execution.config_get", return_value=False):
             result = self.service.register_prepared_lineage(
                 lineage=_lineage_data(
                     jobs=[
@@ -306,8 +306,8 @@ class TestRegisterService:
         )
 
         with (
-            patch("roar.services.registration.register_service.create_database_context") as mock_ctx,
-            patch("roar.services.registration.register_service.config_get", return_value=False),
+            patch("roar.application.publish.register_execution.create_database_context") as mock_ctx,
+            patch("roar.application.publish.register_execution.config_get", return_value=False),
         ):
             mock_db = MagicMock()
             mock_db.__enter__ = MagicMock(return_value=mock_db)

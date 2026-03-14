@@ -6,14 +6,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from roar.application.publish.put_execution import PutResult
+from roar.application.publish.register_execution import RegisterResult
 from roar.application.publish.register_preparation import PreparedRegisterExecution
 from roar.application.publish.requests import PutRequest, RegisterLineageRequest
 from roar.application.publish.results import PutResponse, RegisterLineageResponse
 from roar.application.publish.service import put_artifacts, register_lineage_target
 from roar.application.publish.targets import ResolvedRegisterTarget
 from roar.core.interfaces.lineage import LineageData
-from roar.services.put.service import PutResult
-from roar.services.registration.register_service import RegisterResult
 
 
 def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:

@@ -30,15 +30,15 @@ from ...db.context import DatabaseContext
 from ...db.hashing import hash_files_blake3
 from ...integrations.glaas.registration import RegistrationCoordinator
 from ...integrations.storage.base import StorageBackend
-from .composites import (
-    preregister_put_lineage_composites_with_glaas,
-    register_put_composites_with_glaas,
-)
 from .job_links import (
     build_put_job_link_inputs,
     build_put_job_link_outputs,
     collect_local_composite_outputs,
     collect_local_lineage_composite_inputs,
+)
+from .put_composites import (
+    preregister_put_lineage_composites_with_glaas,
+    register_put_composites_with_glaas,
 )
 
 _AUTO_COMPOSITE_MIN_CONFIDENCE = 0.80

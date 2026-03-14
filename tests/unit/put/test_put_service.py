@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from roar.application.publish.composite_builder import CompositeArtifactBuilder
+from roar.application.publish.put_execution import PutService
 from roar.application.publish.put_preparation import PreparedPutExecution
 from roar.application.publish.registration import build_lineage_membership_index_payload
 from roar.application.publish.source_resolution import ResolvedSource
@@ -21,7 +22,6 @@ from roar.core.interfaces.registration import (
 )
 from roar.integrations.glaas import GlaasClient
 from roar.integrations.storage import MemoryBackend
-from roar.services.put.service import PutService
 
 
 def _create_mock_glaas_client() -> MagicMock:
@@ -244,7 +244,7 @@ class TestPutService:
             pipeline={"id": 1},
         )
 
-        with patch("roar.services.put.service.hash_files_blake3") as hash_batch:
+        with patch("roar.application.publish.put_execution.hash_files_blake3") as hash_batch:
             hash_batch.return_value = {
                 str(file1.resolve()): "a" * 64,
                 str(file2.resolve()): "b" * 64,

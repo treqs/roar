@@ -7,11 +7,11 @@ from ...core.logging import get_logger
 from ...db.context import create_database_context
 from ...integrations.glaas import get_glaas_url
 from ...integrations.storage import resolve_publish_storage_backend
-from ...services.put import PutService
-from ...services.registration.register_service import RegisterService
 from ..git import finalize_put_git, finalize_register_git, prepare_put_git
 from .collection import collect_register_lineage
+from .put_execution import PutService
 from .put_preparation import prepare_put_execution
+from .register_execution import RegisterService
 from .register_preparation import prepare_register_execution
 from .requests import (
     PutRequest,
