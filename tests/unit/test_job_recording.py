@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from roar.db.context import create_database_context as _create_database_context
 from roar.execution.cluster.proxy import S3LogEntry
-from roar.services.execution.job_recording import (
+from roar.execution.recording import (
     ExecutionJobRecorder,
     LocalJobRecorder,
     LocalRecordedArtifact,

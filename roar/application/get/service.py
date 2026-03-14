@@ -9,8 +9,8 @@ from ...core.bootstrap import bootstrap
 from ...core.logging import get_logger
 from ...core.operation_metadata import build_operation_metadata_json
 from ...db.context import create_database_context
+from ...execution.recording import LocalJobRecorder, LocalRecordedArtifact
 from ...integrations.download import parse_source, resolve_download_backend
-from ...services.execution.job_recording import LocalJobRecorder, LocalRecordedArtifact
 from ...services.get.service import GetService, GetTransferResult
 from .requests import GetRequest
 from .results import GetDownloadedFile, GetDryRunItem, GetResponse

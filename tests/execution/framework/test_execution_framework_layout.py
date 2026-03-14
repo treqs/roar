@@ -12,10 +12,13 @@ from roar.execution.framework.registry import (
     iter_execution_backend_config_adapters,
     iter_execution_backend_configurable_keys,
 )
+from roar.execution.recording import DatasetIdentifierInferer, ExecutionJobRecorder
 
 
 def test_canonical_execution_framework_imports_are_available() -> None:
     assert callable(plan_execution_command)
+    assert DatasetIdentifierInferer is not None
+    assert ExecutionJobRecorder is not None
     assert LOCAL_EXECUTION_BACKEND.name == "local"
     assert RAY_EXECUTION_BACKEND.name == "ray"
     assert any(backend.name == "ray" for backend in iter_execution_backends())

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-from ...services.execution.dataset_identifier import DatasetIdentifierInferer
+from ...execution.recording import DatasetIdentifierInferer
 from .source_resolution import ResolvedSource
 
 _AUTO_COMPOSITE_MIN_CONFIDENCE = 0.80

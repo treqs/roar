@@ -26,12 +26,12 @@ from urllib.parse import urlparse
 
 from ...db.context import optional_repo
 from ...db.hashing import hash_files_blake3
-from ..registration._dataset_label import build_dataset_metadata, find_matching_identifier
+from ...services.registration._dataset_label import build_dataset_metadata, find_matching_identifier
 from .dataset_identifier import DatasetIdentifierInferer
 
 if TYPE_CHECKING:
     from ...core.interfaces.run import RunContext
-    from ..execution.proxy import S3LogEntry
+    from ..cluster.proxy import S3LogEntry
 
 
 def _get_logger():

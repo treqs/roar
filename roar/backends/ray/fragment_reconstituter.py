@@ -387,8 +387,8 @@ class FragmentReconstituter:
                 CompositeArtifactBuilder,
                 CompositeLeaf,
             )
-            from roar.services.execution.dataset_identifier import DatasetIdentifierInferer
-            from roar.services.execution.job_recording import (
+            from roar.execution.recording import (
+                DatasetIdentifierInferer,
                 ExecutionJobRecorder,
                 RunCompositeMaterializationConfig,
             )

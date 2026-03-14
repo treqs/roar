@@ -14,9 +14,9 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV
+from roar.execution.recording import ExecutionJobRecorder
 
 from .backup import PreviousOutputBackupService
-from .job_recording import ExecutionJobRecorder
 from .tracer import TracerService
 
 if TYPE_CHECKING:
