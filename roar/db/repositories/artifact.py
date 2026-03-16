@@ -122,7 +122,7 @@ class SQLAlchemyArtifactRepository(ArtifactRepository):
         # Collect all digests for the primary algorithm to check for existing artifacts
         all_digests: dict[str, int] = {}  # digest -> index in items
         primary_algo: str | None = None
-        for i, (hashes, size, path) in enumerate(items):
+        for i, (hashes, _size, _path) in enumerate(items):
             for algo, digest in hashes.items():
                 if primary_algo is None:
                     primary_algo = algo

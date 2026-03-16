@@ -256,7 +256,7 @@ class JobRecordingService:
         artifact_ids = self._artifact_repo.register_batch(batch_items)
 
         # Batch create edges
-        edges = list(zip(artifact_ids, valid_paths))
+        edges = list(zip(artifact_ids, valid_paths, strict=True))
         if is_input:
             self._job_repo.add_inputs_batch(job_id, edges)
         else:
