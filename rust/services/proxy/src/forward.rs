@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-#[cfg(debug_assertions)]
 use std::time::Instant;
 use std::time::SystemTime;
 
@@ -33,6 +32,7 @@ pub struct ForwardState {
     pub region: String,
     /// Cache of bucket name → region, learned from S3 PermanentRedirect responses.
     pub bucket_regions: Arc<RwLock<HashMap<String, String>>>,
+    pub timing_enabled: bool,
 }
 
 /// S3 response with deferred body consumption.
@@ -45,7 +45,7 @@ pub struct S3Response {
 impl S3Response {
     /// Consume the response body as a byte stream (memory-efficient, default).
     pub fn into_body_stream(self) -> Body {
-        Body::from_stream(self.inner.bytes_stream())
+        Body::new(reqwest::Body::from(self.inner))
     }
 
     /// Buffer the full response body in memory.
@@ -70,9 +70,6 @@ pub async fn forward_to_s3(
     body: Bytes,
     upstream_url: Option<&str>,
 ) -> Result<S3Response> {
-    #[cfg(debug_assertions)]
-    let t0 = Instant::now();
-
     let path = uri.path();
     let query = uri.query().unwrap_or("");
 
@@ -166,6 +163,8 @@ async fn forward_to_s3_inner(
     upstream_url: Option<&str>,
     effective_region: &str,
 ) -> Result<S3Response> {
+    let t_total = state.timing_enabled.then(Instant::now);
+
     // Build the target URL — use upstream if provided, otherwise default S3 endpoint
     let target_url = match upstream_url {
         Some(base) => {
@@ -189,19 +188,15 @@ async fn forward_to_s3_inner(
     };
 
     // Resolve credentials
+    let t_creds = state.timing_enabled.then(Instant::now);
     let creds = state
         .credentials_provider
         .provide_credentials()
         .await
         .context("failed to resolve AWS credentials")?;
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[proxy-timing] cred_resolve={:.2}ms",
-        t0.elapsed().as_secs_f64() * 1000.0
-    );
+    log_timing(&t_creds, "cred_resolve");
 
-    #[cfg(debug_assertions)]
-    let t1 = Instant::now();
+    let t_sign = state.timing_enabled.then(Instant::now);
     let identity = creds.into();
 
     // Build signing settings — use UNSIGNED-PAYLOAD to avoid buffering/hashing body
@@ -220,7 +215,7 @@ async fn forward_to_s3_inner(
         .into();
 
     // Collect headers to sign (forward Content-Type, Content-Length, etc.)
-    let mut signable_headers: Vec<(String, String)> = Vec::new();
+    let mut signable_headers: Vec<(String, String)> = Vec::with_capacity(headers.len() + 1);
     let s3_host = match upstream_url {
         Some(base) => {
             // Extract host (and optional port) from the upstream URL
@@ -240,12 +235,12 @@ async fn forward_to_s3_inner(
     signable_headers.push(("host".to_string(), s3_host.clone()));
 
     for (name, value) in headers.iter() {
-        let name_lower = name.as_str().to_lowercase();
-        if SKIP_HEADERS.contains(&name_lower.as_str()) {
+        let name_lower = name.as_str();
+        if SKIP_HEADERS.contains(&name_lower) {
             continue;
         }
         if let Ok(v) = value.to_str() {
-            signable_headers.push((name_lower, v.to_string()));
+            signable_headers.push((name_lower.to_string(), v.to_string()));
         }
     }
 
@@ -281,11 +276,7 @@ async fn forward_to_s3_inner(
     }
 
     signing_instructions.apply_to_request_http1x(&mut temp_request);
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[proxy-timing] signing={:.2}ms",
-        t1.elapsed().as_secs_f64() * 1000.0
-    );
+    log_timing(&t_sign, "signing");
 
     // Build the final reqwest request with all signed headers
     let mut final_builder = state.client.request(
@@ -301,23 +292,13 @@ async fn forward_to_s3_inner(
 
     final_builder = final_builder.body(body);
 
-    #[cfg(debug_assertions)]
-    let t2 = Instant::now();
+    let t_send = state.timing_enabled.then(Instant::now);
     let response = final_builder
         .send()
         .await
         .context("failed to forward request to S3")?;
-    #[cfg(debug_assertions)]
-    {
-        eprintln!(
-            "[proxy-timing] send_recv_headers={:.2}ms",
-            t2.elapsed().as_secs_f64() * 1000.0
-        );
-        eprintln!(
-            "[proxy-timing] total_forward={:.2}ms",
-            t0.elapsed().as_secs_f64() * 1000.0
-        );
-    }
+    log_timing(&t_send, "send_recv_headers");
+    log_timing(&t_total, "total_forward");
 
     // Map the S3 response status + headers
     let status = StatusCode::from_u16(response.status().as_u16())
@@ -337,4 +318,14 @@ async fn forward_to_s3_inner(
         headers: response_headers,
         inner: response,
     })
+}
+
+fn log_timing(start: &Option<Instant>, label: &str) {
+    if let Some(start) = start {
+        eprintln!(
+            "[proxy-timing] {}={:.2}ms",
+            label,
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
 }

@@ -22,7 +22,7 @@ try:
 
     __version__ = version("roar-cli")
 except Exception:
-    __version__ = "0.1.11"
+    __version__ = "0.2.10"
 
 
 # Lazy command registry: maps command name to (module_path, command_name, short_help)
