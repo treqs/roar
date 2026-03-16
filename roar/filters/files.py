@@ -187,7 +187,20 @@ class FileClassifier:
         # file_to_pkg is intentionally empty; classify() uses path extraction.
         return {}, pkg_versions
 
-    def classify(self, path: str) -> tuple[str, str | None]:
+    def _get_git_tracked_files(self) -> set[str]:
+        """Run ``git ls-files`` once and return a set of repo-relative paths."""
+        try:
+            output = subprocess.check_output(
+                ["git", "ls-files"],
+                cwd=str(self.repo_root),
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            return set(output.splitlines())
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return set()
+
+    def classify(self, path: str, git_tracked: set[str] | None = None) -> tuple[str, str | None]:
         """
         Classify a file into one of:
         - "repo": tracked in the git repo
@@ -224,12 +237,18 @@ class FileClassifier:
             else:
                 try:
                     rel = Path(path_str).relative_to(self.repo_root)
-                    subprocess.check_output(
-                        ["git", "ls-files", "--error-unmatch", str(rel)],
-                        cwd=str(self.repo_root),
-                        stderr=subprocess.DEVNULL,
-                    )
-                    return ("repo", None)
+                    if git_tracked is not None:
+                        if str(rel) in git_tracked:
+                            return ("repo", None)
+                        else:
+                            return ("unmanaged", None)
+                    else:
+                        subprocess.check_output(
+                            ["git", "ls-files", "--error-unmatch", str(rel)],
+                            cwd=str(self.repo_root),
+                            stderr=subprocess.DEVNULL,
+                        )
+                        return ("repo", None)
                 except subprocess.CalledProcessError:
                     # In repo but not tracked - could be generated file
                     return ("unmanaged", None)
@@ -360,10 +379,12 @@ class FileClassifier:
             "skip": 0,
         }
 
+        git_tracked = self._get_git_tracked_files()
+
         for path in paths:
             if not path:
                 continue
-            classification, pkg_name = self.classify(path)
+            classification, pkg_name = self.classify(path, git_tracked=git_tracked)
             stats[classification] = stats.get(classification, 0) + 1
 
             if classification == "repo":

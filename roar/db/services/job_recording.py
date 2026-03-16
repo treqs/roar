@@ -217,6 +217,9 @@ class JobRecordingService:
         is_input: bool,
     ) -> None:
         """Register artifacts and link them to the job."""
+        # Build batch items, skipping paths that already have edges for this job
+        batch_items: list[tuple[dict[str, str], int, str | None]] = []
+        valid_paths: list[str] = []
         for path in file_paths:
             if is_input and self._job_repo.has_input_path(job_id, path):
                 continue
@@ -226,22 +229,28 @@ class JobRecordingService:
             path_hashes = hashes_by_path.get(path)
             if not path_hashes:
                 continue
-
             hashes = {algo: digest for algo in hash_algorithms if (digest := path_hashes.get(algo))}
             if not hashes:
                 continue
-
             try:
                 size = os.path.getsize(path)
             except OSError:
                 size = 0
+            batch_items.append((hashes, size, path))
+            valid_paths.append(path)
 
-            artifact_id, _ = self._artifact_repo.register(hashes, size, path)
+        if not batch_items:
+            return
 
-            if is_input:
-                self._job_repo.add_input(job_id, artifact_id, path)
-            else:
-                self._job_repo.add_output(job_id, artifact_id, path)
+        # Batch register artifacts
+        artifact_ids = self._artifact_repo.register_batch(batch_items)
+
+        # Batch create edges
+        edges = list(zip(artifact_ids, valid_paths))
+        if is_input:
+            self._job_repo.add_inputs_batch(job_id, edges)
+        else:
+            self._job_repo.add_outputs_batch(job_id, edges)
 
     @staticmethod
     def _unique_paths(paths: list[str]) -> list[str]:

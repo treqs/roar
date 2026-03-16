@@ -106,6 +106,74 @@ class SQLAlchemyArtifactRepository(ArtifactRepository):
         self._session.flush()
         return artifact_id, True
 
+    def register_batch(self, items: list[tuple[dict[str, str], int, str | None]]) -> list[str]:
+        """Register multiple artifacts at once. Returns list of artifact_ids.
+
+        items = [(hashes_dict, size, path), ...]
+        """
+        if not items:
+            return []
+
+        # Collect all digests for the primary algorithm to check for existing artifacts
+        all_digests: dict[str, int] = {}  # digest -> index in items
+        primary_algo: str | None = None
+        for i, (hashes, size, path) in enumerate(items):
+            for algo, digest in hashes.items():
+                if primary_algo is None:
+                    primary_algo = algo
+                if algo == primary_algo:
+                    all_digests[digest.lower()] = i
+
+        # Bulk lookup existing artifacts by primary hash
+        existing_map: dict[str, str] = {}  # digest -> artifact_id
+        if primary_algo and all_digests:
+            rows = self._session.execute(
+                select(ArtifactHash.digest, ArtifactHash.artifact_id).where(
+                    ArtifactHash.algorithm == primary_algo,
+                    ArtifactHash.digest.in_(list(all_digests.keys())),
+                )
+            ).all()
+            for digest, artifact_id in rows:
+                existing_map[digest] = artifact_id
+
+        # Process items
+        artifact_ids: list[str] = []
+        new_artifacts: list[Artifact] = []
+        new_hashes: list[ArtifactHash] = []
+        for hashes, size, path in items:
+            primary_digest = hashes.get(primary_algo, "").lower() if primary_algo else ""
+            if primary_digest in existing_map:
+                artifact_ids.append(existing_map[primary_digest])
+            else:
+                artifact_id = secrets.token_hex(16)
+                artifact_ids.append(artifact_id)
+                new_artifacts.append(
+                    Artifact(
+                        id=artifact_id,
+                        size=size,
+                        first_seen_at=time.time(),
+                        first_seen_path=path,
+                    )
+                )
+                for algo, digest in hashes.items():
+                    new_hashes.append(
+                        ArtifactHash(
+                            artifact_id=artifact_id,
+                            algorithm=algo,
+                            digest=digest.lower(),
+                        )
+                    )
+                existing_map[primary_digest] = artifact_id  # prevent dupes within batch
+
+        if new_artifacts:
+            self._session.add_all(new_artifacts)
+        if new_hashes:
+            self._session.add_all(new_hashes)
+        if new_artifacts or new_hashes:
+            self._session.flush()
+
+        return artifact_ids
+
     def get(self, artifact_id: str) -> dict[str, Any] | None:
         """
         Get artifact by ID.
@@ -147,6 +215,34 @@ class SQLAlchemyArtifactRepository(ArtifactRepository):
             }
             for h in hashes
         ]
+
+    def get_hashes_batch(self, artifact_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        """
+        Get hashes for multiple artifacts in a single query.
+
+        Args:
+            artifact_ids: List of artifact UUIDs
+
+        Returns:
+            Dict mapping artifact_id to list of hash dicts.
+        """
+        if not artifact_ids:
+            return {}
+
+        rows = (
+            self._session.execute(
+                select(ArtifactHash).where(ArtifactHash.artifact_id.in_(artifact_ids))
+            )
+            .scalars()
+            .all()
+        )
+
+        result: dict[str, list[dict[str, Any]]] = {aid: [] for aid in artifact_ids}
+        for h in rows:
+            result.setdefault(h.artifact_id, []).append(
+                {"algorithm": h.algorithm, "digest": h.digest}
+            )
+        return result
 
     def get_by_hash(self, digest: str, algorithm: str | None = None) -> dict[str, Any] | None:
         """
