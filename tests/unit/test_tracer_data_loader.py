@@ -1,5 +1,6 @@
-"""Unit tests for tracer MessagePack loading and normalization."""
+"""Unit tests for tracer report loading and normalization."""
 
+import json
 from pathlib import Path
 
 import msgpack
@@ -12,6 +13,28 @@ def _write_msgpack(path: Path, payload: dict) -> None:
 
 
 class TestDataLoaderService:
+    def test_loads_json_report_when_tracer_writes_json(self, tmp_path: Path) -> None:
+        report = {
+            "version": 1,
+            "tracer_mode": "ptrace",
+            "opened_files": ["/tmp/a.txt"],
+            "read_files": ["/tmp/a.txt"],
+            "written_files": ["/tmp/b.txt"],
+            "processes": [{"pid": 1, "parent_pid": None, "command": ["python", "train.py"]}],
+            "start_time": 1.0,
+            "end_time": 2.5,
+        }
+        report_path = tmp_path / "trace.msgpack"
+        report_path.write_text(json.dumps(report))
+
+        data = DataLoaderService().load_tracer_data(str(report_path))
+
+        assert data.opened_files == ["/tmp/a.txt"]
+        assert data.read_files == ["/tmp/a.txt"]
+        assert data.written_files == ["/tmp/b.txt"]
+        assert data.tracer_mode == "ptrace"
+        assert data.version == 1
+
     def test_loads_legacy_ptrace_report(self, tmp_path: Path) -> None:
         report = {
             "opened_files": ["/tmp/a.txt", "/tmp/a.txt"],

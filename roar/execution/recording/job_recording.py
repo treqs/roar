@@ -215,10 +215,7 @@ class LocalJobRecorder:
         """Create a job and link precomputed input/output artifacts."""
         resolved_session_id = session_id
         if resolved_session_id is None:
-            active_session = db_ctx.sessions.get_active()
-            if active_session is None:
-                raise ValueError("No active session")
-            resolved_session_id = int(active_session["id"])
+            resolved_session_id = int(db_ctx.sessions.get_or_create_active())
 
         step_number = db_ctx.sessions.get_next_step_number(resolved_session_id)
         job_id, recorded_job_uid = db_ctx.jobs.create(

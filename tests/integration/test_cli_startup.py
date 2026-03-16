@@ -1,7 +1,9 @@
 """
-Integration test for CLI startup performance.
+Opt-in diagnostic test for CLI startup performance.
 
-Verifies that the CLI starts quickly, especially for --help.
+This file is intentionally excluded from the default pytest profile because it
+tracks an aspirational latency budget rather than a stable product contract.
+Run it explicitly when working on CLI startup time.
 """
 
 import subprocess

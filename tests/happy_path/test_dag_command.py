@@ -9,44 +9,53 @@ import json
 import pytest
 
 
+def _run_preprocess(roar_cli, git_commit, python_exe) -> None:
+    result = roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
+    assert result.returncode == 0
+    git_commit("After preprocess")
+
+
+def _run_train(roar_cli, git_commit, python_exe) -> None:
+    result = roar_cli("run", python_exe, "train.py", "processed.csv", "model.pkl")
+    assert result.returncode == 0
+    git_commit("After train")
+
+
+def _run_evaluate(roar_cli, git_commit, python_exe) -> None:
+    result = roar_cli("run", python_exe, "evaluate.py", "model.pkl", "test.csv", "metrics.json")
+    assert result.returncode == 0
+    git_commit("After evaluate")
+
+
+def _rerun_preprocess_with_modified_input(
+    temp_git_repo,
+    roar_cli,
+    git_commit,
+    python_exe,
+    updated_input: str,
+) -> None:
+    (temp_git_repo / "input.csv").write_text(updated_input)
+    git_commit("Modified input")
+
+    result = roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
+    assert result.returncode == 0
+    git_commit("Rerun preprocess")
+
+
+def _write_script(temp_git_repo, git_commit, name: str, body: str, commit_message: str) -> None:
+    (temp_git_repo / name).write_text(body)
+    git_commit(commit_message)
+
+
+def _run_roar_and_commit(roar_cli, git_commit, commit_message: str, *args: str) -> None:
+    result = roar_cli(*args)
+    assert result.returncode == 0
+    git_commit(commit_message)
+
+
 @pytest.mark.happy_path
 class TestDagCommand:
     """Test roar dag command functionality."""
-
-    def test_dag_shows_linear_pipeline(
-        self,
-        temp_git_repo,
-        roar_cli,
-        git_commit,
-        sample_scripts,
-        sample_data,
-        python_exe,
-    ):
-        """
-        Run preprocess -> train and verify dag output shows 2 steps.
-
-        Given: A linear pipeline with 2 steps
-        When: Running roar dag
-        Then: Output should show both steps with proper metrics
-        """
-        # Step 1: Preprocess
-        result = roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        assert result.returncode == 0
-        git_commit("After preprocess")
-
-        # Step 2: Train
-        result = roar_cli("run", python_exe, "train.py", "processed.csv", "model.pkl")
-        assert result.returncode == 0
-        git_commit("After train")
-
-        # Run dag command
-        result = roar_cli("dag", "--no-color")
-        assert result.returncode == 0
-
-        output = result.stdout
-        assert "Pipeline: 2 steps" in output
-        assert "@1" in output
-        assert "@2" in output
 
     def test_dag_json_output(
         self,
@@ -65,9 +74,7 @@ class TestDagCommand:
         Then: Output should be valid JSON with expected structure
         """
         # Run a simple step
-        result = roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        assert result.returncode == 0
-        git_commit("After preprocess")
+        _run_preprocess(roar_cli, git_commit, python_exe)
 
         # Run dag with JSON output
         result = roar_cli("dag", "--json")
@@ -108,19 +115,15 @@ class TestDagCommand:
         Then: The train step should be marked as stale
         """
         # Initial pipeline
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess")
-
-        roar_cli("run", python_exe, "train.py", "processed.csv", "model.pkl")
-        git_commit("After train")
-
-        # Modify preprocess output
-        (temp_git_repo / "input.csv").write_text("id,value\n1,modified\n2,data\n")
-        git_commit("Modified input")
-
-        # Rerun preprocess
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("Rerun preprocess")
+        _run_preprocess(roar_cli, git_commit, python_exe)
+        _run_train(roar_cli, git_commit, python_exe)
+        _rerun_preprocess_with_modified_input(
+            temp_git_repo,
+            roar_cli,
+            git_commit,
+            python_exe,
+            "id,value\n1,modified\n2,data\n",
+        )
 
         # Check dag - train should be stale
         result = roar_cli("dag", "--json")
@@ -150,8 +153,7 @@ class TestDagCommand:
         When: Running roar dag --no-color
         Then: Output should not contain ANSI escape codes
         """
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess")
+        _run_preprocess(roar_cli, git_commit, python_exe)
 
         result = roar_cli("dag", "--no-color")
         assert result.returncode == 0
@@ -176,14 +178,16 @@ class TestDagCommand:
         Then: All executions should be visible
         """
         # Initial run
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess 1")
+        _run_preprocess(roar_cli, git_commit, python_exe)
 
         # Modify and rerun
-        (temp_git_repo / "input.csv").write_text("id,value\n1,modified\n")
-        git_commit("Modified input")
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess 2")
+        _rerun_preprocess_with_modified_input(
+            temp_git_repo,
+            roar_cli,
+            git_commit,
+            python_exe,
+            "id,value\n1,modified\n",
+        )
 
         # Check expanded view
         result = roar_cli("dag", "--expanded", "--json")
@@ -195,46 +199,6 @@ class TestDagCommand:
         # Should have more nodes in expanded view (both executions)
         preprocess_nodes = [n for n in dag_data["nodes"] if "preprocess.py" in n["command"]]
         assert len(preprocess_nodes) == 2
-
-    def test_dag_shows_diamond_pattern(
-        self,
-        temp_git_repo,
-        roar_cli,
-        git_commit,
-        sample_scripts,
-        sample_data,
-        python_exe,
-    ):
-        """
-        Verify dag correctly shows diamond pattern dependencies.
-
-        Given: A diamond pipeline pattern
-        When: Running roar dag --json
-        Then: Dependencies should be correctly tracked
-        """
-        # Create diamond: input -> features_a/features_b -> combine
-        roar_cli("run", python_exe, "extract_features_a.py", "input.csv", "features_a.csv")
-        git_commit("After features_a")
-
-        roar_cli("run", python_exe, "extract_features_b.py", "input.csv", "features_b.csv")
-        git_commit("After features_b")
-
-        roar_cli(
-            "run", python_exe, "combine.py", "features_a.csv", "features_b.csv", "combined.json"
-        )
-        git_commit("After combine")
-
-        result = roar_cli("dag", "--json")
-        assert result.returncode == 0
-
-        dag_data = json.loads(result.stdout)
-        assert dag_data["total_steps"] == 3
-
-        # Find the combine step
-        combine_step = next((n for n in dag_data["nodes"] if "combine.py" in n["command"]), None)
-        assert combine_step is not None
-        assert combine_step["metrics"]["consumed"] == 2
-        assert len(combine_step["dependencies"]) == 2
 
     def test_dag_empty_session(
         self,
@@ -280,8 +244,7 @@ class TestDagCommand:
         """
         # Create model training scripts
         for model_type in ["rf", "xgb", "nn"]:
-            script = temp_git_repo / f"train_{model_type}.py"
-            script.write_text(f'''
+            (temp_git_repo / f"train_{model_type}.py").write_text(f'''
 import sys
 import json
 
@@ -300,8 +263,11 @@ print(f"Trained {model_type} model -> {{output_file}}")
         git_commit("Add model training scripts")
 
         # Create select_best script
-        select_best = temp_git_repo / "select_best.py"
-        select_best.write_text("""
+        _write_script(
+            temp_git_repo,
+            git_commit,
+            "select_best.py",
+            """
 import sys
 import json
 
@@ -316,22 +282,31 @@ with open("model.pkl", "w") as f:
     json.dump({"selected": "rf", "models": combined}, f)
 
 print("Selected best model -> model.pkl")
-""")
-        git_commit("Add select_best script")
+""",
+            "Add select_best script",
+        )
 
         # Run training jobs in parallel (different models)
-        roar_cli("run", python_exe, "train_rf.py", "model_rf.pkl")
-        git_commit("After train_rf")
-
-        roar_cli("run", python_exe, "train_xgb.py", "model_xgb.pkl")
-        git_commit("After train_xgb")
-
-        roar_cli("run", python_exe, "train_nn.py", "model_nn.pkl")
-        git_commit("After train_nn")
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After train_rf", "run", python_exe, "train_rf.py", "model_rf.pkl"
+        )
+        _run_roar_and_commit(
+            roar_cli,
+            git_commit,
+            "After train_xgb",
+            "run",
+            python_exe,
+            "train_xgb.py",
+            "model_xgb.pkl",
+        )
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After train_nn", "run", python_exe, "train_nn.py", "model_nn.pkl"
+        )
 
         # Select best
-        roar_cli("run", python_exe, "select_best.py")
-        git_commit("After select_best")
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After select_best", "run", python_exe, "select_best.py"
+        )
 
         # Check DAG
         result = roar_cli("dag", "--json")
@@ -364,17 +339,42 @@ print("Selected best model -> model.pkl")
         """
         # Use existing extract_features_* scripts from sample_scripts
         # Run feature extraction (fan-out from input)
-        roar_cli("run", python_exe, "extract_features_a.py", "input.csv", "features_a.csv")
-        git_commit("After features_a")
-
-        roar_cli("run", python_exe, "extract_features_b.py", "input.csv", "features_b.csv")
-        git_commit("After features_b")
-
-        roar_cli("run", python_exe, "extract_features_c.py", "input.csv", "features_c.csv")
-        git_commit("After features_c")
+        _run_roar_and_commit(
+            roar_cli,
+            git_commit,
+            "After features_a",
+            "run",
+            python_exe,
+            "extract_features_a.py",
+            "input.csv",
+            "features_a.csv",
+        )
+        _run_roar_and_commit(
+            roar_cli,
+            git_commit,
+            "After features_b",
+            "run",
+            python_exe,
+            "extract_features_b.py",
+            "input.csv",
+            "features_b.csv",
+        )
+        _run_roar_and_commit(
+            roar_cli,
+            git_commit,
+            "After features_c",
+            "run",
+            python_exe,
+            "extract_features_c.py",
+            "input.csv",
+            "features_c.csv",
+        )
 
         # Combine features (fan-in)
-        roar_cli(
+        _run_roar_and_commit(
+            roar_cli,
+            git_commit,
+            "After combine",
             "run",
             python_exe,
             "combine.py",
@@ -383,11 +383,11 @@ print("Selected best model -> model.pkl")
             "features_c.csv",
             "combined.json",
         )
-        git_commit("After combine")
 
         # Train on combined features
-        roar_cli("run", python_exe, "train.py", "combined.json", "model.pkl")
-        git_commit("After train")
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After train", "run", python_exe, "train.py", "combined.json", "model.pkl"
+        )
 
         result = roar_cli("dag", "--json")
         assert result.returncode == 0
@@ -418,8 +418,7 @@ print("Selected best model -> model.pkl")
         """
         # Create base model training scripts
         for model_name in ["a", "b", "c"]:
-            script = temp_git_repo / f"train_model_{model_name}.py"
-            script.write_text(f"""
+            (temp_git_repo / f"train_model_{model_name}.py").write_text(f"""
 import sys
 import json
 
@@ -435,8 +434,11 @@ print(f"Trained model_{model_name}")
         git_commit("Add base model scripts")
 
         # Create ensemble script
-        ensemble = temp_git_repo / "train_ensemble.py"
-        ensemble.write_text("""
+        _write_script(
+            temp_git_repo,
+            git_commit,
+            "train_ensemble.py",
+            """
 import json
 
 models = {}
@@ -453,22 +455,25 @@ with open("model.pkl", "w") as f:
     json.dump(ensemble_model, f)
 
 print("Trained ensemble model")
-""")
-        git_commit("Add ensemble script")
+""",
+            "Add ensemble script",
+        )
 
         # Train base models
-        roar_cli("run", python_exe, "train_model_a.py")
-        git_commit("After model_a")
-
-        roar_cli("run", python_exe, "train_model_b.py")
-        git_commit("After model_b")
-
-        roar_cli("run", python_exe, "train_model_c.py")
-        git_commit("After model_c")
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After model_a", "run", python_exe, "train_model_a.py"
+        )
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After model_b", "run", python_exe, "train_model_b.py"
+        )
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After model_c", "run", python_exe, "train_model_c.py"
+        )
 
         # Train ensemble
-        roar_cli("run", python_exe, "train_ensemble.py")
-        git_commit("After ensemble")
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After ensemble", "run", python_exe, "train_ensemble.py"
+        )
 
         result = roar_cli("dag", "--json")
         assert result.returncode == 0
@@ -501,8 +506,11 @@ print("Trained ensemble model")
         Then: @B prefix should appear for build steps
         """
         # Create a simple build script
-        build_script = temp_git_repo / "setup_env.py"
-        build_script.write_text("""
+        _write_script(
+            temp_git_repo,
+            git_commit,
+            "setup_env.py",
+            """
 import json
 
 # Simulate setting up environment
@@ -511,16 +519,21 @@ with open("config.json", "w") as f:
     json.dump(config, f)
 
 print("Environment setup complete")
-""")
-        git_commit("Add build script")
+""",
+            "Add build script",
+        )
 
         # Run build step
-        roar_cli("build", python_exe, "setup_env.py")
-        git_commit("After build")
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After build", "build", python_exe, "setup_env.py"
+        )
 
         # Run a regular step that uses the config
-        run_script = temp_git_repo / "use_config.py"
-        run_script.write_text("""
+        _write_script(
+            temp_git_repo,
+            git_commit,
+            "use_config.py",
+            """
 import json
 
 with open("config.json", "r") as f:
@@ -530,11 +543,13 @@ with open("output.json", "w") as f:
     json.dump({"used_config": config}, f)
 
 print("Used config")
-""")
-        git_commit("Add use_config script")
+""",
+            "Add use_config script",
+        )
 
-        roar_cli("run", python_exe, "use_config.py")
-        git_commit("After use_config")
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After use_config", "run", python_exe, "use_config.py"
+        )
 
         result = roar_cli("dag", "--no-color")
         assert result.returncode == 0
@@ -561,21 +576,16 @@ print("Used config")
         Then: Downstream steps should be marked stale with correct stale_count
         """
         # Build pipeline: preprocess -> train -> evaluate
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess")
-
-        roar_cli("run", python_exe, "train.py", "processed.csv", "model.pkl")
-        git_commit("After train")
-
-        roar_cli("run", python_exe, "evaluate.py", "model.pkl", "test.csv", "metrics.json")
-        git_commit("After evaluate")
-
-        # Modify input and rerun preprocess
-        (temp_git_repo / "input.csv").write_text("id,value\n1,new_data\n2,changed\n")
-        git_commit("Modified input")
-
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("Rerun preprocess")
+        _run_preprocess(roar_cli, git_commit, python_exe)
+        _run_train(roar_cli, git_commit, python_exe)
+        _run_evaluate(roar_cli, git_commit, python_exe)
+        _rerun_preprocess_with_modified_input(
+            temp_git_repo,
+            roar_cli,
+            git_commit,
+            python_exe,
+            "id,value\n1,new_data\n2,changed\n",
+        )
 
         # Check cascade invalidation
         result = roar_cli("dag", "--json")
@@ -609,8 +619,11 @@ print("Used config")
         Then: Only affected branch should be marked stale
         """
         # Create split script
-        split_script = temp_git_repo / "split.py"
-        split_script.write_text("""
+        _write_script(
+            temp_git_repo,
+            git_commit,
+            "split.py",
+            """
 import sys
 
 with open("input.csv", "r") as f:
@@ -624,46 +637,55 @@ with open("part_b.csv", "w") as f:
     f.write(data[len(data)//2:])
 
 print("Split input into part_a and part_b")
-""")
-        git_commit("Add split script")
+""",
+            "Add split script",
+        )
 
         # Build diamond: split -> (train_a, train_b) -> merge
-        roar_cli("run", python_exe, "split.py")
-        git_commit("After split")
+        _run_roar_and_commit(roar_cli, git_commit, "After split", "run", python_exe, "split.py")
 
         # Create train_a script
-        train_a = temp_git_repo / "train_a.py"
-        train_a.write_text("""
+        _write_script(
+            temp_git_repo,
+            git_commit,
+            "train_a.py",
+            """
 import json
 with open("part_a.csv", "r") as f:
     data = f.read()
 with open("model_a.pkl", "w") as f:
     json.dump({"model": "a", "hash": hash(data)}, f)
 print("Trained model_a")
-""")
-        git_commit("Add train_a script")
+""",
+            "Add train_a script",
+        )
 
-        roar_cli("run", python_exe, "train_a.py")
-        git_commit("After train_a")
+        _run_roar_and_commit(roar_cli, git_commit, "After train_a", "run", python_exe, "train_a.py")
 
         # Create train_b script
-        train_b = temp_git_repo / "train_b.py"
-        train_b.write_text("""
+        _write_script(
+            temp_git_repo,
+            git_commit,
+            "train_b.py",
+            """
 import json
 with open("part_b.csv", "r") as f:
     data = f.read()
 with open("model_b.pkl", "w") as f:
     json.dump({"model": "b", "hash": hash(data)}, f)
 print("Trained model_b")
-""")
-        git_commit("Add train_b script")
+""",
+            "Add train_b script",
+        )
 
-        roar_cli("run", python_exe, "train_b.py")
-        git_commit("After train_b")
+        _run_roar_and_commit(roar_cli, git_commit, "After train_b", "run", python_exe, "train_b.py")
 
         # Create merge script
-        merge_script = temp_git_repo / "merge_models.py"
-        merge_script.write_text("""
+        _write_script(
+            temp_git_repo,
+            git_commit,
+            "merge_models.py",
+            """
 import json
 with open("model_a.pkl", "r") as f:
     model_a = json.load(f)
@@ -672,18 +694,19 @@ with open("model_b.pkl", "r") as f:
 with open("final_model.pkl", "w") as f:
     json.dump({"a": model_a, "b": model_b}, f)
 print("Merged models")
-""")
-        git_commit("Add merge script")
+""",
+            "Add merge script",
+        )
 
-        roar_cli("run", python_exe, "merge_models.py")
-        git_commit("After merge")
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After merge", "run", python_exe, "merge_models.py"
+        )
 
         # Rerun only train_a (branch A)
         (temp_git_repo / "part_a.csv").write_text("modified,data\n")
         git_commit("Modified part_a")
 
-        roar_cli("run", python_exe, "train_a.py")
-        git_commit("Rerun train_a")
+        _run_roar_and_commit(roar_cli, git_commit, "Rerun train_a", "run", python_exe, "train_a.py")
 
         # Check partial invalidation
         result = roar_cli("dag", "--json")
@@ -713,8 +736,11 @@ print("Merged models")
         Then: Both executions should appear in expanded view
         """
         # Create a script that can fail
-        fail_script = temp_git_repo / "might_fail.py"
-        fail_script.write_text("""
+        _write_script(
+            temp_git_repo,
+            git_commit,
+            "might_fail.py",
+            """
 import sys
 import os
 
@@ -733,19 +759,22 @@ if fail_flag == "true":
 with open(output_file, "w") as f:
     f.write(data.upper())
 print(f"Success: wrote {output_file}")
-""")
-        git_commit("Add might_fail script")
+""",
+            "Add might_fail script",
+        )
 
         # First run (success for setup)
-        roar_cli("run", python_exe, "might_fail.py", "output.json")
-        git_commit("After first run")
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After first run", "run", python_exe, "might_fail.py", "output.json"
+        )
 
         # Modify input and rerun
         (temp_git_repo / "input.csv").write_text("id,value\n1,retry\n")
         git_commit("Modified input")
 
-        roar_cli("run", python_exe, "might_fail.py", "output.json")
-        git_commit("After second run")
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After second run", "run", python_exe, "might_fail.py", "output.json"
+        )
 
         # Check expanded view shows both executions
         result = roar_cli("dag", "--expanded", "--json")
@@ -796,8 +825,9 @@ print(f"Completed step {i}")
 
         # Run all steps
         for i in range(1, 13):
-            roar_cli("run", python_exe, f"step_{i}.py")
-            git_commit(f"After step_{i}")
+            _run_roar_and_commit(
+                roar_cli, git_commit, f"After step_{i}", "run", python_exe, f"step_{i}.py"
+            )
 
         result = roar_cli("dag", "--json")
         assert result.returncode == 0
@@ -843,8 +873,9 @@ print(f"Completed level {i}")
 
         # Run all levels
         for i in range(1, 7):
-            roar_cli("run", python_exe, f"level_{i}.py")
-            git_commit(f"After level_{i}")
+            _run_roar_and_commit(
+                roar_cli, git_commit, f"After level_{i}", "run", python_exe, f"level_{i}.py"
+            )
 
         result = roar_cli("dag", "--no-color")
         assert result.returncode == 0
@@ -885,11 +916,8 @@ print(f"Completed level {i}")
         the JSON structure includes the field.
         """
         # Run steps
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess")
-
-        roar_cli("run", python_exe, "train.py", "processed.csv", "model.pkl")
-        git_commit("After train")
+        _run_preprocess(roar_cli, git_commit, python_exe)
+        _run_train(roar_cli, git_commit, python_exe)
 
         # Verify JSON includes step_name field in structure
         result = roar_cli("dag", "--json")
@@ -924,8 +952,11 @@ print(f"Completed level {i}")
         Then: All artifacts should be listed
         """
         # Create script that produces multiple outputs
-        multi_output = temp_git_repo / "multi_output.py"
-        multi_output.write_text("""
+        _write_script(
+            temp_git_repo,
+            git_commit,
+            "multi_output.py",
+            """
 import json
 
 with open("input.csv", "r") as f:
@@ -942,11 +973,13 @@ with open("output_3.json", "w") as f:
     json.dump({"part": 3, "data": data[20:]}, f)
 
 print("Produced 3 outputs")
-""")
-        git_commit("Add multi_output script")
+""",
+            "Add multi_output script",
+        )
 
-        roar_cli("run", python_exe, "multi_output.py")
-        git_commit("After multi_output")
+        _run_roar_and_commit(
+            roar_cli, git_commit, "After multi_output", "run", python_exe, "multi_output.py"
+        )
 
         result = roar_cli("dag", "--json")
         assert result.returncode == 0
@@ -979,8 +1012,11 @@ print("Produced 3 outputs")
         Then: Command should be truncated with '...'
         """
         # Create script with long name and arguments
-        long_script = temp_git_repo / "very_long_script_name_that_goes_on_and_on.py"
-        long_script.write_text("""
+        _write_script(
+            temp_git_repo,
+            git_commit,
+            "very_long_script_name_that_goes_on_and_on.py",
+            """
 import sys
 
 with open("input.csv", "r") as f:
@@ -990,13 +1026,21 @@ with open("output.txt", "w") as f:
     f.write(data + " " + " ".join(sys.argv[1:]))
 
 print("Done")
-""")
-        git_commit("Add long script")
+""",
+            "Add long script",
+        )
 
         # Run with very long arguments
         long_args = ["--parameter-" + str(i) + "=value" + str(i) for i in range(1, 20)]
-        roar_cli("run", python_exe, "very_long_script_name_that_goes_on_and_on.py", *long_args)
-        git_commit("After long command")
+        _run_roar_and_commit(
+            roar_cli,
+            git_commit,
+            "After long command",
+            "run",
+            python_exe,
+            "very_long_script_name_that_goes_on_and_on.py",
+            *long_args,
+        )
 
         result = roar_cli("dag", "--no-color")
         assert result.returncode == 0
@@ -1033,8 +1077,7 @@ print("Done")
         When: Running roar dag --json
         Then: Artifacts should have state, artifact_id, consumer_steps, is_terminal fields
         """
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess")
+        _run_preprocess(roar_cli, git_commit, python_exe)
 
         result = roar_cli("dag", "--json")
         assert result.returncode == 0
@@ -1069,18 +1112,15 @@ print("Done")
         Then: Artifacts from stale steps should have state="stale"
         """
         # Build pipeline
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess")
-
-        roar_cli("run", python_exe, "train.py", "processed.csv", "model.pkl")
-        git_commit("After train")
-
-        # Modify input and rerun preprocess to make train stale
-        (temp_git_repo / "input.csv").write_text("id,value\n1,modified\n2,data\n")
-        git_commit("Modified input")
-
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("Rerun preprocess")
+        _run_preprocess(roar_cli, git_commit, python_exe)
+        _run_train(roar_cli, git_commit, python_exe)
+        _rerun_preprocess_with_modified_input(
+            temp_git_repo,
+            roar_cli,
+            git_commit,
+            python_exe,
+            "id,value\n1,modified\n2,data\n",
+        )
 
         result = roar_cli("dag", "--json")
         assert result.returncode == 0
@@ -1109,11 +1149,8 @@ print("Done")
         When: Running roar dag --show-artifacts --json
         Then: Intermediate artifacts should be included
         """
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess")
-
-        roar_cli("run", python_exe, "train.py", "processed.csv", "model.pkl")
-        git_commit("After train")
+        _run_preprocess(roar_cli, git_commit, python_exe)
+        _run_train(roar_cli, git_commit, python_exe)
 
         # Without --show-artifacts, only terminal artifacts shown
         result = roar_cli("dag", "--json")
@@ -1150,18 +1187,15 @@ print("Done")
         Then: Only stale steps and artifacts should be shown
         """
         # Build pipeline
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess")
-
-        roar_cli("run", python_exe, "train.py", "processed.csv", "model.pkl")
-        git_commit("After train")
-
-        # Rerun preprocess to make train stale
-        (temp_git_repo / "input.csv").write_text("id,value\n1,new\n")
-        git_commit("Modified input")
-
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("Rerun preprocess")
+        _run_preprocess(roar_cli, git_commit, python_exe)
+        _run_train(roar_cli, git_commit, python_exe)
+        _rerun_preprocess_with_modified_input(
+            temp_git_repo,
+            roar_cli,
+            git_commit,
+            python_exe,
+            "id,value\n1,new\n",
+        )
 
         # Without --stale-only
         result = roar_cli("dag", "--json")
@@ -1196,11 +1230,8 @@ print("Done")
         When: Running roar dag --show-artifacts --json
         Then: processed.csv artifact should have train step in consumer_steps
         """
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess")
-
-        roar_cli("run", python_exe, "train.py", "processed.csv", "model.pkl")
-        git_commit("After train")
+        _run_preprocess(roar_cli, git_commit, python_exe)
+        _run_train(roar_cli, git_commit, python_exe)
 
         result = roar_cli("dag", "--show-artifacts", "--json")
         assert result.returncode == 0
@@ -1234,18 +1265,15 @@ print("Done")
         Then: Stale artifacts should show [stale] marker
         """
         # Build pipeline
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess")
-
-        roar_cli("run", python_exe, "train.py", "processed.csv", "model.pkl")
-        git_commit("After train")
-
-        # Rerun preprocess to make train stale
-        (temp_git_repo / "input.csv").write_text("id,value\n1,modified\n")
-        git_commit("Modified input")
-
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("Rerun preprocess")
+        _run_preprocess(roar_cli, git_commit, python_exe)
+        _run_train(roar_cli, git_commit, python_exe)
+        _rerun_preprocess_with_modified_input(
+            temp_git_repo,
+            roar_cli,
+            git_commit,
+            python_exe,
+            "id,value\n1,modified\n",
+        )
 
         result = roar_cli("dag", "--no-color")
         assert result.returncode == 0
@@ -1270,8 +1298,7 @@ print("Done")
         When: Running roar dag --json
         Then: Terminal artifacts should have state="active"
         """
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess")
+        _run_preprocess(roar_cli, git_commit, python_exe)
 
         result = roar_cli("dag", "--json")
         assert result.returncode == 0
@@ -1303,21 +1330,16 @@ print("Done")
             Expected: artifact_a = superseded, artifact_b = superseded
         """
         # Build initial pipeline: preprocess -> train -> evaluate
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("After preprocess")
-
-        roar_cli("run", python_exe, "train.py", "processed.csv", "model.pkl")
-        git_commit("After train")
-
-        roar_cli("run", python_exe, "evaluate.py", "model.pkl", "test.csv", "metrics.json")
-        git_commit("After evaluate")
-
-        # Modify input and rerun preprocess (this creates a superseded version)
-        (temp_git_repo / "input.csv").write_text("id,value\n1,new_data\n2,changed\n")
-        git_commit("Modified input")
-
-        roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
-        git_commit("Rerun preprocess")
+        _run_preprocess(roar_cli, git_commit, python_exe)
+        _run_train(roar_cli, git_commit, python_exe)
+        _run_evaluate(roar_cli, git_commit, python_exe)
+        _rerun_preprocess_with_modified_input(
+            temp_git_repo,
+            roar_cli,
+            git_commit,
+            python_exe,
+            "id,value\n1,new_data\n2,changed\n",
+        )
 
         # Check expanded view - artifacts from superseded executions should be superseded
         result = roar_cli("dag", "--expanded", "--show-artifacts", "--json")

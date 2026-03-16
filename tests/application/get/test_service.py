@@ -133,7 +133,7 @@ def test_get_artifacts_skips_active_session_check_on_dry_run(tmp_path: Path) -> 
     recorder_cls.return_value.record.assert_not_called()
 
 
-def test_get_artifacts_requires_active_session_for_real_downloads(tmp_path: Path) -> None:
+def test_get_artifacts_surfaces_recorder_errors(tmp_path: Path) -> None:
     parsed_source = MagicMock(is_prefix=False, scheme="s3")
     db_ctx = MagicMock()
     db_ctx.__enter__.return_value = db_ctx
@@ -141,7 +141,7 @@ def test_get_artifacts_requires_active_session_for_real_downloads(tmp_path: Path
     service = MagicMock()
     service.get.return_value = GetTransferResult(success=True, downloaded_files=[])
     recorder = MagicMock()
-    recorder.record.side_effect = ValueError("No active session")
+    recorder.record.side_effect = ValueError("Recorder failed")
 
     with (
         patch("roar.application.get.service.bootstrap"),
@@ -153,7 +153,7 @@ def test_get_artifacts_requires_active_session_for_real_downloads(tmp_path: Path
         patch("roar.application.get.service.LocalJobRecorder", return_value=recorder),
     ):
         resolve_git_state.return_value.commit = "deadbeef"
-        with pytest.raises(ValueError, match="No active session"):
+        with pytest.raises(ValueError, match="Recorder failed"):
             get_artifacts(_request(tmp_path))
 
 

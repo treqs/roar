@@ -1,0 +1,246 @@
+"""Minimal fake GLaaS server for local publish-path integration tests."""
+
+from __future__ import annotations
+
+import json
+import re
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
+
+
+class _FakeGlaasServer(ThreadingHTTPServer):
+    def __init__(self) -> None:
+        super().__init__(("127.0.0.1", 0), _FakeGlaasHandler)
+        self.health_checks = 0
+        self.session_registrations: list[dict[str, Any]] = []
+        self.job_batches: list[dict[str, Any]] = []
+        self.job_creates: list[dict[str, Any]] = []
+        self.artifact_batches: list[list[dict[str, Any]]] = []
+        self.input_links: list[dict[str, Any]] = []
+        self.output_links: list[dict[str, Any]] = []
+        self.label_syncs: list[list[dict[str, Any]]] = []
+        self.composite_registrations: list[dict[str, Any]] = []
+        self.artifacts_by_digest: dict[str, dict[str, Any]] = {}
+        self.artifact_dags_by_digest: dict[str, dict[str, Any]] = {}
+        self._next_job_id = 1
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.server_address[1]}"
+
+    def allocate_job_id(self) -> int:
+        job_id = self._next_job_id
+        self._next_job_id += 1
+        return job_id
+
+
+class _FakeGlaasHandler(BaseHTTPRequestHandler):
+    server: _FakeGlaasServer
+
+    def _read_json(self) -> dict[str, Any]:
+        content_length = int(self.headers.get("Content-Length", "0"))
+        if content_length <= 0:
+            return {}
+        raw = self.rfile.read(content_length)
+        if not raw:
+            return {}
+        return json.loads(raw.decode("utf-8"))
+
+    def _write_json(self, status_code: int, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        if self.path == "/api/v1/health":
+            self.server.health_checks += 1
+            self._write_json(200, {"success": True, "status": "healthy"})
+            return
+
+        artifact_match = re.fullmatch(r"/api/v1/artifacts/([0-9a-f]+)", self.path)
+        if artifact_match:
+            prefix = artifact_match.group(1)
+            for digest in sorted(self.server.artifacts_by_digest):
+                if digest.startswith(prefix):
+                    self._write_json(200, {"hash": digest})
+                    return
+            self._write_json(404, {"error": f"Artifact not found: {prefix}"})
+            return
+
+        artifact_dag_match = re.fullmatch(r"/api/v1/artifacts/([0-9a-f]+)/dag", self.path)
+        if artifact_dag_match:
+            prefix = artifact_dag_match.group(1)
+            for digest in sorted(self.server.artifact_dags_by_digest):
+                if digest.startswith(prefix):
+                    self._write_json(200, self.server.artifact_dags_by_digest[digest])
+                    return
+            self._write_json(404, {"error": f"Artifact DAG not found: {prefix}"})
+            return
+
+        self._write_json(404, {"error": f"Unhandled GET path: {self.path}"})
+
+    def do_POST(self) -> None:
+        payload = self._read_json()
+
+        if self.path == "/api/v1/sessions":
+            self.server.session_registrations.append(payload)
+            session_hash = str(payload.get("hash", ""))
+            self._write_json(
+                200,
+                {
+                    "hash": session_hash,
+                    "url": f"{self.server.base_url}/dag/{session_hash}",
+                    "created": True,
+                },
+            )
+            return
+
+        if self.path == "/api/v1/artifacts/batch":
+            artifacts = payload.get("artifacts", [])
+            if isinstance(artifacts, list):
+                self.server.artifact_batches.append(artifacts)
+                for artifact in artifacts:
+                    hashes = artifact.get("hashes", [])
+                    if not isinstance(hashes, list):
+                        continue
+                    for entry in hashes:
+                        if not isinstance(entry, dict):
+                            continue
+                        digest = entry.get("digest")
+                        if isinstance(digest, str) and digest:
+                            self.server.artifacts_by_digest[digest] = artifact
+            self._write_json(200, {"created": len(artifacts), "existing": 0})
+            return
+
+        if self.path == "/api/v1/labels/sync":
+            labels = payload.get("labels", [])
+            if isinstance(labels, list):
+                self.server.label_syncs.append(labels)
+                self._write_json(
+                    200,
+                    {"created": 0, "updated": 0, "unchanged": len(labels)},
+                )
+                return
+
+        if self.path == "/api/v1/artifacts/composites":
+            self.server.composite_registrations.append(payload)
+            self._write_json(
+                200,
+                {
+                    "artifact_id": f"composite-{len(self.server.composite_registrations)}",
+                    "created": True,
+                },
+            )
+            return
+
+        batch_match = re.fullmatch(r"/api/v1/sessions/([0-9a-f]+)/jobs/batch", self.path)
+        if batch_match:
+            session_hash = batch_match.group(1)
+            jobs = payload.get("jobs", [])
+            if not isinstance(jobs, list):
+                jobs = []
+            self.server.job_batches.append({"session_hash": session_hash, "jobs": jobs})
+            job_ids = [self.server.allocate_job_id() for _job in jobs]
+            self._write_json(200, {"job_ids": job_ids, "errors": []})
+            return
+
+        job_match = re.fullmatch(r"/api/v1/sessions/([0-9a-f]+)/jobs", self.path)
+        if job_match:
+            session_hash = job_match.group(1)
+            self.server.job_creates.append({"session_hash": session_hash, "job": payload})
+            self._write_json(200, {"id": self.server.allocate_job_id()})
+            return
+
+        input_match = re.fullmatch(r"/api/v1/sessions/([0-9a-f]+)/jobs/([^/]+)/inputs", self.path)
+        if input_match:
+            session_hash, job_uid = input_match.groups()
+            artifacts = payload.get("artifacts", [])
+            if not isinstance(artifacts, list):
+                artifacts = []
+            self.server.input_links.append(
+                {"session_hash": session_hash, "job_uid": job_uid, "artifacts": artifacts}
+            )
+            self._write_json(200, {"job_uid": job_uid, "inputs_linked": len(artifacts)})
+            return
+
+        output_match = re.fullmatch(
+            r"/api/v1/sessions/([0-9a-f]+)/jobs/([^/]+)/outputs",
+            self.path,
+        )
+        if output_match:
+            session_hash, job_uid = output_match.groups()
+            artifacts = payload.get("artifacts", [])
+            if not isinstance(artifacts, list):
+                artifacts = []
+            self.server.output_links.append(
+                {"session_hash": session_hash, "job_uid": job_uid, "artifacts": artifacts}
+            )
+            self._write_json(200, {"job_uid": job_uid, "outputs_linked": len(artifacts)})
+            return
+
+        self._write_json(404, {"error": f"Unhandled POST path: {self.path}"})
+
+    def log_message(self, format: str, *args: object) -> None:
+        """Suppress default stderr logging for integration tests."""
+
+
+class FakeGlaasServer:
+    """Context-managed fake GLaaS server."""
+
+    def __init__(self) -> None:
+        self._server = _FakeGlaasServer()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def base_url(self) -> str:
+        return self._server.base_url
+
+    @property
+    def health_checks(self) -> int:
+        return self._server.health_checks
+
+    @property
+    def session_registrations(self) -> list[dict[str, Any]]:
+        return self._server.session_registrations
+
+    @property
+    def job_batches(self) -> list[dict[str, Any]]:
+        return self._server.job_batches
+
+    @property
+    def job_creates(self) -> list[dict[str, Any]]:
+        return self._server.job_creates
+
+    @property
+    def artifact_batches(self) -> list[list[dict[str, Any]]]:
+        return self._server.artifact_batches
+
+    @property
+    def input_links(self) -> list[dict[str, Any]]:
+        return self._server.input_links
+
+    @property
+    def output_links(self) -> list[dict[str, Any]]:
+        return self._server.output_links
+
+    @property
+    def label_syncs(self) -> list[list[dict[str, Any]]]:
+        return self._server.label_syncs
+
+    def set_artifact_dag(self, digest: str, dag: dict[str, Any]) -> None:
+        self._server.artifact_dags_by_digest[digest] = dag
+
+    def __enter__(self) -> FakeGlaasServer:
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=5)

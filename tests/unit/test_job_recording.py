@@ -129,3 +129,40 @@ def test_local_job_recorder_records_precomputed_output_artifacts(tmp_path: Path)
     assert job["job_type"] == "get"
     assert len(outputs) == 1
     assert outputs[0]["path"] == str(local_file)
+
+
+def test_local_job_recorder_creates_active_session_when_missing(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    roar_dir = repo_root / ".roar"
+    roar_dir.mkdir()
+    local_file = repo_root / "downloaded.bin"
+    local_file.write_bytes(b"payload")
+
+    with _create_database_context(roar_dir) as db_ctx:
+        recorder = LocalJobRecorder()
+        job_id, _job_uid = recorder.record(
+            db_ctx,
+            command="roar get https://example.com/downloaded.bin",
+            timestamp=1700000000.0,
+            metadata='{"get":{"source":"https://example.com/downloaded.bin"}}',
+            execution_backend="local",
+            execution_role="host",
+            job_type="get",
+            output_artifacts=[
+                LocalRecordedArtifact(
+                    path=str(local_file),
+                    hashes={"blake3": "abc123"},
+                    size=local_file.stat().st_size,
+                )
+            ],
+            exit_code=0,
+        )
+
+        job = db_ctx.jobs.get(job_id)
+        session = db_ctx.sessions.get_active()
+
+    assert job is not None
+    assert session is not None
+    assert job["session_id"] == session["id"]
+    assert session["current_step"] == 1
