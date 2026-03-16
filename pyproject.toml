@@ -101,6 +101,7 @@ markers = [
     "ebpf: Tests requiring eBPF daemon/root privileges",
     "cloud: Tests for cloud storage operations",
     "happy_path: Happy path tests for core functionality",
+    "osmo_e2e: OSMO end-to-end tests requiring a Docker Compose managed KIND harness",
     "ray_e2e: Ray end-to-end tests requiring a running Docker cluster",
     "ray_contract: User-facing Ray contract tests using `roar run ray job submit ...`",
     "ray_diagnostic: Diagnostic Ray tests that intentionally inspect internal runtime details",

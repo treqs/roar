@@ -1,0 +1,25 @@
+services:
+  osmo-tools:
+    build:
+      context: ../../../
+      dockerfile: tests/e2e/osmo/Dockerfile
+    working_dir: /workspace/roar
+    environment:
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL_S3: http://127.0.0.1:34566
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      OSMO_BASE_URL: http://quick-start.osmo:38080
+      OSMO_KIND_CLUSTER_NAME: roar-osmo-e2e
+      OSMO_LOCALSTACK_PORT: "34566"
+      REPO_ROOT: /workspace/roar
+    network_mode: host
+    extra_hosts:
+      - "quick-start.osmo:host-gateway"
+    volumes:
+      - ../../../:/workspace/roar
+      - /var/run/docker.sock:/var/run/docker.sock
+      - osmo-home:/root
+    command: ["bash", "-lc", "sleep infinity"]
+
+volumes:
+  osmo-home:

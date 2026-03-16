@@ -1,0 +1,23 @@
+workflow:
+  name: {{ workflow_name }}
+  resources:
+    default:
+      cpu: 1
+      memory: 1Gi
+      storage: 1Gi
+  tasks:
+    - name: basic
+      image: python:3.11-slim
+      command: ["python"]
+      args: ["/workspace/basic_task.py", "{{output}}/result.txt"]
+      files:
+        - localpath: ../workloads/basic_task.py
+          path: /workspace/basic_task.py
+      outputs:
+        - dataset:
+            name: {{ output_dataset }}
+            path: result.txt
+
+default-values:
+  workflow_name: roar-osmo-basic
+  output_dataset: roar-osmo-basic-output
