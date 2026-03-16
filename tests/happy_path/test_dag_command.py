@@ -386,7 +386,14 @@ print("Selected best model -> model.pkl")
 
         # Train on combined features
         _run_roar_and_commit(
-            roar_cli, git_commit, "After train", "run", python_exe, "train.py", "combined.json", "model.pkl"
+            roar_cli,
+            git_commit,
+            "After train",
+            "run",
+            python_exe,
+            "train.py",
+            "combined.json",
+            "model.pkl",
         )
 
         result = roar_cli("dag", "--json")
@@ -765,7 +772,13 @@ print(f"Success: wrote {output_file}")
 
         # First run (success for setup)
         _run_roar_and_commit(
-            roar_cli, git_commit, "After first run", "run", python_exe, "might_fail.py", "output.json"
+            roar_cli,
+            git_commit,
+            "After first run",
+            "run",
+            python_exe,
+            "might_fail.py",
+            "output.json",
         )
 
         # Modify input and rerun
@@ -773,7 +786,13 @@ print(f"Success: wrote {output_file}")
         git_commit("Modified input")
 
         _run_roar_and_commit(
-            roar_cli, git_commit, "After second run", "run", python_exe, "might_fail.py", "output.json"
+            roar_cli,
+            git_commit,
+            "After second run",
+            "run",
+            python_exe,
+            "might_fail.py",
+            "output.json",
         )
 
         # Check expanded view shows both executions

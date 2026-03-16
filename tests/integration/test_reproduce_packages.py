@@ -85,9 +85,7 @@ class TestReproducePackageExtraction:
         """Preview can export DAG JSON locally when a GLaaS endpoint is configured."""
         script = temp_git_repo / "use_pkg.py"
         script.write_text(
-            "import json\n"
-            "with open('out.json', 'w') as f:\n"
-            "    json.dump({'v': 1}, f)\n"
+            "import json\nwith open('out.json', 'w') as f:\n    json.dump({'v': 1}, f)\n"
         )
         git_commit("Add reproduce out fixture")
 

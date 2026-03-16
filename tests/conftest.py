@@ -102,7 +102,11 @@ def _subprocess_env() -> dict[str, str]:
     path_entries = current_path.split(os.pathsep) if current_path else []
     new_entries = [entry for entry in repo_binary_dirs if entry not in path_entries]
     if new_entries:
-        env["PATH"] = os.pathsep.join([*new_entries, *path_entries]) if path_entries else os.pathsep.join(new_entries)
+        env["PATH"] = (
+            os.pathsep.join([*new_entries, *path_entries])
+            if path_entries
+            else os.pathsep.join(new_entries)
+        )
     return env
 
 

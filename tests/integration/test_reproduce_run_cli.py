@@ -36,8 +36,7 @@ def test_reproduce_run_reuses_matching_local_repo_and_recreates_artifact(
 
     script = temp_git_repo / "generate_model.py"
     script.write_text(
-        "from pathlib import Path\n"
-        "Path('model.bin').write_bytes(b'local-reproduction-payload')\n"
+        "from pathlib import Path\nPath('model.bin').write_bytes(b'local-reproduction-payload')\n"
     )
     git_commit("Add reproduction fixture")
 

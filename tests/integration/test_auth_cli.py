@@ -52,7 +52,9 @@ class _FakeGlaasAuthHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def _run_roar_auth(*args: str, cwd: Path, env_overrides: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_roar_auth(
+    *args: str, cwd: Path, env_overrides: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.update(env_overrides)
     return subprocess.run(

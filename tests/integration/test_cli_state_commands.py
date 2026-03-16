@@ -92,7 +92,9 @@ def test_reset_creates_and_rotates_active_session(temp_git_repo: Path, roar_cli)
     assert active_sessions[0]["id"] != first_active_session["id"]
     assert active_sessions[0]["current_step"] == 1
 
-    previous_session = next(row for row in sessions_after_reset if row["id"] == first_active_session["id"])
+    previous_session = next(
+        row for row in sessions_after_reset if row["id"] == first_active_session["id"]
+    )
     assert previous_session["is_active"] == 0
 
     log_result = roar_cli("log")
