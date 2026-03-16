@@ -193,6 +193,9 @@ class RunCoordinator:
         from ...core.interfaces.run import RunResult
         from .provenance import ProvenanceService
 
+        emit_timing = os.environ.get("ROAR_TIMING") == "1"
+        t_postrun_start = time.perf_counter()
+
         bootstrap(ctx.roar_dir)
         config = load_config(start_dir=ctx.repo_root)
 
@@ -226,12 +229,14 @@ class RunCoordinator:
             )
             roar_dir = os.path.join(ctx.repo_root, ".roar")
             provenance_service = ProvenanceService(cache_dir=roar_dir)
+            t_prov_start = time.perf_counter()
             prov = provenance_service.collect(
                 ctx.repo_root,
                 tracer_result.tracer_log_path,
                 inject_log,
                 config,
             )
+            t_prov_end = time.perf_counter()
             self.logger.debug(
                 "Provenance collected: read_files=%d, written_files=%d",
                 len(prov.get("data", {}).get("read_files", [])),
@@ -245,6 +250,7 @@ class RunCoordinator:
 
             # Record in database
             self.logger.debug("Recording job in database")
+            t_record_start = time.perf_counter()
             job_id, job_uid, read_file_info, written_file_info, stale_upstream, stale_downstream = (
                 self._record_job(
                     ctx,
@@ -256,6 +262,7 @@ class RunCoordinator:
                     run_job_uid=run_job_uid,
                 )
             )
+            t_record_end = time.perf_counter()
             self.logger.debug(
                 "Job recorded: id=%d, uid=%s, inputs=%d, outputs=%d",
                 job_id,
@@ -269,6 +276,24 @@ class RunCoordinator:
             # Cleanup temp files
             self.logger.debug("Cleaning up temporary log files")
             self._cleanup_logs(tracer_result.tracer_log_path, tracer_result.inject_log_path)
+
+        t_postrun_end = time.perf_counter()
+
+        if emit_timing:
+            import json as _json
+
+            n_inputs = len(prov.get("data", {}).get("read_files", []))
+            n_outputs = len(prov.get("data", {}).get("written_files", []))
+            timing = {
+                "roar_timing": True,
+                "tracer_ms": round(tracer_result.duration * 1000, 2),
+                "postrun_ms": round((t_postrun_end - t_postrun_start) * 1000, 2),
+                "provenance_ms": round((t_prov_end - t_prov_start) * 1000, 2),
+                "record_ms": round((t_record_end - t_record_start) * 1000, 2),
+                "n_inputs": n_inputs,
+                "n_outputs": n_outputs,
+            }
+            print(f"ROAR_TIMING:{_json.dumps(timing)}", file=sys.stderr, flush=True)
 
         self.logger.debug(
             "RunCoordinator.execute completed: exit_code=%d, duration=%.2fs",
