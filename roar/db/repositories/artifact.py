@@ -110,6 +110,11 @@ class SQLAlchemyArtifactRepository(ArtifactRepository):
         """Register multiple artifacts at once. Returns list of artifact_ids.
 
         items = [(hashes_dict, size, path), ...]
+
+        Note: unlike ``register()``, this does not accept ``source_type``,
+        ``source_url``, or ``metadata``, and does not backfill missing hash
+        algorithms on existing artifacts.  Intended for the post-run
+        registration hot path where those fields are not needed.
         """
         if not items:
             return []
@@ -239,7 +244,7 @@ class SQLAlchemyArtifactRepository(ArtifactRepository):
 
         result: dict[str, list[dict[str, Any]]] = {aid: [] for aid in artifact_ids}
         for h in rows:
-            result.setdefault(h.artifact_id, []).append(
+            result[h.artifact_id].append(
                 {"algorithm": h.algorithm, "digest": h.digest}
             )
         return result

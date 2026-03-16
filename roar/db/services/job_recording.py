@@ -217,13 +217,17 @@ class JobRecordingService:
         is_input: bool,
     ) -> None:
         """Register artifacts and link them to the job."""
-        # Build batch items, skipping paths that already have edges for this job
+        # Batch-check which paths already have edges for this job
+        if is_input:
+            already_linked = self._job_repo.existing_input_paths(job_id, file_paths)
+        else:
+            already_linked = self._job_repo.existing_output_paths(job_id, file_paths)
+
+        # Build batch items, skipping paths that already have edges
         batch_items: list[tuple[dict[str, str], int, str | None]] = []
         valid_paths: list[str] = []
         for path in file_paths:
-            if is_input and self._job_repo.has_input_path(job_id, path):
-                continue
-            if not is_input and self._job_repo.has_output_path(job_id, path):
+            if path in already_linked:
                 continue
 
             path_hashes = hashes_by_path.get(path)
