@@ -244,9 +244,7 @@ class SQLAlchemyArtifactRepository(ArtifactRepository):
 
         result: dict[str, list[dict[str, Any]]] = {aid: [] for aid in artifact_ids}
         for h in rows:
-            result[h.artifact_id].append(
-                {"algorithm": h.algorithm, "digest": h.digest}
-            )
+            result[h.artifact_id].append({"algorithm": h.algorithm, "digest": h.digest})
         return result
 
     def get_by_hash(self, digest: str, algorithm: str | None = None) -> dict[str, Any] | None:

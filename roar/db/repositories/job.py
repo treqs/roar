@@ -320,18 +320,26 @@ class SQLAlchemyJobRepository(JobRepository):
         """Return the subset of *paths* that already have input rows for *job_id*."""
         if not paths:
             return set()
-        rows = self._session.execute(
-            select(JobInput.path).where(JobInput.job_id == job_id, JobInput.path.in_(paths))
-        ).scalars().all()
+        rows = (
+            self._session.execute(
+                select(JobInput.path).where(JobInput.job_id == job_id, JobInput.path.in_(paths))
+            )
+            .scalars()
+            .all()
+        )
         return set(rows)
 
     def existing_output_paths(self, job_id: int, paths: list[str]) -> set[str]:
         """Return the subset of *paths* that already have output rows for *job_id*."""
         if not paths:
             return set()
-        rows = self._session.execute(
-            select(JobOutput.path).where(JobOutput.job_id == job_id, JobOutput.path.in_(paths))
-        ).scalars().all()
+        rows = (
+            self._session.execute(
+                select(JobOutput.path).where(JobOutput.job_id == job_id, JobOutput.path.in_(paths))
+            )
+            .scalars()
+            .all()
+        )
         return set(rows)
 
     def get_inputs(self, job_id: int) -> list[dict[str, Any]]:
