@@ -138,6 +138,46 @@ def test_register_publish_lineage_skips_label_sync_without_session_context() -> 
     sync_labels.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("jobs_failed", "artifacts_failed"),
+    [
+        (1, 0),
+        (0, 1),
+    ],
+)
+def test_register_publish_lineage_skips_label_sync_when_target_registration_is_incomplete(
+    jobs_failed: int,
+    artifacts_failed: int,
+) -> None:
+    coordinator = MagicMock()
+    coordinator.register_lineage.return_value = BatchRegistrationResult(
+        session_registered=True,
+        jobs_created=1,
+        jobs_failed=jobs_failed,
+        artifacts_registered=1,
+        artifacts_failed=artifacts_failed,
+        links_created=0,
+        links_failed=0,
+        errors=["registration-error"],
+    )
+
+    with patch("roar.application.publish.registration.sync_publish_labels") as sync_labels:
+        result = register_publish_lineage(
+            coordinator=coordinator,
+            glaas_client=MagicMock(),
+            session_hash="session-hash",
+            git_context=GitContext(repo="repo", branch="main", commit="deadbeef"),
+            jobs=[{"job_uid": "job-1"}],
+            artifacts=[{"hashes": [{"algorithm": "blake3", "digest": "a" * 64}]}],
+            db_ctx=MagicMock(),
+            session_id=7,
+            label_artifacts=[{"hash": "a" * 64}],
+        )
+
+    assert result.errors == ["registration-error"]
+    sync_labels.assert_not_called()
+
+
 def test_sync_publish_labels_appends_error_when_sync_fails() -> None:
     client = MagicMock()
     client.sync_labels.return_value = (None, "permission denied")
