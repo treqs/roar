@@ -8,8 +8,9 @@ Registers artifact, job, step, or session lineage with GLaaS.
 
 import click
 
-from ...config import config_get
-from ...services.registration.register_service import RegisterService
+from ...application.publish.requests import RegisterLineageRequest
+from ...application.publish.service import register_lineage_target
+from ...integrations.config import config_get
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -80,65 +81,63 @@ def register(ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3:
 
         roar register outputs/metrics.json  # Register from subdirectory
     """
-    # Create service
-    service = RegisterService()
-
-    # Register the requested lineage target
-    result = service.register_lineage_target(
-        target=target,
-        roar_dir=ctx.roar_dir,
-        cwd=ctx.cwd,
-        dry_run=dry_run,
-        as_blake3=as_blake3,
-        skip_confirmation=yes,
-        confirm_callback=_confirm_secrets if not yes else None,
+    response = register_lineage_target(
+        RegisterLineageRequest(
+            target=target,
+            roar_dir=ctx.roar_dir,
+            cwd=ctx.cwd,
+            dry_run=dry_run,
+            as_blake3=as_blake3,
+            skip_confirmation=yes,
+            confirm_callback=_confirm_secrets if not yes else None,
+        )
     )
 
-    if not result.success:
-        if result.aborted_by_user:
+    if not response.success:
+        if response.aborted_by_user:
             click.echo("Registration aborted.")
             raise SystemExit(1)
-        raise click.ClickException(result.error or "Registration failed")
+        raise click.ClickException(response.error or "Registration failed")
 
     web_url = config_get("glaas.web_url") or "https://glaas.ai"
 
     # Format output
     if dry_run:
         click.echo("Dry run - would register:")
-        click.echo(f"  Session: {result.session_hash[:12]}...")
-        click.echo(f"  Jobs: {result.jobs_registered}")
-        click.echo(f"  Artifacts: {result.artifacts_registered}")
-        click.echo(f"  Links: {result.links_created}")
-        if result.secrets_detected:
-            click.echo(f"  Secrets to redact: {len(result.secrets_detected)} types")
+        click.echo(f"  Session: {response.session_hash[:12]}...")
+        click.echo(f"  Jobs: {response.jobs_registered}")
+        click.echo(f"  Artifacts: {response.artifacts_registered}")
+        click.echo(f"  Links: {response.links_created}")
+        if response.secrets_detected:
+            click.echo(f"  Secrets to redact: {len(response.secrets_detected)} types")
         click.echo("")
         click.echo("View on GLaaS:")
-        click.echo(f"  Session:  {web_url}/dag/{result.session_hash}")
-        if result.artifact_hash:
-            click.echo(f"  Artifact: {web_url}/artifact/{result.artifact_hash}")
+        click.echo(f"  Session:  {web_url}/dag/{response.session_hash}")
+        if response.artifact_hash:
+            click.echo(f"  Artifact: {web_url}/artifact/{response.artifact_hash}")
     else:
         click.echo(f"Registered lineage for: {target}")
-        click.echo(f"  Session: {result.session_hash[:12]}...")
-        click.echo(f"  Jobs: {result.jobs_registered}")
-        click.echo(f"  Artifacts: {result.artifacts_registered}")
-        click.echo(f"  Links: {result.links_created}")
-        if result.secrets_redacted:
-            click.echo(f"  Secrets redacted: {len(result.secrets_detected)} types")
+        click.echo(f"  Session: {response.session_hash[:12]}...")
+        click.echo(f"  Jobs: {response.jobs_registered}")
+        click.echo(f"  Artifacts: {response.artifacts_registered}")
+        click.echo(f"  Links: {response.links_created}")
+        if response.secrets_redacted:
+            click.echo(f"  Secrets redacted: {len(response.secrets_detected)} types")
 
-        if result.error:
+        if response.error:
             click.echo("")
             click.echo("Registration completed with errors:", err=True)
             # Split multi-error strings into separate lines for readability
-            for error in result.error.split("; "):
+            for error in response.error.split("; "):
                 click.echo(f"  - {error}", err=True)
 
-        if result.artifact_hash:
+        if response.artifact_hash:
             click.echo("")
             click.echo("To reproduce this artifact:")
-            click.echo(f"  roar reproduce {result.artifact_hash}")
+            click.echo(f"  roar reproduce {response.artifact_hash}")
 
         click.echo("")
         click.echo("View on GLaaS:")
-        click.echo(f"  Session:  {web_url}/dag/{result.session_hash}")
-        if result.artifact_hash:
-            click.echo(f"  Artifact: {web_url}/artifact/{result.artifact_hash}")
+        click.echo(f"  Session:  {web_url}/dag/{response.session_hash}")
+        if response.artifact_hash:
+            click.echo(f"  Artifact: {web_url}/artifact/{response.artifact_hash}")

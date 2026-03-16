@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from roar.services.reproduction.pipeline_executor import PipelineExecutor
+from roar.execution.reproduction.pipeline_executor import PipelineExecutor
 
 
 class TestPipelineExecutorRoarExecutable:

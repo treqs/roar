@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from roar.db.context import create_database_context
-from roar.services.registration.session import SessionRegistrationService
+from roar.integrations.glaas.registration.session import SessionRegistrationService
 from tests.live_glaas import test_composite_live as composite_live
 
 managed_glaas_url = composite_live.managed_glaas_url

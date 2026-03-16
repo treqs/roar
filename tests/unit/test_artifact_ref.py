@@ -1,6 +1,10 @@
-"""Tests for roar.services.registration._artifact_ref shared helpers."""
+"""Tests for roar.integrations.glaas.registration._artifact_ref shared helpers."""
 
-from roar.services.registration._artifact_ref import cache_key, extract_digest, preview
+from roar.integrations.glaas.registration._artifact_ref import (
+    cache_key,
+    extract_digest,
+    preview,
+)
 
 
 class TestCacheKey:

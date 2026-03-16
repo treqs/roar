@@ -1,0 +1,1 @@
+"""Application publish tests."""

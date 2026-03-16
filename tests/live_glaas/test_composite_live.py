@@ -24,7 +24,7 @@ from uuid import uuid4
 
 import pytest
 
-from roar.glaas_client import make_auth_header
+from roar.integrations.glaas import make_auth_header
 
 _DEFAULT_GLAAS_DB_URL = "postgresql://postgres:postgres@localhost:5434/postgres"
 _NODE_DB_QUERY_SCRIPT = """

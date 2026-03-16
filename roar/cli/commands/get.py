@@ -13,56 +13,9 @@ from pathlib import Path
 
 import click
 
-from ...core.bootstrap import bootstrap
-from ...db.context import create_database_context
-from ...services.get.backends import NoOpDownloadBackend, parse_source, should_skip_download
-from ...services.transfer import load_backend_class, resolve_backend_for_scheme
+from ...application.get import GetRequest, get_artifacts
 from ..context import RoarContext
 from ..decorators import require_init
-
-
-def _get_backend(source_url: str):
-    """Get the appropriate download backend for a source URL.
-
-    If ROAR_GET_SKIP_DOWNLOAD=1 is set, returns a NoOpDownloadBackend that
-    simulates downloads without actual data transfer (for testing).
-    """
-    parsed = parse_source(source_url)
-
-    # Check for skip-download mode (for testing)
-    if should_skip_download():
-        return NoOpDownloadBackend(
-            bucket=parsed.bucket,
-            scheme=parsed.scheme,
-        )
-
-    from ...services.get.backends.http import HTTPBackend
-
-    builders = {
-        "http": lambda: HTTPBackend(url=source_url),
-        "https": lambda: HTTPBackend(url=source_url),
-        "s3": lambda: load_backend_class(
-            "roar.services.get.backends.s3",
-            "S3DownloadBackend",
-            "S3 backend requires boto3. Install with: pip install boto3",
-        )(bucket=parsed.bucket),
-        "gs": lambda: load_backend_class(
-            "roar.services.get.backends.gcs",
-            "GCSDownloadBackend",
-            "GCS backend requires google-cloud-storage. Install with: pip install google-cloud-storage",
-        )(bucket=parsed.bucket),
-    }
-
-    try:
-        return resolve_backend_for_scheme(
-            parsed.scheme,
-            builders,
-            f"Unsupported source scheme: {parsed.scheme}",
-        )
-    except ValueError as e:
-        raise click.ClickException(str(e)) from e
-    except ImportError as e:
-        raise click.ClickException(str(e)) from e
 
 
 @click.command("get")
@@ -152,13 +105,6 @@ def get(
         # Dry run to see what would be downloaded
         roar get s3://bucket/data/ ./data/ --dry-run
     """
-    # Bootstrap DI container
-    bootstrap(ctx.roar_dir)
-
-    from ...core.logging import get_logger
-
-    logger = get_logger()
-
     # Resolve destination
     dest_str = output_path or destination
     if dest_str is None:
@@ -169,125 +115,49 @@ def get(
     if not dest.is_absolute():
         dest = ctx.cwd / dest
 
-    logger.debug(
-        "CLI get invoked: source=%s, destination=%s, message=%r, dry_run=%s, tag=%s, force=%s",
-        source,
-        dest,
-        message,
-        dry_run,
-        tag,
-        force,
-    )
-
-    # Parse source URL
     try:
-        parsed_source = parse_source(source)
-        logger.debug(
-            "Source parsed: scheme=%s, bucket=%s, key=%s",
-            parsed_source.scheme,
-            parsed_source.bucket,
-            parsed_source.key,
-        )
-    except ValueError as e:
-        raise click.ClickException(str(e)) from e
-
-    # Detect prefix download (source ends with /)
-    is_prefix = source.rstrip("/") != source or parsed_source.is_prefix
-
-    # Get download backend
-    try:
-        backend = _get_backend(source)
-        logger.debug("Download backend: %s", type(backend).__name__)
-    except ImportError as e:
-        raise click.ClickException(f"Missing dependency for {source}: {e}") from e
-
-    # Git operations (optional for get)
-    git_commit = None
-    git_tag_name = None
-    if not dry_run:
-        try:
-            from ...services.put import GitOperations
-
-            git_ops = GitOperations(repo_root=ctx.repo_root or ctx.cwd)
-            git_commit = git_ops.get_current_commit()
-            logger.debug("Git commit: %s", git_commit)
-        except Exception as e:
-            logger.debug("Git operation failed (non-fatal for get): %s", e)
-
-    with create_database_context(ctx.roar_dir) as db_ctx:
-        # Check for active session (unless dry-run)
-        if not dry_run:
-            active_session = db_ctx.sessions.get_active()
-            if not active_session:
-                raise click.ClickException("No active session. Run 'roar init' first.")
-
-        from ...services.get.service import GetService
-
-        service = GetService(
-            db_context=db_ctx,
-            backend=backend,
-            source=parsed_source,
-            repo_root=ctx.repo_root or ctx.cwd,
-        )
-
-        try:
-            result = service.get(
+        response = get_artifacts(
+            GetRequest(
+                source=source,
                 destination=dest,
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                repo_root=ctx.repo_root,
                 message=message,
                 expected_hash=expected_hash,
                 dry_run=dry_run,
                 force=force,
-                git_commit=git_commit,
-                is_prefix=is_prefix,
+                tag=tag,
             )
-        except FileExistsError as e:
-            raise click.ClickException(str(e)) from e
-        except FileNotFoundError as e:
-            raise click.ClickException(str(e)) from e
-        except ValueError as e:
-            raise click.ClickException(str(e)) from e
-
-        logger.debug(
-            "GetService.get() returned: success=%s, job_id=%s, dry_run=%s, files=%d, error=%s",
-            result.success,
-            result.job_id,
-            result.dry_run,
-            len(result.downloaded_files),
-            result.error,
         )
+    except FileExistsError as e:
+        raise click.ClickException(str(e)) from e
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e)) from e
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    except ImportError as e:
+        raise click.ClickException(str(e)) from e
 
-        # Handle dry run output
-        if dry_run:
-            click.echo("Dry run - would download:")
-            for item in result.would_download:
-                click.echo(f"  {item['remote_url']} -> {item['local_path']}")
-            click.echo(f"\nTotal: {len(result.would_download)} file(s)")
-            return
+    if dry_run:
+        click.echo("Dry run - would download:")
+        for dry_run_item in response.would_download:
+            click.echo(f"  {dry_run_item.remote_url} -> {dry_run_item.local_path}")
+        click.echo(f"\nTotal: {len(response.would_download)} file(s)")
+        return
 
-        # Handle errors
-        if not result.success:
-            raise click.ClickException(result.error or "Download failed")
+    if not response.success:
+        raise click.ClickException(response.error or "Download failed")
 
-        # Create git tag after successful download (opt-in)
-        if tag and git_commit:
-            try:
-                from ...services.put import GitOperations
+    if response.git_tag:
+        click.echo(f"Created git tag: {response.git_tag}")
+    for warning in response.warnings:
+        click.echo(f"Warning: {warning}", err=True)
 
-                git_ops = GitOperations(repo_root=ctx.repo_root or ctx.cwd)
-                git_tag_name = git_ops.create_tag(git_commit)
-                logger.debug("Git tag created: %s", git_tag_name)
-                click.echo(f"Created git tag: {git_tag_name}")
-            except Exception as e:
-                logger.debug("Git tag creation failed: %s", e)
-                click.echo(f"Warning: Could not create git tag: {e}", err=True)
+    count = len(response.downloaded_files)
+    click.echo(f"Downloaded {count} file(s) from {response.source}")
+    for downloaded_file in response.downloaded_files:
+        click.echo(f"  {downloaded_file.remote_url} -> {downloaded_file.local_path}")
 
-        # Success output
-        count = len(result.downloaded_files)
-        click.echo(f"Downloaded {count} file(s) from {source}")
-        for item in result.downloaded_files:
-            click.echo(f"  {item['remote_url']} -> {item['local_path']}")
-
-        if result.job_id is not None:
-            click.echo(f"\nJob created: step {result.job_id}")
-
-        logger.debug("Get command completed successfully")
+    if response.job_id is not None:
+        click.echo(f"\nJob created: step {response.job_id}")

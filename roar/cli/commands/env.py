@@ -6,7 +6,7 @@ Usage: roar env [set|get|list|unset] [NAME] [VALUE]
 
 import click
 
-from ...config import get_config_path_for_write, load_config, save_config
+from ...integrations.config import get_config_path_for_write, load_config, save_config
 
 
 def _load_env_vars() -> dict[str, str]:

@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 
 import pytest
 
-from roar.services.registration.session import SessionRegistrationService
+from roar.integrations.glaas.registration.session import SessionRegistrationService
 from tests.live_glaas import test_composite_live as composite_live
 
 pytest_plugins = ("tests.live_glaas.test_composite_live",)
@@ -141,58 +141,82 @@ def _label_api_get(glaas_url: str, path: str, **query: str) -> dict[str, object]
     return data
 
 
-def _remote_artifact_label_rows(artifact_hash: str) -> list[tuple[int, dict[str, object]]]:
-    rows = composite_live._db_query_rows(
-        """
-        SELECT version, metadata::text AS metadata_json
-        FROM labels
-        WHERE artifact_hash = $1
-        ORDER BY version ASC
-        """,
-        [artifact_hash],
-    )
-    return [(int(row["version"]), json.loads(str(row["metadata_json"]))) for row in rows]
+def _label_history_rows(
+    glaas_url: str,
+    *,
+    entity_type: str,
+    session_hash: str | None = None,
+    job_uid: str | None = None,
+    artifact_hash: str | None = None,
+) -> list[tuple[int, dict[str, object]]]:
+    query: dict[str, str] = {"entity_type": entity_type}
+    if session_hash:
+        query["session_hash"] = session_hash
+    if job_uid:
+        query["job_uid"] = job_uid
+    if artifact_hash:
+        query["artifact_hash"] = artifact_hash
+    try:
+        history = _label_api_get(
+            glaas_url,
+            "/api/v1/labels/history",
+            **query,
+        )
+    except RuntimeError as error:
+        if "HTTP 404" in str(error):
+            return []
+        raise
+    labels = history.get("labels")
+    assert isinstance(labels, list), history
+    return [
+        (int(label["version"]), label["metadata"])
+        for label in labels
+        if isinstance(label, dict) and isinstance(label.get("metadata"), dict)
+    ]
 
 
-def _remote_session_label_rows(session_hash: str) -> list[tuple[int, dict[str, object]]]:
-    rows = composite_live._db_query_rows(
-        """
-        SELECT version, metadata::text AS metadata_json
-        FROM labels
-        WHERE session_hash = $1
-        ORDER BY version ASC
-        """,
-        [session_hash],
+def _remote_artifact_label_rows(
+    glaas_url: str, artifact_hash: str
+) -> list[tuple[int, dict[str, object]]]:
+    return _label_history_rows(
+        glaas_url,
+        entity_type="artifact",
+        artifact_hash=artifact_hash,
     )
-    return [(int(row["version"]), json.loads(str(row["metadata_json"]))) for row in rows]
 
 
 def _remote_job_label_rows(
-    session_hash: str, step_number: int
+    glaas_url: str, session_hash: str, job_uid: str
 ) -> list[tuple[int, dict[str, object]]]:
-    rows = composite_live._db_query_rows(
-        """
-        SELECT l.version, l.metadata::text AS metadata_json
-        FROM labels l
-        JOIN jobs j ON j.id = l.job_id
-        WHERE j.session_hash = $1
-          AND j.step_number = $2
-        ORDER BY l.version ASC
-        """,
-        [session_hash, step_number],
+    return _label_history_rows(
+        glaas_url,
+        entity_type="job",
+        session_hash=session_hash,
+        job_uid=job_uid,
     )
-    return [(int(row["version"]), json.loads(str(row["metadata_json"]))) for row in rows]
+
+
+def _remote_session_label_rows(
+    glaas_url: str, session_hash: str
+) -> list[tuple[int, dict[str, object]]]:
+    return _label_history_rows(
+        glaas_url,
+        entity_type="dag",
+        session_hash=session_hash,
+    )
 
 
 def test_register_syncs_current_local_labels_only_when_register_called(
     glaas_configured: Path,
     glaas_db_queryable,
+    glaas_url: str,
 ):
     repo = glaas_configured
     refs = _prepare_processed_artifact(repo)
     session_hash = str(refs["session_hash"])
     artifact_hash = str(refs["artifact_hash"])
     step_number = int(refs["step_number"])
+    job_uid = _local_job_uid(repo, step_number)
 
     _assert_ok(
         _run_roar(
@@ -210,22 +234,27 @@ def test_register_syncs_current_local_labels_only_when_register_called(
         _run_roar(repo, "label", "set", "artifact", "processed.csv", "owner=ml", "stage=gold")
     )
 
-    assert _remote_session_label_rows(session_hash) == []
-    assert _remote_job_label_rows(session_hash, step_number) == []
-    assert _remote_artifact_label_rows(artifact_hash) == []
+    assert _remote_session_label_rows(glaas_url, session_hash) == []
+    assert _remote_job_label_rows(glaas_url, session_hash, job_uid) == []
+    assert _remote_artifact_label_rows(glaas_url, artifact_hash) == []
 
     _assert_ok(_run_roar(repo, "register", "processed.csv"))
 
-    assert _remote_session_label_rows(session_hash) == [
+    assert _remote_session_label_rows(glaas_url, session_hash) == [
         (1, {"experiment": "ablation-7", "project": "forecasting"})
     ]
-    assert _remote_job_label_rows(session_hash, step_number) == [(1, {"phase": "preprocess"})]
-    assert _remote_artifact_label_rows(artifact_hash) == [(1, {"owner": "ml", "stage": "gold"})]
+    assert _remote_job_label_rows(glaas_url, session_hash, job_uid) == [
+        (1, {"phase": "preprocess"})
+    ]
+    assert _remote_artifact_label_rows(glaas_url, artifact_hash) == [
+        (1, {"owner": "ml", "stage": "gold"})
+    ]
 
 
 def test_register_after_local_label_change_creates_new_remote_version(
     glaas_configured: Path,
     glaas_db_queryable,
+    glaas_url: str,
 ):
     repo = glaas_configured
     refs = _prepare_processed_artifact(repo)
@@ -239,7 +268,7 @@ def test_register_after_local_label_change_creates_new_remote_version(
     _assert_ok(_run_roar(repo, "label", "set", "artifact", "processed.csv", "stage=gold"))
     _assert_ok(_run_roar(repo, "register", "processed.csv"))
 
-    assert _remote_artifact_label_rows(artifact_hash) == [
+    assert _remote_artifact_label_rows(glaas_url, artifact_hash) == [
         (1, {"owner": "ml", "stage": "raw"}),
         (2, {"owner": "ml", "stage": "gold"}),
     ]
@@ -409,6 +438,7 @@ def test_register_updates_are_visible_via_label_history_and_search_api(
 def test_put_syncs_current_artifact_labels_for_tracked_file(
     glaas_configured: Path,
     glaas_db_queryable,
+    glaas_url: str,
     skip_upload_env,
 ):
     repo = glaas_configured
@@ -419,7 +449,7 @@ def test_put_syncs_current_artifact_labels_for_tracked_file(
         _run_roar(repo, "label", "set", "artifact", "model.pt", "owner=ml", "stage=candidate")
     )
 
-    assert _remote_artifact_label_rows(artifact_hash) == []
+    assert _remote_artifact_label_rows(glaas_url, artifact_hash) == []
 
     _assert_ok(
         _run_roar(
@@ -433,7 +463,7 @@ def test_put_syncs_current_artifact_labels_for_tracked_file(
         )
     )
 
-    assert _remote_artifact_label_rows(artifact_hash) == [
+    assert _remote_artifact_label_rows(glaas_url, artifact_hash) == [
         (1, {"owner": "ml", "stage": "candidate"})
     ]
 
@@ -441,6 +471,7 @@ def test_put_syncs_current_artifact_labels_for_tracked_file(
 def test_register_syncs_copied_labels_for_new_artifact_version_only_after_register(
     glaas_configured: Path,
     glaas_db_queryable,
+    glaas_url: str,
 ):
     repo = glaas_configured
     refs = _prepare_processed_artifact(repo)
@@ -493,12 +524,12 @@ def test_register_syncs_copied_labels_for_new_artifact_version_only_after_regist
         )
     )
 
-    assert _remote_artifact_label_rows(source_hash) == []
-    assert _remote_artifact_label_rows(destination_hash) == []
+    assert _remote_artifact_label_rows(glaas_url, source_hash) == []
+    assert _remote_artifact_label_rows(glaas_url, destination_hash) == []
 
     _assert_ok(_run_roar(repo, "register", "processed.csv"))
 
-    assert _remote_artifact_label_rows(source_hash) == []
-    assert _remote_artifact_label_rows(destination_hash) == [
+    assert _remote_artifact_label_rows(glaas_url, source_hash) == []
+    assert _remote_artifact_label_rows(glaas_url, destination_hash) == [
         (1, {"note": "current", "owner": "ml", "stage": "baseline"})
     ]

@@ -1,18 +1,12 @@
-"""
-Native Click implementation of the dag command.
-
-Usage: roar dag [options]
-"""
+"""Native Click wrapper for the local DAG query."""
 
 from __future__ import annotations
 
-import json
 import sys
 
 import click
 
-from ...db.context import create_database_context
-from ...presenters.dag_data_builder import DagDataBuilder
+from ...application.query import DagQueryRequest, render_dag
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -93,86 +87,17 @@ def dag(
 
         roar dag --stale-only     # Filter to only stale steps/artifacts
     """
-    # Import here to avoid circular imports
-    from ...core.models.dag import (
-        DagArtifactInfo,
-        DagArtifactState,
-        DagNodeInfo,
-        DagNodeMetrics,
-        DagNodeState,
-        DagVisualization,
-    )
-    from ...presenters.dag_renderer import DagRenderer
-
-    with create_database_context(ctx.roar_dir) as db_ctx:
-        # Get active session
-        session = db_ctx.sessions.get_active()
-        if not session:
-            raise click.ClickException("No active session. Run 'roar init' or 'roar run' first.")
-
-        session_id = session["id"]
-
-        # Get DAG data
-        builder = DagDataBuilder(db_ctx, session_id)
-        dag_data = builder.build(
-            expanded=expanded,
-            show_artifacts=show_artifacts,
-            stale_only=stale_only,
-        )
-
-        # Convert to Pydantic models
-        nodes = [
-            DagNodeInfo(
-                step_number=n["step_number"],
-                job_id=n["job_id"],
-                job_uid=n["job_uid"],
-                command=n["command"],
-                step_name=n["step_name"],
-                state=DagNodeState(n["state"]),
-                is_build=n["is_build"],
-                exit_code=n["exit_code"],
-                metrics=DagNodeMetrics(**n["metrics"]),
-                dependencies=n["dependencies"],
-                labels=n.get("labels", {}),
+    try:
+        output = render_dag(
+            DagQueryRequest(
+                roar_dir=ctx.roar_dir,
+                expanded=expanded,
+                output_json=output_json,
+                use_color=not no_color and sys.stdout.isatty(),
+                show_artifacts=show_artifacts,
+                stale_only=stale_only,
             )
-            for n in dag_data["nodes"]
-        ]
-
-        artifacts = [
-            DagArtifactInfo(
-                path=a["path"],
-                hash=a["hash"],
-                is_stale=a["is_stale"],
-                producer_step=a["producer_step"],
-                state=DagArtifactState(a["state"]),
-                artifact_id=a["artifact_id"],
-                consumer_steps=a["consumer_steps"],
-                is_terminal=a["is_terminal"],
-                superseded_by=a["superseded_by"],
-                labels=a.get("labels", {}),
-            )
-            for a in dag_data["artifacts"]
-        ]
-
-        dag_viz = DagVisualization(
-            nodes=nodes,
-            artifacts=artifacts,
-            stale_count=dag_data["stale_count"],
-            total_steps=dag_data["total_steps"],
-            is_expanded=dag_data["is_expanded"],
-            session_id=dag_data["session_id"],
-            stale_artifact_count=dag_data["stale_artifact_count"],
-            superseded_artifact_count=dag_data["superseded_artifact_count"],
-            labels=dag_data.get("labels", {}),
         )
-
-        # Render output
-        use_color = not no_color and sys.stdout.isatty()
-        renderer = DagRenderer(use_color=use_color)
-
-        if output_json:
-            json_output = renderer.render_json(dag_viz)
-            click.echo(json.dumps(json_output, indent=2))
-        else:
-            text_output = renderer.render(dag_viz)
-            click.echo(text_output)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(output)

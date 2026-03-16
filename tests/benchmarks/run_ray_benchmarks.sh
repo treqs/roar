@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-COMPOSE_FILE="$ROOT_DIR/tests/e2e/ray/docker-compose.yml"
+COMPOSE_FILE="$ROOT_DIR/tests/backends/ray/e2e/docker-compose.yml"
 RESULTS_DIR="$ROOT_DIR/tests/benchmarks/results"
 
 if command -v python >/dev/null 2>&1; then
@@ -84,7 +84,6 @@ check_cluster
 
 scripts=(
   "bench_ray_startup.py"
-  "bench_ray_actor_ipc.py"
   "bench_ray_preload.py"
   "bench_ray_proxy.py"
   "bench_ray_e2e.py"
@@ -121,13 +120,11 @@ def load(name: str) -> dict:
 
 
 startup = load("ray_startup_latest.json")
-actor = load("ray_actor_ipc_latest.json")
 preload = load("ray_preload_latest.json")
 proxy = load("ray_proxy_latest.json")
 e2e = load("ray_e2e_latest.json")
 
 startup_overhead = startup.get("results", {}).get("overhead", {})
-actor_sat = actor.get("results", {}).get("saturation", {})
 preload_ols = preload.get("results", {}).get("ols", {})
 proxy_rows = proxy.get("results", {}).get("rows", [])
 e2e_rows = e2e.get("results", {}).get("rows", [])
@@ -145,14 +142,6 @@ rows = [
         "Startup warm overhead",
         f"{float(startup_overhead.get('warm_seconds', 0.0)):+.3f}s",
         f"{float(startup_overhead.get('warm_percent', 0.0)):+.1f}%",
-    ),
-    (
-        "Actor saturation",
-        (
-            f"batch={actor_sat.get('batch_size', 'n/a')}, "
-            f"workers={actor_sat.get('workers', 'n/a')}"
-        ),
-        f"{float(actor_sat.get('throughput_events_per_second', 0.0)):.0f} events/s",
     ),
     (
         "Preload per-open",

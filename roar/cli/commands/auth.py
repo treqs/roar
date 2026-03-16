@@ -14,7 +14,7 @@ from pathlib import Path
 
 import click
 
-from ...config import config_get
+from ...integrations.config import config_get
 
 
 def _find_ssh_pubkey() -> tuple[str, str, str] | None:
@@ -146,8 +146,8 @@ def auth_test() -> None:
     # Test authenticated endpoint
     click.echo("Testing authentication...")
 
-    from ...glaas_client import compute_pubkey_fingerprint, make_auth_header
-    from ...glaas_client import find_ssh_pubkey as glaas_find_ssh_pubkey
+    from ...integrations.glaas import compute_pubkey_fingerprint, make_auth_header
+    from ...integrations.glaas import find_ssh_pubkey as glaas_find_ssh_pubkey
 
     key_info = glaas_find_ssh_pubkey()
     if not key_info:

@@ -11,19 +11,16 @@ from pathlib import Path
 from typing import Any
 
 import blake3
-from sqlalchemy import case, delete, func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session as SASession
 
 from ...core.interfaces.repositories import SessionRepository
-from ..models import Job, Session
-
-_STEP_NOISE_COMMANDS = (
-    "ray_task:unknown",
-    "ray_task:__init__",
-    "ray_task:s3_proxy",
-    "ray_task:s3_driver_proxy",
-    "ray_task:RoarNodeAgent.__init__",
+from ...execution.framework.registry import (
+    is_execution_noise_job,
+    is_execution_phase_job,
+    is_execution_task_job,
 )
+from ..models import Job, Session
 
 
 class SQLAlchemySessionRepository(SessionRepository):
@@ -316,50 +313,21 @@ class SQLAlchemySessionRepository(SessionRepository):
             Job dict or None if not found.
         """
         if job_type == "build":
-            query = (
-                select(Job)
-                .where(
-                    Job.session_id == session_id,
-                    Job.step_number == step_number,
-                    Job.job_type == "build",
-                )
-                .order_by(Job.timestamp.desc())
-                .limit(1)
+            query = select(Job).where(
+                Job.session_id == session_id,
+                Job.step_number == step_number,
+                Job.job_type == "build",
             )
         else:
-            query = (
-                select(Job)
-                .where(
-                    Job.session_id == session_id,
-                    Job.step_number == step_number,
-                    Job.job_type.is_(None) | (Job.job_type != "build"),
-                )
-                .order_by(
-                    case(
-                        (Job.job_type.is_(None), 6),
-                        (Job.job_type == "run", 6),
-                        (
-                            Job.command.is_not(None)
-                            & (~Job.command.in_(_STEP_NOISE_COMMANDS))
-                            & Job.parent_job_uid.is_not(None)
-                            & Job.script.is_not(None)
-                            & (~Job.script.like("%.%")),
-                            5,
-                        ),
-                        (
-                            Job.command.is_not(None) & (~Job.command.in_(_STEP_NOISE_COMMANDS)),
-                            4,
-                        ),
-                        (Job.command.in_(_STEP_NOISE_COMMANDS), 1),
-                        else_=2,
-                    ).desc()
-                )
-                .order_by(Job.timestamp.desc())
-                .order_by(Job.id.desc())
-                .limit(1)
+            query = select(Job).where(
+                Job.session_id == session_id,
+                Job.step_number == step_number,
+                Job.job_type.is_(None) | (Job.job_type != "build"),
             )
-        job = self._session.execute(query).scalar_one_or_none()
-        return self._job_to_dict(job) if job else None
+        jobs = self._session.execute(query).scalars().all()
+        if not jobs:
+            return None
+        return self._job_to_dict(max(jobs, key=self._step_sort_key))
 
     def get_step_by_name(self, session_id: int, step_name: str) -> dict[str, Any] | None:
         """
@@ -534,6 +502,8 @@ class SQLAlchemySessionRepository(SessionRepository):
             job_git_repo = job_data.get("git_repo") or git_repo
             job_git_commit = job_data.get("git_commit") or git_commit
             job_type = job_data.get("job_type")
+            execution_backend = job_data.get("execution_backend")
+            execution_role = job_data.get("execution_role")
 
             job = Job(
                 timestamp=time.time(),
@@ -543,6 +513,8 @@ class SQLAlchemySessionRepository(SessionRepository):
                 git_repo=job_git_repo,
                 git_commit=job_git_commit,
                 status="pending",
+                execution_backend=execution_backend,
+                execution_role=execution_role,
                 job_type=job_type,
             )
             self._session.add(job)
@@ -660,10 +632,43 @@ class SQLAlchemySessionRepository(SessionRepository):
             "exit_code": job.exit_code,
             "synced_at": job.synced_at,
             "status": job.status,
+            "execution_backend": job.execution_backend,
+            "execution_role": job.execution_role,
             "job_type": job.job_type,
             "metadata": job.metadata_,
             "telemetry": job.telemetry,
         }
+
+    @staticmethod
+    def _step_sort_key(job: Job) -> tuple[int, float, int]:
+        job_dict = {
+            "id": job.id,
+            "timestamp": job.timestamp,
+            "command": job.command,
+            "job_type": job.job_type,
+            "script": job.script,
+            "parent_job_uid": job.parent_job_uid,
+            "execution_backend": job.execution_backend,
+            "execution_role": job.execution_role,
+        }
+        if job.job_type in (None, "run") and not is_execution_task_job(job_dict):
+            if is_execution_noise_job(job_dict):
+                priority = 1
+            else:
+                priority = 6
+        elif is_execution_phase_job(job_dict):
+            priority = 5
+        elif is_execution_task_job(job_dict):
+            priority = 4
+        elif is_execution_noise_job(job_dict):
+            priority = 1
+        else:
+            priority = 2
+        return (
+            priority,
+            float(job.timestamp or 0.0),
+            int(job.id or 0),
+        )
 
 
 # Backward compatibility alias

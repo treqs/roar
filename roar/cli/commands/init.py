@@ -11,11 +11,12 @@ import click
 
 from roar.db.engine import create_roar_engine, init_database
 from roar.db.schema import run_migrations
+from roar.execution.framework.registry import iter_execution_backend_init_templates
 
 from ..context import RoarContext
 
 # Default config template with comments
-DEFAULT_CONFIG_TEMPLATE = """\
+_CORE_CONFIG_TEMPLATE_PREFIX = """\
 # roar configuration file
 # See: https://docs.roar.dev/configuration
 
@@ -113,15 +114,9 @@ run = []
 default = "auto"
 # Allow runtime fallback to another tracer backend
 fallback_enabled = true
+"""
 
-[ray]
-# Enable automatic Ray worker instrumentation
-enabled = true
-# Inject roar-cli into runtime_env.pip for remote workers
-pip_install = true
-# Actor attribution mode for Ray actor methods (per_call | per_actor)
-actor_attribution = "per_call"
-
+_CORE_CONFIG_TEMPLATE_SUFFIX = """\
 [reversible]
 # Enable file preservation before overwrites during roar run
 enabled = false
@@ -144,6 +139,16 @@ min_components = 2
 # Maximum composite roots materialized per run job
 max_roots_per_job = 4
 """
+
+
+def build_default_config_template() -> str:
+    sections = [_CORE_CONFIG_TEMPLATE_PREFIX.rstrip()]
+    sections.extend(template for template in iter_execution_backend_init_templates())
+    sections.append(_CORE_CONFIG_TEMPLATE_SUFFIX.rstrip())
+    return "\n\n".join(section for section in sections if section) + "\n"
+
+
+DEFAULT_CONFIG_TEMPLATE = build_default_config_template()
 
 
 def _add_to_gitignore(gitignore_path: Path, gitignore_content: str) -> None:
@@ -176,7 +181,7 @@ def init_project(cwd: Path) -> Path:
         raw_conn.close()
 
     config_path = roar_dir / "config.toml"
-    config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
+    config_path.write_text(build_default_config_template())
 
     return roar_dir
 

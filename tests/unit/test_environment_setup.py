@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from roar.services.reproduction.environment_setup import EnvironmentSetupService
+from roar.execution.reproduction.environment_setup import EnvironmentSetupService
 
 
 @pytest.fixture
@@ -503,10 +503,11 @@ class TestPlatformDetection:
         """Should return True on Linux with apt-get."""
         with (
             patch(
-                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch(
-                "roar.services.reproduction.environment_setup.shutil.which",
+                "roar.execution.reproduction.environment_setup.shutil.which",
                 return_value="/usr/bin/apt-get",
             ),
         ):
@@ -515,7 +516,7 @@ class TestPlatformDetection:
     def test_is_not_debian_on_macos(self, service):
         """Should return False on macOS."""
         with patch(
-            "roar.services.reproduction.environment_setup.platform.system", return_value="Darwin"
+            "roar.execution.reproduction.environment_setup.platform.system", return_value="Darwin"
         ):
             assert service._is_debian_based() is False
 
@@ -523,9 +524,10 @@ class TestPlatformDetection:
         """Should return False when apt-get is not available."""
         with (
             patch(
-                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
-            patch("roar.services.reproduction.environment_setup.shutil.which", return_value=None),
+            patch("roar.execution.reproduction.environment_setup.shutil.which", return_value=None),
         ):
             assert service._is_debian_based() is False
 
@@ -540,7 +542,7 @@ class TestEnvironmentValidation:
         ]
 
         with patch(
-            "roar.services.reproduction.environment_setup.platform.system", return_value="Darwin"
+            "roar.execution.reproduction.environment_setup.platform.system", return_value="Darwin"
         ):
             warnings = service._validate_environment(mock_pipeline)
 
@@ -554,10 +556,11 @@ class TestEnvironmentValidation:
 
         with (
             patch(
-                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch(
-                "roar.services.reproduction.environment_setup.platform.machine",
+                "roar.execution.reproduction.environment_setup.platform.machine",
                 return_value="aarch64",
             ),
         ):
@@ -580,10 +583,11 @@ class TestEnvironmentValidation:
 
         with (
             patch(
-                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch(
-                "roar.services.reproduction.environment_setup.platform.machine",
+                "roar.execution.reproduction.environment_setup.platform.machine",
                 return_value="x86_64",
             ),
             patch.object(service, "_get_current_cuda_version", return_value="12.0"),
@@ -607,10 +611,11 @@ class TestEnvironmentValidation:
 
         with (
             patch(
-                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch(
-                "roar.services.reproduction.environment_setup.platform.machine",
+                "roar.execution.reproduction.environment_setup.platform.machine",
                 return_value="x86_64",
             ),
             patch.object(service, "_get_current_cuda_version", return_value=None),
@@ -634,10 +639,11 @@ class TestEnvironmentValidation:
 
         with (
             patch(
-                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch(
-                "roar.services.reproduction.environment_setup.platform.machine",
+                "roar.execution.reproduction.environment_setup.platform.machine",
                 return_value="x86_64",
             ),
             patch.object(service, "_check_gpu_available", return_value=False),
@@ -654,10 +660,11 @@ class TestEnvironmentValidation:
 
         with (
             patch(
-                "roar.services.reproduction.environment_setup.platform.system", return_value="Linux"
+                "roar.execution.reproduction.environment_setup.platform.system",
+                return_value="Linux",
             ),
             patch(
-                "roar.services.reproduction.environment_setup.platform.machine",
+                "roar.execution.reproduction.environment_setup.platform.machine",
                 return_value="x86_64",
             ),
         ):

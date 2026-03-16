@@ -37,7 +37,7 @@ class SQLAlchemyJobRepository(JobRepository):
         Args:
             session: SQLAlchemy session
             artifact_repository: Repository for artifact lookups (injected)
-            logger: Logger instance. If None, resolves from DI container.
+            logger: Logger instance. If None, uses the configured process logger.
         """
         self._session = session
         self._artifact_repository = artifact_repository
@@ -77,6 +77,8 @@ class SQLAlchemyJobRepository(JobRepository):
         duration_seconds: float | None = None,
         exit_code: int | None = None,
         metadata: str | None = None,
+        execution_backend: str | None = None,
+        execution_role: str | None = None,
         job_type: str | None = None,
         telemetry: str | None = None,
     ) -> tuple:
@@ -96,6 +98,8 @@ class SQLAlchemyJobRepository(JobRepository):
             duration_seconds: How long the job ran
             exit_code: Process exit code
             metadata: JSON metadata string
+            execution_backend: Execution backend that owns the job semantics
+            execution_role: Backend-defined role for the job
             job_type: Type of job ('run', 'build')
             telemetry: JSON telemetry data
 
@@ -120,6 +124,8 @@ class SQLAlchemyJobRepository(JobRepository):
             duration_seconds=duration_seconds,
             exit_code=exit_code,
             metadata_=metadata,
+            execution_backend=execution_backend,
+            execution_role=execution_role,
             job_type=job_type,
             telemetry=telemetry,
         )
@@ -723,6 +729,8 @@ class SQLAlchemyJobRepository(JobRepository):
             "exit_code": job.exit_code,
             "synced_at": job.synced_at,
             "status": job.status,
+            "execution_backend": job.execution_backend,
+            "execution_role": job.execution_role,
             "job_type": job.job_type,
             "metadata": job.metadata_,
             "telemetry": job.telemetry,

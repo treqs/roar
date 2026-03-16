@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from ..services.labels import render_label_lines
+from ..application.labels import render_label_lines
 from .formatting import format_duration, format_size, format_timestamp
 
 
@@ -349,26 +349,30 @@ class ShowRenderer:
 
         # Dataset label (from artifact metadata)
         raw_meta = artifact.get("metadata")
+        parsed_meta = None
         if isinstance(raw_meta, str):
             try:
                 parsed_meta = json.loads(raw_meta)
             except (json.JSONDecodeError, TypeError):
                 parsed_meta = None
-            if isinstance(parsed_meta, dict) and "dataset" in parsed_meta:
-                ds = parsed_meta["dataset"]
-                lines.append("\nDataset:")
-                if ds.get("dataset_id"):
-                    lines.append(f"  ID: {ds['dataset_id']}")
-                if ds.get("dataset_fingerprint"):
-                    algo = ds.get("dataset_fingerprint_algorithm", "")
-                    lines.append(f"  Fingerprint: {algo}:{ds['dataset_fingerprint'][:16]}...")
-                if isinstance(ds.get("confidence"), (int, float)):
-                    lines.append(f"  Confidence: {ds['confidence']:.2f}")
-                if ds.get("evidence"):
-                    lines.append(f"  Evidence: {', '.join(ds['evidence'])}")
-                if ds.get("split"):
-                    lines.append(f"  Split: {ds['split']}")
-                if ds.get("version_hint"):
-                    lines.append(f"  Version: {ds['version_hint']}")
+        elif isinstance(raw_meta, dict):
+            parsed_meta = raw_meta
+
+        if isinstance(parsed_meta, dict) and "dataset" in parsed_meta:
+            ds = parsed_meta["dataset"]
+            lines.append("\nDataset:")
+            if ds.get("dataset_id"):
+                lines.append(f"  ID: {ds['dataset_id']}")
+            if ds.get("dataset_fingerprint"):
+                algo = ds.get("dataset_fingerprint_algorithm", "")
+                lines.append(f"  Fingerprint: {algo}:{ds['dataset_fingerprint'][:16]}...")
+            if isinstance(ds.get("confidence"), (int, float)):
+                lines.append(f"  Confidence: {ds['confidence']:.2f}")
+            if ds.get("evidence"):
+                lines.append(f"  Evidence: {', '.join(ds['evidence'])}")
+            if ds.get("split"):
+                lines.append(f"  Split: {ds['split']}")
+            if ds.get("version_hint"):
+                lines.append(f"  Version: {ds['version_hint']}")
 
         return "\n".join(lines)

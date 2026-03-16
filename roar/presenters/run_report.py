@@ -10,7 +10,7 @@ import shlex
 from typing import Any
 
 from ..core.interfaces.presenter import IPresenter
-from ..core.interfaces.run import RunResult
+from ..core.models.run import RunResult
 
 
 def format_size(size_bytes: int | None) -> str:

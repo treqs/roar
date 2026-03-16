@@ -12,7 +12,7 @@ import pytest
 from roar.core.interfaces.registration import (
     GitContext,
 )
-from roar.services.registration.job import JobRegistrationService
+from roar.integrations.glaas.registration.job import JobRegistrationService
 
 
 class TestCreateJobsBatch:

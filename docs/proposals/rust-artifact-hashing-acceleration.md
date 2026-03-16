@@ -20,7 +20,7 @@ Artifact hashing is implemented in multiple places today:
 - `roar/services/registration/register_service.py`
 - `roar/cli/commands/lineage.py`
 3. algorithm config/validation:
-- `roar/config.py` (`blake3`, `sha256`, `sha512`, `md5`)
+- `roar/integrations/config/access.py` (`blake3`, `sha256`, `sha512`, `md5`)
 
 Observed issues:
 1. duplicated hashing logic and chunking behavior

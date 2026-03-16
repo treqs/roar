@@ -140,8 +140,9 @@ def sample_input_data(temp_git_repo: Path, git_commit: Callable) -> dict[str, Pa
     data_files = {}
 
     input_csv = temp_git_repo / "input.csv"
-    # Include a per-repo token so artifact hashes stay unique across parallel live runs.
-    token = temp_git_repo.name
+    # Include a per-repo token derived from the full temp path so reruns do not
+    # reuse the same content hash across different pytest temp roots.
+    token = hashlib.sha256(str(temp_git_repo).encode("utf-8")).hexdigest()[:12]
     input_csv.write_text(f"id,value\n1,foo\n2,bar\n3,baz\n4,{token}\n")
     data_files["input"] = input_csv
 

@@ -3,12 +3,13 @@ mod s3;
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use aws_credential_types::provider::SharedCredentialsProvider;
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::Router;
@@ -17,6 +18,10 @@ use clap::Parser;
 
 use forward::ForwardState;
 use s3::{LogMeta, S3OpType, S3Operation};
+
+// Buffer small and medium GET responses, but stream large objects to avoid
+// turning full downloads into extra proxy-side serialization work.
+const DEFAULT_RESPONSE_BUFFER_BYTES: usize = 1024 * 1024;
 
 #[derive(Parser)]
 #[command(
@@ -52,6 +57,8 @@ struct AppState {
     default_session_id: Option<String>,
     default_job_id: Option<String>,
     upstream: Option<String>,
+    response_buffer_bytes: usize,
+    timing_enabled: bool,
 }
 
 #[tokio::main]
@@ -71,16 +78,16 @@ async fn main() -> Result<()> {
         .expect("no AWS credentials provider found")
         .clone();
 
-    // Disable automatic redirect following — S3 redirects (301/307) require
-    // re-signing for the correct region, which we handle in forward_to_s3.
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .context("failed to build HTTP client")?;
+    let timing_enabled = std::env::var_os("ROAR_PROXY_TIMING").is_some();
+    let response_buffer_bytes = std::env::var("ROAR_PROXY_BUFFER_RESPONSE_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_RESPONSE_BUFFER_BYTES);
 
     let state = Arc::new(AppState {
         forward: ForwardState {
             client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
                 .pool_max_idle_per_host(32)
                 .tcp_keepalive(std::time::Duration::from_secs(90))
                 .tcp_nodelay(true)
@@ -89,10 +96,13 @@ async fn main() -> Result<()> {
             credentials_provider: SharedCredentialsProvider::new(credentials_provider),
             region,
             bucket_regions: Arc::new(RwLock::new(HashMap::new())),
+            timing_enabled,
         },
         default_session_id: args.session_id,
         default_job_id: args.job_id,
         upstream: args.upstream,
+        response_buffer_bytes,
+        timing_enabled,
     });
 
     let app = Router::new()
@@ -124,8 +134,7 @@ async fn handle_request(State(state): State<Arc<AppState>>, request: Request<Bod
 }
 
 async fn handle_request_inner(state: &AppState, request: Request<Body>) -> Result<Response> {
-    #[cfg(debug_assertions)]
-    let t_start = std::time::Instant::now();
+    let t_start = state.timing_enabled.then(Instant::now);
     let (parts, body) = request.into_parts();
 
     let content_length = parts
@@ -155,10 +164,14 @@ async fn handle_request_inner(state: &AppState, request: Request<Body>) -> Resul
     let status = s3_response.status;
     let headers = s3_response.headers.clone();
 
-    let (response_body_bytes, response_body) = if matches!(
-        op.as_ref().map(|o| &o.operation),
-        Some(S3OpType::CompleteMultipartUpload)
-    ) {
+    let should_buffer = should_buffer_response(
+        op.as_ref(),
+        status,
+        &headers,
+        state.response_buffer_bytes,
+    );
+
+    let (response_body_bytes, response_body) = if should_buffer {
         let bytes = s3_response.collect_body().await?;
         (Some(bytes.clone()), Body::from(bytes))
     } else {
@@ -181,11 +194,108 @@ async fn handle_request_inner(state: &AppState, request: Request<Body>) -> Resul
         .body(response_body)
         .context("failed to build response")?;
 
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[proxy-timing] handle_total={:.2}ms",
-        t_start.elapsed().as_secs_f64() * 1000.0
-    );
+    if let Some(t_start) = t_start {
+        eprintln!(
+            "[proxy-timing] handle_total={:.2}ms",
+            t_start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
 
     Ok(response)
+}
+
+fn should_buffer_response(
+    op: Option<&S3Operation>,
+    status: StatusCode,
+    headers: &HeaderMap,
+    response_buffer_bytes: usize,
+) -> bool {
+    if matches!(
+        op.map(|operation| &operation.operation),
+        Some(S3OpType::CompleteMultipartUpload)
+    ) {
+        return true;
+    }
+
+    if response_buffer_bytes == 0 || !status.is_success() {
+        return false;
+    }
+
+    if !matches!(op.map(|operation| &operation.operation), Some(S3OpType::GetObject)) {
+        return false;
+    }
+
+    headers
+        .get("content-length")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .is_some_and(|content_length| content_length <= response_buffer_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{Method, Uri};
+
+    fn uri(value: &str) -> Uri {
+        value.parse().expect("valid URI")
+    }
+
+    fn content_length_headers(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-length", value.parse().expect("valid header"));
+        headers
+    }
+
+    #[test]
+    fn buffers_complete_multipart_even_when_threshold_disabled() {
+        let op = S3Operation::parse(
+            &Method::POST,
+            &uri("/bucket/key?uploadId=example"),
+            None,
+        );
+
+        assert!(should_buffer_response(
+            op.as_ref(),
+            StatusCode::OK,
+            &HeaderMap::new(),
+            0,
+        ));
+    }
+
+    #[test]
+    fn buffers_small_get_objects() {
+        let op = S3Operation::parse(&Method::GET, &uri("/bucket/key"), None);
+
+        assert!(should_buffer_response(
+            op.as_ref(),
+            StatusCode::OK,
+            &content_length_headers("65536"),
+            1024 * 1024,
+        ));
+    }
+
+    #[test]
+    fn does_not_buffer_large_get_objects() {
+        let op = S3Operation::parse(&Method::GET, &uri("/bucket/key"), None);
+
+        assert!(!should_buffer_response(
+            op.as_ref(),
+            StatusCode::OK,
+            &content_length_headers("2097152"),
+            1024 * 1024,
+        ));
+    }
+
+    #[test]
+    fn does_not_buffer_without_known_length() {
+        let op = S3Operation::parse(&Method::GET, &uri("/bucket/key"), None);
+
+        assert!(!should_buffer_response(
+            op.as_ref(),
+            StatusCode::OK,
+            &HeaderMap::new(),
+            1024 * 1024,
+        ));
+    }
 }

@@ -7,12 +7,31 @@ This module provides fixtures for integration testing the roar CLI:
 - git_commit: Helper to commit changes between steps
 """
 
+import os
 import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _subprocess_env() -> dict[str, str]:
+    """Ensure subprocess CLI calls import the current worktree first."""
+    env = dict(os.environ)
+    repo_root = str(REPO_ROOT)
+    current_pythonpath = env.get("PYTHONPATH", "")
+    pythonpath_entries = current_pythonpath.split(os.pathsep) if current_pythonpath else []
+    if repo_root not in pythonpath_entries:
+        env["PYTHONPATH"] = (
+            f"{repo_root}{os.pathsep}{current_pythonpath}" if current_pythonpath else repo_root
+        )
+    return env
+
+
+os.environ["PYTHONPATH"] = _subprocess_env()["PYTHONPATH"]
 
 
 def _run_roar_cmd(*args: str, cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
@@ -23,6 +42,7 @@ def _run_roar_cmd(*args: str, cwd: Path, check: bool = True) -> subprocess.Compl
         cwd=cwd,
         capture_output=True,
         text=True,
+        env=_subprocess_env(),
     )
     if check and result.returncode != 0:
         stdout = result.stdout or "<empty>"

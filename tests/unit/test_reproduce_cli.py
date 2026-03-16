@@ -1,301 +1,65 @@
-"""
-Unit tests for the 'roar reproduce' CLI command.
+"""Unit tests for the thin reproduce CLI wrapper."""
 
-Tests the CLI behavior with mocked dependencies:
-- Default shows preview with copy-paste command
-- --run flag triggers full reproduction
-"""
-
-import importlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from click.testing import CliRunner
 
-# Import the module explicitly — the package __init__.py shadows the module name
-# with the Click command object, so patch("roar.cli.commands.reproduce.X") fails
-# on Python 3.10+. Use patch.object(reproduce_module, "X") instead.
-reproduce_module = importlib.import_module("roar.cli.commands.reproduce")
-reproduce = reproduce_module.reproduce
+from roar.application.reproduce.requests import ReproduceRequest
+from roar.cli.commands.reproduce import reproduce
 
 
-class TestReproduceCLI:
-    """Test reproduce CLI command behavior."""
+def _ctx(tmp_path: Path) -> MagicMock:
+    ctx = MagicMock()
+    ctx.roar_dir = tmp_path / ".roar"
+    ctx.cwd = tmp_path
+    ctx.is_initialized = True
+    return ctx
 
-    @pytest.fixture
-    def runner(self):
-        """Create a Click CLI test runner."""
-        return CliRunner()
 
-    @pytest.fixture
-    def mock_glaas_client(self):
-        """Create a mock GLaaS client."""
-        client = MagicMock()
-        client.is_configured.return_value = True
-        return client
+def test_reproduce_cli_builds_application_request(tmp_path: Path) -> None:
+    runner = CliRunner()
 
-    @pytest.fixture
-    def mock_pipeline_info(self):
-        """Create a mock PipelineInfo for preview."""
-        pipeline = MagicMock()
-        pipeline.artifact_hash = "abc123def456789"
-        pipeline.git_repo = "https://github.com/test/repo"
-        pipeline.git_commit = "abc123def456"
-        pipeline.build_steps = [{"type": "build", "command": "pip install -r requirements.txt"}]
-        pipeline.run_steps = [{"type": "run", "command": "python train.py"}]
-        return pipeline
+    with patch("roar.cli.commands.reproduce.reproduce_artifact", return_value=None) as mock_service:
+        result = runner.invoke(
+            reproduce,
+            [
+                "abc123def456",
+                "--run",
+                "-y",
+                "--dpkg-any-version",
+                "--pip-any-version",
+                "--package-sync",
+                "--list-requirements",
+                "--out",
+                "dag.json",
+            ],
+            obj=_ctx(tmp_path),
+        )
 
-    def test_reproduce_default_shows_preview_with_copypaste_command(
-        self, runner, mock_glaas_client, mock_pipeline_info
+    assert result.exit_code == 0
+    request = mock_service.call_args.args[0]
+    assert isinstance(request, ReproduceRequest)
+    assert request.hash_prefix == "abc123def456"
+    assert request.roar_dir == tmp_path / ".roar"
+    assert request.cwd == tmp_path
+    assert request.run_pipeline is True
+    assert request.auto_confirm is True
+    assert request.dpkg_any_version is True
+    assert request.pip_any_version is True
+    assert request.package_sync is True
+    assert request.list_requirements is True
+    assert request.out_path == "dag.json"
+
+
+def test_reproduce_cli_surfaces_application_errors(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    with patch(
+        "roar.cli.commands.reproduce.reproduce_artifact",
+        side_effect=ValueError("Artifact not found"),
     ):
-        """Bare 'roar reproduce <hash>' shows preview and suggests --run command."""
-        hash_prefix = "abc123def456"
+        result = runner.invoke(reproduce, ["abc123def456"], obj=_ctx(tmp_path))
 
-        with (
-            patch.object(reproduce_module, "load_config") as mock_config,
-            patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch.object(reproduce_module, "ReproductionService") as mock_service_cls,
-            patch("roar.services.reproduction.PipelineExecutor") as mock_executor_cls,
-        ):
-            mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
-            mock_glaas_cls.return_value = mock_glaas_client
-
-            mock_service = MagicMock()
-            mock_service._lookup_pipeline.return_value = (mock_pipeline_info, None)
-            mock_service_cls.return_value = mock_service
-
-            mock_executor = MagicMock()
-            mock_executor_cls.return_value = mock_executor
-
-            ctx = MagicMock()
-            ctx.roar_dir = Path("/tmp/.roar")
-            ctx.cwd = Path("/tmp")
-
-            result = runner.invoke(
-                reproduce,
-                [hash_prefix],
-                obj=ctx,
-            )
-
-        # Command should succeed
-        assert result.exit_code == 0, f"Exit code was {result.exit_code}: {result.output}"
-
-        # Should show artifact info
-        assert "Artifact:" in result.output or "abc123" in result.output
-
-        # Should show git repo and commit
-        assert "git" in result.output.lower() or "repo" in result.output.lower()
-
-        # Should show copy-paste command for --run
-        assert "--run" in result.output
-        assert "roar reproduce" in result.output
-
-        # Should NOT call service.reproduce (no actual setup)
-        mock_service.reproduce.assert_not_called()
-
-    def test_reproduce_default_shows_pipeline_steps(
-        self, runner, mock_glaas_client, mock_pipeline_info
-    ):
-        """Preview output should include build and run step listings."""
-        hash_prefix = "abc123def456"
-
-        with (
-            patch.object(reproduce_module, "load_config") as mock_config,
-            patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch.object(reproduce_module, "ReproductionService") as mock_service_cls,
-        ):
-            mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
-            mock_glaas_cls.return_value = mock_glaas_client
-
-            mock_service = MagicMock()
-            mock_service._lookup_pipeline.return_value = (mock_pipeline_info, None)
-            mock_service_cls.return_value = mock_service
-
-            ctx = MagicMock()
-            ctx.roar_dir = Path("/tmp/.roar")
-            ctx.cwd = Path("/tmp")
-
-            result = runner.invoke(
-                reproduce,
-                [hash_prefix],
-                obj=ctx,
-            )
-
-        assert result.exit_code == 0, f"Exit code was {result.exit_code}: {result.output}"
-        assert "Build Steps" in result.output
-        assert "Run Steps" in result.output
-        assert "python train.py" in result.output
-
-    def test_reproduce_run_does_full_reproduction(self, runner, mock_glaas_client):
-        """'roar reproduce <hash> --run' clones, sets up venv, and runs pipeline."""
-        hash_prefix = "abc123def456"
-
-        with (
-            patch.object(reproduce_module, "load_config") as mock_config,
-            patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch.object(reproduce_module, "ReproductionService") as mock_service_cls,
-        ):
-            mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
-            mock_glaas_cls.return_value = mock_glaas_client
-
-            mock_service = MagicMock()
-
-            # Mock successful reproduction result
-            from roar.core.interfaces.reproduction import ReproductionResult
-
-            mock_result = ReproductionResult(
-                success=True,
-                repo_dir=Path("/tmp/reproduce/test-repo"),
-                steps_run=2,
-                steps_total=2,
-                warnings=[],
-            )
-            mock_service.reproduce.return_value = mock_result
-            mock_service_cls.return_value = mock_service
-
-            ctx = MagicMock()
-            ctx.roar_dir = Path("/tmp/.roar")
-            ctx.cwd = Path("/tmp")
-
-            result = runner.invoke(
-                reproduce,
-                [hash_prefix, "--run"],
-                obj=ctx,
-            )
-
-        # Command should succeed
-        assert result.exit_code == 0, f"Exit code was {result.exit_code}: {result.output}"
-
-        # Should call service.reproduce with run_pipeline=True
-        mock_service.reproduce.assert_called_once()
-        call_kwargs = mock_service.reproduce.call_args.kwargs
-        assert call_kwargs["run_pipeline"] is True
-
-        # Should show completion message
-        assert "Reproduction Complete" in result.output
-
-    def test_reproduce_run_with_autoconfirm(self, runner, mock_glaas_client):
-        """'roar reproduce <hash> --run -y' runs with auto-confirmation."""
-        hash_prefix = "abc123def456"
-
-        with (
-            patch.object(reproduce_module, "load_config") as mock_config,
-            patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch.object(reproduce_module, "ReproductionService") as mock_service_cls,
-        ):
-            mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
-            mock_glaas_cls.return_value = mock_glaas_client
-
-            mock_service = MagicMock()
-
-            from roar.core.interfaces.reproduction import ReproductionResult
-
-            mock_result = ReproductionResult(
-                success=True,
-                repo_dir=Path("/tmp/reproduce/test-repo"),
-                steps_run=2,
-                steps_total=2,
-                warnings=[],
-            )
-            mock_service.reproduce.return_value = mock_result
-            mock_service_cls.return_value = mock_service
-
-            ctx = MagicMock()
-            ctx.roar_dir = Path("/tmp/.roar")
-            ctx.cwd = Path("/tmp")
-
-            result = runner.invoke(
-                reproduce,
-                [hash_prefix, "--run", "-y"],
-                obj=ctx,
-            )
-
-        # Command should succeed
-        assert result.exit_code == 0
-
-        # Should call service.reproduce with auto_confirm=True
-        mock_service.reproduce.assert_called_once()
-        call_kwargs = mock_service.reproduce.call_args.kwargs
-        assert call_kwargs["auto_confirm"] is True
-
-    def test_reproduce_default_does_not_create_directories(
-        self, runner, mock_glaas_client, mock_pipeline_info, tmp_path
-    ):
-        """Default preview mode should not create any directories."""
-        hash_prefix = "abc123def456"
-        reproduce_dir = tmp_path / "reproduce"
-
-        with (
-            patch.object(reproduce_module, "load_config") as mock_config,
-            patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch.object(reproduce_module, "ReproductionService") as mock_service_cls,
-            patch("roar.services.reproduction.PipelineExecutor") as mock_executor_cls,
-        ):
-            mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
-            mock_glaas_cls.return_value = mock_glaas_client
-
-            mock_service = MagicMock()
-            mock_service._lookup_pipeline.return_value = (mock_pipeline_info, None)
-            mock_service_cls.return_value = mock_service
-
-            mock_executor = MagicMock()
-            mock_executor_cls.return_value = mock_executor
-
-            ctx = MagicMock()
-            ctx.roar_dir = tmp_path / ".roar"
-            ctx.cwd = tmp_path
-
-            result = runner.invoke(
-                reproduce,
-                [hash_prefix],
-                obj=ctx,
-            )
-
-        assert result.exit_code == 0
-
-        # Verify no reproduce directory was created
-        assert not reproduce_dir.exists(), "Preview mode should not create directories"
-
-        # Service.reproduce should NOT be called
-        mock_service.reproduce.assert_not_called()
-
-    def test_reproduce_shows_disclaimer_about_run_actions(
-        self, runner, mock_glaas_client, mock_pipeline_info
-    ):
-        """Preview should show disclaimer about what --run will do."""
-        hash_prefix = "abc123def456"
-
-        with (
-            patch.object(reproduce_module, "load_config") as mock_config,
-            patch("roar.glaas_client.GlaasClient") as mock_glaas_cls,
-            patch.object(reproduce_module, "ReproductionService") as mock_service_cls,
-            patch("roar.services.reproduction.PipelineExecutor") as mock_executor_cls,
-        ):
-            mock_config.return_value = {"glaas": {"url": "http://localhost:3001"}}
-            mock_glaas_cls.return_value = mock_glaas_client
-
-            mock_service = MagicMock()
-            mock_service._lookup_pipeline.return_value = (mock_pipeline_info, None)
-            mock_service_cls.return_value = mock_service
-
-            mock_executor = MagicMock()
-            mock_executor_cls.return_value = mock_executor
-
-            ctx = MagicMock()
-            ctx.roar_dir = Path("/tmp/.roar")
-            ctx.cwd = Path("/tmp")
-
-            result = runner.invoke(
-                reproduce,
-                [hash_prefix],
-                obj=ctx,
-            )
-
-        assert result.exit_code == 0
-
-        # Should explain what --run will do (clone, venv, install, run)
-        output_lower = result.output.lower()
-        assert any(
-            keyword in output_lower for keyword in ["clone", "venv", "install", "reproduce"]
-        ), f"Output should describe what --run does. Got: {result.output}"
+    assert result.exit_code != 0
+    assert "Artifact not found" in result.output

@@ -4,14 +4,15 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from roar.core.exceptions import TracerNotFoundError
-from roar.services.execution.coordinator import RunCoordinator
-from roar.services.execution.proxy import ProxyHandle
+from roar.execution.cluster.proxy import ProxyHandle
+from roar.execution.runtime.coordinator import RunCoordinator
 
 
 def _make_ctx():
     """Create a minimal RunContext mock."""
     ctx = MagicMock()
     ctx.command = ["python", "train.py"]
+    ctx.execution_backend = "local"
     ctx.job_type = "run"
     ctx.repo_root = "/tmp/repo"
     ctx.roar_dir = Path("/tmp/repo/.roar")
@@ -36,7 +37,7 @@ def _patch_coordinator_deps(coord):
     """Return a combined context manager that patches coordinator dependencies."""
     return (
         patch("os.path.exists", return_value=True),
-        patch("roar.config.load_config", return_value={}),
+        patch("roar.integrations.config.load_config", return_value={}),
     )
 
 
@@ -48,8 +49,8 @@ class TestProxyLifecycle:
 
         with (
             patch("os.path.exists", return_value=True),
-            patch("roar.config.load_config", return_value={}),
-            patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
+            patch("roar.integrations.config.load_config", return_value={}),
+            patch("roar.execution.provenance.ProvenanceService", return_value=mock_prov),
             patch.object(coord, "_record_job", return_value=(1, "abc123", [], [], [], [])),
             patch.object(coord, "_backup_previous_outputs"),
             patch.object(coord, "_cleanup_logs"),
@@ -109,9 +110,10 @@ class TestProxyLifecycle:
 
         # Execution should succeed despite proxy failure
         assert result.exit_code == 0
-        # Tracer should have been called without extra_env
+        # Tracer still receives the selected execution backend
         call_kwargs = mock_tracer.execute.call_args.kwargs
-        assert call_kwargs.get("extra_env") is None
+        assert call_kwargs["extra_env"]["ROAR_EXECUTION_BACKEND"] == "local"
+        assert "AWS_ENDPOINT_URL" not in call_kwargs["extra_env"]
 
     def test_no_proxy_service_means_no_extra_env(self):
         mock_tracer = MagicMock()
@@ -121,7 +123,7 @@ class TestProxyLifecycle:
         self._run_coord(coord)
 
         call_kwargs = mock_tracer.execute.call_args.kwargs
-        assert call_kwargs.get("extra_env") is None
+        assert call_kwargs["extra_env"] == {"ROAR_EXECUTION_BACKEND": "local"}
 
     def test_run_job_uid_is_forwarded_to_record_job(self):
         mock_tracer = MagicMock()
@@ -134,8 +136,8 @@ class TestProxyLifecycle:
         with (
             patch("secrets.token_hex", return_value="runuid12"),
             patch("os.path.exists", return_value=True),
-            patch("roar.config.load_config", return_value={}),
-            patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
+            patch("roar.integrations.config.load_config", return_value={}),
+            patch("roar.execution.provenance.ProvenanceService", return_value=mock_prov),
             patch.object(
                 coord, "_record_job", return_value=(1, "abc123", [], [], [], [])
             ) as mock_record,
@@ -164,8 +166,8 @@ class TestProxyLifecycle:
         mock_prov.collect.return_value = {"data": {"read_files": [], "written_files": []}}
         with (
             patch("os.path.exists", return_value=True),
-            patch("roar.config.load_config", return_value={}),
-            patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
+            patch("roar.integrations.config.load_config", return_value={}),
+            patch("roar.execution.provenance.ProvenanceService", return_value=mock_prov),
             patch.object(coord, "_record_job", return_value=(1, "abc123", [], [], [], [])),
             patch.object(coord, "_backup_previous_outputs"),
             patch.object(coord, "_cleanup_logs"),
@@ -208,7 +210,7 @@ class TestProxyLifecycle:
 
         with (
             patch.object(coord, "_backup_previous_outputs"),
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.load_config", return_value={}),
             patch("os.path.exists", return_value=False),
             patch.object(coord, "_cleanup_logs"),
         ):
@@ -226,8 +228,8 @@ class TestEndpointUrlChaining:
 
         with (
             patch("os.path.exists", return_value=True),
-            patch("roar.config.load_config", return_value={}),
-            patch("roar.services.execution.provenance.ProvenanceService", return_value=mock_prov),
+            patch("roar.integrations.config.load_config", return_value={}),
+            patch("roar.execution.provenance.ProvenanceService", return_value=mock_prov),
             patch.object(coord, "_record_job", return_value=(1, "abc123", [], [], [], [])),
             patch.object(coord, "_backup_previous_outputs"),
             patch.object(coord, "_cleanup_logs"),

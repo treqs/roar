@@ -6,8 +6,7 @@ import pytest
 
 from roar.core.models.dataset_identifier import DatasetIdentifier
 from roar.db.context import create_database_context
-from roar.services.execution.dataset_identifier import DatasetIdentifierInferer
-from roar.services.execution.job_recording import ExecutionJobRecorder
+from roar.execution.recording import DatasetIdentifierInferer, ExecutionJobRecorder
 
 
 def _raw_session_paths() -> list[str]:
@@ -108,6 +107,8 @@ def test_record_materializes_local_composite_outputs(tmp_path: Path):
         repo_root=str(repo_root),
         roar_dir=roar_dir,
         command=["python", "train.py", "--output-dir", str(dataset_dir)],
+        execution_backend="local",
+        execution_role="host",
         step_name="train",
         job_type="run",
         hash_algorithms=["blake3"],
@@ -171,6 +172,8 @@ def test_record_materializes_composite_even_when_run_hashes_exclude_blake3(tmp_p
         repo_root=str(repo_root),
         roar_dir=roar_dir,
         command=["python", "train.py", "--output-dir", str(dataset_dir)],
+        execution_backend="local",
+        execution_role="host",
         step_name="train",
         job_type="run",
         hash_algorithms=["sha256"],
@@ -218,6 +221,8 @@ enabled = false
         repo_root=str(repo_root),
         roar_dir=roar_dir,
         command=["python", "train.py", "--output-dir", str(dataset_dir)],
+        execution_backend="local",
+        execution_role="host",
         step_name="train",
         job_type="run",
         hash_algorithms=["blake3"],

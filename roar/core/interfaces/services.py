@@ -51,6 +51,8 @@ class JobRecordingService(Protocol):
         duration_seconds: float | None = None,
         exit_code: int | None = None,
         metadata: str | None = None,
+        execution_backend: str | None = None,
+        execution_role: str | None = None,
         step_name: str | None = None,
         assign_to_session: bool = True,
         job_type: str | None = None,

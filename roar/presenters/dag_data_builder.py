@@ -5,14 +5,11 @@ from __future__ import annotations
 from typing import Any, cast
 
 from ..db.context import optional_repo
-
-_STEP_NOISE_COMMANDS = {
-    "ray_task:unknown",
-    "ray_task:__init__",
-    "ray_task:s3_proxy",
-    "ray_task:s3_driver_proxy",
-    "ray_task:RoarNodeAgent.__init__",
-}
+from ..execution.framework.registry import (
+    is_execution_noise_job,
+    is_execution_phase_job,
+    is_execution_task_job,
+)
 
 
 class DagDataBuilder:
@@ -130,23 +127,16 @@ class DagDataBuilder:
 
     def _step_sort_key(self, step: dict) -> tuple[int, float, int]:
         job_type = step.get("job_type")
-        command = str(step.get("command") or "")
-        script = str(step.get("script") or "")
-        parent_job_uid = str(step.get("parent_job_uid") or "")
-        is_phase_wrapper = (
-            command.startswith("ray_task:")
-            and command not in _STEP_NOISE_COMMANDS
-            and bool(parent_job_uid)
-            and bool(script)
-            and "." not in script
-        )
-        if job_type in (None, "run"):
-            priority = 6
-        elif is_phase_wrapper:
+        if job_type in (None, "run") and not is_execution_task_job(step):
+            if is_execution_noise_job(step):
+                priority = 1
+            else:
+                priority = 6
+        elif is_execution_phase_job(step):
             priority = 5
-        elif command and command not in _STEP_NOISE_COMMANDS:
+        elif is_execution_task_job(step):
             priority = 4
-        elif command in _STEP_NOISE_COMMANDS:
+        elif is_execution_noise_job(step):
             priority = 1
         else:
             priority = 2

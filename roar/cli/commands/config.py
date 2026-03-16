@@ -6,7 +6,7 @@ Usage: roar config [list|get|set] [key] [value]
 
 import click
 
-from ...config import config_get, config_list, config_set
+from ...integrations.config import config_get, config_list, config_set
 
 
 @click.group("config", invoke_without_command=True)

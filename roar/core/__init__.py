@@ -1,16 +1,4 @@
-"""
-Core infrastructure for roar's dependency injection and plugin architecture.
-
-This module provides:
-- ServiceContainer: DI container
-- Plugin registry with auto-discovery
-- Application bootstrap for initialization
-- Protocol definitions for all service interfaces
-- Custom exception hierarchy
-
-All public names are lazily imported on first access to keep
-``import roar.core.settings`` (and similar lightweight imports) fast.
-"""
+"""Core public API for bootstrap and exceptions."""
 
 __all__ = [
     "CloudDownloadError",
@@ -29,16 +17,10 @@ __all__ = [
     "RoarNetworkError",
     "RoarPluginError",
     "RoarValidationError",
-    "ServiceContainer",
     "TracerNotFoundError",
     "bootstrap",
-    "discover_commands",
-    "discover_plugins",
-    "get_container",
     "is_initialized",
     "reset",
-    "resolve",
-    "try_resolve",
 ]
 
 # Map public names to (module, name) for lazy resolution.
@@ -46,12 +28,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "bootstrap": (".bootstrap", "bootstrap"),
     "is_initialized": (".bootstrap", "is_initialized"),
     "reset": (".bootstrap", "reset"),
-    "ServiceContainer": (".container", "ServiceContainer"),
-    "get_container": (".container", "get_container"),
-    "resolve": (".container", "resolve"),
-    "try_resolve": (".container", "try_resolve"),
-    "discover_commands": (".registry", "discover_commands"),
-    "discover_plugins": (".registry", "discover_plugins"),
     # exceptions
     "CloudDownloadError": (".exceptions", "CloudDownloadError"),
     "CloudUploadError": (".exceptions", "CloudUploadError"),

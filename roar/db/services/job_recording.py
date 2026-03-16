@@ -70,6 +70,8 @@ class JobRecordingService:
         input_files: list[str] | None = None,
         output_files: list[str] | None = None,
         metadata: str | None = None,
+        execution_backend: str | None = None,
+        execution_role: str | None = None,
         step_name: str | None = None,
         assign_to_session: bool = True,
         job_type: str | None = None,
@@ -92,6 +94,8 @@ class JobRecordingService:
             input_files: List of input file paths
             output_files: List of output file paths
             metadata: JSON metadata string
+            execution_backend: Execution backend that owns the job semantics
+            execution_role: Backend-defined role for the job
             step_name: User-assigned step name
             assign_to_session: Whether to assign to active session
             job_type: Job type ('run', 'build', etc.)
@@ -151,6 +155,8 @@ class JobRecordingService:
             duration_seconds=duration_seconds,
             exit_code=exit_code,
             metadata=metadata,
+            execution_backend=execution_backend,
+            execution_role=execution_role,
             job_type=job_type,
             telemetry=telemetry,
         )

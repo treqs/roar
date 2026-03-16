@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock
 
 from roar.core.dto.registration import JobDTO, JobIODTO
-from roar.services.registration.coordinator import RegistrationCoordinator
+from roar.integrations.glaas.registration.coordinator import RegistrationCoordinator
 
 
 class TestJobIODTOByteRanges:
