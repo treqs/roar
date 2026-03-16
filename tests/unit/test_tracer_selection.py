@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from roar.services.execution.tracer import TracerService
+from roar.execution.runtime.tracer import TracerService
 
 
 def _make_signal_handler():
@@ -69,6 +69,8 @@ class TestTracerSelection:
         proc2.pid = 102
 
         with (
+            patch.object(svc, "_get_tracer_mode", return_value="auto"),
+            patch.object(svc, "_get_fallback_enabled", return_value=True),
             patch.object(
                 svc,
                 "_get_tracer_candidates",
@@ -76,7 +78,7 @@ class TestTracerSelection:
             ),
             patch("subprocess.Popen", side_effect=[proc1, proc2]) as mock_popen,
             patch("os.path.exists", return_value=False),
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.load_config", return_value={}),
         ):
             svc.execute(
                 command=["python", "train.py"],
@@ -96,6 +98,8 @@ class TestTracerSelection:
         proc.pid = 101
 
         with (
+            patch.object(svc, "_get_tracer_mode", return_value="auto"),
+            patch.object(svc, "_get_fallback_enabled", return_value=True),
             patch.object(
                 svc,
                 "_get_tracer_candidates",
@@ -103,7 +107,7 @@ class TestTracerSelection:
             ),
             patch("subprocess.Popen", return_value=proc) as mock_popen,
             patch("os.path.exists", return_value=False),
-            patch("roar.config.load_config", return_value={}),
+            patch("roar.integrations.config.load_config", return_value={}),
         ):
             svc.execute(
                 command=["python", "train.py"],

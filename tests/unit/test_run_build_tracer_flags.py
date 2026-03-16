@@ -1,35 +1,28 @@
-"""Tests for run/build tracer flag plumbing into execution helper."""
+"""Tests for the thin run/build CLI wrappers."""
 
-import importlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
+from roar.application.run import BuildRequest, RunRequest
 from roar.cli.commands.build import build
 from roar.cli.commands.run import run
-
-run_module = importlib.import_module("roar.cli.commands.run")
-build_module = importlib.import_module("roar.cli.commands.build")
 
 
 def _ctx():
     obj = MagicMock()
     obj.is_initialized = True
     obj.roar_dir = Path("/tmp/repo/.roar")
+    obj.cwd = Path("/tmp/repo")
     return obj
 
 
 class TestRunTracerFlags:
-    def test_run_forwards_tracer_flags(self):
+    def test_run_passes_request_to_application_service(self):
         runner = CliRunner()
 
-        with (
-            patch.object(run_module, "validate_git_clean", return_value="/tmp/repo"),
-            patch.object(run_module, "get_quiet_setting", return_value=False),
-            patch.object(run_module, "get_hash_algorithms", return_value=["blake3"]),
-            patch.object(run_module, "execute_and_report", return_value=0) as mock_exec,
-        ):
+        with patch("roar.cli.commands.run.run_command", return_value=0) as mock_run_command:
             result = runner.invoke(
                 run,
                 [
@@ -45,22 +38,21 @@ class TestRunTracerFlags:
             )
 
         assert result.exit_code == 0
-        kwargs = mock_exec.call_args.kwargs
-        assert kwargs["tracer_mode"] == "ptrace"
-        assert kwargs["tracer_fallback"] is False
-        assert kwargs["step_name"] == "preprocess"
+        request = mock_run_command.call_args.args[0]
+        assert isinstance(request, RunRequest)
+        assert request.roar_dir == Path("/tmp/repo/.roar")
+        assert request.cwd == Path("/tmp/repo")
+        assert request.args == ("python", "train.py")
+        assert request.tracer_mode == "ptrace"
+        assert request.tracer_fallback is False
+        assert request.step_name == "preprocess"
 
 
 class TestBuildTracerFlags:
-    def test_build_forwards_tracer_flags(self):
+    def test_build_passes_request_to_application_service(self):
         runner = CliRunner()
 
-        with (
-            patch.object(build_module, "validate_git_clean", return_value="/tmp/repo"),
-            patch.object(build_module, "get_quiet_setting", return_value=False),
-            patch.object(build_module, "get_hash_algorithms", return_value=["blake3"]),
-            patch.object(build_module, "execute_and_report", return_value=0) as mock_exec,
-        ):
+        with patch("roar.cli.commands.build.build_command", return_value=0) as mock_build_command:
             result = runner.invoke(
                 build,
                 ["--tracer", "ebpf", "--tracer-fallback", "--name", "bootstrap", "make", "-j4"],
@@ -68,20 +60,19 @@ class TestBuildTracerFlags:
             )
 
         assert result.exit_code == 0
-        kwargs = mock_exec.call_args.kwargs
-        assert kwargs["tracer_mode"] == "ebpf"
-        assert kwargs["tracer_fallback"] is True
-        assert kwargs["step_name"] == "bootstrap"
+        request = mock_build_command.call_args.args[0]
+        assert isinstance(request, BuildRequest)
+        assert request.roar_dir == Path("/tmp/repo/.roar")
+        assert request.cwd == Path("/tmp/repo")
+        assert request.args == ("make", "-j4")
+        assert request.tracer_mode == "ebpf"
+        assert request.tracer_fallback is True
+        assert request.step_name == "bootstrap"
 
     def test_build_accepts_preload_tracer_mode(self):
         runner = CliRunner()
 
-        with (
-            patch.object(build_module, "validate_git_clean", return_value="/tmp/repo"),
-            patch.object(build_module, "get_quiet_setting", return_value=False),
-            patch.object(build_module, "get_hash_algorithms", return_value=["blake3"]),
-            patch.object(build_module, "execute_and_report", return_value=0) as mock_exec,
-        ):
+        with patch("roar.cli.commands.build.build_command", return_value=0) as mock_build_command:
             result = runner.invoke(
                 build,
                 ["--tracer", "preload", "make", "-j4"],
@@ -89,5 +80,6 @@ class TestBuildTracerFlags:
             )
 
         assert result.exit_code == 0
-        kwargs = mock_exec.call_args.kwargs
-        assert kwargs["tracer_mode"] == "preload"
+        request = mock_build_command.call_args.args[0]
+        assert isinstance(request, BuildRequest)
+        assert request.tracer_mode == "preload"

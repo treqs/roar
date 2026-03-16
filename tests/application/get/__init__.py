@@ -1,0 +1,1 @@
+"""Application get tests."""

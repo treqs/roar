@@ -10,9 +10,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from roar.glaas_client import GlaasClient
-from roar.services.registration.artifact import ArtifactRegistrationService
-from roar.services.registration.job import (
+from roar.integrations.glaas import GlaasClient
+from roar.integrations.glaas.registration.artifact import ArtifactRegistrationService
+from roar.integrations.glaas.registration.job import (
     JobRegistrationService,
     _batch_artifacts,
 )
@@ -25,7 +25,7 @@ class TestSizeBasedBatching:
 
     def test_batch_by_size_small_artifacts_single_batch(self):
         """Small artifacts fitting under limit should be in single batch."""
-        from roar.services.registration.artifact import _batch_by_size
+        from roar.integrations.glaas.registration.artifact import _batch_by_size
 
         artifacts = [
             {"hashes": [{"algorithm": "blake3", "digest": f"small{i:060d}"}], "size": 100}
@@ -38,7 +38,7 @@ class TestSizeBasedBatching:
 
     def test_batch_by_size_splits_at_limit(self):
         """Artifacts should be split when approaching size limit."""
-        from roar.services.registration.artifact import _batch_by_size
+        from roar.integrations.glaas.registration.artifact import _batch_by_size
 
         artifacts = [
             {
@@ -61,13 +61,13 @@ class TestSizeBasedBatching:
 
     def test_batch_by_size_empty_list(self):
         """Empty list should return empty list."""
-        from roar.services.registration.artifact import _batch_by_size
+        from roar.integrations.glaas.registration.artifact import _batch_by_size
 
         assert _batch_by_size([]) == []
 
     def test_batch_by_size_preserves_order(self):
         """Batching should preserve original order of artifacts."""
-        from roar.services.registration.artifact import _batch_by_size
+        from roar.integrations.glaas.registration.artifact import _batch_by_size
 
         artifacts = [
             {"hashes": [{"algorithm": "blake3", "digest": f"order{i:060d}"}], "size": i, "index": i}
@@ -80,7 +80,7 @@ class TestSizeBasedBatching:
 
     def test_batch_by_size_oversized_single_artifact(self):
         """Single artifact exceeding limit should be in its own batch."""
-        from roar.services.registration.artifact import _batch_by_size
+        from roar.integrations.glaas.registration.artifact import _batch_by_size
 
         # Create one huge artifact that exceeds the limit
         huge_artifact = {

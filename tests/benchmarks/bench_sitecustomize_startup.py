@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-INJECT_DIR = Path(__file__).resolve().parents[2] / "roar" / "services" / "execution" / "inject"
+INJECT_DIR = Path(__file__).resolve().parents[2] / "roar" / "execution" / "runtime" / "inject"
 N = 10
 
 

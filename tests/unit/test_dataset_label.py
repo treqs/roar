@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from roar.services.registration._dataset_label import (
+from roar.execution.recording.dataset_metadata import (
     build_dataset_metadata,
     find_matching_identifier,
 )

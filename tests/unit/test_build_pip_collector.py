@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from roar.services.execution.provenance.build_pip_collector import (
+from roar.execution.provenance.build_pip_collector import (
     KNOWN_PYTHON_BUILD_TOOLS,
     BuildPipCollectorService,
 )
@@ -33,9 +33,9 @@ class TestBuildPipCollector:
         assert result == {}
 
     @patch(
-        "roar.services.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version"
+        "roar.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version"
     )
-    @patch("roar.services.execution.provenance.build_pip_collector.shutil.which")
+    @patch("roar.execution.provenance.build_pip_collector.shutil.which")
     def test_uv_detected(self, mock_which, mock_version, service):
         processes = [
             {"command": ["/some/venv/bin/uv", "pip", "install", "numpy"]},
@@ -48,7 +48,7 @@ class TestBuildPipCollector:
         result = service.collect(processes, sys_prefix="/some/venv")
         assert result == {"uv": "0.1.40"}
 
-    @patch("roar.services.execution.provenance.build_pip_collector.shutil.which")
+    @patch("roar.execution.provenance.build_pip_collector.shutil.which")
     def test_system_tool_excluded(self, mock_which, service):
         """Tools NOT under sys_prefix and NOT in site-packages should be excluded."""
         processes = [
@@ -60,9 +60,9 @@ class TestBuildPipCollector:
         assert result == {}
 
     @patch(
-        "roar.services.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version"
+        "roar.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version"
     )
-    @patch("roar.services.execution.provenance.build_pip_collector.shutil.which")
+    @patch("roar.execution.provenance.build_pip_collector.shutil.which")
     def test_pip_installed_tool_kept(self, mock_which, mock_version, service):
         """Tools under sys_prefix should be kept (inverse of build_dpkg)."""
         processes = [
@@ -75,9 +75,9 @@ class TestBuildPipCollector:
         assert result == {"maturin": "1.4.0"}
 
     @patch(
-        "roar.services.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version"
+        "roar.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version"
     )
-    @patch("roar.services.execution.provenance.build_pip_collector.shutil.which")
+    @patch("roar.execution.provenance.build_pip_collector.shutil.which")
     def test_site_packages_tool_kept(self, mock_which, mock_version, service):
         """Tools in site-packages should be kept."""
         processes = [
@@ -89,7 +89,7 @@ class TestBuildPipCollector:
         result = service.collect(processes, sys_prefix="/venv")
         assert result == {"hatch": "1.9.0"}
 
-    @patch("roar.services.execution.provenance.build_pip_collector.shutil.which")
+    @patch("roar.execution.provenance.build_pip_collector.shutil.which")
     def test_tool_not_on_path(self, mock_which, service):
         processes = [
             {"command": ["maturin", "build"]},
@@ -108,9 +108,9 @@ class TestBuildPipCollector:
         assert result == {}
 
     @patch(
-        "roar.services.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version"
+        "roar.execution.provenance.build_pip_collector.BuildPipCollectorService._get_package_version"
     )
-    @patch("roar.services.execution.provenance.build_pip_collector.shutil.which")
+    @patch("roar.execution.provenance.build_pip_collector.shutil.which")
     def test_pip3_normalized_to_pip(self, mock_which, mock_version, service):
         """pip3 should be normalized to pip package name."""
         processes = [

@@ -12,10 +12,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from roar.core.bootstrap import bootstrap, reset
-from roar.core.container import get_container
-from roar.core.interfaces.logger import ILogger
-from roar.services.logging import NullLogger
-from roar.services.reproduction.environment_setup import EnvironmentSetupService
+from roar.core.logging import NullLogger, get_logger
+from roar.execution.reproduction.environment_setup import EnvironmentSetupService
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -145,15 +143,18 @@ class TestReproducePackageExtraction:
         lineage = json.loads(lineage_result.stdout)
         artifact_hash = lineage["artifact"]["hash"]
 
-        # Use ReproductionService to look up the pipeline
-        from roar.services.reproduction import ReproductionService
+        from roar.application.reproduce.lookup import lookup_pipeline_result
 
-        repro = ReproductionService(glaas_client=None, presenter=None)
-        pipeline, error = repro._lookup_pipeline(artifact_hash[:12], None, temp_git_repo / ".roar")
-        assert error is None
-        assert pipeline is not None
+        lookup = lookup_pipeline_result(
+            hash_prefix=artifact_hash[:12],
+            roar_dir=temp_git_repo / ".roar",
+            server_url=None,
+            glaas_client=None,
+        )
+        assert lookup.error is None
+        assert lookup.pipeline is not None
 
-        packages = service._get_packages(pipeline)
+        packages = service._get_packages(lookup.pipeline)
         # packages may or may not be populated depending on provenance
         # collection — the important thing is no crash
         assert isinstance(packages, list)
@@ -317,9 +318,7 @@ class TestDebugLoggingAvailable:
 
         bootstrap(roar_dir)
 
-        container = get_container()
-        logger = container.try_resolve(ILogger)
-        assert logger is not None
+        logger = get_logger()
         assert not isinstance(logger, NullLogger)
 
     def test_logger_is_null_without_bootstrap(self):

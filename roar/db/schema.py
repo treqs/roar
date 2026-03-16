@@ -107,6 +107,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     exit_code INTEGER,
     synced_at REAL,                     -- When synced to GLaaS
     status TEXT,                        -- NULL=completed, 'pending'=from server not yet run
+    execution_backend TEXT,             -- Backend that owns execution semantics (e.g. local, ray)
+    execution_role TEXT,                -- Backend-defined role (e.g. host, submit, task)
     job_type TEXT,                      -- NULL='run', 'build'=build step (runs before DAG)
     metadata TEXT,                      -- JSON: env vars, hardware info, etc.
     telemetry TEXT                      -- JSON: external service links (wandb, etc.)
@@ -118,6 +120,8 @@ CREATE INDEX IF NOT EXISTS idx_jobs_git_commit ON jobs(git_commit);
 CREATE INDEX IF NOT EXISTS idx_jobs_synced ON jobs(synced_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_session ON jobs(session_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_step_identity ON jobs(step_identity);
+CREATE INDEX IF NOT EXISTS idx_jobs_execution_backend ON jobs(execution_backend);
+CREATE INDEX IF NOT EXISTS idx_jobs_execution_role ON jobs(execution_role);
 
 -- Full-text search on commands
 CREATE VIRTUAL TABLE IF NOT EXISTS jobs_fts USING fts5(
@@ -261,6 +265,12 @@ def run_migrations(conn) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN job_type TEXT")
     if "parent_job_uid" not in columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN parent_job_uid TEXT")
+    if "execution_backend" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN execution_backend TEXT")
+    if "execution_role" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN execution_role TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_execution_backend ON jobs(execution_backend)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_execution_role ON jobs(execution_role)")
 
     # Add byte_ranges to job_inputs and job_outputs
     cursor = conn.execute("PRAGMA table_info(job_inputs)")

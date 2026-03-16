@@ -169,7 +169,13 @@ jobs:
         run: python -c "import roar._hash_native as m; print(m.__name__)"
 
       - name: Run tests (parallel)
-        run: pytest --tb=short -x -m "not glaas and not live_glaas"
+        run: >
+          pytest --tb=short -x -m "not glaas and not live_glaas"
+          --ignore=tests/execution/runtime/test_sitecustomize_perf.py
+
+      - name: Run runtime perf guards (serial)
+        if: matrix.python-version == '3.12'
+        run: pytest --tb=short -x tests/execution/runtime/test_sitecustomize_perf.py -n 0
 
   test-macos:
     needs: [build-rust-binaries-macos]
@@ -244,7 +250,9 @@ jobs:
           python -m roar run "$(python -c 'import sys; print(sys.executable)')" smoke.py
 
       - name: Run tests (parallel)
-        run: pytest --tb=short -x -m "not glaas and not live_glaas and not ebpf and not large_pipeline"
+        run: >
+          pytest --tb=short -x -m "not glaas and not live_glaas and not ebpf and not large_pipeline"
+          --ignore=tests/execution/runtime/test_sitecustomize_perf.py
 
   test-tracer-privileged:
     runs-on: ubuntu-latest

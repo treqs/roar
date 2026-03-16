@@ -1,0 +1,187 @@
+"""Application orchestration for tracked run/build workflows."""
+
+from __future__ import annotations
+
+import shlex
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, cast
+
+from ...db.context import create_database_context
+from ...execution.framework.planning import plan_execution_command
+from ...presenters.console import ConsolePresenter
+from ...presenters.run_report import RunReportPresenter
+from .dag_references import DAGReferenceResolver
+from .execution import (
+    execute_and_report,
+    get_hash_algorithms,
+    get_quiet_setting,
+    validate_git_clean,
+)
+from .requests import BuildRequest, RunRequest
+
+
+@dataclass(frozen=True)
+class _ExecutionInputs:
+    command: list[str]
+    job_type: str | None
+
+
+@dataclass(frozen=True)
+class _FinalizerContext:
+    roar_dir: Path
+
+
+def run_command(request: RunRequest) -> int:
+    """Execute the `roar run` application workflow."""
+    repo_root = validate_git_clean()
+    quiet_setting = get_quiet_setting(request.quiet, repo_root)
+    algorithms = get_hash_algorithms(
+        list(request.hash_algorithms) if request.hash_algorithms else None
+    )
+    execution_inputs = _resolve_run_inputs(request)
+    if execution_inputs is None:
+        return 0
+    return _execute_tracked_command(
+        roar_dir=request.roar_dir,
+        repo_root=repo_root,
+        command=execution_inputs.command,
+        job_type=execution_inputs.job_type,
+        step_name=request.step_name,
+        quiet=quiet_setting,
+        hash_algorithms=algorithms,
+        tracer_mode=request.tracer_mode,
+        tracer_fallback=request.tracer_fallback,
+    )
+
+
+def build_command(request: BuildRequest) -> int:
+    """Execute the `roar build` application workflow."""
+    repo_root = validate_git_clean()
+    quiet_setting = get_quiet_setting(request.quiet, repo_root)
+    algorithms = get_hash_algorithms(
+        list(request.hash_algorithms) if request.hash_algorithms else None
+    )
+    command = list(request.args)
+    if not command:
+        raise ValueError("No command specified")
+    return _execute_tracked_command(
+        roar_dir=request.roar_dir,
+        repo_root=repo_root,
+        command=command,
+        job_type="build",
+        step_name=request.step_name,
+        quiet=quiet_setting,
+        hash_algorithms=algorithms,
+        tracer_mode=request.tracer_mode,
+        tracer_fallback=request.tracer_fallback,
+    )
+
+
+def _execute_tracked_command(
+    *,
+    roar_dir: Path,
+    repo_root: str,
+    command: list[str],
+    job_type: str | None,
+    step_name: str | None,
+    quiet: bool,
+    hash_algorithms: list[str],
+    tracer_mode: str | None,
+    tracer_fallback: bool | None,
+) -> int:
+    planned = plan_execution_command(command)
+    backend_name = planned.backend_name
+    execution_role = str(planned.execution_role or "").strip()
+    if not execution_role:
+        raise ValueError(f"Execution backend '{backend_name}' did not provide an execution role.")
+
+    exit_code = execute_and_report(
+        roar_dir=roar_dir,
+        backend_name=backend_name,
+        execution_role=execution_role,
+        command=planned.command,
+        job_type=job_type,
+        step_name=step_name,
+        quiet=quiet,
+        hash_algorithms=hash_algorithms,
+        repo_root=repo_root,
+        tracer_mode=tracer_mode,
+        tracer_fallback=tracer_fallback,
+    )
+
+    if planned.finalize_run:
+        planned.finalize_run(cast(Any, _FinalizerContext(roar_dir=roar_dir)))
+
+    return exit_code
+
+
+def _resolve_run_inputs(request: RunRequest) -> _ExecutionInputs | None:
+    args_list = list(request.args)
+    dag_reference: str | None = None
+    param_overrides: dict[str, str] = {}
+    command: list[str] = []
+
+    i = 0
+    while i < len(args_list):
+        arg = args_list[i]
+        if arg.startswith("@") and dag_reference is None:
+            dag_reference = arg
+            i += 1
+            continue
+        if dag_reference and arg.startswith("--") and "=" in arg:
+            key, value = arg[2:].split("=", 1)
+            param_overrides[key] = value
+            i += 1
+            continue
+        command.append(arg)
+        i += 1
+
+    if dag_reference:
+        return _resolve_dag_reference(
+            roar_dir=request.roar_dir,
+            reference=dag_reference,
+            param_overrides=param_overrides,
+        )
+
+    if not command:
+        raise ValueError("No command specified")
+    return _ExecutionInputs(command=command, job_type=None)
+
+
+def _resolve_dag_reference(
+    *,
+    roar_dir: Path,
+    reference: str,
+    param_overrides: dict[str, str],
+) -> _ExecutionInputs | None:
+    with create_database_context(roar_dir) as db_ctx:
+        resolver = DAGReferenceResolver(
+            db_ctx.sessions,
+            db_ctx.jobs,
+            db_ctx.artifacts,
+            db_ctx.lineage,
+            db_ctx.session_service,
+        )
+        resolved, error = resolver.resolve(reference, param_overrides)
+
+    if error:
+        raise ValueError(error)
+    if resolved is None:
+        raise ValueError(f"Could not resolve DAG reference: {reference}")
+
+    presenter = ConsolePresenter()
+    report = RunReportPresenter(presenter)
+    if resolved.stale_upstream:
+        if not report.show_upstream_stale_warning(resolved.step_number, resolved.stale_upstream):
+            presenter.print("Aborted.")
+            return None
+        presenter.print("")
+
+    presenter.print(f"Re-running @{resolved.step_number}: {resolved.command}")
+    presenter.print("")
+
+    return _ExecutionInputs(
+        command=shlex.split(resolved.command),
+        job_type="build" if resolved.is_build else None,
+    )

@@ -78,6 +78,8 @@ class JobRepository(Protocol):
         duration_seconds: float | None = None,
         exit_code: int | None = None,
         metadata: str | None = None,
+        execution_backend: str | None = None,
+        execution_role: str | None = None,
         job_type: str | None = None,
         telemetry: str | None = None,
     ) -> tuple:

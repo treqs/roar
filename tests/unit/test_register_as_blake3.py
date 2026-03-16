@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 from blake3 import blake3
 
-from roar.core.interfaces.upload import LineageData
+from roar.application.publish.blake3_upgrade import upgrade_s3_etags_to_blake3
+from roar.core.interfaces.lineage import LineageData
 from roar.db.context import create_database_context
-from roar.services.registration.register_service import RegisterService
 
 
 def test_upgrade_s3_etag_to_blake3_adds_hash_without_removing_etag(tmp_path: Path) -> None:
@@ -40,9 +40,13 @@ def test_upgrade_s3_etag_to_blake3_adds_hash_without_removing_etag(tmp_path: Pat
     mock_s3 = MagicMock()
     mock_s3.get_object.return_value = {"Body": io.BytesIO(payload)}
 
-    with patch("roar.services.registration.register_service.boto3") as mock_boto3:
+    with patch("roar.application.publish.blake3_upgrade.boto3") as mock_boto3:
         mock_boto3.client.return_value = mock_s3
-        RegisterService().upgrade_s3_etags_to_blake3(roar_dir=roar_dir, lineage=lineage)
+        upgrade_s3_etags_to_blake3(
+            roar_dir=roar_dir,
+            lineage=lineage,
+            logger=MagicMock(),
+        )
 
     mock_s3.get_object.assert_called_once_with(Bucket="demo-bucket", Key="path/to/object.bin")
 

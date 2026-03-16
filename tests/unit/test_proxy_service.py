@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from roar.services.execution.proxy import ProxyHandle, ProxyService
+from roar.execution.cluster.proxy import ProxyHandle, ProxyService
 
 
 class TestFindProxy:
@@ -280,7 +280,7 @@ class TestDaemonMethods:
 
 
 def test_parse_log_line_get_object_with_size():
-    from roar.services.execution.proxy import parse_log_line
+    from roar.execution.cluster.proxy import parse_log_line
 
     line = "[S3:GetObject] s3://my-bucket/data.csv  (8192 bytes)  etag=abc123"
     entry = parse_log_line(line)

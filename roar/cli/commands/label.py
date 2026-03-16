@@ -12,23 +12,22 @@ from __future__ import annotations
 
 import click
 
-from ...db.context import create_database_context
-from ...services.labels import LabelService, parse_label_pairs, render_label_lines
+from ...application.query import (
+    LabelCopyRequest,
+    LabelHistoryRequest,
+    LabelSetRequest,
+    LabelShowRequest,
+    copy_labels,
+    set_labels,
+    show_labels,
+)
+from ...application.query import (
+    label_history as render_label_history,
+)
 from ..context import RoarContext
 from ..decorators import require_init
 
 _ENTITY_TYPE = click.Choice(["dag", "job", "artifact"], case_sensitive=False)
-
-
-def _echo_current(metadata: dict, *, heading: str | None = None) -> None:
-    if heading:
-        click.echo(heading)
-    lines = render_label_lines(metadata, indent="  " if heading else "")
-    if not lines:
-        click.echo("No labels.")
-        return
-    for line in lines:
-        click.echo(line)
 
 
 @click.group("label", invoke_without_command=True)
@@ -47,17 +46,19 @@ def label(ctx: click.Context) -> None:
 @require_init
 def label_set(ctx: RoarContext, entity_type: str, target: str, pairs: tuple[str, ...]) -> None:
     """Patch the current label document for a target."""
-    with create_database_context(ctx.roar_dir) as db_ctx:
-        service = LabelService(db_ctx, ctx.cwd)
-        resolved = service.resolve_target(entity_type, target)
-        patch = parse_label_pairs(pairs)
-        result = service.set_metadata(resolved, patch)
-        heading = (
-            f"Updated labels (version {result.version}):"
-            if result.changed
-            else f"Labels unchanged (version {result.version}):"
+    try:
+        rendered = set_labels(
+            LabelSetRequest(
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                entity_type=entity_type,
+                target=target,
+                pairs=pairs,
+            )
         )
-        _echo_current(result.metadata, heading=heading)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(rendered)
 
 
 @label.command("cp")
@@ -75,17 +76,20 @@ def label_cp(
     destination_target: str,
 ) -> None:
     """Copy the current source label document into the destination as a patch."""
-    with create_database_context(ctx.roar_dir) as db_ctx:
-        service = LabelService(db_ctx, ctx.cwd)
-        source = service.resolve_target(source_entity_type, source_target)
-        destination = service.resolve_target(destination_entity_type, destination_target)
-        result = service.copy_metadata(source, destination)
-        heading = (
-            f"Copied labels (version {result.version}):"
-            if result.changed
-            else f"Copy made no changes (version {result.version}):"
+    try:
+        rendered = copy_labels(
+            LabelCopyRequest(
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                source_entity_type=source_entity_type,
+                source_target=source_target,
+                destination_entity_type=destination_entity_type,
+                destination_target=destination_target,
+            )
         )
-        _echo_current(result.metadata, heading=heading)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(rendered)
 
 
 @label.command("show")
@@ -95,10 +99,18 @@ def label_cp(
 @require_init
 def label_show(ctx: RoarContext, entity_type: str, target: str) -> None:
     """Show the current local label document for a target."""
-    with create_database_context(ctx.roar_dir) as db_ctx:
-        service = LabelService(db_ctx, ctx.cwd)
-        resolved = service.resolve_target(entity_type, target)
-        _echo_current(service.current_metadata(resolved))
+    try:
+        rendered = show_labels(
+            LabelShowRequest(
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                entity_type=entity_type,
+                target=target,
+            )
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(rendered)
 
 
 @label.command("history")
@@ -108,16 +120,15 @@ def label_show(ctx: RoarContext, entity_type: str, target: str) -> None:
 @require_init
 def label_history(ctx: RoarContext, entity_type: str, target: str) -> None:
     """Show all local label versions for a target."""
-    with create_database_context(ctx.roar_dir) as db_ctx:
-        service = LabelService(db_ctx, ctx.cwd)
-        resolved = service.resolve_target(entity_type, target)
-        history = service.history(resolved)
-        if not history:
-            click.echo("No labels.")
-            return
-        for idx, row in enumerate(history):
-            if idx:
-                click.echo("")
-            click.echo(f"Version {row['version']}:")
-            for line in render_label_lines(row["metadata"], indent="  "):
-                click.echo(line)
+    try:
+        rendered = render_label_history(
+            LabelHistoryRequest(
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                entity_type=entity_type,
+                target=target,
+            )
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(rendered)

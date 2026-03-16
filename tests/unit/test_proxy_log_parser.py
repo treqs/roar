@@ -1,6 +1,6 @@
 """Tests for the S3 proxy log line parser."""
 
-from roar.services.execution.proxy import parse_log_line
+from roar.execution.cluster.proxy import parse_log_line
 
 
 class TestParseLogLineGetObject:

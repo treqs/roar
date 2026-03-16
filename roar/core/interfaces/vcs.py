@@ -5,10 +5,13 @@ Enables pluggable VCS backends (Git, Mercurial, etc.)
 following the Open/Closed Principle.
 """
 
-from abc import ABC, abstractmethod
+from __future__ import annotations
 
-# Re-export models for backward compatibility
-from roar.core.models.vcs import VCSInfo
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from roar.core.models.vcs import VCSInfo
 
 
 class IVCSProvider(ABC):

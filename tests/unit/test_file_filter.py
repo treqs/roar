@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from roar.core.models.provenance import PythonInjectData, TracerData
-from roar.services.execution.provenance import file_filter
-from roar.services.execution.provenance.file_filter import FileFilterService
+from roar.execution.provenance import file_filter
+from roar.execution.provenance.file_filter import FileFilterService
 
 
 def _filter_config(ignore_tmp_files: bool = False) -> dict[str, dict[str, bool]]:

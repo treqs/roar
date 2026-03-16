@@ -9,7 +9,7 @@ import uuid
 
 import ray
 
-from roar.services.execution.inject.sitecustomize import _prepare_worker_runtime_env
+from roar.backends.ray.plugin import ray_prepare_worker_runtime_env as _prepare_worker_runtime_env
 from tests.benchmarks.ray_bench_utils import (
     MINIO_ACCESS_KEY,
     MINIO_INTERNAL_ENDPOINT,
@@ -166,7 +166,7 @@ def _measure_scenario_interleaved(
 
 
 def _make_roar_runtime_env() -> dict:
-    runtime_env = _prepare_worker_runtime_env({}, f"e2e-bench-{uuid.uuid4().hex[:8]}")
+    runtime_env = _prepare_worker_runtime_env({}, f"e2e-bench-{uuid.uuid4().hex[:8]}", {})
     env_vars = dict(runtime_env.get("env_vars", {}))
     env_vars.update(
         {

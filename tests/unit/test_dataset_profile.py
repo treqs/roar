@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from roar.services.registration._dataset_profile import build_dataset_profile
+from roar.execution.recording.dataset_profile import build_dataset_profile
 
 
 def test_build_dataset_profile_summarizes_formats_splits_partitions_and_dates():

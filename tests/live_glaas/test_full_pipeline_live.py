@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from roar.glaas_client import make_auth_header
+from roar.integrations.glaas import make_auth_header
 
 # =============================================================================
 # Fixtures

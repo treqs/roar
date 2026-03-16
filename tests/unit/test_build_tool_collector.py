@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from roar.services.execution.provenance.build_tool_collector import (
+from roar.execution.provenance.build_tool_collector import (
     KNOWN_BUILD_TOOLS,
     BuildToolCollectorService,
 )
@@ -32,9 +32,9 @@ class TestBuildToolCollector:
         result = service.collect(processes, sys_prefix="/some/venv")
         assert result == {}
 
-    @patch("roar.services.execution.provenance.build_tool_collector.sys")
-    @patch("roar.services.execution.provenance.build_tool_collector.subprocess.run")
-    @patch("roar.services.execution.provenance.build_tool_collector.shutil.which")
+    @patch("roar.execution.provenance.build_tool_collector.sys")
+    @patch("roar.execution.provenance.build_tool_collector.subprocess.run")
+    @patch("roar.execution.provenance.build_tool_collector.shutil.which")
     def test_cmake_gcc_detected(self, mock_which, mock_run, mock_sys, service):
         mock_sys.platform = "linux"
         processes = [
@@ -60,7 +60,7 @@ class TestBuildToolCollector:
         result = service.collect(processes, sys_prefix="/some/venv")
         assert result == {"cmake": "3.25.1-1", "gcc-12": "12.2.0-14"}
 
-    @patch("roar.services.execution.provenance.build_tool_collector.shutil.which")
+    @patch("roar.execution.provenance.build_tool_collector.shutil.which")
     def test_pip_installed_tool_excluded(self, mock_which, service):
         """Tools under sys_prefix should be excluded."""
         processes = [
@@ -71,7 +71,7 @@ class TestBuildToolCollector:
         result = service.collect(processes, sys_prefix="/venv")
         assert result == {}
 
-    @patch("roar.services.execution.provenance.build_tool_collector.shutil.which")
+    @patch("roar.execution.provenance.build_tool_collector.shutil.which")
     def test_site_packages_tool_excluded(self, mock_which, service):
         """Tools in site-packages should be excluded."""
         processes = [
@@ -82,7 +82,7 @@ class TestBuildToolCollector:
         result = service.collect(processes, sys_prefix="/other")
         assert result == {}
 
-    @patch("roar.services.execution.provenance.build_tool_collector.shutil.which")
+    @patch("roar.execution.provenance.build_tool_collector.shutil.which")
     def test_unknown_tool_on_path_skipped(self, mock_which, service):
         """Tool not found on PATH is skipped gracefully."""
         processes = [

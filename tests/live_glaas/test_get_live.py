@@ -151,6 +151,14 @@ def temp_git_repo(tmp_path: Path):
         capture_output=True,
     )
 
+    # Create an active session for get/dag workflows.
+    subprocess.run(
+        [sys.executable, "-m", "roar", "reset", "-y"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
     return tmp_path
 
 
@@ -356,6 +364,14 @@ print("Finetuning complete!")
             text=True,
         )
         before_tags = set(before.stdout.strip().split("\n")) if before.stdout.strip() else set()
+
+        init_session = subprocess.run(
+            [sys.executable, "-m", "roar", "run", sys.executable, "-c", "print('warmup')"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        assert init_session.returncode == 0
 
         result = subprocess.run(
             [

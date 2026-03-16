@@ -202,6 +202,8 @@ class Job(Base):
     exit_code: Mapped[int | None] = mapped_column(Integer)
     synced_at: Mapped[float | None] = mapped_column(Float)
     status: Mapped[str | None] = mapped_column(String)
+    execution_backend: Mapped[str | None] = mapped_column(String)
+    execution_role: Mapped[str | None] = mapped_column(String)
     job_type: Mapped[str | None] = mapped_column(String)
     metadata_: Mapped[str | None] = mapped_column("metadata", Text)  # JSON
     telemetry: Mapped[str | None] = mapped_column(Text)  # JSON
@@ -222,6 +224,8 @@ class Job(Base):
         Index("idx_jobs_synced", "synced_at"),
         Index("idx_jobs_session", "session_id"),
         Index("idx_jobs_step_identity", "step_identity"),
+        Index("idx_jobs_execution_backend", "execution_backend"),
+        Index("idx_jobs_execution_role", "execution_role"),
     )
 
 

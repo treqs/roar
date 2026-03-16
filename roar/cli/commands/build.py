@@ -6,15 +6,10 @@ Usage: roar build [options] <command>
 
 import click
 
+from ...application.run import BuildRequest, build_command
 from ...core.tracer_modes import TRACER_MODE_VALUES
 from ..context import RoarContext
 from ..decorators import require_init
-from ._execution import (
-    execute_and_report,
-    get_hash_algorithms,
-    get_quiet_setting,
-    validate_git_clean,
-)
 
 
 @click.command(
@@ -71,27 +66,23 @@ def build(
         click.echo(_get_help_text())
         return
 
-    # Validate git is clean
-    repo_root = validate_git_clean()
-
-    # Get quiet setting
-    quiet_setting = get_quiet_setting(quiet, repo_root)
-
-    # Get hash algorithms
-    algorithms = get_hash_algorithms(list(hash_algorithms) if hash_algorithms else None)
-
-    # Execute and report (always job_type="build")
-    exit_code = execute_and_report(
-        ctx=ctx,
-        command=args_list,
-        job_type="build",
-        step_name=step_name,
-        quiet=quiet_setting,
-        hash_algorithms=algorithms,
-        repo_root=repo_root,
-        tracer_mode=tracer_mode,
-        tracer_fallback=tracer_fallback,
-    )
+    try:
+        exit_code = build_command(
+            BuildRequest(
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                args=tuple(args_list),
+                quiet=quiet,
+                step_name=step_name,
+                tracer_mode=tracer_mode,
+                tracer_fallback=tracer_fallback,
+                hash_algorithms=tuple(hash_algorithms),
+            )
+        )
+    except ValueError as exc:
+        if str(exc) == "No command specified":
+            click.echo(_get_help_text())
+        raise click.ClickException(str(exc)) from exc
 
     if exit_code != 0:
         raise SystemExit(exit_code)

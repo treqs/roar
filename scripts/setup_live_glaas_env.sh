@@ -21,4 +21,4 @@ DATABASE_URL="$DB_URL" npx --prefix "$GLAAS_API_DIR" tsx "$GLAAS_API_DIR/scripts
 echo ""
 echo "=== Setup complete. Run tests with: ==="
 echo "  cd /home/trevor/dev/roar"
-echo "  GLAAS_URL=$GLAAS_URL .venv/bin/pytest tests/live_glaas/test_ray_register_live.py -v -m live_glaas --dist no"
+echo "  GLAAS_URL=$GLAAS_URL .venv/bin/pytest tests/backends/ray/live/test_ray_register_live.py -v -m live_glaas --dist no"
