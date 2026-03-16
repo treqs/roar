@@ -48,6 +48,14 @@ def _repo_local_ptrace_binary() -> str | None:
     return None
 
 
+def _expected_ptrace_binary(path_bin_dir: Path | None = None) -> str:
+    repo_local = _repo_local_ptrace_binary()
+    if repo_local is not None:
+        return repo_local
+    assert path_bin_dir is not None
+    return str((path_bin_dir / "roar-tracer").resolve())
+
+
 def test_tracer_status_reports_configured_default_and_repo_local_ptrace_binary(
     temp_git_repo: Path,
     roar_cli,
@@ -56,7 +64,7 @@ def test_tracer_status_reports_configured_default_and_repo_local_ptrace_binary(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _write_executable(bin_dir / "roar-tracer")
-    expected_ptrace = _repo_local_ptrace_binary()
+    expected_ptrace = _expected_ptrace_binary(bin_dir)
 
     set_result = roar_cli("tracer", "ptrace")
     assert set_result.returncode == 0
@@ -71,10 +79,7 @@ def test_tracer_status_reports_configured_default_and_repo_local_ptrace_binary(
     assert "Default tracer: ptrace" in result.stdout
     assert "Fallback enabled: True" in result.stdout
     assert "Proxy enabled: False" in result.stdout
-    if expected_ptrace is not None:
-        assert f"ptrace:  {expected_ptrace}" in result.stdout
-    else:
-        assert "ptrace:  not found" in result.stdout
+    assert f"ptrace:  {expected_ptrace}" in result.stdout
     assert "  ebpf:" in result.stdout
     assert "  preload:" in result.stdout
     assert "  roard:" in result.stdout
@@ -88,9 +93,7 @@ def test_tracer_check_uses_configured_default_backend_and_repo_local_binary(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _write_executable(bin_dir / "roar-tracer")
-    expected_ptrace = _repo_local_ptrace_binary()
-    if expected_ptrace is None:
-        pytest.skip("repo-local ptrace tracer is only expected on Linux test environments")
+    expected_ptrace = _expected_ptrace_binary(bin_dir)
 
     roar_cli("tracer", "ptrace")
 
@@ -112,9 +115,7 @@ def test_tracer_check_prefers_repo_local_binary_over_path_override(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _write_executable(bin_dir / "roar-tracer")
-    expected_ptrace = _repo_local_ptrace_binary()
-    if expected_ptrace is None:
-        pytest.skip("repo-local ptrace tracer is only expected on Linux test environments")
+    expected_ptrace = _expected_ptrace_binary(bin_dir)
 
     roar_cli("tracer", "ptrace")
 
