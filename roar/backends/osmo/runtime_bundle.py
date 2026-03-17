@@ -96,7 +96,9 @@ def _default_ptrace_tracer_path() -> Path:
     package_dir = Path(roar.__file__).resolve().parent
     tracer_path = tracer_backends.find_ptrace_tracer(package_dir)
     if not tracer_path:
-        raise ValueError("ptrace tracer binary could not be resolved from the local Roar environment")
+        raise ValueError(
+            "ptrace tracer binary could not be resolved from the local Roar environment"
+        )
     return Path(tracer_path)
 
 

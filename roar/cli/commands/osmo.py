@@ -226,9 +226,7 @@ def osmo_prepare_workflow(
             "--stage-roar-runtime and --install-roar-runtime are mutually exclusive"
         )
     if runtime_install_local_path is not None and not install_roar_runtime:
-        raise click.ClickException(
-            "--runtime-install-local-path requires --install-roar-runtime"
-        )
+        raise click.ClickException("--runtime-install-local-path requires --install-roar-runtime")
     if runtime_install_local_path is not None and runtime_install_requirement is not None:
         raise click.ClickException(
             "--runtime-install-local-path and --runtime-install-requirement are mutually exclusive"

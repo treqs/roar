@@ -40,9 +40,7 @@ default-values:
         encoding="utf-8",
     )
     (roar_dir / "config.toml").write_text(
-        "[osmo]\n"
-        "download_declared_outputs = true\n"
-        "ingest_lineage_bundles = true\n",
+        "[osmo]\ndownload_declared_outputs = true\ningest_lineage_bundles = true\n",
         encoding="utf-8",
     )
 
@@ -184,9 +182,7 @@ def test_attach_osmo_workflow_supports_dataset_hints_without_workflow_spec(
     workflow_path = repo_root / "workflow.yaml"
     workflow_path.write_text("workflow: {}\n", encoding="utf-8")
     (roar_dir / "config.toml").write_text(
-        "[osmo]\n"
-        "download_declared_outputs = true\n"
-        "ingest_lineage_bundles = true\n",
+        "[osmo]\ndownload_declared_outputs = true\ningest_lineage_bundles = true\n",
         encoding="utf-8",
     )
 

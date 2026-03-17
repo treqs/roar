@@ -102,9 +102,7 @@ default-values:
 
     config_path = temp_git_repo / ".roar" / "config.toml"
     config_path.write_text(
-        "[osmo]\n"
-        "download_declared_outputs = true\n"
-        "ingest_lineage_bundles = true\n",
+        "[osmo]\ndownload_declared_outputs = true\ningest_lineage_bundles = true\n",
         encoding="utf-8",
     )
 
@@ -171,7 +169,14 @@ default-values:
     query_path = next(path for path in output_paths if path.name == "query-COMPLETED.json")
     downloaded_result = next(path for path in output_paths if path.name == "result.txt")
     downloaded_bundle = next(path for path in output_paths if path.name == "roar-fragments.json")
-    assert receipt_path == temp_git_repo / ".roar" / "osmo" / "attachments" / "workflow-attach-product-COMPLETED.json"
+    assert (
+        receipt_path
+        == temp_git_repo
+        / ".roar"
+        / "osmo"
+        / "attachments"
+        / "workflow-attach-product-COMPLETED.json"
+    )
     assert query_path.exists()
     assert downloaded_result.read_text(encoding="utf-8").strip() == "ROAR_OSMO_ATTACH_OK"
     assert downloaded_bundle.exists()
@@ -192,9 +197,7 @@ def test_roar_osmo_attach_supports_dataset_hints_without_workflow_spec(
 
     config_path = temp_git_repo / ".roar" / "config.toml"
     config_path.write_text(
-        "[osmo]\n"
-        "download_declared_outputs = true\n"
-        "ingest_lineage_bundles = true\n",
+        "[osmo]\ndownload_declared_outputs = true\ningest_lineage_bundles = true\n",
         encoding="utf-8",
     )
 

@@ -126,10 +126,7 @@ def roar_exec(
     timeout: float | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    shell_command = (
-        f"cd {shlex.quote(cwd)} && "
-        f"python3 -m roar {shlex.join(list(args))}"
-    )
+    shell_command = f"cd {shlex.quote(cwd)} && python3 -m roar {shlex.join(list(args))}"
     result = exec_on_service(
         "osmo-tools",
         ["bash", "-lc", shell_command],
@@ -173,10 +170,7 @@ def restore_host_path_ownership(path: str | Path) -> None:
         [
             "bash",
             "-lc",
-            (
-                "chown -R "
-                f"{os.getuid()}:{os.getgid()} {shlex.quote(repo_path)}"
-            ),
+            (f"chown -R {os.getuid()}:{os.getgid()} {shlex.quote(repo_path)}"),
         ],
         timeout=5 * 60,
     )

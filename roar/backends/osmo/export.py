@@ -42,7 +42,8 @@ def export_osmo_lineage_bundle(
 
         resolved_task_name = _resolve_task_name(selected_job, task_name)
         reads = [
-            _build_artifact_ref(item, project_dir=project_dir) for item in db_ctx.jobs.get_inputs(selected_job_id)
+            _build_artifact_ref(item, project_dir=project_dir)
+            for item in db_ctx.jobs.get_inputs(selected_job_id)
         ]
         writes = [
             _build_artifact_ref(item, project_dir=project_dir)
@@ -68,7 +69,8 @@ def export_osmo_lineage_bundle(
         backend_metadata={
             "execution_role": "task",
             "source_job_uid": selected_job_uid or None,
-            "source_execution_backend": str(selected_job.get("execution_backend") or "").strip() or None,
+            "source_execution_backend": str(selected_job.get("execution_backend") or "").strip()
+            or None,
             "source_execution_role": str(selected_job.get("execution_role") or "").strip() or None,
             "source_job_type": str(selected_job.get("job_type") or "").strip() or None,
         },

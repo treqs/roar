@@ -710,7 +710,9 @@ default-values:
     metadata = json.loads(str(job["metadata"]))
     assert metadata["osmo_submit"]["submit"]["dataset_hints"] == ["roar-lineage"]
     assert metadata["osmo_submit"]["lineage_reconstitution"]["fragments_processed"] == 1
-    downloaded_names = [item["dataset_name"] for item in metadata["osmo_submit"]["downloaded_outputs"]]
+    downloaded_names = [
+        item["dataset_name"] for item in metadata["osmo_submit"]["downloaded_outputs"]
+    ]
     assert downloaded_names == ["workflow-config-lineage-output", "roar-lineage"]
 
 

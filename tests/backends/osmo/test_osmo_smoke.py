@@ -216,8 +216,7 @@ def test_osmo_basic_workflow_submit_and_complete(
     assert child_jobs[0]["execution_role"] == "task"
 
     output_paths = [
-        _host_visible_path(Path(str(row["path"])), project_dir=project_dir)
-        for row in output_rows
+        _host_visible_path(Path(str(row["path"])), project_dir=project_dir) for row in output_rows
     ]
     receipt_path = next(path for path in output_paths if "submissions" in str(path))
     query_path = next(path for path in output_paths if path.name == "query-COMPLETED.json")

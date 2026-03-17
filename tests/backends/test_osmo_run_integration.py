@@ -221,7 +221,10 @@ default-values:
     output_paths = [Path(str(row["path"])) for row in output]
     receipt_path = next(path for path in output_paths if "submissions" in str(path))
     query_path = next(path for path in output_paths if path.name == "query-COMPLETED.json")
-    assert receipt_path == temp_git_repo / ".roar" / "osmo" / "submissions" / "workflow-product-COMPLETED.json"
+    assert (
+        receipt_path
+        == temp_git_repo / ".roar" / "osmo" / "submissions" / "workflow-product-COMPLETED.json"
+    )
     downloaded_result = next(path for path in output_paths if path.name == "result.txt")
     downloaded_bundle = next(path for path in output_paths if path.name == "roar-fragments.json")
     assert downloaded_result.exists()
@@ -233,7 +236,10 @@ default-values:
     payload = json.loads(receipt_path.read_text(encoding="utf-8"))
     assert payload["osmo_submit"]["workflow_id"] == "workflow-product"
     assert payload["osmo_submit"]["workflow_status"] == "COMPLETED"
-    assert payload["osmo_submit"]["response"]["overview"] == "https://osmo.example/workflows/workflow-product"
+    assert (
+        payload["osmo_submit"]["response"]["overview"]
+        == "https://osmo.example/workflows/workflow-product"
+    )
 
 
 def test_roar_run_osmo_workflow_submit_transparently_prepares_install_wrapper(
@@ -243,7 +249,8 @@ def test_roar_run_osmo_workflow_submit_transparently_prepares_install_wrapper(
 ) -> None:
     _write_fake_osmo(temp_git_repo)
     (temp_git_repo / "task.py").write_text("print('hello')\n", encoding="utf-8")
-    original_workflow = """
+    original_workflow = (
+        """
 workflow:
   name: sample
   tasks:
@@ -253,13 +260,14 @@ workflow:
       files:
         - localpath: ./task.py
           path: /workspace/task.py
-""".strip() + "\n"
+""".strip()
+        + "\n"
+    )
     (temp_git_repo / "workflow.yaml").write_text(original_workflow, encoding="utf-8")
 
     config_path = temp_git_repo / ".roar" / "config.toml"
     config_path.write_text(
-        "[osmo]\n"
-        'runtime_install_requirement = "roar-cli==9.9.9"\n',
+        '[osmo]\nruntime_install_requirement = "roar-cli==9.9.9"\n',
         encoding="utf-8",
     )
     git_commit("enable osmo transparent workflow preparation")
@@ -281,7 +289,7 @@ workflow:
     assert Path(submitted_command[2]).resolve().parent == temp_git_repo.resolve()
     assert "path: /tmp/roar-osmo-wrapper.sh" in submitted_rendered
     assert "name: roar-lineage" in submitted_rendered
-    assert 'localpath: ./task.py' in submitted_rendered
+    assert "localpath: ./task.py" in submitted_rendered
     assert (
         '"$python_bin" -m pip install --disable-pip-version-check --no-input --target "$install_root" "roar-cli==9.9.9"'
         in submitted_rendered
@@ -298,10 +306,13 @@ workflow:
         Path(submitted_command[2]).resolve()
     )
     assert payload["osmo_submit"]["submit"]["prepared_workflow"]["wrapped_tasks"] == ["basic"]
-    assert payload["osmo_submit"]["submit"]["prepared_workflow"][
-        "runtime_install_requirement"
-    ] == "roar-cli==9.9.9"
-    assert "runtime_tracer_download_url" not in payload["osmo_submit"]["submit"]["prepared_workflow"]
+    assert (
+        payload["osmo_submit"]["submit"]["prepared_workflow"]["runtime_install_requirement"]
+        == "roar-cli==9.9.9"
+    )
+    assert (
+        "runtime_tracer_download_url" not in payload["osmo_submit"]["submit"]["prepared_workflow"]
+    )
 
 
 def test_roar_run_osmo_workflow_submit_can_inject_local_install_artifact(
@@ -332,8 +343,7 @@ workflow:
 
     config_path = temp_git_repo / ".roar" / "config.toml"
     config_path.write_text(
-        "[osmo]\n"
-        'runtime_install_local_path = "dist/roar_cli.whl"\n',
+        '[osmo]\nruntime_install_local_path = "dist/roar_cli.whl"\n',
         encoding="utf-8",
     )
     git_commit("enable osmo runtime install artifact")

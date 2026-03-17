@@ -217,7 +217,9 @@ def execute_osmo_workflow_submit(ctx: RunContext) -> RunResult:
             session_id=session_id,
         )
         job = db_ctx.jobs.get(job_id)
-        resolved_session_id = int(job["session_id"]) if job and job.get("session_id") else session_id
+        resolved_session_id = (
+            int(job["session_id"]) if job and job.get("session_id") else session_id
+        )
         submit_step_number = int(job["step_number"]) if job and job.get("step_number") else 1
         db_ctx.commit()
 
@@ -256,7 +258,9 @@ def execute_osmo_workflow_submit(ctx: RunContext) -> RunResult:
             metadata=build_operation_metadata_json("osmo_submit", final_payload),
             receipt_artifact=receipt_artifact,
         )
-        stale_upstream, stale_downstream = StalenessAnalyzer().analyze(db_ctx, resolved_session_id, job_id)
+        stale_upstream, stale_downstream = StalenessAnalyzer().analyze(
+            db_ctx, resolved_session_id, job_id
+        )
         inputs = db_ctx.jobs.get_inputs(job_id)
         outputs = db_ctx.jobs.get_outputs(job_id)
 
@@ -401,7 +405,9 @@ def attach_osmo_workflow(
             session_id=session_id,
         )
         job = db_ctx.jobs.get(job_id)
-        resolved_session_id = int(job["session_id"]) if job and job.get("session_id") else session_id
+        resolved_session_id = (
+            int(job["session_id"]) if job and job.get("session_id") else session_id
+        )
         attach_step_number = int(job["step_number"]) if job and job.get("step_number") else 1
         db_ctx.commit()
 
@@ -444,7 +450,9 @@ def attach_osmo_workflow(
             metadata=build_operation_metadata_json("osmo_attach", final_payload),
             receipt_artifact=receipt_artifact,
         )
-        stale_upstream, stale_downstream = StalenessAnalyzer().analyze(db_ctx, resolved_session_id, job_id)
+        stale_upstream, stale_downstream = StalenessAnalyzer().analyze(
+            db_ctx, resolved_session_id, job_id
+        )
         inputs = db_ctx.jobs.get_inputs(job_id)
         outputs = db_ctx.jobs.get_outputs(job_id)
 
@@ -523,7 +531,11 @@ def _build_osmo_submit_payload(
             payload["downloaded_outputs"] = list(download_result.datasets)
         if download_result.error:
             payload["download_error"] = download_result.error
-    if diagnostics_result.query_artifact_path or diagnostics_result.task_logs or diagnostics_result.error:
+    if (
+        diagnostics_result.query_artifact_path
+        or diagnostics_result.task_logs
+        or diagnostics_result.error
+    ):
         diagnostics_payload: dict[str, Any] = {}
         if diagnostics_result.query_artifact_path:
             diagnostics_payload["query_artifact_path"] = diagnostics_result.query_artifact_path
@@ -592,7 +604,11 @@ def _build_osmo_attach_payload(
             payload["downloaded_outputs"] = list(download_result.datasets)
         if download_result.error:
             payload["download_error"] = download_result.error
-    if diagnostics_result.query_artifact_path or diagnostics_result.task_logs or diagnostics_result.error:
+    if (
+        diagnostics_result.query_artifact_path
+        or diagnostics_result.task_logs
+        or diagnostics_result.error
+    ):
         diagnostics_payload: dict[str, Any] = {}
         if diagnostics_result.query_artifact_path:
             diagnostics_payload["query_artifact_path"] = diagnostics_result.query_artifact_path
@@ -725,7 +741,9 @@ def _merge_configured_osmo_context_hints(
     config: dict[str, Any],
     include_lineage_dataset_hint: bool,
 ) -> OsmoSubmitCommandContext:
-    dataset_hints = [str(item).strip() for item in (context.dataset_hints or []) if str(item).strip()]
+    dataset_hints = [
+        str(item).strip() for item in (context.dataset_hints or []) if str(item).strip()
+    ]
     if include_lineage_dataset_hint:
         lineage_dataset_name = str(config.get("lineage_bundle_dataset_name", "")).strip()
         if lineage_dataset_name and lineage_dataset_name not in dataset_hints:
@@ -819,9 +837,10 @@ def _prepare_submit_command(
         str(config.get("runtime_install_local_path") or ""),
         submit_context.repo_root,
     )
-    runtime_install_remote_path = str(
-        config.get("runtime_install_remote_path", "/tmp/roar-osmo-install.whl")
-    ).strip() or "/tmp/roar-osmo-install.whl"
+    runtime_install_remote_path = (
+        str(config.get("runtime_install_remote_path", "/tmp/roar-osmo-install.whl")).strip()
+        or "/tmp/roar-osmo-install.whl"
+    )
     runtime_install_requirement = (
         None
         if runtime_install_local_path
@@ -1006,7 +1025,9 @@ def _maybe_reconstitute_downloaded_lineage(
         return OsmoLineageReconstitutionResult(error=message)
     if download_result is None or download_result.error:
         return OsmoLineageReconstitutionResult(
-            error=download_result.error if download_result is not None else "no downloaded outputs available"
+            error=download_result.error
+            if download_result is not None
+            else "no downloaded outputs available"
         )
 
     bundle_filename = str(config.get("lineage_bundle_filename", "roar-fragments.json"))
@@ -1076,7 +1097,9 @@ def _download_declared_outputs(
     datasets: list[dict[str, Any]] = []
     for declared in declared_outputs:
         dataset_ref = f"{declared.dataset_name}:latest"
-        dataset_dir = workflow_dir / (_sanitize_receipt_component(declared.dataset_name) or "dataset")
+        dataset_dir = workflow_dir / (
+            _sanitize_receipt_component(declared.dataset_name) or "dataset"
+        )
         dataset_dir.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
             [
@@ -1149,8 +1172,8 @@ def _capture_workflow_diagnostics(
     if not workflow_id or wait_result is None or wait_result.payload is None:
         return OsmoWorkflowDiagnosticsResult()
 
-    diagnostics_dir = roar_dir / "osmo" / "diagnostics" / (
-        _sanitize_receipt_component(workflow_id) or "submit"
+    diagnostics_dir = (
+        roar_dir / "osmo" / "diagnostics" / (_sanitize_receipt_component(workflow_id) or "submit")
     )
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1187,7 +1210,11 @@ def _capture_workflow_diagnostics(
                 text=True,
                 check=False,
             )
-            log_path = diagnostics_dir / "tasks" / f"{_sanitize_receipt_component(task_name) or 'task'}.log"
+            log_path = (
+                diagnostics_dir
+                / "tasks"
+                / f"{_sanitize_receipt_component(task_name) or 'task'}.log"
+            )
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_text = result.stdout
             if result.stderr:
@@ -1272,7 +1299,9 @@ def _merge_declared_dataset_output_hints(
     hints: list[str] | None,
 ) -> list[OsmoDeclaredDatasetOutput]:
     merged: list[OsmoDeclaredDatasetOutput] = list(outputs)
-    seen_dataset_names = {str(item.dataset_name).strip() for item in outputs if str(item.dataset_name).strip()}
+    seen_dataset_names = {
+        str(item.dataset_name).strip() for item in outputs if str(item.dataset_name).strip()
+    }
     for dataset_name in hints or []:
         normalized = str(dataset_name or "").strip()
         if not normalized or normalized in seen_dataset_names:
@@ -1495,9 +1524,7 @@ def _wait_for_workflow_completion(
             return query_result
         time.sleep(poll_interval_seconds)
 
-    message = (
-        f"[roar] timed out waiting for OSMO workflow {workflow_id} after {timeout_seconds}s."
-    )
+    message = f"[roar] timed out waiting for OSMO workflow {workflow_id} after {timeout_seconds}s."
     if last_error:
         message = f"{message} last_error={last_error}"
     _emit_captured_output(message, sys.stderr)

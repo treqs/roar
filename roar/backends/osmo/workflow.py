@@ -93,14 +93,18 @@ def prepare_osmo_workflow_for_lineage(
         )
         if inject_runtime_wrapper and _inject_runtime_wrapper(
             task,
-                task_name=task_name,
-                lineage_bundle_filename=lineage_bundle_filename,
-                wrapper_script_path=wrapper_script_path,
-                runtime_bundle_remote_path=runtime_bundle_remote_path if runtime_bundle_local_path else None,
-                runtime_install_source=(
-                    runtime_install_remote_path if runtime_install_local_path else runtime_install_requirement
-                ),
-            ):
+            task_name=task_name,
+            lineage_bundle_filename=lineage_bundle_filename,
+            wrapper_script_path=wrapper_script_path,
+            runtime_bundle_remote_path=runtime_bundle_remote_path
+            if runtime_bundle_local_path
+            else None,
+            runtime_install_source=(
+                runtime_install_remote_path
+                if runtime_install_local_path
+                else runtime_install_requirement
+            ),
+        ):
             task_modified = True
             wrapped_tasks.append(task_name)
         if runtime_bundle_local_path:
@@ -134,10 +138,14 @@ def prepare_osmo_workflow_for_lineage(
         lineage_bundle_filename=lineage_bundle_filename,
         wrapper_script_path=wrapper_script_path if inject_runtime_wrapper else None,
         runtime_bundle_local_path=runtime_bundle_local_path,
-        runtime_bundle_remote_path=runtime_bundle_remote_path if runtime_bundle_local_path else None,
+        runtime_bundle_remote_path=runtime_bundle_remote_path
+        if runtime_bundle_local_path
+        else None,
         runtime_install_requirement=runtime_install_requirement,
         runtime_install_local_path=runtime_install_local_path,
-        runtime_install_remote_path=runtime_install_remote_path if runtime_install_local_path else None,
+        runtime_install_remote_path=runtime_install_remote_path
+        if runtime_install_local_path
+        else None,
     )
 
 
@@ -337,6 +345,7 @@ def _ensure_runtime_bundle_file(
         }
     )
 
+
 def _ensure_runtime_install_file(
     task: dict[str, Any],
     *,
@@ -385,9 +394,7 @@ fi
     runtime_install = ""
     if runtime_install_source:
         escaped_requirement = (
-            runtime_install_source.replace("\\", "\\\\")
-            .replace('"', '\\"')
-            .replace("$", "\\$")
+            runtime_install_source.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
         )
         runtime_install = f"""
 install_root="/tmp/roar-osmo-python"

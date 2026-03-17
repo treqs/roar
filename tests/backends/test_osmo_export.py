@@ -100,4 +100,3 @@ def test_export_osmo_lineage_bundle_can_select_job_uid(temp_git_repo: Path) -> N
     assert payload["metadata"]["exported_job_uid"] == "first-job"
     assert payload["fragments"][0]["writes"][0]["path"] == "${ROAR_PROJECT_DIR}/outputs/first.txt"
     assert payload["fragments"][0]["task_name"] == "selected-task"
-
