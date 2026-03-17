@@ -349,7 +349,9 @@ def register_publish_lineage(
     if pre_registration_errors:
         batch_result.errors = [*pre_registration_errors, *batch_result.errors]
 
-    if session_id is not None and db_ctx is not None:
+    labels_are_safe_to_sync = batch_result.jobs_failed == 0 and batch_result.artifacts_failed == 0
+
+    if session_id is not None and db_ctx is not None and labels_are_safe_to_sync:
         sync_publish_labels(
             glaas_client=glaas_client,
             db_ctx=db_ctx,
