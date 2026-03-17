@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from roar.execution.recording.dataset_metadata import (
+    AUTO_DATASET_LABEL_KEYS,
+    build_dataset_label_metadata,
     build_dataset_metadata,
     find_matching_identifier,
 )
@@ -126,3 +128,54 @@ class TestBuildDatasetMetadata:
         result = build_dataset_metadata(identifier)
         assert "extra_key" not in result
         assert result["dataset_id"] == "file:///data/raw"
+
+
+# ---------------------------------------------------------------------------
+# build_dataset_label_metadata
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDatasetLabelMetadata:
+    def test_includes_dataset_identity_and_modality_labels(self):
+        identifier = {
+            "dataset_id": "file:///data/imagenet",
+            "dataset_fingerprint": "a1b2c3d4e5f67890",
+            "dataset_fingerprint_algorithm": "blake3",
+            "split": "train",
+            "version_hint": "v2",
+        }
+
+        result = build_dataset_label_metadata(
+            identifier,
+            components=[
+                {
+                    "relative_path": "train/class_a/image-0001.jpg",
+                    "component_size": 42,
+                    "component_type": "image/jpeg",
+                }
+            ],
+            component_count_total=1,
+        )
+
+        assert result == {
+            "dataset": {
+                "type": "dataset",
+                "id": "file:///data/imagenet",
+                "fingerprint": "a1b2c3d4e5f67890",
+                "fingerprint_algorithm": "blake3",
+                "split": "train",
+                "version_hint": "v2",
+                "modality": "image",
+            }
+        }
+
+    def test_declares_reserved_paths_for_system_managed_dataset_labels(self):
+        assert {
+            "dataset.type",
+            "dataset.id",
+            "dataset.fingerprint",
+            "dataset.fingerprint_algorithm",
+            "dataset.split",
+            "dataset.version_hint",
+            "dataset.modality",
+        } == AUTO_DATASET_LABEL_KEYS

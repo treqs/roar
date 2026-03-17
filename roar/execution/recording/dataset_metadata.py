@@ -1,9 +1,23 @@
-"""Helpers for attaching dataset identity labels to composite artifact metadata."""
+"""Helpers for attaching dataset identity metadata and labels to composite artifacts."""
 
 from __future__ import annotations
 
 from typing import Any
 from urllib.parse import urlparse
+
+from .dataset_profile import build_dataset_profile
+
+AUTO_DATASET_LABEL_KEYS = frozenset(
+    {
+        "dataset.type",
+        "dataset.id",
+        "dataset.fingerprint",
+        "dataset.fingerprint_algorithm",
+        "dataset.split",
+        "dataset.version_hint",
+        "dataset.modality",
+    }
+)
 
 
 def find_matching_identifier(
@@ -50,3 +64,45 @@ def build_dataset_metadata(identifier: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             meta[key] = value
     return meta
+
+
+def build_dataset_label_metadata(
+    identifier: dict[str, Any],
+    *,
+    components: list[dict[str, Any]] | None = None,
+    component_count_total: int | None = None,
+) -> dict[str, Any]:
+    """Build the system-managed label document for a detected dataset artifact.
+
+    The label payload is intentionally smaller and more stable than the full
+    dataset metadata blob. It captures the artifact's dataset identity and the
+    most queryable derived characteristics for local labels and future sync.
+    """
+    dataset: dict[str, Any] = {"type": "dataset"}
+
+    value = identifier.get("dataset_id")
+    if value is not None:
+        dataset["id"] = value
+
+    value = identifier.get("dataset_fingerprint")
+    if value is not None:
+        dataset["fingerprint"] = value
+
+    value = identifier.get("dataset_fingerprint_algorithm")
+    if value is not None:
+        dataset["fingerprint_algorithm"] = value
+
+    value = identifier.get("split")
+    if value is not None:
+        dataset["split"] = value
+
+    value = identifier.get("version_hint")
+    if value is not None:
+        dataset["version_hint"] = value
+
+    profile = build_dataset_profile(components or [], total_components=component_count_total)
+    modality = profile.get("modality_hint") if isinstance(profile, dict) else None
+    if isinstance(modality, str) and modality:
+        dataset["modality"] = modality
+
+    return {"dataset": dataset}

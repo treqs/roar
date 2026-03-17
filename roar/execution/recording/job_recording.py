@@ -27,7 +27,12 @@ from urllib.parse import urlparse
 from ...db.context import optional_repo
 from ...db.hashing import hash_files_blake3
 from .dataset_identifier import DatasetIdentifierInferer
-from .dataset_metadata import build_dataset_metadata, find_matching_identifier
+from .dataset_metadata import (
+    AUTO_DATASET_LABEL_KEYS,
+    build_dataset_label_metadata,
+    build_dataset_metadata,
+    find_matching_identifier,
+)
 
 if TYPE_CHECKING:
     from ...core.models.run import RunContext
@@ -349,8 +354,14 @@ class CompositeOutputMaterializer:
                 }
             }
             matching = find_matching_identifier(str(root), dataset_identifiers)
+            dataset_label_metadata: dict[str, Any] = {}
             if matching is not None:
                 meta_dict["dataset"] = build_dataset_metadata(matching)
+                dataset_label_metadata = build_dataset_label_metadata(
+                    matching,
+                    components=list(composite.payload.get("components") or []),
+                    component_count_total=composite.component_count_total,
+                )
             metadata = json.dumps(meta_dict)
             artifact_id, _created = db_ctx.artifacts.register(
                 hashes={"composite-blake3": composite.digest},
@@ -359,6 +370,12 @@ class CompositeOutputMaterializer:
                 source_type=composite.payload.get("source_type"),
                 metadata=metadata,
             )
+            if dataset_label_metadata:
+                self._sync_dataset_labels(
+                    db_ctx,
+                    artifact_id=artifact_id,
+                    dataset_label_metadata=dataset_label_metadata,
+                )
             composite_repo.upsert_details(
                 artifact_id=artifact_id,
                 components=list(composite.payload.get("components") or []),
@@ -478,6 +495,74 @@ class CompositeOutputMaterializer:
             return True
         except ValueError:
             return False
+
+    @staticmethod
+    def _sync_dataset_labels(
+        db_ctx: Any,
+        *,
+        artifact_id: str,
+        dataset_label_metadata: dict[str, Any],
+    ) -> None:
+        labels_repo = cast(Any, optional_repo(db_ctx, "labels"))
+        if labels_repo is None or not dataset_label_metadata:
+            return
+
+        current = labels_repo.get_current("artifact", artifact_id=artifact_id)
+        current_metadata = current.get("metadata") if isinstance(current, dict) else {}
+        if not isinstance(current_metadata, dict):
+            current_metadata = {}
+
+        merged = CompositeOutputMaterializer._merge_dataset_labels(
+            current_metadata,
+            dataset_label_metadata,
+        )
+        if merged == current_metadata:
+            return
+
+        labels_repo.create_version("artifact", merged, artifact_id=artifact_id)
+
+    @staticmethod
+    def _merge_dataset_labels(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+        merged = CompositeOutputMaterializer._remove_label_paths(
+            current,
+            AUTO_DATASET_LABEL_KEYS,
+        )
+        return CompositeOutputMaterializer._deep_merge(merged, patch)
+
+    @staticmethod
+    def _deep_merge(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+        merged = json.loads(json.dumps(current))
+        for key, value in patch.items():
+            existing = merged.get(key)
+            if isinstance(existing, dict) and isinstance(value, dict):
+                merged[key] = CompositeOutputMaterializer._deep_merge(existing, value)
+            else:
+                merged[key] = value
+        return merged
+
+    @staticmethod
+    def _remove_label_paths(metadata: dict[str, Any], reserved_paths: set[str] | frozenset[str]) -> dict[str, Any]:
+        cleaned = json.loads(json.dumps(metadata))
+        for path in reserved_paths:
+            CompositeOutputMaterializer._remove_nested(cleaned, path.split("."))
+        return cleaned
+
+    @staticmethod
+    def _remove_nested(root: dict[str, Any], path: list[str]) -> None:
+        if not path:
+            return
+        key = path[0]
+        if key not in root:
+            return
+        if len(path) == 1:
+            root.pop(key, None)
+            return
+        child = root.get(key)
+        if not isinstance(child, dict):
+            return
+        CompositeOutputMaterializer._remove_nested(child, path[1:])
+        if not child:
+            root.pop(key, None)
 
 
 class ExecutionJobRecorder:
