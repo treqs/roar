@@ -36,6 +36,10 @@ class ArtifactRepository(Protocol):
         """Get all hashes for an artifact."""
         ...
 
+    def get_hashes_batch(self, artifact_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        """Get hashes for multiple artifacts in a single query."""
+        ...
+
     def get_locations(self, artifact_id: str) -> list[dict[str, str]]:
         """Get all known locations for an artifact."""
         ...

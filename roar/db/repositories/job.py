@@ -280,6 +280,22 @@ class SQLAlchemyJobRepository(JobRepository):
             self._session.add(job_output)
             self._session.flush()
 
+    def add_inputs_batch(self, job_id: int, items: list[tuple[str, str]]) -> None:
+        """Bulk-insert input records. items = [(artifact_id, path), ...]"""
+        if not items:
+            return
+        objects = [JobInput(job_id=job_id, artifact_id=aid, path=p) for aid, p in items]
+        self._session.add_all(objects)
+        self._session.flush()
+
+    def add_outputs_batch(self, job_id: int, items: list[tuple[str, str]]) -> None:
+        """Bulk-insert output records. items = [(artifact_id, path), ...]"""
+        if not items:
+            return
+        objects = [JobOutput(job_id=job_id, artifact_id=aid, path=p) for aid, p in items]
+        self._session.add_all(objects)
+        self._session.flush()
+
     def has_input_path(self, job_id: int, path: str) -> bool:
         """Check whether an input row already exists for a job/path pair."""
         existing = self._session.execute(
@@ -299,6 +315,32 @@ class SQLAlchemyJobRepository(JobRepository):
             )
         ).scalar_one_or_none()
         return existing is not None
+
+    def existing_input_paths(self, job_id: int, paths: list[str]) -> set[str]:
+        """Return the subset of *paths* that already have input rows for *job_id*."""
+        if not paths:
+            return set()
+        rows = (
+            self._session.execute(
+                select(JobInput.path).where(JobInput.job_id == job_id, JobInput.path.in_(paths))
+            )
+            .scalars()
+            .all()
+        )
+        return set(rows)
+
+    def existing_output_paths(self, job_id: int, paths: list[str]) -> set[str]:
+        """Return the subset of *paths* that already have output rows for *job_id*."""
+        if not paths:
+            return set()
+        rows = (
+            self._session.execute(
+                select(JobOutput.path).where(JobOutput.job_id == job_id, JobOutput.path.in_(paths))
+            )
+            .scalars()
+            .all()
+        )
+        return set(rows)
 
     def get_inputs(self, job_id: int) -> list[dict[str, Any]]:
         """
@@ -325,9 +367,13 @@ class SQLAlchemyJobRepository(JobRepository):
         )
         rows = self._session.execute(query).all()
 
+        # Batch-fetch all hashes in one query
+        artifact_ids = list({row[1] for row in rows})
+        all_hashes = self._artifact_repository.get_hashes_batch(artifact_ids)
+
         results = []
         for path, artifact_id, byte_ranges, size, first_seen_path, kind, component_count in rows:
-            hashes = self._artifact_repository.get_hashes(artifact_id)
+            hashes = all_hashes.get(artifact_id, [])
             results.append(
                 {
                     "path": path or first_seen_path,  # Use artifact path as fallback
@@ -369,9 +415,13 @@ class SQLAlchemyJobRepository(JobRepository):
         )
         rows = self._session.execute(query).all()
 
+        # Batch-fetch all hashes in one query
+        artifact_ids = list({row[1] for row in rows})
+        all_hashes = self._artifact_repository.get_hashes_batch(artifact_ids)
+
         results = []
         for path, artifact_id, byte_ranges, size, first_seen_path, kind, component_count in rows:
-            hashes = self._artifact_repository.get_hashes(artifact_id)
+            hashes = all_hashes.get(artifact_id, [])
             results.append(
                 {
                     "path": path or first_seen_path,  # Use artifact path as fallback
