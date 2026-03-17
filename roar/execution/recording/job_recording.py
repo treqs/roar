@@ -541,7 +541,9 @@ class CompositeOutputMaterializer:
         return merged
 
     @staticmethod
-    def _remove_label_paths(metadata: dict[str, Any], reserved_paths: set[str] | frozenset[str]) -> dict[str, Any]:
+    def _remove_label_paths(
+        metadata: dict[str, Any], reserved_paths: set[str] | frozenset[str]
+    ) -> dict[str, Any]:
         cleaned = json.loads(json.dumps(metadata))
         for path in reserved_paths:
             CompositeOutputMaterializer._remove_nested(cleaned, path.split("."))
