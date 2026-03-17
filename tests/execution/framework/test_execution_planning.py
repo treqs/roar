@@ -169,7 +169,7 @@ def test_plan_execution_command_accepts_finalizer_without_command_change(monkeyp
     assert planned.finalize_run is finalizer
 
 
-def test_execution_backends_register_local_and_ray_backends() -> None:
+def test_execution_backends_register_local_ray_and_osmo_backends() -> None:
     from roar.execution.framework.registry import (
         is_distributed_submission_command,
         is_execution_backend_job_environment,
@@ -188,7 +188,9 @@ def test_execution_backends_register_local_and_ray_backends() -> None:
 
     assert "local" in backend_names
     assert "ray" in backend_names
+    assert "osmo" in backend_names
     assert backend_names.index("ray") < backend_names.index("local")
+    assert backend_names.index("osmo") < backend_names.index("local")
     assert match_execution_backend_for_module("ray") is not None
     assert match_execution_backend_for_module("ray.data").name == "ray"
     assert match_execution_backend_for_module("numpy") is None

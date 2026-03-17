@@ -2,7 +2,7 @@ services:
   osmo-tools:
     build:
       context: ../../../
-      dockerfile: tests/e2e/osmo/Dockerfile
+      dockerfile: tests/backends/osmo/Dockerfile
     working_dir: /workspace/roar
     environment:
       AWS_DEFAULT_REGION: us-east-1

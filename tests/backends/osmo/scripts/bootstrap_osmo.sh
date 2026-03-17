@@ -5,11 +5,15 @@ set -euo pipefail
 cluster_name="${OSMO_KIND_CLUSTER_NAME:-roar-osmo-e2e}"
 base_url="${OSMO_BASE_URL:-http://quick-start.osmo:38080}"
 repo_root="${REPO_ROOT:-/workspace/roar}"
-kind_config="${repo_root}/tests/e2e/osmo/kind-osmo-cluster-config.yaml"
+kind_config="${repo_root}/tests/backends/osmo/kind-osmo-cluster-config.yaml"
 localstack_port="${OSMO_LOCALSTACK_PORT:-34566}"
 localstack_forward_log="/tmp/osmo-localstack-port-forward.log"
 localstack_forward_pid="/tmp/osmo-localstack-port-forward.pid"
 localstack_override_url="http://127.0.0.1:${localstack_port}"
+dockerhub_username="${OSMO_DOCKERHUB_USERNAME:-}"
+dockerhub_password="${OSMO_DOCKERHUB_PASSWORD:-}"
+preload_images="${OSMO_PRELOAD_DOCKERHUB_IMAGES:-postgres:15.1 redis:7.0 gresau/localstack-persist:latest busybox:1.37.0 alpine:3.18 alpine/k8s:1.28.4 public.ecr.aws/docker/library/python:3.11-slim}"
+kind_nodes_csv=""
 
 cleanup_port_forward() {
   if [[ -f "${localstack_forward_pid}" ]]; then
@@ -18,15 +22,85 @@ cleanup_port_forward() {
   fi
 }
 
+dockerhub_login() {
+  if [[ -z "${dockerhub_username}" || -z "${dockerhub_password}" ]]; then
+    return 0
+  fi
+
+  printf '%s' "${dockerhub_password}" | docker login \
+    --username "${dockerhub_username}" \
+    --password-stdin >/dev/null
+}
+
+preload_dockerhub_images_into_kind() {
+  local image
+  local target_nodes_csv
+  if [[ -z "${kind_nodes_csv}" ]]; then
+    echo "kind node list is empty; cannot preload Docker Hub images" >&2
+    exit 1
+  fi
+  for image in ${preload_images}; do
+    target_nodes_csv="$(resolve_preload_nodes_csv "${image}")"
+    docker pull "${image}" >/dev/null
+    kind load docker-image \
+      --name "${cluster_name}" \
+      --nodes "${target_nodes_csv}" \
+      "${image}" >/dev/null
+  done
+}
+
+resolve_preload_nodes_csv() {
+  local image="$1"
+  local selector=""
+  case "${image}" in
+    postgres:*|redis:*|gresau/localstack-persist:*)
+      selector="node_group=data"
+      ;;
+    alpine/k8s:*)
+      selector="node_group=service"
+      ;;
+    python:3.11-slim|public.ecr.aws/docker/library/python:3.11-slim)
+      selector="node_group=compute"
+      ;;
+    *)
+      ;;
+  esac
+
+  if [[ -z "${selector}" ]]; then
+    printf '%s\n' "${kind_nodes_csv}"
+    return 0
+  fi
+
+  local selected_nodes_csv
+  selected_nodes_csv="$(kubectl get nodes -l "${selector}" -o jsonpath='{range .items[*]}{.metadata.name}{","}{end}')"
+  selected_nodes_csv="${selected_nodes_csv%,}"
+  if [[ -z "${selected_nodes_csv}" ]]; then
+    printf '%s\n' "${kind_nodes_csv}"
+    return 0
+  fi
+  printf '%s\n' "${selected_nodes_csv}"
+}
+
 kind delete cluster --name "${cluster_name}" >/dev/null 2>&1 || true
+docker ps -a --format '{{.Names}}' | grep "^${cluster_name}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
 cleanup_port_forward
 
 helm repo add osmo https://helm.ngc.nvidia.com/nvidia/osmo >/dev/null 2>&1 || true
 helm repo update >/dev/null
 
+dockerhub_login
 kind create cluster --name "${cluster_name}" --config "${kind_config}"
+deadline=$((SECONDS + 30))
+while (( SECONDS < deadline )); do
+  kind_nodes_csv="$(kind get nodes --name "${cluster_name}" | paste -sd, -)"
+  if [[ -n "${kind_nodes_csv}" ]]; then
+    break
+  fi
+  sleep 1
+done
 
 kubectl wait --for=condition=Ready node --all --timeout=5m
+preload_dockerhub_images_into_kind
 
 for node in $(docker ps --format '{{.Names}}' | grep "^${cluster_name}-"); do
   docker exec "${node}" sysctl -w \
@@ -53,6 +127,13 @@ helm upgrade --install osmo osmo/quick-start \
   --create-namespace \
   --wait \
   --timeout 20m
+
+kubectl patch configmap quick-start \
+  -n osmo \
+  --type merge \
+  -p '{"data":{"proxy-body-size":"32m"}}' >/dev/null
+kubectl rollout restart deployment/quick-start -n osmo >/dev/null
+kubectl rollout status deployment/quick-start -n osmo --timeout=5m
 
 kubectl rollout status deployment/localstack-s3 -n osmo --timeout=5m
 
@@ -95,15 +176,17 @@ pool = pools.get("default")
 raise SystemExit(0 if pool and pool.get("status") == "ONLINE" else 1)
 PY
       then
-        osmo credential set quick-start-localstack \
+        if osmo credential set quick-start-localstack \
           --type DATA \
           --payload \
           endpoint=s3://osmo \
           region=us-east-1 \
           access_key_id=test \
-          access_key=test >/tmp/osmo-credential.out 2>/tmp/osmo-credential.err
-        osmo profile set bucket osmo >/tmp/osmo-profile.out 2>/tmp/osmo-profile.err
-        exit 0
+          access_key=test >/tmp/osmo-credential.out 2>/tmp/osmo-credential.err \
+          && osmo profile set bucket osmo >/tmp/osmo-profile.out 2>/tmp/osmo-profile.err
+        then
+          exit 0
+        fi
       fi
     fi
   fi

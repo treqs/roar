@@ -5,13 +5,13 @@ workflow:
     exec_timeout: {{timeout}}
   tasks:
   - name: master
-    image: python:3.11-slim
+    image: public.ecr.aws/docker/library/python:3.11-slim
     command: [bash, /tmp/master.sh]
     files:
     - path: /tmp/master.sh
       contents: |
         set -euo pipefail
-        python -m pip install --no-cache-dir "ray[default]=={{ray_version}}"
+        python3 -m pip install --no-cache-dir "ray[default]=={{ray_version}}"
         export RAY_USAGE_STATS_ENABLED=0
         ray start \
           --head \
@@ -19,7 +19,7 @@ workflow:
           --dashboard-host=0.0.0.0 \
           --dashboard-port={{dashboard_port}} \
           --num-cpus={{ray_cpus_per_node}}
-        python - <<'PY'
+        python3 - <<'PY'
         import json
         import time
         import urllib.request
