@@ -55,6 +55,57 @@ def _artifact_label_rows_by_hash(
 class TestLabelCommand:
     """CLI product-path tests for label lifecycle behavior."""
 
+    def test_detected_dataset_composite_artifact_gets_auto_labels(
+        self,
+        temp_git_repo,
+        roar_cli,
+        git_commit,
+        python_exe,
+    ):
+        dataset_script = temp_git_repo / "emit_dataset.py"
+        dataset_script.write_text(
+            "\n".join(
+                [
+                    "from __future__ import annotations",
+                    "",
+                    "from pathlib import Path",
+                    "import argparse",
+                    "",
+                    "parser = argparse.ArgumentParser()",
+                    "parser.add_argument('--output-dir', required=True)",
+                    "args = parser.parse_args()",
+                    "",
+                    "root = Path(args.output_dir)",
+                    "(root / 'train').mkdir(parents=True, exist_ok=True)",
+                    "(root / 'train' / 'part-00000.csv').write_text('value\\n1\\n', encoding='utf-8')",
+                    "(root / 'train' / 'part-00001.csv').write_text('value\\n2\\n', encoding='utf-8')",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        git_commit("Add dataset emitter")
+
+        result = roar_cli("run", python_exe, "emit_dataset.py", "--output-dir", "dataset")
+        assert result.returncode == 0
+
+        dataset_root = temp_git_repo / "dataset"
+
+        label_show = _assert_ok(roar_cli("label", "show", "artifact", "dataset", check=False))
+        assert f"dataset.id={dataset_root.resolve().as_uri()}" in label_show
+        assert "dataset.modality=tabular" in label_show
+        assert "dataset.type=dataset" in label_show
+
+        show_output = _assert_ok(roar_cli("show", "dataset", check=False))
+        assert "Labels:" in show_output
+        assert f"dataset.id={dataset_root.resolve().as_uri()}" in show_output
+        assert "dataset.modality=tabular" in show_output
+        assert "dataset.type=dataset" in show_output
+
+        rows = _artifact_label_rows(temp_git_repo, dataset_root)
+        assert rows[0][1]["dataset"]["type"] == "dataset"
+        assert rows[0][1]["dataset"]["id"] == dataset_root.resolve().as_uri()
+        assert rows[0][1]["dataset"]["modality"] == "tabular"
+
     def test_artifact_label_set_patches_current_document_and_preserves_history(
         self,
         temp_git_repo,

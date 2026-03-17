@@ -45,7 +45,16 @@ class DataLoaderService:
         """
         self.logger.debug("Loading tracer data from: %s", path)
         with open(path, "rb") as f:
-            data = msgpack.unpack(f, raw=False)
+            raw_data = f.read()
+
+        try:
+            data = msgpack.unpackb(raw_data, raw=False)
+        except msgpack.ExtraData:
+            stripped = raw_data.lstrip()
+            if not stripped.startswith((b"{", b"[")):
+                raise
+            self.logger.debug("Tracer report was JSON-encoded; falling back to JSON parsing")
+            data = json.loads(raw_data.decode("utf-8"))
 
         self.logger.debug("Tracer data parsed successfully: %d keys", len(data))
         files = self._normalize_files(data)

@@ -116,10 +116,9 @@ def auth_register() -> None:
 @auth.command("test")
 def auth_test() -> None:
     """Test connection to GLaaS server."""
-    # Get GLaaS server URL from config
-    glaas_url = config_get("glaas.url")
-    if not glaas_url:
-        glaas_url = os.environ.get("GLAAS_URL")
+    from ...integrations.glaas import get_glaas_url
+
+    glaas_url = get_glaas_url()
 
     if not glaas_url:
         raise click.ClickException(
@@ -201,7 +200,9 @@ def auth_test() -> None:
 @auth.command("status")
 def auth_status() -> None:
     """Show current auth status."""
-    glaas_url = config_get("glaas.url") or os.environ.get("GLAAS_URL")
+    from ...integrations.glaas import get_glaas_url
+
+    glaas_url = get_glaas_url()
     key_info = _find_ssh_pubkey()
 
     click.echo("GLaaS Auth Status")

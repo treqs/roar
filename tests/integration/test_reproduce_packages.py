@@ -15,6 +15,8 @@ from roar.core.bootstrap import bootstrap, reset
 from roar.core.logging import NullLogger, get_logger
 from roar.execution.reproduction.environment_setup import EnvironmentSetupService
 
+from .fake_glaas import FakeGlaasServer
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -37,6 +39,11 @@ def _make_pipeline(build_steps=None, run_steps=None):
 
 class TestReproducePackageExtraction:
     """Integration tests for package extraction during reproduction."""
+
+    @pytest.fixture
+    def fake_glaas_server(self):
+        with FakeGlaasServer() as server:
+            yield server
 
     def test_preview_shows_pip_packages(self, temp_git_repo, roar_cli, git_commit, python_exe):
         """Running roar reproduce <hash> should show pip packages in preview."""
@@ -66,6 +73,58 @@ class TestReproducePackageExtraction:
         assert preview.returncode == 0
         # Output should contain artifact hash info at minimum
         assert artifact_hash[:12] in preview.stdout or "Artifact" in preview.stdout
+
+    def test_preview_can_write_dag_output_via_fake_glaas(
+        self,
+        temp_git_repo,
+        roar_cli,
+        git_commit,
+        python_exe,
+        fake_glaas_server,
+    ):
+        """Preview can export DAG JSON locally when a GLaaS endpoint is configured."""
+        script = temp_git_repo / "use_pkg.py"
+        script.write_text(
+            "import json\nwith open('out.json', 'w') as f:\n    json.dump({'v': 1}, f)\n"
+        )
+        git_commit("Add reproduce out fixture")
+
+        result = roar_cli("run", python_exe, "use_pkg.py")
+        assert result.returncode == 0
+        git_commit("After run")
+
+        lineage_result = roar_cli("lineage", "out.json")
+        lineage = json.loads(lineage_result.stdout)
+        artifact_hash = lineage["artifact"]["hash"]
+        dag_path = temp_git_repo / "dag.json"
+
+        fake_glaas_server.set_artifact_dag(
+            artifact_hash,
+            {
+                "artifact": {"hash": artifact_hash},
+                "gitRepo": "https://github.com/test/repo.git",
+                "gitCommit": "abc123def4567890",
+                "jobs": [],
+                "external_deps": [],
+                "is_external": False,
+            },
+        )
+        roar_cli("config", "set", "glaas.url", fake_glaas_server.base_url)
+
+        preview = roar_cli(
+            "reproduce",
+            artifact_hash[:12],
+            "--list-requirements",
+            "--out",
+            str(dag_path),
+            check=False,
+        )
+
+        assert preview.returncode == 0
+        assert f"DAG lineage response written to {dag_path}" in preview.stdout
+        assert "Pipeline Preview" in preview.stdout
+        written = json.loads(dag_path.read_text())
+        assert written["artifact"]["hash"] == artifact_hash
 
     def test_preview_shows_dpkg_packages_when_present(
         self, temp_git_repo, roar_cli, git_commit, python_exe

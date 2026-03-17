@@ -1,4 +1,10 @@
-"""Unit tests for sitecustomize.py startup performance optimizations."""
+"""
+Opt-in diagnostic tests for sitecustomize.py startup performance.
+
+These checks track coarse performance budgets and are intentionally excluded
+from the default pytest profile. Run them explicitly when working on startup
+or atexit overhead in the runtime inject path.
+"""
 
 import os
 import subprocess
@@ -6,12 +12,15 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from roar.execution.runtime.inject.tracker import (
     get_installed_packages,
     get_used_packages,
 )
 
 INJECT_DIR = Path(__file__).resolve().parents[3] / "roar" / "execution" / "runtime" / "inject"
+pytestmark = pytest.mark.diagnostic
 
 
 def _roar_env(*, log_file: str | None = None) -> dict:

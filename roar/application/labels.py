@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ..db.context import DatabaseContext
+from ..execution.recording.dataset_metadata import AUTO_DATASET_LABEL_KEYS
 
-RESERVED_LABEL_KEYS = {"dataset.type", "dataset.modality"}
+RESERVED_LABEL_KEYS = set(AUTO_DATASET_LABEL_KEYS)
 
 
 @dataclass(frozen=True)

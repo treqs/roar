@@ -137,7 +137,7 @@ class JobRecordingService:
 
         # Handle session assignment
         session_id, step_number = self._assign_to_session(
-            assign_to_session, step_identity, git_commit
+            assign_to_session, step_identity, git_commit, git_repo
         )
 
         # Create the job record
@@ -193,6 +193,7 @@ class JobRecordingService:
         assign: bool,
         step_identity: str,
         git_commit: str | None,
+        git_repo: str | None,
     ) -> tuple[int | None, int | None]:
         """Handle session assignment and step numbering."""
         if not assign:
@@ -209,8 +210,13 @@ class JobRecordingService:
 
         self._session_repo.update_current_step(session_id, step_number)
 
-        if git_commit:
-            self._session_repo.update_git_commits(session_id, git_commit, update_start=True)
+        if git_commit or git_repo:
+            self._session_repo.update_git_commits(
+                session_id,
+                git_commit,
+                update_start=True,
+                git_repo=git_repo,
+            )
 
         return session_id, step_number
 

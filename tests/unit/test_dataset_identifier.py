@@ -138,6 +138,16 @@ def test_record_materializes_local_composite_outputs(tmp_path: Path):
         assert composite_artifact is not None
         assert composite_artifact["kind"] == "composite"
 
+        current_labels = db_ctx.labels.get_current(
+            "artifact",
+            artifact_id=composite_artifact["id"],
+        )
+        assert current_labels is not None
+        assert current_labels["metadata"]["dataset"]["type"] == "dataset"
+        assert current_labels["metadata"]["dataset"]["id"] == dataset_dir.resolve().as_uri()
+        assert current_labels["metadata"]["dataset"]["modality"] == "tabular"
+        assert current_labels["metadata"]["dataset"]["fingerprint"]
+
         summary = db_ctx.composites.get(composite_artifact["id"])
         assert summary is not None
         assert summary["component_count"] == 2

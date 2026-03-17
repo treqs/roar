@@ -101,11 +101,13 @@ markers = [
     "ebpf: Tests requiring eBPF daemon/root privileges",
     "cloud: Tests for cloud storage operations",
     "happy_path: Happy path tests for core functionality",
+    "diagnostic: Opt-in diagnostics or aspirational performance budgets outside the default gate",
+    "large_pipeline: Stress-style pipeline coverage with larger DAG fixtures",
     "ray_e2e: Ray end-to-end tests requiring a running Docker cluster",
     "ray_contract: User-facing Ray contract tests using `roar run ray job submit ...`",
     "ray_diagnostic: Diagnostic Ray tests that intentionally inspect internal runtime details",
 ]
-addopts = "-v --strict-markers -n auto --dist loadfile --ignore=tests/ebpf --ignore=tests/live_glaas --ignore=tests/benchmarks --ignore=tests/integration --ignore=tests/e2e --ignore-glob=tests/backends/*/e2e --ignore-glob=tests/backends/*/live"
+addopts = "-v --strict-markers -n auto --dist loadfile --ignore=tests/ebpf --ignore=tests/live_glaas --ignore=tests/benchmarks --ignore=tests/e2e --ignore=tests/integration/test_cli_startup.py --ignore=tests/execution/runtime/test_sitecustomize_perf.py --ignore-glob=tests/backends/*/e2e --ignore-glob=tests/backends/*/live"
 timeout = 60
 filterwarnings = [
     "ignore::DeprecationWarning",

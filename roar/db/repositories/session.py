@@ -377,7 +377,11 @@ class SQLAlchemySessionRepository(SessionRepository):
         self._session.flush()
 
     def update_git_commits(
-        self, session_id: int, git_commit: str, update_start: bool = False
+        self,
+        session_id: int,
+        git_commit: str | None,
+        update_start: bool = False,
+        git_repo: str | None = None,
     ) -> None:
         """
         Update git commit references for a session.
@@ -386,14 +390,19 @@ class SQLAlchemySessionRepository(SessionRepository):
             session_id: Session ID
             git_commit: Git commit hash
             update_start: Whether to update start commit if not set
+            git_repo: Git repository URL/path to persist on the session
         """
         session = self._session.get(Session, session_id)
         if not session:
             return
 
-        if update_start and not session.git_commit_start:
+        if git_repo and not session.git_repo:
+            session.git_repo = git_repo
+
+        if git_commit and update_start and not session.git_commit_start:
             session.git_commit_start = git_commit
-        session.git_commit_end = git_commit
+        if git_commit:
+            session.git_commit_end = git_commit
         self._session.flush()
 
     def rename_step(
