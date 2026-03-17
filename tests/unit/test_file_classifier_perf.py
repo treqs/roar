@@ -9,8 +9,10 @@ reducing _build_package_file_map() to <200ms regardless of package count.
 """
 
 import os
+import subprocess
 import sys
 import time
+from unittest.mock import patch
 
 
 class TestBuildPackageFileMapPerf:
@@ -142,3 +144,20 @@ class TestClassifySitePackages:
                 f"json.__file__ classified as {kind!r}; expected stdlib/system/skip/unmanaged. "
                 f"Path: {json_file}"
             )
+
+    def test_classify_in_repo_file_tolerates_missing_git_binary(self, tmp_path):
+        """Missing git should degrade to unmanaged instead of crashing classification."""
+        from roar.filters.files import FileClassifier
+
+        repo_file = tmp_path / "task.py"
+        repo_file.write_text("print('hello')\n", encoding="utf-8")
+        fc = FileClassifier(
+            repo_root=str(tmp_path),
+            sys_prefix=sys.prefix,
+            sys_base_prefix=sys.base_prefix,
+        )
+
+        with patch.object(subprocess, "check_output", side_effect=FileNotFoundError("git")):
+            kind, pkg = fc.classify(str(repo_file))
+
+        assert (kind, pkg) == ("unmanaged", None)

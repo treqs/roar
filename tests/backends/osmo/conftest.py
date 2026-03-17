@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 import json
+import os
 import shlex
 import shutil
 import socket
@@ -18,8 +20,15 @@ import pytest
 
 COMPOSE_FILE = Path(__file__).resolve().parent / "docker-compose.yml"
 REPO_ROOT = COMPOSE_FILE.parent.parent.parent.parent.resolve()
-HOST_DOWNLOADS_DIR = REPO_ROOT / ".tmp-osmo-e2e" / "downloads"
-CONTAINER_DOWNLOADS_DIR = Path("/workspace/roar/.tmp-osmo-e2e/downloads")
+HOST_TMP_DIR = REPO_ROOT / ".tmp-osmo-e2e"
+HOST_DOWNLOADS_DIR = HOST_TMP_DIR / "downloads"
+HOST_PROJECTS_DIR = HOST_TMP_DIR / "projects"
+HOST_WHEELS_DIR = HOST_TMP_DIR / "wheels"
+CONTAINER_REPO_ROOT = Path("/workspace/roar")
+CONTAINER_TMP_DIR = CONTAINER_REPO_ROOT / ".tmp-osmo-e2e"
+CONTAINER_DOWNLOADS_DIR = CONTAINER_TMP_DIR / "downloads"
+CONTAINER_PROJECTS_DIR = CONTAINER_TMP_DIR / "projects"
+CONTAINER_WHEELS_DIR = CONTAINER_TMP_DIR / "wheels"
 BASE_URL = "http://quick-start.osmo:38080"
 BOOTSTRAP_TIMEOUT_SECONDS = 45 * 60
 QUERY_TIMEOUT_SECONDS = 12 * 60
@@ -110,6 +119,191 @@ def osmo_exec(
     return result
 
 
+def roar_exec(
+    args: Sequence[str],
+    *,
+    cwd: str,
+    timeout: float | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    shell_command = (
+        f"cd {shlex.quote(cwd)} && "
+        f"python3 -m roar {shlex.join(list(args))}"
+    )
+    result = exec_on_service(
+        "osmo-tools",
+        ["bash", "-lc", shell_command],
+        timeout=timeout,
+    )
+    if check and result.returncode != 0:
+        raise RuntimeError(
+            "Roar command failed:\n"
+            f"command: {' '.join(args)}\n"
+            f"cwd: {cwd}\n"
+            f"stdout:\n{textwrap.indent(result.stdout, '  ')}\n"
+            f"stderr:\n{textwrap.indent(result.stderr, '  ')}"
+        )
+    return result
+
+
+def allow_git_safe_directory(path: str | Path) -> None:
+    repo_path = str(path)
+    result = exec_on_service(
+        "osmo-tools",
+        [
+            "bash",
+            "-lc",
+            f"cd /tmp && git config --global --add safe.directory {shlex.quote(repo_path)}",
+        ],
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Failed to allow git safe.directory in osmo-tools:\n"
+            f"path: {repo_path}\n"
+            f"stdout:\n{textwrap.indent(result.stdout, '  ')}\n"
+            f"stderr:\n{textwrap.indent(result.stderr, '  ')}"
+        )
+
+
+def restore_host_path_ownership(path: str | Path) -> None:
+    repo_path = str(path)
+    result = exec_on_service(
+        "osmo-tools",
+        [
+            "bash",
+            "-lc",
+            (
+                "chown -R "
+                f"{os.getuid()}:{os.getgid()} {shlex.quote(repo_path)}"
+            ),
+        ],
+        timeout=5 * 60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Failed to restore host path ownership from osmo-tools:\n"
+            f"path: {repo_path}\n"
+            f"stdout:\n{textwrap.indent(result.stdout, '  ')}\n"
+            f"stderr:\n{textwrap.indent(result.stderr, '  ')}"
+        )
+
+
+def publish_runtime_artifact_service(
+    *,
+    service_name: str,
+    host_artifact_path: Path,
+    artifact_filename: str,
+) -> str:
+    image_suffix = hashlib.sha256(host_artifact_path.read_bytes()).hexdigest()[:12]
+    image_tag = f"{service_name}:{image_suffix}"
+    build_dir = HOST_WHEELS_DIR / f"{service_name}-image"
+    shutil.rmtree(build_dir, ignore_errors=True)
+    build_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(host_artifact_path, build_dir / artifact_filename)
+    (build_dir / "Dockerfile").write_text(
+        f"""
+FROM busybox:1.37.0
+COPY {artifact_filename} /srv/{artifact_filename}
+CMD ["sh", "-c", "httpd -f -p 8080 -h /srv"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    build_result = run_docker(
+        [
+            "docker",
+            "build",
+            "-t",
+            image_tag,
+            str(build_dir),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20 * 60,
+    )
+    if build_result.returncode != 0:
+        raise RuntimeError(
+            "Failed to build runtime artifact image.\n"
+            f"stdout:\n{textwrap.indent(build_result.stdout, '  ')}\n"
+            f"stderr:\n{textwrap.indent(build_result.stderr, '  ')}"
+        )
+
+    load_result = exec_on_service(
+        "osmo-tools",
+        ["bash", "-lc", f"kind load docker-image --name roar-osmo-e2e {shlex.quote(image_tag)}"],
+        timeout=20 * 60,
+    )
+    if load_result.returncode != 0:
+        raise RuntimeError(
+            "Failed to load runtime artifact image into kind.\n"
+            f"stdout:\n{textwrap.indent(load_result.stdout, '  ')}\n"
+            f"stderr:\n{textwrap.indent(load_result.stderr, '  ')}"
+        )
+
+    script = f"""
+set -euo pipefail
+kubectl -n osmo delete deployment {shlex.quote(service_name)} --ignore-not-found >/dev/null
+kubectl -n osmo delete service {shlex.quote(service_name)} --ignore-not-found >/dev/null
+cat <<'YAML' | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {service_name}
+  namespace: osmo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {service_name}
+  template:
+    metadata:
+      labels:
+        app: {service_name}
+    spec:
+      nodeSelector:
+        node_group: service
+      containers:
+        - name: http
+          image: {image_tag}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {service_name}
+  namespace: osmo
+spec:
+  selector:
+    app: {service_name}
+  ports:
+    - port: 80
+      targetPort: 8080
+YAML
+kubectl rollout status deployment/{shlex.quote(service_name)} -n osmo --timeout=5m >/dev/null
+"""
+    result = exec_on_service(
+        "osmo-tools",
+        ["bash", "-lc", script],
+        timeout=10 * 60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Failed to publish runtime artifact service.\n"
+            f"stdout:\n{textwrap.indent(result.stdout, '  ')}\n"
+            f"stderr:\n{textwrap.indent(result.stderr, '  ')}"
+        )
+    return f"http://{service_name}.osmo.svc.cluster.local/{artifact_filename}"
+
+
+def container_repo_path(path: Path) -> Path:
+    return CONTAINER_REPO_ROOT / path.resolve().relative_to(REPO_ROOT)
+
+
 def _remove_downloads_dir() -> None:
     with contextlib.suppress(FileNotFoundError):
         try:
@@ -132,6 +326,11 @@ def _remove_downloads_dir() -> None:
                 text=True,
                 timeout=5 * 60,
             )
+
+
+def _prepare_host_tmp_dirs() -> None:
+    HOST_PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    HOST_WHEELS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _popen_docker(
@@ -157,6 +356,7 @@ def osmo_harness() -> dict[str, str]:
         pytest.skip("docker is required for OSMO e2e tests")
 
     _remove_downloads_dir()
+    _prepare_host_tmp_dirs()
     HOST_DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
     run_docker(
@@ -168,9 +368,19 @@ def osmo_harness() -> dict[str, str]:
     )
 
     try:
+        bootstrap_env = {
+            key: value
+            for key in (
+                "OSMO_DOCKERHUB_USERNAME",
+                "OSMO_DOCKERHUB_PASSWORD",
+                "OSMO_PRELOAD_DOCKERHUB_IMAGES",
+            )
+            if (value := os.environ.get(key))
+        }
         bootstrap = exec_on_service(
             "osmo-tools",
-            ["bash", "tests/e2e/osmo/scripts/bootstrap_osmo.sh"],
+            ["bash", "tests/backends/osmo/scripts/bootstrap_osmo.sh"],
+            env=bootstrap_env or None,
             timeout=BOOTSTRAP_TIMEOUT_SECONDS,
         )
         if bootstrap.returncode != 0:
@@ -182,11 +392,13 @@ def osmo_harness() -> dict[str, str]:
         yield {
             "base_url": BASE_URL,
             "container_downloads_dir": str(CONTAINER_DOWNLOADS_DIR),
+            "container_projects_dir": str(CONTAINER_PROJECTS_DIR),
+            "container_wheels_dir": str(CONTAINER_WHEELS_DIR),
         }
     finally:
         exec_on_service(
             "osmo-tools",
-            ["bash", "tests/e2e/osmo/scripts/destroy_osmo.sh"],
+            ["bash", "tests/backends/osmo/scripts/destroy_osmo.sh"],
             timeout=10 * 60,
         )
         run_docker(
@@ -196,6 +408,61 @@ def osmo_harness() -> dict[str, str]:
             text=True,
             timeout=10 * 60,
         )
+
+
+@pytest.fixture(scope="session")
+def osmo_runtime_wheel(osmo_harness: dict[str, str]) -> dict[str, str]:
+    del osmo_harness
+    shutil.rmtree(HOST_WHEELS_DIR, ignore_errors=True)
+    HOST_WHEELS_DIR.mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(
+        ["./scripts/build_wheel_with_bins.sh", str(HOST_WHEELS_DIR)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20 * 60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Failed to build roar wheel for OSMO e2e runtime install.\n"
+            f"stdout:\n{textwrap.indent(result.stdout, '  ')}\n"
+            f"stderr:\n{textwrap.indent(result.stderr, '  ')}"
+        )
+
+    wheels = sorted(HOST_WHEELS_DIR.glob("*.whl"))
+    if not wheels:
+        raise RuntimeError(f"wheel build did not produce a wheel in {HOST_WHEELS_DIR}")
+    wheel_path = wheels[-1]
+    container_wheel_path = CONTAINER_WHEELS_DIR / wheel_path.name
+    install_result = exec_on_service(
+        "osmo-tools",
+        [
+            "bash",
+            "-lc",
+            (
+                "python3 -m pip install --disable-pip-version-check --no-input "
+                f"--force-reinstall {shlex.quote(str(container_wheel_path))}"
+            ),
+        ],
+        timeout=15 * 60,
+    )
+    if install_result.returncode != 0:
+        raise RuntimeError(
+            "Failed to install roar wheel into osmo-tools.\n"
+            f"stdout:\n{textwrap.indent(install_result.stdout, '  ')}\n"
+            f"stderr:\n{textwrap.indent(install_result.stderr, '  ')}"
+        )
+    return {
+        "host_path": str(wheel_path),
+        "container_path": str(container_wheel_path),
+        "cluster_url": publish_runtime_artifact_service(
+            service_name="roar-runtime-wheel",
+            host_artifact_path=wheel_path,
+            artifact_filename=wheel_path.name,
+        ),
+    }
 
 
 def wait_for_workflow_completion(workflow_id: str) -> dict[str, object]:

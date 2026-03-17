@@ -230,7 +230,7 @@ class FileClassifier:
                         stderr=subprocess.DEVNULL,
                     )
                     return ("repo", None)
-                except subprocess.CalledProcessError:
+                except (subprocess.CalledProcessError, FileNotFoundError):
                     # In repo but not tracked - could be generated file
                     return ("unmanaged", None)
         except ValueError:

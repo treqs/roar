@@ -41,15 +41,17 @@ class GitVCSProvider(BaseVCSProvider):
             else:
                 out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL)
             return out.decode().strip()
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             return None
 
     def get_info(self, repo_root: str) -> VCSInfo:
         """Get comprehensive git repository information."""
         info = VCSInfo()
+        if not self.is_available():
+            return info
 
         # Current commit hash
-        with contextlib.suppress(subprocess.CalledProcessError):
+        with contextlib.suppress(subprocess.CalledProcessError, FileNotFoundError):
             info.commit = (
                 subprocess.check_output(
                     ["git", "rev-parse", "HEAD"], cwd=repo_root, stderr=subprocess.DEVNULL
@@ -59,7 +61,7 @@ class GitVCSProvider(BaseVCSProvider):
             )
 
         # Current branch
-        with contextlib.suppress(subprocess.CalledProcessError):
+        with contextlib.suppress(subprocess.CalledProcessError, FileNotFoundError):
             info.branch = (
                 subprocess.check_output(
                     ["git", "rev-parse", "--abbrev-ref", "HEAD"],
@@ -71,7 +73,7 @@ class GitVCSProvider(BaseVCSProvider):
             )
 
         # Remote URL (origin)
-        with contextlib.suppress(subprocess.CalledProcessError):
+        with contextlib.suppress(subprocess.CalledProcessError, FileNotFoundError):
             info.remote_url = (
                 subprocess.check_output(
                     ["git", "remote", "get-url", "origin"], cwd=repo_root, stderr=subprocess.DEVNULL
@@ -87,7 +89,7 @@ class GitVCSProvider(BaseVCSProvider):
             info.uncommitted_changes = changes
 
         # Commit timestamp
-        with contextlib.suppress(subprocess.CalledProcessError):
+        with contextlib.suppress(subprocess.CalledProcessError, FileNotFoundError):
             info.commit_timestamp = (
                 subprocess.check_output(
                     ["git", "show", "-s", "--format=%ci", "HEAD"],
@@ -99,7 +101,7 @@ class GitVCSProvider(BaseVCSProvider):
             )
 
         # Commit message (first line)
-        with contextlib.suppress(subprocess.CalledProcessError):
+        with contextlib.suppress(subprocess.CalledProcessError, FileNotFoundError):
             info.commit_message = (
                 subprocess.check_output(
                     ["git", "show", "-s", "--format=%s", "HEAD"],
@@ -119,7 +121,7 @@ class GitVCSProvider(BaseVCSProvider):
             lines = out.decode().splitlines()
             clean = len(lines) == 0
             return clean, lines
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             return True, []
 
     def classify_file(self, repo_root: str, path: str) -> str:
@@ -158,7 +160,7 @@ class GitVCSProvider(BaseVCSProvider):
                 stderr=subprocess.DEVNULL,
             )
             return True
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             return False
 
     def get_commit_hash(self, repo_root: str) -> str | None:
@@ -171,7 +173,7 @@ class GitVCSProvider(BaseVCSProvider):
                 .decode()
                 .strip()
             )
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             return None
 
     def get_branch(self, repo_root: str) -> str | None:
@@ -186,7 +188,7 @@ class GitVCSProvider(BaseVCSProvider):
                 .decode()
                 .strip()
             )
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             return None
 
     def get_remote_url(self, repo_root: str, remote: str = "origin") -> str | None:
@@ -199,7 +201,7 @@ class GitVCSProvider(BaseVCSProvider):
                 .decode()
                 .strip()
             )
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             return None
 
     def create_tag(

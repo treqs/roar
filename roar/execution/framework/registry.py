@@ -14,6 +14,7 @@ from roar.execution.framework.contract import BackendConfigAdapter, ExecutionBac
 _ENTRYPOINT_GROUP = "roar.execution_backends"
 _BUILTIN_EXECUTION_BACKEND_MODULES = (
     "roar.backends.ray.plugin",
+    "roar.backends.osmo.plugin",
     "roar.backends.local.plugin",
 )
 _registered_execution_backends: list[ExecutionBackend] = []
