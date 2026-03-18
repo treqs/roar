@@ -12,6 +12,7 @@ Usage:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from importlib import import_module
 
 import click
@@ -28,27 +29,34 @@ except Exception:
 # Lazy command registry: maps command name to (module_path, command_name, short_help)
 # Short help is stored here to avoid importing commands just for --help
 LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
-    "auth": ("roar.cli.commands.auth", "auth", "Manage authentication with GLaaS"),
-    "build": ("roar.cli.commands.build", "build", "Run a build step before the main pipeline"),
+    "auth": ("roar.cli.commands.auth", "auth", "Manage GLaaS auth and SSH keys"),
+    "build": ("roar.cli.commands.build", "build", "Track a build step before the main pipeline"),
     "config": ("roar.cli.commands.config", "config", "View or set configuration"),
-    "dag": ("roar.cli.commands.dag", "dag", "Show the execution DAG"),
-    "env": ("roar.cli.commands.env", "env", "Show environment information"),
-    "get": ("roar.cli.commands.get", "get", "Download artifacts from cloud storage"),
-    "init": ("roar.cli.commands.init", "init", "Initialize roar in current directory"),
+    "dag": ("roar.cli.commands.dag", "dag", "Inspect the local execution DAG"),
+    "env": ("roar.cli.commands.env", "env", "Manage persistent environment variables"),
+    "get": ("roar.cli.commands.get", "get", "Download published artifacts"),
+    "init": ("roar.cli.commands.init", "init", "Set up roar in a project"),
     "label": ("roar.cli.commands.label", "label", "Manage local labels"),
-    "lineage": ("roar.cli.commands.lineage", "lineage", "Show lineage for an artifact"),
-    "log": ("roar.cli.commands.log", "log", "Show execution log"),
-    "pop": ("roar.cli.commands.pop", "pop", "Pop the last step from the session"),
+    "lineage": ("roar.cli.commands.lineage", "lineage", "Inspect lineage for a tracked artifact"),
+    "log": ("roar.cli.commands.log", "log", "List jobs in the active session"),
+    "pop": ("roar.cli.commands.pop", "pop", "Remove the last local step"),
     "proxy": ("roar.cli.commands.proxy", "proxy", "Manage S3 proxy for lineage tracking"),
-    "put": ("roar.cli.commands.put", "put", "Publish artifacts to cloud storage"),
-    "register": ("roar.cli.commands.register", "register", "Register artifacts or jobs"),
-    "reproduce": ("roar.cli.commands.reproduce", "reproduce", "Reproduce an artifact"),
+    "put": ("roar.cli.commands.put", "put", "Publish artifacts and register lineage"),
+    "register": ("roar.cli.commands.register", "register", "Register local lineage with GLaaS"),
+    "reproduce": ("roar.cli.commands.reproduce", "reproduce", "Generate a reproduction plan"),
     "reset": ("roar.cli.commands.reset", "reset", "Reset roar state"),
-    "run": ("roar.cli.commands.run", "run", "Run a command with provenance tracking"),
-    "show": ("roar.cli.commands.show", "show", "Show details of a job or artifact"),
-    "status": ("roar.cli.commands.status", "status", "Show current session status"),
-    "tracer": ("roar.cli.commands.tracer", "tracer", "Manage tracer backend defaults"),
+    "run": ("roar.cli.commands.run", "run", "Track a command with provenance"),
+    "show": ("roar.cli.commands.show", "show", "Inspect a session, job, or artifact"),
+    "status": ("roar.cli.commands.status", "status", "Show the active session summary"),
+    "tracer": ("roar.cli.commands.tracer", "tracer", "Configure tracer backend defaults"),
 }
+
+HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Start Here", ("init", "run", "build", "dag")),
+    ("Inspect Local Lineage", ("status", "log", "show", "lineage", "pop", "reproduce")),
+    ("Share and Publish", ("put", "register", "get", "label")),
+    ("Setup and Admin", ("auth", "config", "env", "tracer", "proxy", "reset")),
+)
 
 
 class LazyCommand(click.Command):
@@ -63,7 +71,16 @@ class LazyCommand(click.Command):
     def _load(self) -> click.Command:
         """Load the real command implementation."""
         if self._real_command is None:
-            module = import_module(self._module_path)
+            try:
+                module = import_module(self._module_path)
+            except ModuleNotFoundError as exc:
+                missing = exc.name or "unknown"
+                raise click.ClickException(
+                    f"Failed to load '{self.name}' because import '{missing}' is unavailable. "
+                    "Reinstall roar-cli or run it from a fully provisioned environment."
+                ) from exc
+            except ImportError as exc:
+                raise click.ClickException(f"Failed to load '{self.name}': {exc}") from exc
             self._real_command = getattr(module, self._attr_name)
         return self._real_command
 
@@ -114,6 +131,50 @@ class LazyGroup(click.Group):
         """List all available commands."""
         return sorted(super().list_commands(ctx))
 
+    def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        """Render top-level commands grouped by workflow."""
+        rendered_commands: set[str] = set()
+
+        for section_name, command_names in HELP_GROUPS:
+            rows = self._get_command_rows(ctx, formatter, command_names)
+            if not rows:
+                continue
+            rendered_commands.update(name for name, _ in rows)
+            with formatter.section(section_name):
+                formatter.write_dl(rows)
+
+        remaining = [name for name in self.list_commands(ctx) if name not in rendered_commands]
+        rows = self._get_command_rows(ctx, formatter, remaining)
+        if rows:
+            with formatter.section("Other Commands"):
+                formatter.write_dl(rows)
+
+    def _get_command_rows(
+        self,
+        ctx: click.Context,
+        formatter: click.HelpFormatter,
+        command_names: Iterable[str],
+    ) -> list[tuple[str, str]]:
+        """Build help rows for a command section."""
+        commands: list[tuple[str, click.Command]] = []
+        max_name_len = 0
+
+        for command_name in command_names:
+            command = self.get_command(ctx, command_name)
+            if command is None or command.hidden:
+                continue
+            commands.append((command_name, command))
+            max_name_len = max(max_name_len, len(command_name))
+
+        if not commands:
+            return []
+
+        help_limit = formatter.width - 6 - max_name_len
+        return [
+            (command_name, command.get_short_help_str(help_limit))
+            for command_name, command in commands
+        ]
+
 
 @click.command(cls=LazyGroup, lazy_commands=LAZY_COMMANDS, invoke_without_command=True)
 @click.version_option(version=__version__, prog_name="roar")
@@ -130,13 +191,20 @@ def cli(ctx: click.Context) -> None:
         roar run <command>     Run a command with provenance tracking
 
     \b
-    Information:
-        roar reproduce <hash>  Reproduce an artifact
+    Inspect Local Lineage:
+        roar status            Show the active session summary
+        roar show @1           Inspect a specific step, job, or artifact
+        roar dag               See the full local execution graph
 
     \b
-    Configuration:
+    Share and Publish:
+        roar put ...           Upload artifacts and register lineage
+        roar register <target> Register local lineage with GLaaS
+
+    \b
+    Setup and Configuration:
         roar config            View or set configuration
-        roar auth              Manage authentication with https://glaas.ai
+        roar auth key          Show the SSH key used for GLaaS signup
     """
     ctx.ensure_object(dict)
 

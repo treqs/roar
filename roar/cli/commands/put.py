@@ -13,9 +13,22 @@ import click
 
 from ...application.publish.requests import PutRequest
 from ...application.publish.service import put_artifacts
-from ...integrations.config import config_get
 from ..context import RoarContext
 from ..decorators import require_init
+
+
+def _preview_hash(value: str | None) -> str | None:
+    """Shorten long hashes for CLI summaries."""
+    if not value:
+        return None
+    return f"{value[:12]}..." if len(value) > 12 else value
+
+
+def _resolve_glaas_web_url() -> str:
+    """Load the GLaaS web URL lazily for success output."""
+    from ...integrations.config import config_get
+
+    return config_get("glaas.web_url") or "https://glaas.ai"
 
 
 @click.command("put")
@@ -110,26 +123,38 @@ def put(
 
     # Handle dry run output
     if response.dry_run:
-        click.echo("Dry run - would upload:")
+        click.echo(
+            f"Dry run: would upload {len(response.would_upload)} file(s) to {response.destination}"
+        )
         for dry_run_item in response.would_upload:
             click.echo(f"  {dry_run_item.path}")
-        click.echo(f"\nTotal: {len(response.would_upload)} file(s)")
         return
 
     # Check for registration errors
     if not response.success:
         click.echo(f"Published {len(response.uploaded_files)} file(s) to {response.destination}")
+        if response.job_uid:
+            click.echo(f"Local details: roar show --job {response.job_uid}")
         click.echo("\nWarning: Registration completed with errors:", err=True)
         if response.error:
             for error in response.error.split("; "):
                 click.echo(f"  - {error}", err=True)
         raise click.ClickException("Registration completed with errors")
 
-    if response.git_tag:
-        click.echo(f"Created git tag: {response.git_tag}")
-
     # Success output
     click.echo(f"Published {len(response.uploaded_files)} file(s) to {response.destination}")
+    session_preview = _preview_hash(response.session_hash)
+    if session_preview:
+        click.echo(f"Session: {session_preview}")
+    if response.job_id is not None:
+        click.echo(f"Job step: @{response.job_id}")
+    if response.job_uid:
+        click.echo(f"Job UID: {response.job_uid}")
+    if response.git_tag:
+        click.echo(f"Git tag: {response.git_tag}")
+    if response.uploaded_files:
+        click.echo("")
+        click.echo("Uploaded files:")
     for uploaded_file in response.uploaded_files:
         click.echo(f"  {uploaded_file.local_path} -> {uploaded_file.remote_url}")
     if response.composites_registered:
@@ -157,12 +182,15 @@ def put(
                     f"Warning: local composite metadata was not persisted for {root_path}{detail}",
                     err=True,
                 )
-    click.echo(f"\nJob created: step {response.job_id}")
-    if response.git_tag:
-        click.echo(f"Git tag: {response.git_tag}")
-    # Show GLaaS registration info
-    web_url = config_get("glaas.web_url") or "https://glaas.ai"
+
+    web_url = _resolve_glaas_web_url()
     session_hash = response.session_hash or ""
     session_url = response.session_url or (f"{web_url}/dag/{session_hash}" if session_hash else "")
-    click.echo("\nRegistered with GLaaS:")
-    click.echo(f"  View: {session_url}")
+    if session_url:
+        click.echo("\nGLaaS:")
+        click.echo(f"  Session: {session_url}")
+
+    click.echo("\nNext:")
+    if response.job_uid:
+        click.echo(f"  roar show --job {response.job_uid}")
+    click.echo("  roar show --session")

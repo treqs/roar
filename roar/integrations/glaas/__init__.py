@@ -1,38 +1,41 @@
-"""GLaaS API support modules."""
+"""Lazy exports for GLaaS integration helpers."""
 
-from .auth import (
-    compute_pubkey_fingerprint,
-    create_signature_payload,
-    find_ssh_private_key,
-    find_ssh_pubkey,
-    get_glaas_url,
-    make_auth_header,
-    sign_payload,
-)
-from .client import GlaasClient
-from .fragment_streamer import GlaasFragmentStreamer
-from .registration import (
-    ArtifactRegistrationService,
-    JobRegistrationService,
-    RegistrationCoordinator,
-    SessionRegistrationService,
-)
-from .transport import parse_json_response, request_json
+from __future__ import annotations
 
-__all__ = [
-    "ArtifactRegistrationService",
-    "GlaasClient",
-    "GlaasFragmentStreamer",
-    "JobRegistrationService",
-    "RegistrationCoordinator",
-    "SessionRegistrationService",
-    "compute_pubkey_fingerprint",
-    "create_signature_payload",
-    "find_ssh_private_key",
-    "find_ssh_pubkey",
-    "get_glaas_url",
-    "make_auth_header",
-    "parse_json_response",
-    "request_json",
-    "sign_payload",
-]
+from importlib import import_module
+from typing import Any
+
+_EXPORTS = {
+    "ArtifactRegistrationService": ".registration",
+    "GlaasClient": ".client",
+    "GlaasFragmentStreamer": ".fragment_streamer",
+    "JobRegistrationService": ".registration",
+    "RegistrationCoordinator": ".registration",
+    "SessionRegistrationService": ".registration",
+    "compute_pubkey_fingerprint": ".auth",
+    "create_signature_payload": ".auth",
+    "find_ssh_private_key": ".auth",
+    "find_ssh_pubkey": ".auth",
+    "get_glaas_url": ".auth",
+    "make_auth_header": ".auth",
+    "parse_json_response": ".transport",
+    "request_json": ".transport",
+    "sign_payload": ".auth",
+}
+
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module = import_module(module_name, __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

@@ -10,9 +10,20 @@ import click
 
 from ...application.publish.requests import RegisterLineageRequest
 from ...application.publish.service import register_lineage_target
-from ...integrations.config import config_get
 from ..context import RoarContext
 from ..decorators import require_init
+
+
+def _preview_hash(value: str) -> str:
+    """Shorten hashes in command summaries."""
+    return f"{value[:12]}..." if len(value) > 12 else value
+
+
+def _resolve_glaas_web_url(*, start_dir: str | None = None) -> str:
+    """Load the GLaaS web URL with the lightweight preview config path."""
+    from ...integrations.config.raw import get_raw_glaas_web_url
+
+    return get_raw_glaas_web_url(start_dir=start_dir) or "https://glaas.ai"
 
 
 def _confirm_secrets(detected_secrets: list[str]) -> bool:
@@ -99,25 +110,26 @@ def register(ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3:
             raise SystemExit(1)
         raise click.ClickException(response.error or "Registration failed")
 
-    web_url = config_get("glaas.web_url") or "https://glaas.ai"
+    web_url = _resolve_glaas_web_url(start_dir=str(ctx.cwd))
+    session_preview = _preview_hash(response.session_hash) if response.session_hash else ""
 
     # Format output
     if dry_run:
-        click.echo("Dry run - would register:")
-        click.echo(f"  Session: {response.session_hash[:12]}...")
+        click.echo(f"Dry run: would register lineage for: {target}")
+        click.echo(f"  Session: {session_preview}")
         click.echo(f"  Jobs: {response.jobs_registered}")
         click.echo(f"  Artifacts: {response.artifacts_registered}")
         click.echo(f"  Links: {response.links_created}")
         if response.secrets_detected:
             click.echo(f"  Secrets to redact: {len(response.secrets_detected)} types")
         click.echo("")
-        click.echo("View on GLaaS:")
+        click.echo("GLaaS:")
         click.echo(f"  Session:  {web_url}/dag/{response.session_hash}")
         if response.artifact_hash:
             click.echo(f"  Artifact: {web_url}/artifact/{response.artifact_hash}")
     else:
         click.echo(f"Registered lineage for: {target}")
-        click.echo(f"  Session: {response.session_hash[:12]}...")
+        click.echo(f"  Session: {session_preview}")
         click.echo(f"  Jobs: {response.jobs_registered}")
         click.echo(f"  Artifacts: {response.artifacts_registered}")
         click.echo(f"  Links: {response.links_created}")
@@ -131,13 +143,12 @@ def register(ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3:
             for error in response.error.split("; "):
                 click.echo(f"  - {error}", err=True)
 
-        if response.artifact_hash:
-            click.echo("")
-            click.echo("To reproduce this artifact:")
-            click.echo(f"  roar reproduce {response.artifact_hash}")
-
         click.echo("")
-        click.echo("View on GLaaS:")
+        click.echo("GLaaS:")
         click.echo(f"  Session:  {web_url}/dag/{response.session_hash}")
         if response.artifact_hash:
             click.echo(f"  Artifact: {web_url}/artifact/{response.artifact_hash}")
+            click.echo("")
+            click.echo("Next:")
+            click.echo(f"  roar show --artifact {response.artifact_hash}")
+            click.echo(f"  roar reproduce {response.artifact_hash}")

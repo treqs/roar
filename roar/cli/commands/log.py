@@ -6,7 +6,8 @@ import sys
 
 import click
 
-from ...application.query import LogQueryRequest, render_log
+from ...application.query.log import LogQueryError, render_log
+from ...application.query.requests import LogQueryRequest
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -25,4 +26,9 @@ def log(ctx: RoarContext) -> None:
 
         roar log              # Show recent job history
     """
-    click.echo(render_log(LogQueryRequest(roar_dir=ctx.roar_dir, use_color=sys.stdout.isatty())))
+    try:
+        click.echo(
+            render_log(LogQueryRequest(roar_dir=ctx.roar_dir, use_color=sys.stdout.isatty()))
+        )
+    except LogQueryError as exc:
+        raise click.ClickException(str(exc)) from exc

@@ -53,7 +53,11 @@ def test_put_uses_service_session_url_for_dag_link(tmp_path: Path) -> None:
 
     with (
         patch.object(put_module, "put_artifacts", return_value=response),
-        patch.object(put_module, "config_get", return_value="https://glaas.example"),
+        patch.object(
+            put_module,
+            "_resolve_glaas_web_url",
+            return_value="https://glaas.example",
+        ),
     ):
         result = runner.invoke(
             put,
@@ -84,7 +88,11 @@ def test_put_falls_back_to_web_url_plus_service_session_hash(tmp_path: Path) -> 
 
     with (
         patch.object(put_module, "put_artifacts", return_value=response),
-        patch.object(put_module, "config_get", return_value="https://glaas.example"),
+        patch.object(
+            put_module,
+            "_resolve_glaas_web_url",
+            return_value="https://glaas.example",
+        ),
     ):
         result = runner.invoke(
             put,
@@ -127,7 +135,11 @@ def test_put_prints_registered_composite_summary(tmp_path: Path) -> None:
 
     with (
         patch.object(put_module, "put_artifacts", return_value=response),
-        patch.object(put_module, "config_get", return_value="https://glaas.example"),
+        patch.object(
+            put_module,
+            "_resolve_glaas_web_url",
+            return_value="https://glaas.example",
+        ),
     ):
         result = runner.invoke(
             put,
@@ -174,7 +186,11 @@ def test_put_warns_when_local_composite_persistence_fails(tmp_path: Path) -> Non
 
     with (
         patch.object(put_module, "put_artifacts", return_value=response),
-        patch.object(put_module, "config_get", return_value="https://glaas.example"),
+        patch.object(
+            put_module,
+            "_resolve_glaas_web_url",
+            return_value="https://glaas.example",
+        ),
     ):
         result = runner.invoke(
             put,

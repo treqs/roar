@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from ...db.context import create_database_context
-from ..labels import LabelService, flatten_label_metadata, parse_label_pairs
+from ..label_rendering import flatten_label_metadata
+from ..labels import LabelService, parse_label_pairs
 from .requests import (
     LabelCopyRequest,
     LabelHistoryRequest,

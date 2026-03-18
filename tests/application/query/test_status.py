@@ -5,8 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from roar.application.query import StatusQueryRequest
-from roar.application.query.status import build_status_summary
+from roar.application.query.status import StatusQueryError, build_status_summary
 
 
 def test_build_status_summary_groups_steps_and_artifacts(tmp_path: Path) -> None:
@@ -48,10 +50,7 @@ def test_build_status_summary_groups_steps_and_artifacts(tmp_path: Path) -> None
 
     from unittest.mock import patch
 
-    with (
-        patch("roar.application.query.status.bootstrap"),
-        patch("roar.application.query.status.create_database_context") as mock_db,
-    ):
+    with patch("roar.application.query.status.create_query_database_context") as mock_db:
         mock_db.return_value.__enter__.return_value = db_ctx
         summary = build_status_summary(request)
 
@@ -62,17 +61,18 @@ def test_build_status_summary_groups_steps_and_artifacts(tmp_path: Path) -> None
     assert [artifact.present for artifact in summary.artifacts] == [True, False]
 
 
-def test_build_status_summary_returns_none_without_active_session(tmp_path: Path) -> None:
+def test_build_status_summary_without_active_session_raises_query_error(tmp_path: Path) -> None:
     request = StatusQueryRequest(roar_dir=tmp_path / ".roar")
     request.roar_dir.mkdir()
 
     from unittest.mock import patch
 
-    with (
-        patch("roar.application.query.status.bootstrap"),
-        patch("roar.application.query.status.create_database_context") as mock_db,
-    ):
+    with patch("roar.application.query.status.create_query_database_context") as mock_db:
         mock_db.return_value.__enter__.return_value = SimpleNamespace(
             sessions=SimpleNamespace(get_active=lambda: None)
         )
-        assert build_status_summary(request) is None
+        with pytest.raises(
+            StatusQueryError,
+            match=r"No active session\. Run 'roar run' to create a session first\.",
+        ):
+            build_status_summary(request)

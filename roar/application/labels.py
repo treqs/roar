@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from ..db.context import DatabaseContext
 from ..execution.recording.dataset_metadata import AUTO_DATASET_LABEL_KEYS
+from .label_rendering import flatten_label_metadata
 
 RESERVED_LABEL_KEYS = set(AUTO_DATASET_LABEL_KEYS)
 
@@ -56,27 +57,6 @@ def parse_label_pairs(pairs: tuple[str, ...]) -> dict[str, Any]:
             raise ValueError(f"Invalid label assignment '{pair}'. Key must not be empty.")
         _assign_nested(metadata, key.split("."), _parse_scalar(raw_value))
     return metadata
-
-
-def flatten_label_metadata(metadata: dict[str, Any]) -> list[tuple[str, str]]:
-    """Flatten metadata into sorted ``(key, display_value)`` pairs."""
-    flat: list[tuple[str, str]] = []
-
-    def _walk(prefix: str, value: Any) -> None:
-        if isinstance(value, dict):
-            for key in sorted(value.keys()):
-                next_prefix = f"{prefix}.{key}" if prefix else key
-                _walk(next_prefix, value[key])
-            return
-        flat.append((prefix, _display_scalar(value)))
-
-    _walk("", metadata)
-    return flat
-
-
-def render_label_lines(metadata: dict[str, Any], indent: str = "") -> list[str]:
-    """Render a metadata document as sorted ``key=value`` lines."""
-    return [f"{indent}{key}={value}" for key, value in flatten_label_metadata(metadata)]
 
 
 class LabelService:
@@ -351,16 +331,6 @@ def _parse_scalar(raw: str) -> Any:
     except ValueError:
         pass
     return stripped
-
-
-def _display_scalar(value: Any) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if value is None:
-        return "null"
-    if isinstance(value, (int, float, str)):
-        return str(value)
-    return json.dumps(value, sort_keys=True)
 
 
 def _deep_merge(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:

@@ -1,38 +1,48 @@
-"""
-Database context for roar.
+"""Database context for roar."""
 
-Provides a lightweight context manager that exposes typed repository
-and service properties, replacing the monolithic RoarDB facade.
-"""
+from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
-
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session
+from typing import TYPE_CHECKING, Any
 
 from ..core.exceptions import DatabaseConnectionError
-from .engine import create_roar_engine, create_session_factory, init_database
-from .repositories import (
-    SQLAlchemyArtifactRepository,
-    SQLAlchemyCollectionRepository,
-    SQLAlchemyCompositeRepository,
-    SQLAlchemyHashCacheRepository,
-    SQLAlchemyJobRepository,
-    SQLAlchemyLabelRepository,
-    SQLAlchemySessionRepository,
-)
-from .schema import run_migrations
-from .services import (
-    DefaultHashingService,
-    DefaultLineageService,
-    DefaultSessionService,
-    JobRecordingService,
-)
 
-try:
-    import sqlite3 as sqlite_module
-except ImportError:
-    import pysqlite3 as sqlite_module  # type: ignore[import-not-found, no-redef]
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Engine as Engine
+    from sqlalchemy.orm import Session as Session
+
+    from .repositories.artifact import (
+        SQLAlchemyArtifactRepository as SQLAlchemyArtifactRepository,
+    )
+    from .repositories.collection import (
+        SQLAlchemyCollectionRepository as SQLAlchemyCollectionRepository,
+    )
+    from .repositories.composite import (
+        SQLAlchemyCompositeRepository as SQLAlchemyCompositeRepository,
+    )
+    from .repositories.hash_cache import (
+        SQLAlchemyHashCacheRepository as SQLAlchemyHashCacheRepository,
+    )
+    from .repositories.job import SQLAlchemyJobRepository as SQLAlchemyJobRepository
+    from .repositories.label import SQLAlchemyLabelRepository as SQLAlchemyLabelRepository
+    from .repositories.session import (
+        SQLAlchemySessionRepository as SQLAlchemySessionRepository,
+    )
+    from .services.hashing import DefaultHashingService as DefaultHashingService
+    from .services.job_recording import JobRecordingService as JobRecordingService
+    from .services.lineage import DefaultLineageService as DefaultLineageService
+    from .services.session import DefaultSessionService as DefaultSessionService
+
+
+@lru_cache(maxsize=1)
+def _get_sqlite_module() -> Any:
+    try:
+        import sqlite3 as sqlite_module
+    except ImportError:
+        import pysqlite3 as sqlite_module  # type: ignore[import-not-found, no-redef]
+
+    return sqlite_module
 
 
 class DatabaseContext:
@@ -60,7 +70,7 @@ class DatabaseContext:
         self._engine: Engine | None = None
         self._session: Session | None = None
 
-        # Repositories (initialized on connect)
+        # Repositories (initialized on first access)
         self._hash_cache_repo: SQLAlchemyHashCacheRepository | None = None
         self._artifact_repo: SQLAlchemyArtifactRepository | None = None
         self._job_repo: SQLAlchemyJobRepository | None = None
@@ -69,7 +79,7 @@ class DatabaseContext:
         self._composite_repo: SQLAlchemyCompositeRepository | None = None
         self._label_repo: SQLAlchemyLabelRepository | None = None
 
-        # Services (initialized on connect)
+        # Services (initialized on first access)
         self._hashing_service: DefaultHashingService | None = None
         self._session_service: DefaultSessionService | None = None
         self._lineage_service: DefaultLineageService | None = None
@@ -77,6 +87,11 @@ class DatabaseContext:
 
     def connect(self) -> None:
         """Connect to the database and initialize schema if needed."""
+        from .engine import create_roar_engine, create_session_factory, init_database
+        from .schema import run_migrations
+
+        sqlite_module = _get_sqlite_module()
+
         self._engine = create_roar_engine(self.db_path)
         init_database(self._engine)
         raw_conn = sqlite_module.connect(str(self.db_path))
@@ -86,32 +101,7 @@ class DatabaseContext:
             raw_conn.commit()
         finally:
             raw_conn.close()
-        session_factory = create_session_factory(self._engine)
-        self._session = session_factory()
-
-        # Initialize repositories
-        self._hash_cache_repo = SQLAlchemyHashCacheRepository(self._session)
-        self._artifact_repo = SQLAlchemyArtifactRepository(self._session)
-        self._job_repo = SQLAlchemyJobRepository(self._session, self._artifact_repo)
-        self._session_repo = SQLAlchemySessionRepository(self._session)
-        self._collection_repo = SQLAlchemyCollectionRepository(self._session)
-        self._composite_repo = SQLAlchemyCompositeRepository(self._session)
-        self._label_repo = SQLAlchemyLabelRepository(self._session)
-
-        # Initialize services
-        self._hashing_service = DefaultHashingService(self._hash_cache_repo)
-        self._session_service = DefaultSessionService(
-            self._session_repo, self._job_repo, self._artifact_repo
-        )
-        self._lineage_service = DefaultLineageService(self._artifact_repo, self._job_repo)
-        self._job_recording_service = JobRecordingService(
-            self._session,
-            self._job_repo,
-            self._artifact_repo,
-            self._session_repo,
-            self._hashing_service,
-            self._session_service,
-        )
+        self._session = create_session_factory(self._engine)()
 
     def close(self) -> None:
         """Close database connection."""
@@ -122,12 +112,25 @@ class DatabaseContext:
             self._engine.dispose()
             self._engine = None
 
+        self._hash_cache_repo = None
+        self._artifact_repo = None
+        self._job_repo = None
+        self._session_repo = None
+        self._collection_repo = None
+        self._composite_repo = None
+        self._label_repo = None
+
+        self._hashing_service = None
+        self._session_service = None
+        self._lineage_service = None
+        self._job_recording_service = None
+
     def commit(self) -> None:
         """Commit the current transaction."""
         if self._session:
             self._session.commit()
 
-    def __enter__(self) -> "DatabaseContext":
+    def __enter__(self) -> DatabaseContext:
         self.connect()
         return self
 
@@ -139,13 +142,7 @@ class DatabaseContext:
                 self._session.commit()
         self.close()
 
-    # -------------------------------------------------------------------------
-    # Repository properties
-    # -------------------------------------------------------------------------
-
-    @property
-    def session(self) -> Session:
-        """Get the underlying database session."""
+    def _require_session(self) -> Session:
         if self._session is None:
             raise DatabaseConnectionError(
                 "DatabaseContext not connected. Use as context manager.",
@@ -153,88 +150,81 @@ class DatabaseContext:
             )
         return self._session
 
+    # -------------------------------------------------------------------------
+    # Repository properties
+    # -------------------------------------------------------------------------
+
+    @property
+    def session(self) -> Session:
+        """Get the underlying database session."""
+        return self._require_session()
+
     @property
     def conn(self):
-        """Get raw database connection for direct SQL queries.
-
-        Note: Prefer using repositories when possible. This is for
-        legacy compatibility with raw SQL usage.
-        """
-        if self._session is None:
-            raise DatabaseConnectionError(
-                "DatabaseContext not connected. Use as context manager.",
-                db_path=str(self.db_path),
-            )
-        return self._session.connection()
+        """Get raw database connection for direct SQL queries."""
+        return self._require_session().connection()
 
     @property
     def hash_cache(self) -> SQLAlchemyHashCacheRepository:
         """Hash cache repository for file hash caching."""
         if self._hash_cache_repo is None:
-            raise DatabaseConnectionError(
-                "DatabaseContext not connected. Use as context manager.",
-                db_path=str(self.db_path),
-            )
+            from .repositories.hash_cache import SQLAlchemyHashCacheRepository
+
+            self._hash_cache_repo = SQLAlchemyHashCacheRepository(self._require_session())
         return self._hash_cache_repo
 
     @property
     def artifacts(self) -> SQLAlchemyArtifactRepository:
         """Artifact repository for content-addressed file storage."""
         if self._artifact_repo is None:
-            raise DatabaseConnectionError(
-                "DatabaseContext not connected. Use as context manager.",
-                db_path=str(self.db_path),
-            )
+            from .repositories.artifact import SQLAlchemyArtifactRepository
+
+            self._artifact_repo = SQLAlchemyArtifactRepository(self._require_session())
         return self._artifact_repo
 
     @property
     def jobs(self) -> SQLAlchemyJobRepository:
         """Job repository for execution records."""
         if self._job_repo is None:
-            raise DatabaseConnectionError(
-                "DatabaseContext not connected. Use as context manager.",
-                db_path=str(self.db_path),
-            )
+            from .repositories.job import SQLAlchemyJobRepository
+
+            self._job_repo = SQLAlchemyJobRepository(self._require_session(), self.artifacts)
         return self._job_repo
 
     @property
     def sessions(self) -> SQLAlchemySessionRepository:
         """Session repository for step sequences."""
         if self._session_repo is None:
-            raise DatabaseConnectionError(
-                "DatabaseContext not connected. Use as context manager.",
-                db_path=str(self.db_path),
-            )
+            from .repositories.session import SQLAlchemySessionRepository
+
+            self._session_repo = SQLAlchemySessionRepository(self._require_session())
         return self._session_repo
 
     @property
     def collections(self) -> SQLAlchemyCollectionRepository:
         """Collection repository for artifact groups."""
         if self._collection_repo is None:
-            raise DatabaseConnectionError(
-                "DatabaseContext not connected. Use as context manager.",
-                db_path=str(self.db_path),
-            )
+            from .repositories.collection import SQLAlchemyCollectionRepository
+
+            self._collection_repo = SQLAlchemyCollectionRepository(self._require_session())
         return self._collection_repo
 
     @property
     def composites(self) -> SQLAlchemyCompositeRepository:
         """Composite repository for component rows and membership metadata."""
         if self._composite_repo is None:
-            raise DatabaseConnectionError(
-                "DatabaseContext not connected. Use as context manager.",
-                db_path=str(self.db_path),
-            )
+            from .repositories.composite import SQLAlchemyCompositeRepository
+
+            self._composite_repo = SQLAlchemyCompositeRepository(self._require_session())
         return self._composite_repo
 
     @property
     def labels(self) -> SQLAlchemyLabelRepository:
         """Label repository for versioned local label documents."""
         if self._label_repo is None:
-            raise DatabaseConnectionError(
-                "DatabaseContext not connected. Use as context manager.",
-                db_path=str(self.db_path),
-            )
+            from .repositories.label import SQLAlchemyLabelRepository
+
+            self._label_repo = SQLAlchemyLabelRepository(self._require_session())
         return self._label_repo
 
     # -------------------------------------------------------------------------
@@ -245,19 +235,21 @@ class DatabaseContext:
     def hashing(self) -> DefaultHashingService:
         """Hashing service for computing and caching file hashes."""
         if self._hashing_service is None:
-            raise DatabaseConnectionError(
-                "DatabaseContext not connected. Use as context manager.",
-                db_path=str(self.db_path),
-            )
+            from .services.hashing import DefaultHashingService
+
+            self._hashing_service = DefaultHashingService(self.hash_cache)
         return self._hashing_service
 
     @property
     def session_service(self) -> DefaultSessionService:
         """Session service for session management operations."""
         if self._session_service is None:
-            raise DatabaseConnectionError(
-                "DatabaseContext not connected. Use as context manager.",
-                db_path=str(self.db_path),
+            from .services.session import DefaultSessionService
+
+            self._session_service = DefaultSessionService(
+                self.sessions,
+                self.jobs,
+                self.artifacts,
             )
         return self._session_service
 
@@ -265,19 +257,24 @@ class DatabaseContext:
     def lineage(self) -> DefaultLineageService:
         """Lineage service for artifact lineage queries."""
         if self._lineage_service is None:
-            raise DatabaseConnectionError(
-                "DatabaseContext not connected. Use as context manager.",
-                db_path=str(self.db_path),
-            )
+            from .services.lineage import DefaultLineageService
+
+            self._lineage_service = DefaultLineageService(self.artifacts, self.jobs)
         return self._lineage_service
 
     @property
     def job_recording(self) -> JobRecordingService:
         """Job recording service for recording jobs with lineage."""
         if self._job_recording_service is None:
-            raise DatabaseConnectionError(
-                "DatabaseContext not connected. Use as context manager.",
-                db_path=str(self.db_path),
+            from .services.job_recording import JobRecordingService
+
+            self._job_recording_service = JobRecordingService(
+                self._require_session(),
+                self.jobs,
+                self.artifacts,
+                self.sessions,
+                self.hashing,
+                self.session_service,
             )
         return self._job_recording_service
 

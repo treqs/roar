@@ -63,9 +63,8 @@ class GlaasClient:
     """Client for interacting with GLaaS server."""
 
     def __init__(self, base_url: str | None = None):
-        self.base_url = base_url or get_glaas_url()
-        if self.base_url:
-            self.base_url = self.base_url.rstrip("/")
+        resolved_base_url = get_glaas_url() if base_url is None else base_url
+        self.base_url = resolved_base_url.rstrip("/") if resolved_base_url else None
 
     def is_configured(self) -> bool:
         """Check if GLaaS is configured."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -16,11 +17,15 @@ class DagQueryRequest:
     stale_only: bool
 
 
+ShowQuerySelector = Literal["auto", "session", "path", "job", "artifact"]
+
+
 @dataclass(frozen=True)
 class ShowQueryRequest:
     roar_dir: Path
     cwd: Path
     ref: str | None
+    selector: ShowQuerySelector = "auto"
 
 
 @dataclass(frozen=True)
