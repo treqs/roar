@@ -150,6 +150,7 @@ build_python_wheel() {
       (
         cd "$ROOT_DIR"
         maturin build \
+          --release \
           --manifest-path rust/crates/artifact-hash-py/Cargo.toml \
           --interpreter "$python_candidate" \
           --out "$OUT_DIR"
@@ -161,6 +162,7 @@ build_python_wheel() {
       (
         cd "$ROOT_DIR"
         "$python_candidate" -m maturin build \
+          --release \
           --manifest-path rust/crates/artifact-hash-py/Cargo.toml \
           --interpreter "$python_candidate" \
           --out "$OUT_DIR"
