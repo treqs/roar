@@ -29,6 +29,7 @@ class SyncLayout:
     release_dir: Path
     package_bin_dir: Path
     artifacts: tuple[ArtifactSpec, ...]
+    fallback_release_dirs: tuple[Path, ...] = ()
     portable_target: str | None = None
 
 
@@ -46,11 +47,14 @@ def _default_layout() -> SyncLayout:
     root_dir = Path(__file__).resolve().parents[1]
     library_suffix = ".dylib" if sys.platform == "darwin" else ".so"
     common_sources = _common_tracer_sources(root_dir)
-    release_dir = root_dir / "rust" / "target" / "release"
+    host_release_dir = root_dir / "rust" / "target" / "release"
+    release_dir = host_release_dir
+    fallback_release_dirs: tuple[Path, ...] = ()
     portable_target = None
 
     if sys.platform.startswith("linux"):
         release_dir = root_dir / "rust" / "target" / LINUX_PORTABLE_TARGET_DIR / "release"
+        fallback_release_dirs = (host_release_dir,)
         portable_target = LINUX_PORTABLE_TARGET
 
     artifacts = [
@@ -107,8 +111,29 @@ def _default_layout() -> SyncLayout:
         release_dir=release_dir,
         package_bin_dir=root_dir / "roar" / "bin",
         artifacts=tuple(artifacts),
+        fallback_release_dirs=fallback_release_dirs,
         portable_target=portable_target,
     )
+
+
+def _candidate_release_dirs(layout: SyncLayout) -> tuple[Path, ...]:
+    return (layout.release_dir, *layout.fallback_release_dirs)
+
+
+def _find_release_binary(layout: SyncLayout, binary_name: str) -> Path | None:
+    for release_dir in _candidate_release_dirs(layout):
+        candidate = release_dir / binary_name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _find_release_library(layout: SyncLayout, names: tuple[str, ...]) -> Path | None:
+    for release_dir in _candidate_release_dirs(layout):
+        candidate = _first_existing_path(release_dir, names)
+        if candidate is not None:
+            return candidate
+    return None
 
 
 def _iter_source_files(paths: tuple[Path, ...]) -> list[Path]:
@@ -168,7 +193,7 @@ def sync_reason(layout: SyncLayout) -> str | None:
 
         for binary_name in artifact.binary_names:
             reason = _sync_reason_for_path(
-                release_path=layout.release_dir / binary_name,
+                release_path=_find_release_binary(layout, binary_name),
                 package_path=layout.package_bin_dir / binary_name,
                 latest_source_mtime=latest_source_mtime,
                 missing_release_reason=f"release {binary_name} is missing",
@@ -180,7 +205,7 @@ def sync_reason(layout: SyncLayout) -> str | None:
                 return reason
 
         if artifact.library_names:
-            release_library = _first_existing_path(layout.release_dir, artifact.library_names)
+            release_library = _find_release_library(layout, artifact.library_names)
             package_library = _first_existing_path(layout.package_bin_dir, artifact.library_names)
             if release_library is None:
                 return f"release library for {artifact.package_name} is missing"
@@ -205,11 +230,12 @@ def _packages_needing_build(layout: SyncLayout) -> list[str]:
         latest_source_mtime = _latest_mtime(_iter_source_files(artifact.source_paths))
         needs_build = False
         for binary_name in artifact.binary_names:
-            if _artifact_is_stale(layout.release_dir / binary_name, latest_source_mtime):
+            release_binary = _find_release_binary(layout, binary_name)
+            if release_binary is None or _artifact_is_stale(release_binary, latest_source_mtime):
                 needs_build = True
                 break
         if not needs_build and artifact.library_names:
-            release_library = _first_existing_path(layout.release_dir, artifact.library_names)
+            release_library = _find_release_library(layout, artifact.library_names)
             if release_library is None or _artifact_is_stale(release_library, latest_source_mtime):
                 needs_build = True
         if needs_build and artifact.package_name not in packages:
@@ -261,13 +287,13 @@ def sync_packaged_rust_artifacts(layout: SyncLayout) -> None:
 
     for artifact in layout.artifacts:
         for binary_name in artifact.binary_names:
-            release_path = layout.release_dir / binary_name
-            if not release_path.exists():
+            release_path = _find_release_binary(layout, binary_name)
+            if release_path is None:
                 raise SystemExit(f"release {binary_name} is missing after build")
             _sync_file(release_path, layout.package_bin_dir / binary_name)
 
         if artifact.library_names:
-            release_library = _first_existing_path(layout.release_dir, artifact.library_names)
+            release_library = _find_release_library(layout, artifact.library_names)
             if release_library is None:
                 raise SystemExit(
                     f"release library for {artifact.package_name} is missing after build"
