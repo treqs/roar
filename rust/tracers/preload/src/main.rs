@@ -78,6 +78,59 @@ impl CollectorState {
                 self.fd.mark_path_open(path.clone());
                 self.fd.mark_path_written_with_thread(path, thread_id);
             }
+            TraceEvent::Fork {
+                parent_pid,
+                child_pid,
+            } => {
+                self.ensure_process(parent_pid);
+                if let Some(existing) = self.processes.get_mut(&child_pid) {
+                    // Exec event may have arrived first — fill in parent.
+                    if existing.parent_pid.is_none() && child_pid != self.root_pid {
+                        existing.parent_pid = Some(parent_pid);
+                    }
+                } else {
+                    let info = capture_process_info(child_pid, Some(parent_pid))
+                        .unwrap_or_else(|| ProcessInfo {
+                            pid: child_pid,
+                            parent_pid: Some(parent_pid),
+                            command: self
+                                .processes
+                                .get(&parent_pid)
+                                .map(|p| p.command.clone())
+                                .unwrap_or_default(),
+                            env: HashMap::new(),
+                        });
+                    self.processes.insert(child_pid, info);
+                }
+            }
+            TraceEvent::Exec { pid, command } => {
+                // Update the process entry with the post-exec command.
+                if let Some(proc_info) = self.processes.get_mut(&pid) {
+                    proc_info.command = command;
+                } else {
+                    // Exec arrived before Fork (common for fast children).
+                    // Try /proc for parent; if unavailable, mark as pending —
+                    // a later Fork event will fill in parent_pid.
+                    let parent = if pid == self.root_pid {
+                        None
+                    } else {
+                        parent_pid_from_proc(pid)
+                    };
+                    self.processes.insert(
+                        pid,
+                        ProcessInfo {
+                            pid,
+                            parent_pid: parent,
+                            command,
+                            env: if pid == self.root_pid {
+                                self.root_env.clone()
+                            } else {
+                                HashMap::new()
+                            },
+                        },
+                    );
+                }
+            }
         }
     }
 

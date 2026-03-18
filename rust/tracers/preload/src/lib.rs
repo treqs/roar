@@ -744,6 +744,45 @@ fn resolve_at_path(dirfd: c_int, path: *const c_char) -> Option<String> {
     Some(format!("{base}/{path_s}"))
 }
 
+// ── fork/exec event emission ──────────────────────────────────────────────────
+
+/// Called from C `fork()` interposition after a successful fork (parent side).
+#[cfg_attr(not(target_os = "macos"), no_mangle)]
+pub unsafe extern "C" fn roar_preload_emit_fork(parent_pid: u32, child_pid: u32) {
+    if in_hook() {
+        return;
+    }
+    with_hook_guard(|| {
+        send_event(&TraceEvent::Fork {
+            parent_pid,
+            child_pid,
+        });
+    });
+}
+
+/// Called from C constructor after library load.  Sends an Exec event so the
+/// launcher learns the command of newly exec'd processes.
+#[cfg_attr(not(target_os = "macos"), no_mangle)]
+pub unsafe extern "C" fn roar_preload_notify_exec() {
+    // Only send if ROAR_PRELOAD_TRACE_SOCK is set (i.e. we're inside a traced tree).
+    if trace_sock_path().is_none() {
+        return;
+    }
+    let pid = current_pid();
+    let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+        return;
+    };
+    let command: Vec<String> = cmdline
+        .split(|b| *b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .collect();
+    if command.is_empty() {
+        return;
+    }
+    send_event(&TraceEvent::Exec { pid, command });
+}
+
 #[cfg_attr(not(target_os = "macos"), no_mangle)]
 pub unsafe extern "C" fn roar_preload_emit_path_flags(path: *const c_char, flags: c_int) {
     if in_hook() {

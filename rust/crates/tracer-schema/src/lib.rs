@@ -15,6 +15,14 @@ pub enum NativeTraceEvent {
         thread_id: u32,
         path: String,
     },
+    Fork {
+        parent_pid: u32,
+        child_pid: u32,
+    },
+    Exec {
+        pid: u32,
+        command: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

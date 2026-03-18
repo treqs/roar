@@ -187,4 +187,35 @@ int creat(const char *path, mode_t mode) {
   }
   return ret;
 }
+
+/* ── fork/vfork interposition ─────────────────────────────── */
+
+extern void roar_preload_emit_fork(unsigned int parent_pid,
+                                   unsigned int child_pid);
+
+pid_t fork(void) {
+  static pid_t (*real_fork)(void) = NULL;
+  if (real_fork == NULL) {
+    real_fork = (pid_t (*)(void))dlsym(RTLD_NEXT, "fork");
+  }
+  if (real_fork == NULL) {
+    return -1;
+  }
+
+  pid_t ret = real_fork();
+  if (ret > 0) {
+    /* Parent side — successful fork. */
+    roar_preload_emit_fork((unsigned int)getpid(), (unsigned int)ret);
+  }
+  return ret;
+}
+
+/* ── exec notification via constructor ────────────────────── */
+
+extern void roar_preload_notify_exec(void);
+
+__attribute__((constructor)) static void roar_preload_ctor(void) {
+  roar_preload_notify_exec();
+}
+
 #endif
