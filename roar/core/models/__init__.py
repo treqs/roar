@@ -1,140 +1,81 @@
-"""
-Pydantic models for roar.
+"""Lazy exports for core Pydantic model types."""
 
-This package provides typed, validated models for all roar data structures.
-All models use Pydantic v2 with strict validation.
-"""
+from __future__ import annotations
 
-# Base models
-# Core domain models
-from .artifact import Artifact, ArtifactHash
-from .base import ImmutableModel, RoarBaseModel
+from importlib import import_module
+from typing import Any
 
-# DAG visualization models
-from .dag import (
-    DagArtifactInfo,
-    DagNodeInfo,
-    DagNodeMetrics,
-    DagNodeState,
-    DagVisualization,
-)
-from .dataset_identifier import DatasetIdentifier
+_EXPORTS = {
+    "Artifact": ".artifact",
+    "ArtifactDagResponse": ".glaas",
+    "ArtifactHash": ".artifact",
+    "ArtifactHashRequest": ".glaas",
+    "ArtifactResponse": ".glaas",
+    "CheckTagRequest": ".glaas",
+    "CheckTagResponse": ".glaas",
+    "CompleteLiveJobRequest": ".glaas",
+    "ContainerInfo": ".provenance",
+    "CreateDagRequest": ".glaas",
+    "CreateLiveJobRequest": ".glaas",
+    "DagArtifactInfo": ".dag",
+    "DagNodeInfo": ".dag",
+    "DagNodeMetrics": ".dag",
+    "DagNodeState": ".dag",
+    "DagResponse": ".glaas",
+    "DagVisualization": ".dag",
+    "DatasetIdentifier": ".dataset_identifier",
+    "FileClassification": ".provenance",
+    "FilteredFiles": ".provenance",
+    "GitInfo": ".provenance",
+    "HardwareInfo": ".provenance",
+    "IOEntry": ".glaas",
+    "ImmutableModel": ".base",
+    "Job": ".job",
+    "JobInput": ".job",
+    "JobOutput": ".job",
+    "JobResponse": ".glaas",
+    "LineageArtifactInfo": ".lineage",
+    "LineageJobInfo": ".lineage",
+    "LineageResponse": ".glaas",
+    "LineageResult": ".lineage",
+    "LiveJobResponse": ".glaas",
+    "PackageInfo": ".provenance",
+    "ProvenanceContext": ".provenance",
+    "PythonInjectData": ".provenance",
+    "RecordTagRequest": ".glaas",
+    "RegisterArtifactRequest": ".glaas",
+    "RegisterArtifactsBatchRequest": ".glaas",
+    "RegisterJobRequest": ".glaas",
+    "RegisterJobsBatchRequest": ".glaas",
+    "RegisterSessionRequest": ".glaas",
+    "ResolvedStep": ".run",
+    "RoarBaseModel": ".base",
+    "RunArguments": ".run",
+    "RunContext": ".run",
+    "RunResult": ".run",
+    "RuntimeInfo": ".provenance",
+    "Session": ".session",
+    "SessionResponse": ".glaas",
+    "TelemetryRunInfo": ".telemetry",
+    "TracerData": ".provenance",
+    "TracerResult": ".run",
+    "UpdateLiveJobRequest": ".glaas",
+    "VCSInfo": ".vcs",
+}
 
-# GLaaS API models
-from .glaas import (
-    ArtifactDagResponse,
-    ArtifactHashRequest,
-    ArtifactResponse,
-    CheckTagRequest,
-    CheckTagResponse,
-    CompleteLiveJobRequest,
-    CreateDagRequest,
-    CreateLiveJobRequest,
-    DagResponse,
-    IOEntry,
-    JobResponse,
-    LineageResponse,
-    LiveJobResponse,
-    RecordTagRequest,
-    RegisterArtifactRequest,
-    RegisterArtifactsBatchRequest,
-    RegisterJobRequest,
-    RegisterJobsBatchRequest,
-    RegisterSessionRequest,
-    SessionResponse,
-    UpdateLiveJobRequest,
-)
-from .job import Job, JobInput, JobOutput
+__all__ = sorted(_EXPORTS)
 
-# Lineage models
-from .lineage import LineageArtifactInfo, LineageJobInfo, LineageResult
 
-# Provenance models
-from .provenance import (
-    ContainerInfo,
-    FileClassification,
-    FilteredFiles,
-    GitInfo,
-    HardwareInfo,
-    PackageInfo,
-    ProvenanceContext,
-    PythonInjectData,
-    RuntimeInfo,
-    TracerData,
-)
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-# Run/execution models
-from .run import (
-    ResolvedStep,
-    RunArguments,
-    RunContext,
-    RunResult,
-    TracerResult,
-)
+    module = import_module(module_name, __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
 
-# Session models
-from .session import Session
 
-# Telemetry models
-from .telemetry import TelemetryRunInfo
-
-# VCS models
-from .vcs import VCSInfo
-
-__all__ = [
-    "Artifact",
-    "ArtifactDagResponse",
-    "ArtifactHash",
-    "ArtifactHashRequest",
-    "ArtifactResponse",
-    "CheckTagRequest",
-    "CheckTagResponse",
-    "CompleteLiveJobRequest",
-    "ContainerInfo",
-    "CreateDagRequest",
-    "CreateLiveJobRequest",
-    "DagArtifactInfo",
-    "DagNodeInfo",
-    "DagNodeMetrics",
-    "DagNodeState",
-    "DagResponse",
-    "DagVisualization",
-    "DatasetIdentifier",
-    "FileClassification",
-    "FilteredFiles",
-    "GitInfo",
-    "HardwareInfo",
-    "IOEntry",
-    "ImmutableModel",
-    "Job",
-    "JobInput",
-    "JobOutput",
-    "JobResponse",
-    "LineageArtifactInfo",
-    "LineageJobInfo",
-    "LineageResponse",
-    "LineageResult",
-    "LiveJobResponse",
-    "PackageInfo",
-    "ProvenanceContext",
-    "PythonInjectData",
-    "RecordTagRequest",
-    "RegisterArtifactRequest",
-    "RegisterArtifactsBatchRequest",
-    "RegisterJobRequest",
-    "RegisterJobsBatchRequest",
-    "RegisterSessionRequest",
-    "ResolvedStep",
-    "RoarBaseModel",
-    "RunArguments",
-    "RunContext",
-    "RunResult",
-    "RuntimeInfo",
-    "Session",
-    "SessionResponse",
-    "TelemetryRunInfo",
-    "TracerData",
-    "TracerResult",
-    "UpdateLiveJobRequest",
-    "VCSInfo",
-]
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

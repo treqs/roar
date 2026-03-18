@@ -45,16 +45,9 @@ class DataLoaderService:
         """
         self.logger.debug("Loading tracer data from: %s", path)
         with open(path, "rb") as f:
-            raw_data = f.read()
+            payload = f.read()
 
-        try:
-            data = msgpack.unpackb(raw_data, raw=False)
-        except msgpack.ExtraData:
-            stripped = raw_data.lstrip()
-            if not stripped.startswith((b"{", b"[")):
-                raise
-            self.logger.debug("Tracer report was JSON-encoded; falling back to JSON parsing")
-            data = json.loads(raw_data.decode("utf-8"))
+        data = self._parse_tracer_payload(payload, path)
 
         self.logger.debug("Tracer data parsed successfully: %d keys", len(data))
         files = self._normalize_files(data)
@@ -72,6 +65,23 @@ class DataLoaderService:
             tracer_mode=str(data.get("tracer_mode", "ptrace") or "ptrace"),
             events_dropped=int(data.get("events_dropped", 0) or 0),
         )
+
+    def _parse_tracer_payload(self, payload: bytes, path: str) -> dict:
+        """Parse the tracer report from MessagePack or a legacy JSON payload."""
+        stripped = payload.lstrip()
+        if stripped.startswith((b"{", b"[")):
+            self.logger.warning(
+                "Tracer report at %s is JSON, not MessagePack; accepting legacy format", path
+            )
+            data = json.loads(payload.decode("utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError(f"Expected tracer report object in {path}")
+            return data
+
+        data = msgpack.unpackb(payload, raw=False)
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected tracer report object in {path}")
+        return data
 
     def _normalize_files(self, data: dict) -> list[dict]:
         """Normalize tracer file records to a common shape."""

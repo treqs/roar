@@ -78,8 +78,9 @@ def test_put_registers_lineage_with_fake_glaas_and_updates_local_dag(
     assert result.returncode == 0
     assert "Published 1 file(s) to s3://test-bucket/models" in result.stdout
     assert "model.pt -> s3://test-bucket/models/model.pt" in result.stdout
-    assert "Job created: step 2" in result.stdout
-    assert f"View: {fake_glaas_publish_server.base_url}/dag/" in result.stdout
+    assert "Job step: @2" in result.stdout
+    assert "GLaaS:" in result.stdout
+    assert f"{fake_glaas_publish_server.base_url}/dag/" in result.stdout
 
     dag = _get_dag(roar_cli)
     assert dag["total_steps"] == 2
@@ -133,10 +134,9 @@ def test_put_dry_run_does_not_create_local_or_remote_publish_jobs(
     )
 
     assert result.returncode == 0
-    assert "Dry run - would upload:" in result.stdout
+    assert "Dry run: would upload 2 file(s) to s3://bucket/test" in result.stdout
     assert "model.pt" in result.stdout
     assert "metrics.json" in result.stdout
-    assert "Total: 2 file(s)" in result.stdout
 
     dag_after = _get_dag(roar_cli)
     assert dag_after["total_steps"] == dag_before["total_steps"] == 1

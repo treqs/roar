@@ -7,9 +7,9 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
-from ...core.bootstrap import bootstrap
 from ...core.logging import get_logger
-from ...db.context import create_database_context, optional_repo
+from ...db.context import optional_repo
+from ...db.query_context import create_query_database_context
 from ...presenters.show_renderer import ShowRenderer
 from .requests import ShowQueryRequest
 from .results import (
@@ -25,6 +25,8 @@ from .results import (
     ShowSummary,
 )
 
+_NO_ACTIVE_SESSION_MESSAGE = "No active session. Run 'roar run' to create a session first."
+
 
 class ShowQueryError(RuntimeError):
     """Raised when a show query cannot build a summary."""
@@ -32,10 +34,7 @@ class ShowQueryError(RuntimeError):
 
 def render_show(request: ShowQueryRequest) -> str:
     """Render session, job, or artifact details."""
-    try:
-        summary = build_show_summary(request)
-    except ShowQueryError as exc:
-        return str(exc)
+    summary = build_show_summary(request)
 
     renderer = ShowRenderer()
     if isinstance(summary, ShowSessionSummary):
@@ -60,57 +59,56 @@ def render_show(request: ShowQueryRequest) -> str:
 
 def build_show_summary(request: ShowQueryRequest) -> ShowSummary:
     """Build a typed show summary for session, job, or artifact details."""
-    bootstrap(request.roar_dir)
     logger = _logger()
     if logger:
-        logger.debug("show: entry with ref=%r", request.ref)
+        logger.debug("show: entry with ref=%r selector=%r", request.ref, request.selector)
 
-    with create_database_context(request.roar_dir) as db_ctx:
+    with create_query_database_context(request.roar_dir) as db_ctx:
+        if request.selector == "session":
+            return _build_active_session_summary(db_ctx)
+
+        if request.selector == "job":
+            if request.ref is None:
+                raise ShowQueryError("Job reference is required.")
+            return _build_job_summary_for_ref(db_ctx, request.ref)
+
+        if request.selector == "path":
+            if request.ref is None:
+                raise ShowQueryError("Artifact path is required.")
+            return _build_artifact_summary_for_path(db_ctx, request.cwd, request.ref)
+
+        if request.selector == "artifact":
+            if request.ref is None:
+                raise ShowQueryError("Artifact hash is required.")
+            return _build_artifact_summary_for_hash(db_ctx, request.ref)
+
         if request.ref is None:
-            session = db_ctx.sessions.get_active()
-            if not session:
-                raise ShowQueryError("No active session.")
-            return _build_session_summary(db_ctx, session)
+            return _build_active_session_summary(db_ctx)
 
         ref_type = _classify_ref(request.ref, request.cwd)
         if logger:
             logger.debug("show: ref_type=%r for ref=%r", ref_type, request.ref)
 
         if ref_type == "job_step":
-            session = db_ctx.sessions.get_active()
-            if not session:
-                raise ShowQueryError("No active session.")
-            job = _resolve_job_ref(db_ctx, int(session["id"]), request.ref)
-            if not job:
-                raise ShowQueryError(f"Job not found: {request.ref}")
-            return _build_job_summary(db_ctx, job)
+            return _build_job_summary_for_ref(db_ctx, request.ref)
 
         if ref_type == "file_path":
-            path_obj = Path(os.path.expanduser(request.ref))
-            if not path_obj.is_absolute():
-                path_obj = request.cwd / path_obj
-            resolved_path = os.path.normpath(str(path_obj.absolute()))
-            artifact = db_ctx.artifacts.get_by_path(resolved_path)
-            if not artifact:
-                raise ShowQueryError(f"No artifact found for path: {request.ref}")
-            return _build_artifact_summary(db_ctx, artifact)
+            return _build_artifact_summary_for_path(db_ctx, request.cwd, request.ref)
 
         if ref_type == "job_uid":
-            job = db_ctx.jobs.get_by_uid(request.ref)
-            if not job:
-                raise ShowQueryError(f"Job not found: {request.ref}")
-            return _build_job_summary(db_ctx, job)
+            return _build_job_summary_for_ref(db_ctx, request.ref)
 
         if ref_type == "artifact_hash":
             job = db_ctx.jobs.get_by_uid(request.ref)
             if job:
                 return _build_job_summary(db_ctx, job)
-            artifact = db_ctx.artifacts.get_by_hash(request.ref)
-            if artifact:
-                return _build_artifact_summary(db_ctx, artifact)
-            raise ShowQueryError(f"Not found: {request.ref}")
+            return _build_artifact_summary_for_hash(db_ctx, request.ref, missing_prefix="Not found")
 
-        raise ShowQueryError(f"Unknown reference format: {request.ref}")
+        artifact = _lookup_artifact_by_path(db_ctx, request.cwd, request.ref)
+        if artifact:
+            return _build_artifact_summary(db_ctx, artifact)
+
+        raise ShowQueryError(f"No artifact found for path: {request.ref}")
 
 
 def _logger():
@@ -139,14 +137,60 @@ def _classify_ref(ref: str, cwd: Path) -> str:
         return "job_step"
     if "/" in ref or ref.startswith(("./", "../", "~")):
         return "file_path"
-    if (cwd / ref).exists():
-        return "file_path"
-    is_hex = all(char in "0123456789abcdefABCDEF" for char in ref)
+    is_hex = bool(ref) and all(char in "0123456789abcdefABCDEF" for char in ref)
     if is_hex and len(ref) <= 8:
         return "job_uid"
     if is_hex and len(ref) > 8:
         return "artifact_hash"
-    return "unknown"
+    return "path_candidate"
+
+
+def _lookup_artifact_by_path(db_ctx, cwd: Path, ref: str) -> dict[str, Any] | None:
+    path_obj = Path(os.path.expanduser(ref))
+    if not path_obj.is_absolute():
+        path_obj = cwd / path_obj
+    resolved_path = os.path.normpath(str(path_obj.absolute()))
+    return db_ctx.artifacts.get_by_path(resolved_path)
+
+
+def _build_active_session_summary(db_ctx) -> ShowSessionSummary:
+    session = db_ctx.sessions.get_active()
+    if not session:
+        raise ShowQueryError(_NO_ACTIVE_SESSION_MESSAGE)
+    return _build_session_summary(db_ctx, session)
+
+
+def _build_job_summary_for_ref(db_ctx, ref: str) -> ShowJobSummary:
+    if ref.startswith("@"):
+        session = db_ctx.sessions.get_active()
+        if not session:
+            raise ShowQueryError(_NO_ACTIVE_SESSION_MESSAGE)
+        job = _resolve_job_ref(db_ctx, int(session["id"]), ref)
+    else:
+        job = db_ctx.jobs.get_by_uid(ref)
+
+    if not job:
+        raise ShowQueryError(f"Job not found: {ref}")
+    return _build_job_summary(db_ctx, job)
+
+
+def _build_artifact_summary_for_path(db_ctx, cwd: Path, ref: str) -> ShowArtifactSummary:
+    artifact = _lookup_artifact_by_path(db_ctx, cwd, ref)
+    if not artifact:
+        raise ShowQueryError(f"No artifact found for path: {ref}")
+    return _build_artifact_summary(db_ctx, artifact)
+
+
+def _build_artifact_summary_for_hash(
+    db_ctx,
+    ref: str,
+    *,
+    missing_prefix: str = "Artifact not found",
+) -> ShowArtifactSummary:
+    artifact = db_ctx.artifacts.get_by_hash(ref)
+    if not artifact:
+        raise ShowQueryError(f"{missing_prefix}: {ref}")
+    return _build_artifact_summary(db_ctx, artifact)
 
 
 def _resolve_job_ref(db_ctx, session_id: int, job_ref: str) -> dict | None:

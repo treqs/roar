@@ -33,6 +33,14 @@ class TestGlaasClientExceptions:
 
             assert "not configured" in str(exc_info.value).lower()
 
+    def test_empty_base_url_does_not_fall_back_to_config_lookup(self):
+        """An explicit empty URL should stay unconfigured without reading config."""
+        with patch("roar.integrations.glaas.client.get_glaas_url") as get_glaas_url:
+            client = GlaasClient(base_url="")
+
+        get_glaas_url.assert_not_called()
+        assert client.base_url is None
+
     def test_health_check_raises_connection_error_on_network_failure(self):
         """health_check should raise GlaasConnectionError on network errors."""
         client = GlaasClient(base_url="http://localhost:9999")

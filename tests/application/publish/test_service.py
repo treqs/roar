@@ -10,14 +10,14 @@ from roar.application.publish.put_execution import PutResult
 from roar.application.publish.register_execution import RegisterResult
 from roar.application.publish.register_preparation import PreparedRegisterExecution
 from roar.application.publish.requests import PutRequest, RegisterLineageRequest
-from roar.application.publish.results import PutResponse, RegisterLineageResponse
+from roar.application.publish.results import PutDryRunItem, PutResponse, RegisterLineageResponse
 from roar.application.publish.service import put_artifacts, register_lineage_target
 from roar.application.publish.targets import ResolvedRegisterTarget
 from roar.core.interfaces.lineage import LineageData
 
 
-def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:
-    expected = RegisterResult(success=True, session_hash="a" * 64)
+def test_register_lineage_target_uses_local_preview_path_for_dry_run(tmp_path: Path) -> None:
+    expected = RegisterLineageResponse(success=True, session_hash="a" * 64)
     runtime = MagicMock()
     logger = MagicMock()
     collected = MagicMock()
@@ -37,10 +37,9 @@ def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:
     )
 
     with (
-        patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
         patch(
-            "roar.application.publish.service.get_glaas_url",
-            return_value="http://localhost:3001",
+            "roar.application.publish.service.build_register_preview_runtime",
+            return_value=runtime,
         ),
         patch("roar.application.publish.service.get_logger", return_value=logger),
         patch(
@@ -52,13 +51,15 @@ def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:
             return_value=(collected, None),
         ) as collect_lineage,
         patch(
-            "roar.application.publish.service.prepare_register_execution",
+            "roar.application.publish.service.prepare_register_preview_execution",
             return_value=prepared,
         ) as prepare_register,
+        patch(
+            "roar.application.publish.service.preview_register_lineage",
+            return_value=expected,
+        ) as preview_register,
         patch("roar.application.publish.service.RegisterService") as mock_cls,
     ):
-        mock_cls.return_value.register_prepared_lineage.return_value = expected
-
         response = register_lineage_target(
             RegisterLineageRequest(
                 target="model.pt",
@@ -68,11 +69,8 @@ def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:
             )
         )
 
-    assert response == RegisterLineageResponse(success=True, session_hash="a" * 64)
-    mock_cls.assert_called_once_with(
-        glaas_client=runtime.glaas_client,
-        coordinator=runtime.registration_coordinator,
-    )
+    assert response == expected
+    mock_cls.assert_not_called()
     collect_lineage.assert_called_once_with(
         target=ResolvedRegisterTarget(kind="artifact_path", value="model.pt"),
         roar_dir=tmp_path / ".roar",
@@ -80,25 +78,23 @@ def test_register_lineage_target_collects_and_registers(tmp_path: Path) -> None:
         lineage_collector=runtime.lineage_collector,
         session_service=runtime.session_service,
         logger=logger,
+        dry_run=True,
     )
     prepare_register.assert_called_once_with(
         runtime=runtime,
         roar_dir=tmp_path / ".roar",
         cwd=tmp_path,
         session_id=7,
-        dry_run=True,
         session_hash_override=None,
         logger=logger,
     )
-    mock_cls.return_value.register_prepared_lineage.assert_called_once_with(
+    preview_register.assert_called_once_with(
         lineage=collected.lineage,
-        roar_dir=tmp_path / ".roar",
         artifact_hash="a" * 64,
-        dry_run=True,
-        as_blake3=False,
+        prepared=prepared,
+        cwd=tmp_path,
         skip_confirmation=False,
         confirm_callback=None,
-        prepared=prepared,
     )
 
 
@@ -107,10 +103,6 @@ def test_register_lineage_target_returns_collection_error(tmp_path: Path) -> Non
 
     with (
         patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
-        patch(
-            "roar.application.publish.service.get_glaas_url",
-            return_value="http://localhost:3001",
-        ),
         patch(
             "roar.application.publish.service.resolve_register_lineage_target",
             return_value=ResolvedRegisterTarget(kind="artifact_path", value="missing.csv"),
@@ -147,10 +139,6 @@ def test_register_lineage_target_returns_preparation_error(tmp_path: Path) -> No
     with (
         patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
         patch("roar.application.publish.service.get_logger", return_value=logger),
-        patch(
-            "roar.application.publish.service.get_glaas_url",
-            return_value="http://localhost:3001",
-        ),
         patch(
             "roar.application.publish.service.resolve_register_lineage_target",
             return_value=ResolvedRegisterTarget(kind="artifact_path", value="model.pt"),
@@ -204,10 +192,6 @@ def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -
     with (
         patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
         patch("roar.application.publish.service.get_logger", return_value=logger),
-        patch(
-            "roar.application.publish.service.get_glaas_url",
-            return_value="http://localhost:3001",
-        ),
         patch(
             "roar.application.publish.service.resolve_register_lineage_target",
             return_value=ResolvedRegisterTarget(kind="artifact_path", value="model.pt"),
@@ -419,27 +403,25 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
 
 def test_put_artifacts_returns_preparation_error_before_service(tmp_path: Path) -> None:
     db_ctx = MagicMock()
+    db_ctx.sessions.get_active.return_value = None
 
     with (
         patch("roar.application.publish.service.bootstrap"),
         patch("roar.application.publish.service.get_logger", return_value=MagicMock()),
         patch(
-            "roar.application.publish.service.create_database_context",
+            "roar.application.publish.service.create_query_database_context",
             return_value=nullcontext(db_ctx),
-        ),
-        patch(
-            "roar.application.publish.service.resolve_publish_storage_backend",
-            return_value=MagicMock(),
         ),
         patch(
             "roar.application.publish.service.prepare_put_git",
             return_value=MagicMock(git_commit=None, expected_tag=None, warnings=()),
         ),
-        patch("roar.application.publish.service.build_publish_runtime", return_value=MagicMock()),
+        patch("roar.application.publish.service.create_database_context") as create_db_ctx,
         patch(
-            "roar.application.publish.service.prepare_put_execution",
-            side_effect=ValueError("No active session"),
-        ),
+            "roar.application.publish.service.resolve_publish_storage_backend"
+        ) as resolve_backend,
+        patch("roar.application.publish.service.build_publish_runtime") as build_runtime,
+        patch("roar.application.publish.service.prepare_put_execution") as prepare_put_execution,
         patch("roar.application.publish.service.PutService") as mock_put_cls,
         pytest.raises(ValueError, match="No active session"),
     ):
@@ -455,4 +437,60 @@ def test_put_artifacts_returns_preparation_error_before_service(tmp_path: Path) 
             )
         )
 
+    create_db_ctx.assert_not_called()
+    resolve_backend.assert_not_called()
+    build_runtime.assert_not_called()
+    prepare_put_execution.assert_not_called()
     mock_put_cls.return_value.put_prepared.assert_not_called()
+
+
+def test_put_artifacts_dry_run_skips_backend_runtime_and_service(tmp_path: Path) -> None:
+    db_ctx = MagicMock()
+    db_ctx.sessions.get_active.return_value = {"id": 7}
+    model = tmp_path / "model.pt"
+    model.write_bytes(b"model")
+
+    with (
+        patch("roar.application.publish.service.bootstrap") as bootstrap,
+        patch("roar.application.publish.service.get_logger", return_value=MagicMock()),
+        patch(
+            "roar.application.publish.service.create_query_database_context",
+            return_value=nullcontext(db_ctx),
+        ),
+        patch("roar.application.publish.service.prepare_put_git") as prepare_put_git,
+        patch("roar.application.publish.service.create_database_context") as create_db_ctx,
+        patch(
+            "roar.application.publish.service.resolve_publish_storage_backend"
+        ) as resolve_backend,
+        patch("roar.application.publish.service.build_publish_runtime") as build_runtime,
+        patch("roar.application.publish.service.prepare_put_execution") as prepare_put_execution,
+        patch("roar.application.publish.service.PutService") as mock_put_cls,
+        patch("roar.application.publish.service.finalize_put_git") as finalize_put_git,
+    ):
+        response = put_artifacts(
+            PutRequest(
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                repo_root=tmp_path,
+                sources=["model.pt"],
+                destination="s3://bucket/prefix",
+                message="publish",
+                dry_run=True,
+            )
+        )
+
+    assert response == PutResponse(
+        success=True,
+        destination="s3://bucket/prefix",
+        dry_run=True,
+        would_upload=[PutDryRunItem(path=str(model.resolve()), exists=True)],
+        warnings=[],
+    )
+    create_db_ctx.assert_not_called()
+    resolve_backend.assert_not_called()
+    build_runtime.assert_not_called()
+    prepare_put_execution.assert_not_called()
+    mock_put_cls.assert_not_called()
+    bootstrap.assert_not_called()
+    prepare_put_git.assert_not_called()
+    finalize_put_git.assert_not_called()

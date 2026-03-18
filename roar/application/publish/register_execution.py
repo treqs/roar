@@ -4,36 +4,97 @@ Register service for submitting artifact lineage to GLaaS.
 Owns the registration mechanics after local lineage has already been collected.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ...application.publish.composite_builder import CompositeArtifactBuilder
-from ...application.publish.register_preparation import PreparedRegisterExecution
-from ...application.publish.registration import (
-    normalize_registration_hashes,
-    prepare_batch_registration_artifacts,
-    register_publish_lineage,
-)
-from ...core.interfaces.lineage import LineageData
-from ...core.interfaces.logger import ILogger
 from ...core.logging import get_logger
-from ...db.context import create_database_context
 from ...filters.omit import OmitFilter
 from ...integrations.config import config_get
-from ...integrations.glaas import GlaasClient
-from ...integrations.glaas.registration import RegistrationCoordinator
-from .blake3_upgrade import upgrade_s3_etags_to_blake3
 from .job_preparation import (
     estimate_links,
     normalize_jobs_for_registration,
     order_jobs_for_registration,
-    refresh_job_artifact_references,
 )
-from .lineage_composites import has_lineage_composites, preregister_lineage_composites_with_glaas
 from .secrets import detect_lineage_secrets, filter_lineage_secrets
+
+if TYPE_CHECKING:
+    from ...application.publish.composite_builder import CompositeArtifactBuilder
+    from ...application.publish.register_preparation import PreparedRegisterExecution
+    from ...core.interfaces.lineage import LineageData
+    from ...core.interfaces.logger import ILogger
+    from ...integrations.glaas import GlaasClient
+    from ...integrations.glaas.registration import RegistrationCoordinator
+
+
+def create_database_context(roar_dir: Path) -> Any:
+    """Load SQLAlchemy DB context only for non-dry-run registration paths."""
+    from ...db.context import create_database_context as _create_database_context
+
+    return _create_database_context(roar_dir)
+
+
+def upgrade_s3_etags_to_blake3(*args: Any, **kwargs: Any) -> None:
+    """Load S3 hash upgrade support only when requested."""
+    from .blake3_upgrade import upgrade_s3_etags_to_blake3 as _upgrade_s3_etags_to_blake3
+
+    _upgrade_s3_etags_to_blake3(*args, **kwargs)
+
+
+def has_lineage_composites(*args: Any, **kwargs: Any) -> bool:
+    """Load composite detection only for non-dry-run registration paths."""
+    from .lineage_composites import has_lineage_composites as _has_lineage_composites
+
+    return _has_lineage_composites(*args, **kwargs)
+
+
+def preregister_lineage_composites_with_glaas(*args: Any, **kwargs: Any) -> Any:
+    """Load composite preregistration only when needed."""
+    from .lineage_composites import (
+        preregister_lineage_composites_with_glaas as _preregister_lineage_composites_with_glaas,
+    )
+
+    return _preregister_lineage_composites_with_glaas(*args, **kwargs)
+
+
+def refresh_job_artifact_references(*args: Any, **kwargs: Any) -> None:
+    """Load heavy job/artifact reconciliation only for real registration."""
+    from .job_preparation import (
+        refresh_job_artifact_references as _refresh_job_artifact_references,
+    )
+
+    _refresh_job_artifact_references(*args, **kwargs)
+
+
+def prepare_batch_registration_artifacts(*args: Any, **kwargs: Any) -> Any:
+    """Load batch registration helpers only for real registration."""
+    from ...application.publish.registration import (
+        prepare_batch_registration_artifacts as _prepare_batch_registration_artifacts,
+    )
+
+    return _prepare_batch_registration_artifacts(*args, **kwargs)
+
+
+def register_publish_lineage(*args: Any, **kwargs: Any) -> Any:
+    """Load batch registration only for real registration."""
+    from ...application.publish.registration import (
+        register_publish_lineage as _register_publish_lineage,
+    )
+
+    return _register_publish_lineage(*args, **kwargs)
+
+
+def normalize_registration_hashes(*args: Any, **kwargs: Any) -> Any:
+    """Load hash normalization only when extracting registration payloads."""
+    from ...application.publish.registration import (
+        normalize_registration_hashes as _normalize_registration_hashes,
+    )
+
+    return _normalize_registration_hashes(*args, **kwargs)
 
 
 @dataclass
@@ -89,7 +150,7 @@ class RegisterService:
         """
         self._glaas_client = glaas_client
         self._coordinator = coordinator
-        self._composite_builder = composite_builder or CompositeArtifactBuilder()
+        self._composite_builder = composite_builder
         self._omit_filter = omit_filter
 
         self._logger = logger or get_logger()
@@ -106,12 +167,29 @@ class RegisterService:
     @cached_property
     def glaas_client(self) -> GlaasClient:
         """Get or create GLaaS client."""
-        return self._glaas_client or GlaasClient()
+        if self._glaas_client is None:
+            from ...integrations.glaas import GlaasClient
+
+            self._glaas_client = GlaasClient()
+        return self._glaas_client
 
     @cached_property
     def coordinator(self) -> RegistrationCoordinator:
         """Get or create registration coordinator."""
-        return self._coordinator or RegistrationCoordinator()
+        if self._coordinator is None:
+            from ...integrations.glaas.registration import RegistrationCoordinator
+
+            self._coordinator = RegistrationCoordinator()
+        return self._coordinator
+
+    @property
+    def composite_builder(self) -> CompositeArtifactBuilder:
+        """Get or create composite builder only for real registration paths."""
+        if self._composite_builder is None:
+            from ...application.publish.composite_builder import CompositeArtifactBuilder
+
+            self._composite_builder = CompositeArtifactBuilder()
+        return self._composite_builder
 
     def register_prepared_lineage(
         self,
@@ -204,7 +282,7 @@ class RegisterService:
                         lineage_artifacts=lineage.artifacts,
                         session_hash=session_hash,
                         registration_errors=pre_registration_errors,
-                        composite_builder=self._composite_builder,
+                        composite_builder=self.composite_builder,
                         logger=self._logger,
                     )
             except Exception as e:

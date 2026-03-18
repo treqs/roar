@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from ...db.context import create_database_context
+from ...db.query_context import create_query_database_context
 from ...presenters.formatting import format_duration, format_timestamp
 from .requests import LogQueryRequest
 from .results import LogJobSummary, LogSummary
+
+_NO_ACTIVE_SESSION_MESSAGE = "No active session. Run 'roar run' to create a session first."
 
 
 class LogQueryError(RuntimeError):
@@ -14,10 +16,7 @@ class LogQueryError(RuntimeError):
 
 def render_log(request: LogQueryRequest) -> str:
     """Render recent job execution history."""
-    try:
-        summary = build_log_summary(request)
-    except LogQueryError as exc:
-        return str(exc)
+    summary = build_log_summary(request)
     if not summary.jobs:
         return "No log entries found."
 
@@ -56,10 +55,10 @@ def render_log(request: LogQueryRequest) -> str:
 
 def build_log_summary(request: LogQueryRequest) -> LogSummary:
     """Build a typed summary of recent job execution history."""
-    with create_database_context(request.roar_dir) as db_ctx:
+    with create_query_database_context(request.roar_dir) as db_ctx:
         session = db_ctx.sessions.get_active()
         if not session:
-            raise LogQueryError("No active session.")
+            raise LogQueryError(_NO_ACTIVE_SESSION_MESSAGE)
 
         jobs = db_ctx.jobs.get_by_session(session["id"], limit=20)
 

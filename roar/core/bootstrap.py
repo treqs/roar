@@ -31,7 +31,7 @@ def bootstrap(roar_dir: Path | None = None) -> None:
     if _initialized:
         return
 
-    _configure_core_logging()
+    _configure_core_logging(roar_dir)
 
     # Register built-in integrations that should not depend on plugin discovery.
     _register_builtin_integrations()
@@ -43,13 +43,19 @@ def bootstrap(roar_dir: Path | None = None) -> None:
     return
 
 
-def _configure_core_logging() -> None:
+def _configure_core_logging(roar_dir: Path | None = None) -> None:
     """Configure the process-wide logger from local config."""
-    from ..integrations.config import config_get
+    from ..integrations.config import load_settings
 
-    level = config_get("logging.level") or "warning"
-    console_enabled = config_get("logging.console") or False
-    file_enabled = config_get("logging.file")
+    start_dir: str | None = None
+    if roar_dir is not None:
+        search_root = roar_dir.parent if roar_dir.name == ".roar" else roar_dir
+        start_dir = str(search_root)
+
+    settings = load_settings(start_dir=start_dir)
+    level = settings.logging.level or "warning"
+    console_enabled = bool(settings.logging.console)
+    file_enabled = settings.logging.file
     if file_enabled is None:
         file_enabled = True
     configure_logger(

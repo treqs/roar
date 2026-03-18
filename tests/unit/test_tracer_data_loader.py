@@ -12,6 +12,10 @@ def _write_msgpack(path: Path, payload: dict) -> None:
     path.write_bytes(msgpack.packb(payload, use_bin_type=True))
 
 
+def _write_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload))
+
+
 class TestDataLoaderService:
     def test_loads_json_report_when_tracer_writes_json(self, tmp_path: Path) -> None:
         report = {
@@ -25,7 +29,7 @@ class TestDataLoaderService:
             "end_time": 2.5,
         }
         report_path = tmp_path / "trace.msgpack"
-        report_path.write_text(json.dumps(report))
+        _write_json(report_path, report)
 
         data = DataLoaderService().load_tracer_data(str(report_path))
 

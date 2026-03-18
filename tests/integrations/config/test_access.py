@@ -1,5 +1,6 @@
 """Tests for proxy configuration model and config get/set."""
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from roar.integrations.config import (
@@ -45,8 +46,8 @@ class TestProxyConfigGetSet:
         roar_dir = tmp_path / ".roar"
         roar_dir.mkdir()
 
-        with patch("roar.integrations.config.access.load_config") as mock_load:
-            mock_load.return_value = RoarConfig().to_dict()
+        with patch("roar.integrations.config.access.load_settings") as mock_load:
+            mock_load.return_value = SimpleNamespace(proxy=SimpleNamespace(enabled=False))
             result = config_get("proxy.enabled")
         assert result is False
 

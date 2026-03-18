@@ -2,7 +2,8 @@
 
 import click
 
-from ...application.query import LineageQueryRequest, render_lineage
+from ...application.query.lineage import render_lineage
+from ...application.query.requests import LineageQueryRequest
 from ..context import RoarContext
 from ..decorators import require_init
 

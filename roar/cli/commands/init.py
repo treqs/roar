@@ -227,6 +227,7 @@ def init(ctx: RoarContext, yes: bool, no: bool, init_path: Path | None) -> None:
         roar init --path /some/dir  # Initialize in a specific directory
     """
     cwd = init_path if init_path is not None else ctx.cwd
+    target_repo_root = RoarContext._get_repo_root(cwd)
 
     # Check if .roar already exists
     roar_dir = cwd / ".roar"
@@ -248,12 +249,12 @@ def init(ctx: RoarContext, yes: bool, no: bool, init_path: Path | None) -> None:
     click.echo(f"Created {roar_dir / 'config.toml'}")
 
     # Check if we're in a git repo
-    if ctx.repo_root is None:
+    if target_repo_root is None:
         click.echo("Not in a git repository. Done.")
         return
 
     # Check if .gitignore exists
-    gitignore_path = ctx.repo_root / ".gitignore"
+    gitignore_path = target_repo_root / ".gitignore"
     if not gitignore_path.exists():
         click.echo("No .gitignore found. Done.")
         return

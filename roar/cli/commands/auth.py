@@ -74,14 +74,14 @@ def auth(ctx: click.Context) -> None:
     """Manage authentication with https://glaas.ai
 
     \b
-    To register with GLaaS:
-        1. Run 'roar auth register' to display your public key
+    To set up GLaaS auth:
+        1. Run 'roar auth key' to display your public key
         2. Sign up for GLaaS at https://glaas.ai where you can paste your public key
         3. Once added, run 'roar auth test' to verify
 
     \b
     Examples:
-        roar auth register    # Show your SSH key
+        roar auth key         # Show your SSH key
         roar auth test        # Test connection
         roar auth status      # Show auth status
     """
@@ -89,9 +89,8 @@ def auth(ctx: click.Context) -> None:
         click.echo(ctx.get_help())
 
 
-@auth.command("register")
-def auth_register() -> None:
-    """Show SSH public key for registration."""
+def _show_auth_key() -> None:
+    """Render the SSH public key guidance used by auth key and its legacy alias."""
     key_info = _find_ssh_pubkey()
 
     if not key_info:
@@ -99,7 +98,7 @@ def auth_register() -> None:
             "No SSH public key found.\n\n"
             "Generate one with:\n"
             "  ssh-keygen -t ed25519\n\n"
-            "Then run 'roar auth register' again."
+            "Then run 'roar auth key' again."
         )
 
     key_type, pubkey, path = key_info
@@ -111,6 +110,18 @@ def auth_register() -> None:
     click.echo(f"Path: {path}")
     click.echo("")
     click.echo("Copy and paste this key when you sign up at https://glaas.ai")
+
+
+@auth.command("key")
+def auth_key() -> None:
+    """Show SSH public key for GLaaS signup."""
+    _show_auth_key()
+
+
+@auth.command("register", hidden=True)
+def auth_register() -> None:
+    """Backward-compatible alias for 'roar auth key'."""
+    _show_auth_key()
 
 
 @auth.command("test")
@@ -150,7 +161,7 @@ def auth_test() -> None:
 
     key_info = glaas_find_ssh_pubkey()
     if not key_info:
-        raise click.ClickException("No SSH key found. Run 'roar auth register' first.")
+        raise click.ClickException("No SSH key found. Run 'roar auth key' first.")
 
     _, pubkey, key_path = key_info
     fingerprint = compute_pubkey_fingerprint(pubkey)

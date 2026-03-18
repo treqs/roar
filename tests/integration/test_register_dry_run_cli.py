@@ -82,8 +82,8 @@ def test_register_dry_run_resolves_artifact_step_and_session_targets(
 
     for result in (artifact_result, step_result, session_result):
         assert result.returncode == 0
-        assert "Dry run - would register:" in result.stdout
-        assert "View on GLaaS:" in result.stdout
+        assert "Dry run: would register lineage for:" in result.stdout
+        assert "GLaaS:" in result.stdout
 
     published_session_hashes = {
         _parse_session_hash(artifact_result.stdout),
@@ -134,9 +134,9 @@ def test_register_publishes_local_lineage_with_fake_glaas(
     assert "Jobs: 1" in result.stdout
     assert "Artifacts:" in result.stdout
     assert "Links:" in result.stdout
-    assert "To reproduce this artifact:" in result.stdout
+    assert "Next:" in result.stdout
     assert "roar reproduce " in result.stdout
-    assert "View on GLaaS:" in result.stdout
+    assert "GLaaS:" in result.stdout
 
     assert fake_glaas_publish_server.health_checks >= 1
     assert len(fake_glaas_publish_server.session_registrations) == 1

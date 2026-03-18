@@ -176,6 +176,55 @@ def test_collect_register_lineage_for_job_uses_representative_hash(tmp_path: Pat
     )
 
 
+def test_collect_register_lineage_step_reference_dry_run_uses_read_only_collector(
+    tmp_path: Path,
+) -> None:
+    collector = MagicMock()
+    collector.collect_step_read_only.return_value = LineageData(
+        jobs=[{"id": 1, "job_uid": "job-1"}],
+        artifacts=[],
+        artifact_hashes={"c" * 64},
+        pipeline={"id": 7},
+    )
+
+    with (
+        patch("roar.application.publish.collection.create_database_context") as create_db_ctx,
+        patch(
+            "roar.application.publish.collection.create_query_database_context"
+        ) as create_query_db,
+    ):
+        db_ctx = MagicMock()
+        db_ctx.__enter__ = MagicMock(return_value=db_ctx)
+        db_ctx.__exit__ = MagicMock(return_value=None)
+        db_ctx.sessions.get_active.return_value = {"id": 7}
+        create_query_db.return_value = db_ctx
+
+        collected, error = collect_register_lineage(
+            target=ResolvedRegisterTarget(kind="step_reference", value="@1"),
+            roar_dir=tmp_path / ".roar",
+            cwd=tmp_path,
+            lineage_collector=collector,
+            session_service=MagicMock(),
+            logger=MagicMock(),
+            dry_run=True,
+        )
+
+    assert error is None
+    assert collected == CollectedRegisterLineage(
+        lineage=collector.collect_step_read_only.return_value,
+        session_id=7,
+        artifact_hash="c" * 64,
+        session_hash_override=None,
+    )
+    create_db_ctx.assert_not_called()
+    collector.collect_step_read_only.assert_called_once_with(
+        session_id=7,
+        step_number=1,
+        roar_dir=tmp_path / ".roar",
+        job_type=None,
+    )
+
+
 def test_select_representative_hash_returns_empty_string_for_multiple_hashes() -> None:
     lineage = LineageData(
         jobs=[],

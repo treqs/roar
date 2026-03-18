@@ -4,13 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...application.publish.registration import normalize_registration_hashes
 from ...execution.framework.registry import (
     is_execution_noise_job,
     is_execution_submit_job,
     is_execution_task_job,
 )
 from ...integrations.glaas.registration import _artifact_ref
+
+
+def normalize_registration_hashes(*args: Any, **kwargs: Any) -> Any:
+    """Load heavy registration hashing helpers only when needed."""
+    from ...application.publish.registration import (
+        normalize_registration_hashes as _normalize_registration_hashes,
+    )
+
+    return _normalize_registration_hashes(*args, **kwargs)
 
 
 def normalize_jobs_for_registration(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -6,7 +6,8 @@ import sys
 
 import click
 
-from ...application.query import DagQueryRequest, render_dag
+from ...application.query.dag import render_dag
+from ...application.query.requests import DagQueryRequest
 from ..context import RoarContext
 from ..decorators import require_init
 

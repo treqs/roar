@@ -4,18 +4,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ...core.bootstrap import bootstrap
-from ...db.context import create_database_context
+from ...db.query_context import create_query_database_context
 from ...presenters.formatting import format_size
 from .requests import StatusQueryRequest
 from .results import StatusArtifactSummary, StatusSummary
+
+_NO_ACTIVE_SESSION_MESSAGE = "No active session. Run 'roar run' to create a session first."
+
+
+class StatusQueryError(RuntimeError):
+    """Raised when a status query cannot build a summary."""
 
 
 def render_status(request: StatusQueryRequest) -> str:
     """Render a summary of the active session."""
     summary = build_status_summary(request)
-    if summary is None:
-        return "No active session."
     lines = [
         "DAG:",
         f"  Build steps: {summary.build_steps}",
@@ -47,14 +50,12 @@ def render_status(request: StatusQueryRequest) -> str:
     return "\n".join(lines)
 
 
-def build_status_summary(request: StatusQueryRequest) -> StatusSummary | None:
+def build_status_summary(request: StatusQueryRequest) -> StatusSummary:
     """Build a typed summary of the active session status."""
-    bootstrap(request.roar_dir)
-
-    with create_database_context(request.roar_dir) as db_ctx:
+    with create_query_database_context(request.roar_dir) as db_ctx:
         session = db_ctx.sessions.get_active()
         if not session:
-            return None
+            raise StatusQueryError(_NO_ACTIVE_SESSION_MESSAGE)
 
         jobs = db_ctx.jobs.get_by_session(session["id"], limit=10000)
 
@@ -67,21 +68,29 @@ def build_status_summary(request: StatusQueryRequest) -> StatusSummary | None:
             else:
                 run_steps.add(step)
 
-        seen_artifact_ids: set[int] = set()
         artifacts: list[StatusArtifactSummary] = []
-        for job in jobs:
-            for output in db_ctx.jobs.get_outputs(job["id"]):
-                artifact_id = output["artifact_id"]
-                if artifact_id not in seen_artifact_ids:
-                    seen_artifact_ids.add(artifact_id)
-                    artifacts.append(
-                        StatusArtifactSummary(
-                            artifact_hash=str(output["artifact_hash"] or ""),
-                            size_bytes=int(output["size"] or 0),
-                            path=str(output["path"]),
-                            present=Path(output["path"]).exists(),
-                        )
-                    )
+        distinct_outputs = getattr(db_ctx.jobs, "get_distinct_outputs_by_session", None)
+        if callable(distinct_outputs):
+            outputs = distinct_outputs(session["id"])
+        else:
+            seen_artifact_ids: set[int | str] = set()
+            outputs = []
+            for job in jobs:
+                for output in db_ctx.jobs.get_outputs(job["id"]):
+                    artifact_id = output["artifact_id"]
+                    if artifact_id not in seen_artifact_ids:
+                        seen_artifact_ids.add(artifact_id)
+                        outputs.append(output)
+
+        for output in outputs:
+            artifacts.append(
+                StatusArtifactSummary(
+                    artifact_hash=str(output["artifact_hash"] or ""),
+                    size_bytes=int(output["size"] or 0),
+                    path=str(output["path"]),
+                    present=Path(output["path"]).exists(),
+                )
+            )
 
     return StatusSummary(
         build_steps=len(build_steps),

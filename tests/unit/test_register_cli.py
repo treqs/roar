@@ -1,5 +1,8 @@
+"""Unit tests for the register CLI output surface."""
+
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
@@ -8,7 +11,17 @@ from roar.application.publish.results import RegisterLineageResponse
 from roar.cli.commands.register import register
 
 
-def _fake_result():
+def _mock_context(tmp_path: Path) -> MagicMock:
+    roar_dir = tmp_path / ".roar"
+    roar_dir.mkdir()
+    ctx = MagicMock()
+    ctx.roar_dir = roar_dir
+    ctx.cwd = tmp_path
+    ctx.is_initialized = True
+    return ctx
+
+
+def _fake_result() -> RegisterLineageResponse:
     return RegisterLineageResponse(
         success=True,
         aborted_by_user=False,
@@ -23,25 +36,74 @@ def _fake_result():
     )
 
 
-def test_register_cli_accepts_s3_uri(tmp_path):
+def test_register_cli_accepts_s3_uri(tmp_path: Path) -> None:
     runner = CliRunner()
 
-    ctx = MagicMock()
-    ctx.roar_dir = tmp_path / ".roar"
-    ctx.roar_dir.mkdir()
-    ctx.cwd = tmp_path
-    ctx.is_initialized = True
-
-    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+    with (
+        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
+        patch(
+            "roar.cli.commands.register._resolve_glaas_web_url",
+            return_value="https://glaas.local",
+        ),
+    ):
         mock_register.return_value = _fake_result()
-        with patch("roar.cli.commands.register.config_get", return_value="https://glaas.local"):
-            result = runner.invoke(
-                register,
-                ["s3://output-bucket/results/run123/final_report.json", "--yes"],
-                obj=ctx,
-            )
+        result = runner.invoke(
+            register,
+            ["s3://output-bucket/results/run123/final_report.json", "--yes"],
+            obj=_mock_context(tmp_path),
+        )
 
     assert result.exit_code == 0, result.output
     mock_register.assert_called_once()
     request = mock_register.call_args.args[0]
     assert request.target == "s3://output-bucket/results/run123/final_report.json"
+
+
+def test_register_cli_prints_next_steps_for_artifacts(tmp_path: Path) -> None:
+    runner = CliRunner()
+    artifact_hash = "abcdef0123456789abcdef0123456789"
+    response = RegisterLineageResponse(
+        success=True,
+        session_hash="0123456789abcdef0123456789abcdef",
+        artifact_hash=artifact_hash,
+        jobs_registered=3,
+        artifacts_registered=4,
+        links_created=5,
+    )
+
+    with (
+        patch("roar.cli.commands.register.register_lineage_target", return_value=response),
+        patch(
+            "roar.cli.commands.register._resolve_glaas_web_url",
+            return_value="https://glaas.example",
+        ),
+    ):
+        result = runner.invoke(register, ["model.pt"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert "Registered lineage for: model.pt" in result.output
+    assert "Session: 0123456789ab..." in result.output
+    assert "GLaaS:" in result.output
+    assert "https://glaas.example/dag/0123456789abcdef0123456789abcdef" in result.output
+    assert "https://glaas.example/artifact/abcdef0123456789abcdef0123456789" in result.output
+    assert "Next:" in result.output
+    assert f"roar show --artifact {artifact_hash}" in result.output
+    assert f"roar reproduce {artifact_hash}" in result.output
+
+
+def test_register_cli_dry_run_mentions_target(tmp_path: Path) -> None:
+    runner = CliRunner()
+    response = RegisterLineageResponse(
+        success=True,
+        session_hash="0123456789abcdef0123456789abcdef",
+        jobs_registered=2,
+        artifacts_registered=3,
+        links_created=4,
+    )
+
+    with patch("roar.cli.commands.register.register_lineage_target", return_value=response):
+        result = runner.invoke(register, ["model.pt", "--dry-run"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert "Dry run: would register lineage for: model.pt" in result.output
+    assert "Session: 0123456789ab..." in result.output
