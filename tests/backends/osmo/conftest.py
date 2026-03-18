@@ -11,6 +11,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import textwrap
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -34,6 +35,13 @@ BOOTSTRAP_TIMEOUT_SECONDS = 45 * 60
 QUERY_TIMEOUT_SECONDS = 12 * 60
 POLL_INTERVAL_SECONDS = 5
 PORT_FORWARD_TIMEOUT_SECONDS = 5 * 60
+DEFAULT_OSMO_TEST_PYTHON_IMAGE = (
+    f"public.ecr.aws/docker/library/python:{sys.version_info.major}.{sys.version_info.minor}-slim"
+)
+OSMO_TEST_PYTHON_IMAGE = os.environ.get(
+    "OSMO_TEST_PYTHON_IMAGE",
+    DEFAULT_OSMO_TEST_PYTHON_IMAGE,
+)
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -74,6 +82,13 @@ def run_docker(args: Sequence[str], **kwargs) -> subprocess.CompletedProcess[str
 
 def _compose_args(*args: str) -> list[str]:
     return ["docker", "compose", "-f", str(COMPOSE_FILE), *args]
+
+
+def _compose_env() -> dict[str, str]:
+    return {
+        **os.environ,
+        "OSMO_TEST_PYTHON_IMAGE": OSMO_TEST_PYTHON_IMAGE,
+    }
 
 
 def _compose_exec_command(
@@ -358,6 +373,7 @@ def osmo_harness() -> dict[str, str]:
         check=True,
         capture_output=True,
         text=True,
+        env=_compose_env(),
         timeout=30 * 60,
     )
 
@@ -371,6 +387,7 @@ def osmo_harness() -> dict[str, str]:
             )
             if (value := os.environ.get(key))
         }
+        bootstrap_env["OSMO_TEST_PYTHON_IMAGE"] = OSMO_TEST_PYTHON_IMAGE
         bootstrap = exec_on_service(
             "osmo-tools",
             ["bash", "tests/backends/osmo/scripts/bootstrap_osmo.sh"],

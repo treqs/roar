@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+ARG PYTHON_IMAGE=public.ecr.aws/docker/library/python:3.11-slim
+FROM ${PYTHON_IMAGE}
 
 ARG DOCKER_VERSION=28.2.2
 ARG HELM_VERSION=v3.16.2

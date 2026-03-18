@@ -12,7 +12,8 @@ localstack_forward_pid="/tmp/osmo-localstack-port-forward.pid"
 localstack_override_url="http://127.0.0.1:${localstack_port}"
 dockerhub_username="${OSMO_DOCKERHUB_USERNAME:-}"
 dockerhub_password="${OSMO_DOCKERHUB_PASSWORD:-}"
-preload_images="${OSMO_PRELOAD_DOCKERHUB_IMAGES:-postgres:15.1 redis:7.0 gresau/localstack-persist:latest busybox:1.37.0 alpine:3.18 alpine/k8s:1.28.4 public.ecr.aws/docker/library/python:3.11-slim}"
+test_python_image="${OSMO_TEST_PYTHON_IMAGE:-public.ecr.aws/docker/library/python:3.11-slim}"
+preload_images="${OSMO_PRELOAD_DOCKERHUB_IMAGES:-postgres:15.1 redis:7.0 gresau/localstack-persist:latest busybox:1.37.0 alpine:3.18 alpine/k8s:1.28.4 ${test_python_image}}"
 kind_nodes_csv=""
 
 cleanup_port_forward() {
@@ -59,7 +60,7 @@ resolve_preload_nodes_csv() {
     alpine/k8s:*)
       selector="node_group=service"
       ;;
-    python:3.11-slim|public.ecr.aws/docker/library/python:3.11-slim)
+    python:*-slim|public.ecr.aws/docker/library/python:*-slim)
       selector="node_group=compute"
       ;;
     *)

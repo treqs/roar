@@ -12,6 +12,7 @@ import pytest
 
 from .conftest import (
     HOST_PROJECTS_DIR,
+    OSMO_TEST_PYTHON_IMAGE,
     allow_git_safe_directory,
     container_repo_path,
     restore_host_path_ownership,
@@ -19,7 +20,7 @@ from .conftest import (
 )
 
 pytestmark = [pytest.mark.e2e, pytest.mark.osmo_e2e]
-OSMO_SMOKE_TASK_IMAGE = "public.ecr.aws/docker/library/python:3.11-slim"
+OSMO_SMOKE_TASK_IMAGE = OSMO_TEST_PYTHON_IMAGE
 
 
 def _run_host(args: list[str], *, cwd: Path) -> None:
