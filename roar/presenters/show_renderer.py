@@ -134,6 +134,13 @@ class ShowRenderer:
 
         lines.append(f"\nCommand: {job['command']}")
 
+        # Agent process tree
+        meta = job.get("metadata")
+        if job.get("job_type") == "agent" and meta and isinstance(meta, dict):
+            process_tree = meta.get("process_tree")
+            if process_tree:
+                self._render_agent_process_tree(lines, process_tree)
+
         # Git info
         if job.get("git_commit"):
             lines.append(f"\nGit commit: {job['git_commit']}")
@@ -141,7 +148,6 @@ class ShowRenderer:
             lines.append(f"Git branch: {job['git_branch']}")
 
         # Metadata (what gets registered with GLaaS)
-        meta = job.get("metadata")
         if meta and isinstance(meta, dict):
             lines.append("\nMetadata:")
 
@@ -258,6 +264,40 @@ class ShowRenderer:
                     lines.append(f"    {h['algorithm']}: {h['digest']}")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_process_cmd(cmd: list[str] | None, max_len: int = 120) -> str:
+        """Format a command list as a single-line display string."""
+        import shlex
+
+        if not cmd:
+            return "(unknown)"
+        cmd_str = shlex.join(cmd).replace("\n", " ").replace("  ", " ")
+        if len(cmd_str) > max_len:
+            cmd_str = cmd_str[: max_len - 3] + "..."
+        return cmd_str
+
+    @classmethod
+    def _render_agent_process_tree(cls, lines: list[str], tree: list[dict]) -> None:
+        """Render executed commands for an agent job."""
+        if not tree:
+            return
+
+        lines.append("\nExecuted commands:")
+        for node in tree:
+            cls._render_process_node(lines, node, depth=0)
+
+    @classmethod
+    def _render_process_node(
+        cls, lines: list[str], node: dict, depth: int
+    ) -> None:
+        """Recursively render a process tree node with indentation."""
+        cmd_str = cls._format_process_cmd(node.get("command"))
+        indent = "  " + "  " * depth
+        connector = "" if depth == 0 else "- "
+        lines.append(f"{indent}{connector}{cmd_str}")
+        for child in node.get("children", []):
+            cls._render_process_node(lines, child, depth + 1)
 
     def render_artifact(
         self,

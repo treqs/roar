@@ -28,6 +28,7 @@ except Exception:
 # Lazy command registry: maps command name to (module_path, command_name, short_help)
 # Short help is stored here to avoid importing commands just for --help
 LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
+    "agent": ("roar.cli.commands.agent", "agent", "Run an agent with provenance tracking"),
     "auth": ("roar.cli.commands.auth", "auth", "Manage authentication with GLaaS"),
     "build": ("roar.cli.commands.build", "build", "Run a build step before the main pipeline"),
     "config": ("roar.cli.commands.config", "config", "View or set configuration"),

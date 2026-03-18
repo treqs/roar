@@ -115,7 +115,9 @@ class GitVCSProvider(BaseVCSProvider):
     def get_status(self, repo_root: str) -> tuple[bool, list[str]]:
         """Get the git working tree status."""
         try:
-            out = subprocess.check_output(["git", "status", "--porcelain=v1"], cwd=repo_root)
+            out = subprocess.check_output(
+                ["git", "status", "--porcelain=v1"], cwd=repo_root, stderr=subprocess.DEVNULL
+            )
             lines = out.decode().splitlines()
             clean = len(lines) == 0
             return clean, lines

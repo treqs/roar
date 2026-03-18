@@ -557,6 +557,13 @@ class ExecutionJobRecorder:
         except Exception:
             pass
 
+        # For agent jobs, include the process tree so `roar show` can render
+        # the top-level commands the agent spawned.
+        if getattr(ctx, "job_type", None) == "agent":
+            process_tree = prov.get("processes")
+            if process_tree:
+                metadata["process_tree"] = process_tree
+
         return json.dumps(metadata) if metadata else None
 
     def _build_telemetry_json(self, repo_root: str, start_time: float) -> str | None:

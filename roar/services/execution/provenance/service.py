@@ -284,15 +284,27 @@ class ProvenanceService:
         return process_info
 
     def _get_git_info(self, repo_root: str) -> dict[str, Any]:
-        """Get git info via VCS provider."""
+        """Get git info via VCS provider.
+
+        Returns an empty dict if the repo_root is not inside a git repository
+        (e.g. when invoked via ``roar agent`` outside a repo).
+        """
         try:
-            vcs = get_container().get_vcs_provider("git")
+            from ....integrations import get_vcs_provider
+
+            vcs = get_vcs_provider("git")
             vcs_info = vcs.get_info(repo_root)
         except KeyError:
-            # Defensive fallback if plugin bootstrap/registration was skipped.
             from ....plugins.vcs.git import GitVCSProvider
 
-            vcs_info = GitVCSProvider().get_info(repo_root)
+            try:
+                vcs_info = GitVCSProvider().get_info(repo_root)
+            except Exception:
+                self.logger.debug("Git info unavailable for %s", repo_root)
+                return {}
+        except Exception:
+            self.logger.debug("Git info unavailable for %s", repo_root)
+            return {}
 
         return {
             "commit": vcs_info.commit,

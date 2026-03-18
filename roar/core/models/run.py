@@ -16,7 +16,7 @@ from .base import ImmutableModel, RoarBaseModel
 
 # Type aliases
 HashAlgorithm = Literal["blake3", "sha256", "sha512", "md5"]
-JobType = Literal["run", "build"]
+JobType = Literal["run", "build", "agent"]
 
 
 class RunArguments(ImmutableModel):

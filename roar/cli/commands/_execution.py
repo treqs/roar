@@ -79,6 +79,25 @@ def validate_git_clean() -> str:
     return repo_root
 
 
+def get_git_root_optional() -> str:
+    """Get git repo root if available, otherwise return cwd.
+
+    Unlike ``validate_git_clean``, this does **not** require a git repo and
+    does **not** check for uncommitted changes.  Suitable for ``roar agent``
+    where the agent is expected to modify the working tree.
+    """
+    import subprocess
+
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return os.getcwd()
+
+
 def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
     """
     Get quiet setting from CLI flag or config.
@@ -186,7 +205,7 @@ def execute_and_report(
 
     # Create run context
     hash_algos = cast(list[Literal["blake3", "sha256", "sha512", "md5"]], hash_algorithms)
-    job_type_literal = cast(Literal["run", "build"] | None, job_type)
+    job_type_literal = cast(Literal["run", "build", "agent"] | None, job_type)
     run_ctx = RunContext(
         roar_dir=ctx.roar_dir,
         repo_root=repo_root,
