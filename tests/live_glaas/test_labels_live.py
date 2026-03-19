@@ -2,10 +2,13 @@
 Live GLaaS tests for label synchronization semantics.
 """
 
+import fcntl
 import json
+import os
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -18,9 +21,76 @@ pytest_plugins = ("tests.live_glaas.test_composite_live",)
 pytestmark = pytest.mark.live_glaas
 
 
+def _clear_remote_label_storage() -> None:
+    rows = composite_live._db_query_rows(
+        """
+        SELECT
+          to_regclass('public.current_label_values') IS NOT NULL AS has_current_label_values,
+          to_regclass('public.label_versions') IS NOT NULL AS has_label_versions,
+          to_regclass('public.label_targets') IS NOT NULL AS has_label_targets,
+          to_regclass('public.label_keys') IS NOT NULL AS has_label_keys,
+          to_regclass('public.label_facts') IS NOT NULL AS has_label_facts,
+          to_regclass('public.labels') IS NOT NULL AS has_labels
+        """
+    )
+    assert rows, "Expected label storage probe row"
+    row = rows[0]
+
+    current_tables = [
+        table_name
+        for table_name, present in (
+            ("current_label_values", row.get("has_current_label_values")),
+            ("label_versions", row.get("has_label_versions")),
+            ("label_targets", row.get("has_label_targets")),
+            ("label_keys", row.get("has_label_keys")),
+        )
+        if present
+    ]
+    if current_tables:
+        current_table_list = ", ".join(f'"{table}"' for table in current_tables)
+        composite_live._db_query_rows(
+            f"TRUNCATE TABLE {current_table_list} RESTART IDENTITY CASCADE"
+        )
+
+    legacy_tables = [
+        table_name
+        for table_name, present in (
+            ("label_facts", row.get("has_label_facts")),
+            ("labels", row.get("has_labels")),
+        )
+        if present
+    ]
+    if legacy_tables:
+        legacy_table_list = ", ".join(f'"{table}"' for table in legacy_tables)
+        composite_live._db_query_rows(
+            f"TRUNCATE TABLE {legacy_table_list} RESTART IDENTITY CASCADE"
+        )
+
+
 @pytest.fixture(autouse=True)
-def _clear_remote_labels(glaas_db_queryable):
-    composite_live._db_query_rows("DELETE FROM labels")
+def _clear_remote_labels(_serialize_external_label_tests):
+    del _serialize_external_label_tests
+    rows = composite_live._db_query_rows("SELECT 1 AS ok")
+    assert rows and str(rows[0].get("ok")) == "1", (
+        f"Unexpected GLaaS database probe result: {rows}"
+    )
+    _clear_remote_label_storage()
+
+
+@pytest.fixture(autouse=True)
+def _serialize_external_label_tests():
+    external_glaas_url = os.environ.get("GLAAS_URL")
+    if not external_glaas_url:
+        yield
+        return
+
+    lock_path = Path(tempfile.gettempdir()) / "roar-live-glaas-label-tests.lock"
+    with lock_path.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _assert_ok(result: subprocess.CompletedProcess[str]) -> str:

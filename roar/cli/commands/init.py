@@ -9,6 +9,7 @@ from pathlib import Path
 
 import click
 
+from roar.db.context import create_database_context
 from roar.db.engine import create_roar_engine, init_database
 from roar.db.schema import run_migrations
 from roar.execution.framework.registry import iter_execution_backend_init_templates
@@ -159,10 +160,17 @@ def _add_to_gitignore(gitignore_path: Path, gitignore_content: str) -> None:
         f.write(".roar/\n")
 
 
+def _ensure_active_session(roar_dir: Path) -> None:
+    """Guarantee the initialized project has an active session."""
+    with create_database_context(roar_dir) as db_ctx:
+        db_ctx.sessions.get_or_create_active()
+
+
 def init_project(cwd: Path) -> Path:
     """Create the minimal local roar project structure in ``cwd``."""
     roar_dir = cwd / ".roar"
     if roar_dir.exists():
+        _ensure_active_session(roar_dir)
         return roar_dir
 
     roar_dir.mkdir()
@@ -183,6 +191,7 @@ def init_project(cwd: Path) -> Path:
     config_path = roar_dir / "config.toml"
     config_path.write_text(build_default_config_template())
 
+    _ensure_active_session(roar_dir)
     return roar_dir
 
 
@@ -232,6 +241,7 @@ def init(ctx: RoarContext, yes: bool, no: bool, init_path: Path | None) -> None:
     # Check if .roar already exists
     roar_dir = cwd / ".roar"
     if roar_dir.exists():
+        init_project(cwd)
         click.echo(f".roar directory already exists at {roar_dir}")
         return
 

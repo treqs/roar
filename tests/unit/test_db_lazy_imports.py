@@ -108,4 +108,4 @@ def test_database_context_initializes_repositories_and_services_lazily(tmp_path:
         assert db_ctx._lineage_service is None
         assert db_ctx._collection_repo is None
         assert db_ctx._composite_repo is None
-        assert db_ctx._label_repo is None
+        assert db_ctx._label_repo is not None

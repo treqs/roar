@@ -9,9 +9,11 @@ import os
 
 from sqlalchemy.orm import Session as SASession
 
+from ...core.step_name import STEP_NAME_LABEL_KEY, get_step_name_label
 from ..repositories import (
     SQLAlchemyArtifactRepository,
     SQLAlchemyJobRepository,
+    SQLAlchemyLabelRepository,
     SQLAlchemySessionRepository,
 )
 from .hashing import DefaultHashingService
@@ -35,6 +37,7 @@ class JobRecordingService:
         session: SASession,
         job_repo: SQLAlchemyJobRepository,
         artifact_repo: SQLAlchemyArtifactRepository,
+        label_repo: SQLAlchemyLabelRepository,
         session_repo: SQLAlchemySessionRepository,
         hashing_service: DefaultHashingService,
         session_service: DefaultSessionService,
@@ -46,6 +49,7 @@ class JobRecordingService:
             session: SQLAlchemy session (for transaction management)
             job_repo: Job repository
             artifact_repo: Artifact repository
+            label_repo: Label repository
             session_repo: Session repository
             hashing_service: Service for computing file hashes
             session_service: Service for session operations
@@ -53,6 +57,7 @@ class JobRecordingService:
         self._session = session
         self._job_repo = job_repo
         self._artifact_repo = artifact_repo
+        self._label_repo = label_repo
         self._session_repo = session_repo
         self._hashing_service = hashing_service
         self._session_service = session_service
@@ -148,7 +153,6 @@ class JobRecordingService:
             step_identity=step_identity,
             session_id=session_id,
             step_number=step_number,
-            step_name=step_name,
             git_repo=git_repo,
             git_commit=git_commit,
             git_branch=git_branch,
@@ -160,6 +164,9 @@ class JobRecordingService:
             job_type=job_type,
             telemetry=telemetry,
         )
+
+        if step_name:
+            self._record_step_name_label(job_id, step_name)
 
         # Register and link input artifacts
         self._register_artifacts(
@@ -187,6 +194,19 @@ class JobRecordingService:
             self._session_repo.update_hash(session_id, self._job_repo)
 
         return job_id, job_uid
+
+    def _record_step_name_label(self, job_id: int, step_name: str) -> None:
+        """Store the canonical step name as current job label metadata."""
+        current = self._label_repo.get_current("job", job_id=job_id)
+        current_metadata = current.get("metadata") if isinstance(current, dict) else {}
+        if not isinstance(current_metadata, dict):
+            current_metadata = {}
+        if get_step_name_label(current_metadata) == step_name:
+            return
+
+        merged = dict(current_metadata)
+        merged[STEP_NAME_LABEL_KEY] = step_name
+        self._label_repo.create_version("job", merged, job_id=job_id)
 
     def _assign_to_session(
         self,

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from ...core.logging import get_logger
+from ...core.step_name import resolve_step_name
 from ...db.context import optional_repo
 from ...db.query_context import create_query_database_context
 from ...presenters.show_renderer import ShowRenderer
@@ -248,7 +249,7 @@ def _build_job_summary(db_ctx, job: dict[str, Any]) -> ShowJobSummary:
         job_uid=str(prepared["job_uid"]),
         step_number=prepared.get("step_number"),
         job_type=prepared.get("job_type"),
-        step_name=prepared.get("step_name"),
+        step_name=resolve_step_name(labels, prepared.get("step_name")),
         step_identity=prepared.get("step_identity"),
         timestamp=prepared["timestamp"],
         duration_seconds=prepared.get("duration_seconds"),

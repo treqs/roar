@@ -68,13 +68,19 @@ def test_reset_creates_and_rotates_active_session(temp_git_repo: Path, roar_cli)
         temp_git_repo,
         "SELECT id, is_active, current_step FROM sessions ORDER BY id",
     )
-    assert sessions_before_reset == []
+    assert len(sessions_before_reset) == 1
+    assert sessions_before_reset[0]["is_active"] == 1
+    assert sessions_before_reset[0]["current_step"] == 1
+    initial_active_session = sessions_before_reset[0]
 
     first_reset_result = roar_cli("reset", "-y")
     assert first_reset_result.returncode == 0
+    assert "Current session has 0 step(s)." in first_reset_result.stdout
+    assert f"Deactivated session {initial_active_session['id']}." in first_reset_result.stdout
     assert "Created new session" in first_reset_result.stdout
 
     first_active_session = _active_session(temp_git_repo)
+    assert first_active_session["id"] != initial_active_session["id"]
     assert first_active_session["current_step"] == 1
 
     second_reset_result = roar_cli("reset", "-y")
@@ -142,7 +148,7 @@ def test_reset_rotates_active_session_after_recorded_job(
 def test_pop_reports_when_no_active_session(temp_git_repo: Path, roar_cli) -> None:
     pop_result = roar_cli("pop", "-y")
     assert pop_result.returncode == 0
-    assert "No active session." in pop_result.stdout
+    assert "No jobs in the active session." in pop_result.stdout
 
 
 def test_pop_reports_when_active_session_has_no_jobs(temp_git_repo: Path, roar_cli) -> None:

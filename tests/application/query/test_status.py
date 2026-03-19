@@ -9,6 +9,7 @@ import pytest
 
 from roar.application.query import StatusQueryRequest
 from roar.application.query.status import StatusQueryError, build_status_summary
+from roar.core.session_hash import compute_local_session_hash
 
 
 def test_build_status_summary_groups_steps_and_artifacts(tmp_path: Path) -> None:
@@ -55,6 +56,7 @@ def test_build_status_summary_groups_steps_and_artifacts(tmp_path: Path) -> None
         summary = build_status_summary(request)
 
     assert summary is not None
+    assert summary.dag_hash == compute_local_session_hash(roar_dir=request.roar_dir, session_id=7)
     assert summary.build_steps == 1
     assert summary.run_steps == 1
     assert len(summary.artifacts) == 2

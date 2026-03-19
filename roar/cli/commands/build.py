@@ -22,7 +22,7 @@ from ..decorators import require_init
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
 @click.option("-q", "--quiet", is_flag=True, default=None, help="Suppress output summary")
-@click.option("-n", "--name", "step_name", help="Name for this step")
+@click.option("-n", "--name", "step_name", help="Set the name label for this step")
 @click.option(
     "--tracer",
     "tracer_mode",
@@ -106,7 +106,7 @@ Options:
   --tracer-fallback / --no-tracer-fallback
                  Enable/disable runtime tracer fallback
   --hash <algo>  Add hash algorithm (can be repeated)
-  -n, --name     Name for this step
+  -n, --name     Set the name label for this step
 
 Examples:
   roar build maturin develop --release

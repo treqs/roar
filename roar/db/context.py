@@ -272,6 +272,7 @@ class DatabaseContext:
                 self._require_session(),
                 self.jobs,
                 self.artifacts,
+                self.labels,
                 self.sessions,
                 self.hashing,
                 self.session_service,

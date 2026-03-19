@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ...core.session_hash import compute_local_session_hash
 from ...db.query_context import create_query_database_context
 from ...presenters.formatting import format_size
 from .requests import StatusQueryRequest
@@ -21,6 +22,7 @@ def render_status(request: StatusQueryRequest) -> str:
     summary = build_status_summary(request)
     lines = [
         "DAG:",
+        f"  DAG hash:    {summary.dag_hash}",
         f"  Build steps: {summary.build_steps}",
         f"  Run steps:   {summary.run_steps}",
     ]
@@ -57,6 +59,10 @@ def build_status_summary(request: StatusQueryRequest) -> StatusSummary:
         if not session:
             raise StatusQueryError(_NO_ACTIVE_SESSION_MESSAGE)
 
+        dag_hash = compute_local_session_hash(
+            roar_dir=request.roar_dir,
+            session_id=int(session["id"]),
+        )
         jobs = db_ctx.jobs.get_by_session(session["id"], limit=10000)
 
         build_steps: set[int] = set()
@@ -93,6 +99,7 @@ def build_status_summary(request: StatusQueryRequest) -> StatusSummary:
             )
 
     return StatusSummary(
+        dag_hash=dag_hash,
         build_steps=len(build_steps),
         run_steps=len(run_steps),
         artifacts=artifacts,

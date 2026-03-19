@@ -924,21 +924,37 @@ print(f"Completed level {i}")
         python_exe,
     ):
         """
-        Test that step_name field exists in JSON output structure.
+        Test that --name creates canonical named nodes in DAG output.
 
-        Given: Steps run with commands
+        Given: Steps run with explicit names
         When: Running roar dag --json
-        Then: JSON output should have step_name field in node structure
-
-        Note: The --name flag exists in the CLI but step_name propagation
-        through RunContext is not yet implemented. This test validates
-        the JSON structure includes the field.
+        Then: JSON output should surface the label-backed step name
         """
-        # Run steps
-        _run_preprocess(roar_cli, git_commit, python_exe)
-        _run_train(roar_cli, git_commit, python_exe)
+        _run_roar_and_commit(
+            roar_cli,
+            git_commit,
+            "After preprocess",
+            "run",
+            "--name",
+            "preprocess",
+            python_exe,
+            "preprocess.py",
+            "input.csv",
+            "processed.csv",
+        )
+        _run_roar_and_commit(
+            roar_cli,
+            git_commit,
+            "After train",
+            "run",
+            "--name",
+            "train",
+            python_exe,
+            "train.py",
+            "processed.csv",
+            "model.pkl",
+        )
 
-        # Verify JSON includes step_name field in structure
         result = roar_cli("dag", "--json")
         assert result.returncode == 0
         dag_data = json.loads(result.stdout)
@@ -951,9 +967,10 @@ print(f"Completed level {i}")
         assert preprocess_step is not None
         assert train_step is not None
 
-        # Verify step_name field exists in JSON structure (even if None)
-        assert "step_name" in preprocess_step
-        assert "step_name" in train_step
+        assert preprocess_step["step_name"] == "preprocess"
+        assert preprocess_step["labels"] == {"name": "preprocess"}
+        assert train_step["step_name"] == "train"
+        assert train_step["labels"] == {"name": "train"}
 
     def test_dag_multiple_artifacts(
         self,

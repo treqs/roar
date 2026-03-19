@@ -326,6 +326,8 @@ def _run_git(path: Path, *args: str) -> str | None:
 
 def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageResponse:
     """Run the `roar register` application workflow."""
+    if not request.dry_run:
+        bootstrap(request.roar_dir)
     logger = get_logger()
     resolved_target = resolve_register_lineage_target(
         request.target,

@@ -147,6 +147,70 @@ def test_render_show_job_uid_takes_precedence_for_short_hex_refs(tmp_path: Path)
     assert summary.command == "python train.py"
 
 
+def test_render_show_job_prefers_name_label_and_hides_duplicate_name_label_line(
+    tmp_path: Path,
+) -> None:
+    with patch.object(show_module, "create_query_database_context") as mock_db:
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        db_ctx.jobs.get_by_uid.return_value = {
+            "id": 7,
+            "job_uid": "deadbeef",
+            "step_number": 2,
+            "job_type": None,
+            "step_name": "legacy-name",
+            "timestamp": 1700000000.0,
+            "duration_seconds": 1.25,
+            "exit_code": 0,
+            "command": "python train.py",
+            "metadata": None,
+            "telemetry": None,
+        }
+        db_ctx.jobs.get_inputs.return_value = []
+        db_ctx.jobs.get_outputs.return_value = []
+        db_ctx.labels = MagicMock()
+        db_ctx.labels.get_current.return_value = {
+            "metadata": {"name": "label-name", "phase": "train"}
+        }
+
+        rendered = show_module.render_show(_request(tmp_path, "deadbeef"))
+
+    assert "Name: label-name" in rendered
+    assert "phase=train" in rendered
+    assert "name=label-name" not in rendered
+
+
+def test_build_show_job_summary_falls_back_to_legacy_step_name_when_name_label_missing(
+    tmp_path: Path,
+) -> None:
+    with patch.object(show_module, "create_query_database_context") as mock_db:
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        db_ctx.jobs.get_by_uid.return_value = {
+            "id": 7,
+            "job_uid": "deadbeef",
+            "step_number": 2,
+            "job_type": None,
+            "step_name": "legacy-name",
+            "timestamp": 1700000000.0,
+            "duration_seconds": 1.25,
+            "exit_code": 0,
+            "command": "python train.py",
+            "metadata": None,
+            "telemetry": None,
+        }
+        db_ctx.jobs.get_inputs.return_value = []
+        db_ctx.jobs.get_outputs.return_value = []
+        db_ctx.labels = MagicMock()
+        db_ctx.labels.get_current.return_value = {"metadata": {"phase": "train"}}
+
+        summary = show_module.build_show_summary(_request(tmp_path, "deadbeef"))
+
+    assert isinstance(summary, ShowJobSummary)
+    assert summary.step_name == "legacy-name"
+    assert summary.labels == {"phase": "train"}
+
+
 def test_render_show_explicit_artifact_selector_bypasses_job_uid_precedence(
     tmp_path: Path,
 ) -> None:

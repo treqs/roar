@@ -17,7 +17,7 @@ pytestmark = pytest.mark.integration
 
 
 class _FakeGlaasAuthServer(ThreadingHTTPServer):
-    auth_status_code = 404
+    auth_status_code = 200
     last_authorization: str | None = None
 
 
@@ -29,13 +29,16 @@ class _FakeGlaasAuthHandler(BaseHTTPRequestHandler):
             self._write_json(200, {"status": "ok"})
             return
 
-        if self.path == "/api/v1/artifacts/00000000":
+        if self.path == "/api/v1/sessions?limit=1":
             self.server.last_authorization = self.headers.get("Authorization")
-            if self.server.auth_status_code == 404 and self.server.last_authorization:
-                self._write_json(404, {"detail": "Not found"})
+            if self.server.auth_status_code == 200 and self.server.last_authorization:
+                self._write_json(200, {"success": True, "data": {"items": [], "pagination": {}}})
                 return
 
-            self._write_json(401, {"detail": "Unknown key"})
+            self._write_json(
+                401,
+                {"success": False, "error": {"message": "Unknown key", "code": "UNAUTHORIZED"}},
+            )
             return
 
         self._write_json(404, {"detail": "Not found"})

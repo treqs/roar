@@ -2,7 +2,23 @@
 
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
+
 import pytest
+
+from roar.core.session_hash import compute_local_session_hash
+
+
+def _active_session_id(repo_path: Path) -> int:
+    db_path = repo_path / ".roar" / "roar.db"
+    assert db_path.exists(), ".roar/roar.db not found"
+    with sqlite3.connect(str(db_path)) as conn:
+        row = conn.execute(
+            "SELECT id FROM sessions WHERE is_active = 1 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None, "Expected an active session"
+    return int(row[0])
 
 
 @pytest.mark.happy_path
@@ -28,6 +44,11 @@ class TestQueryCommands:
 
         status_result = roar_cli("status")
         assert status_result.returncode == 0
+        expected_hash = compute_local_session_hash(
+            roar_dir=temp_git_repo / ".roar",
+            session_id=_active_session_id(temp_git_repo),
+        )
+        assert f"DAG hash:    {expected_hash}" in status_result.stdout
         assert "Build steps: 0" in status_result.stdout
         assert "Run steps:   2" in status_result.stdout
         assert "Tracked artifacts" in status_result.stdout

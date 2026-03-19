@@ -51,6 +51,23 @@ def _artifact_label_rows_by_hash(
     return [(int(version), json.loads(metadata)) for version, metadata in rows]
 
 
+def _job_label_rows(repo: Path, step_number: int) -> list[tuple[int, dict[str, object]]]:
+    db_path = repo / ".roar" / "roar.db"
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT l.version, l.metadata
+            FROM labels l
+            JOIN jobs j ON j.id = l.job_id
+            WHERE l.entity_type = 'job'
+              AND j.step_number = ?
+            ORDER BY l.version ASC
+            """,
+            (step_number,),
+        ).fetchall()
+    return [(int(version), json.loads(metadata)) for version, metadata in rows]
+
+
 @pytest.mark.happy_path
 class TestLabelCommand:
     """CLI product-path tests for label lifecycle behavior."""
@@ -279,6 +296,52 @@ class TestLabelCommand:
             artifact for artifact in dag_data["artifacts"] if "processed.csv" in artifact["path"]
         )
         assert processed_artifact["labels"] == {"owner": "ml", "stage": "gold"}
+
+    def test_run_name_creates_job_name_label_without_persisting_legacy_step_name(
+        self,
+        temp_git_repo,
+        roar_cli,
+        git_commit,
+        sample_scripts,
+        sample_data,
+        python_exe,
+    ):
+        result = roar_cli(
+            "run",
+            "--name",
+            "preprocess",
+            python_exe,
+            "preprocess.py",
+            "input.csv",
+            "processed.csv",
+        )
+        assert result.returncode == 0
+        git_commit("After named preprocess")
+
+        label_show = _assert_ok(roar_cli("label", "show", "job", "@1", check=False))
+        assert "name=preprocess" in label_show
+
+        show_output = _assert_ok(roar_cli("show", "@1", check=False))
+        assert "Name: preprocess" in show_output
+        assert "name=preprocess" not in show_output
+
+        dag_output = _assert_ok(roar_cli("dag", "--json", check=False))
+        dag_data = json.loads(dag_output)
+        preprocess_node = next(
+            node for node in dag_data["nodes"] if "preprocess.py" in node["command"]
+        )
+        assert preprocess_node["step_name"] == "preprocess"
+        assert preprocess_node["labels"] == {"name": "preprocess"}
+
+        assert _job_label_rows(temp_git_repo, 1) == [(1, {"name": "preprocess"})]
+
+        db_path = temp_git_repo / ".roar" / "roar.db"
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT step_name FROM jobs WHERE step_number = 1 ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        assert row is not None
+        assert row[0] is None
 
     def test_artifact_label_cp_carries_forward_labels_to_new_artifact_version(
         self,

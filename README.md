@@ -350,7 +350,7 @@ roar show ./output/model.pkl       # Show artifact by path
 
 ### `roar status`
 
-Show a summary of the active session.
+Show a summary of the active session, including the current DAG hash.
 
 ```bash
 roar status
