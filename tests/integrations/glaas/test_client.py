@@ -219,7 +219,9 @@ class TestOptionalAuth:
             assert first_result == {"id": 1}
             assert second_result == {"id": 2}
             assert mock_urlopen.call_count == 3
-            assert mock_urlopen.call_args_list[0][0][0].full_url.endswith("/api/v1/sessions?limit=1")
+            assert mock_urlopen.call_args_list[0][0][0].full_url.endswith(
+                "/api/v1/sessions?limit=1"
+            )
             assert mock_urlopen.call_args_list[1][0][0].full_url.endswith("/api/v1/test")
             assert mock_urlopen.call_args_list[2][0][0].full_url.endswith("/api/v1/test-2")
 
@@ -360,7 +362,9 @@ class TestOptionalAuth:
             assert first_result == {"id": 1}
             assert second_result == {"id": 2}
             assert mock_urlopen.call_count == 3
-            assert mock_urlopen.call_args_list[0][0][0].full_url.endswith("/api/v1/sessions?limit=1")
+            assert mock_urlopen.call_args_list[0][0][0].full_url.endswith(
+                "/api/v1/sessions?limit=1"
+            )
             assert mock_urlopen.call_args_list[1][0][0].full_url.endswith("/api/v1/test")
             assert mock_urlopen.call_args_list[1][0][0].get_header("Authorization") is None
             assert mock_urlopen.call_args_list[2][0][0].full_url.endswith("/api/v1/test-2")
