@@ -1,14 +1,31 @@
-"""
-Output presenters for roar CLI.
+"""Lazy exports for presenter implementations."""
 
-Implements different output formats (console, JSON, etc.)
-following the Strategy pattern.
-"""
+from __future__ import annotations
 
-from .console import ConsolePresenter
-from .dag_data_builder import DagDataBuilder
-from .dag_renderer import DagRenderer
-from .null import NullPresenter
-from .show_renderer import ShowRenderer
+from importlib import import_module
+from typing import Any
 
-__all__ = ["ConsolePresenter", "DagDataBuilder", "DagRenderer", "NullPresenter", "ShowRenderer"]
+_EXPORTS = {
+    "ConsolePresenter": ".console",
+    "DagDataBuilder": ".dag_data_builder",
+    "DagRenderer": ".dag_renderer",
+    "NullPresenter": ".null",
+    "ShowRenderer": ".show_renderer",
+}
+
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module = import_module(module_name, __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

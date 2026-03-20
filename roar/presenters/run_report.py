@@ -94,7 +94,15 @@ class RunReportPresenter:
         if result.interrupted and result.outputs:
             self._out.print("")
             self._out.print("Note: Run was interrupted. Output files may be incomplete.")
-            self._out.print("Use 'roar clean' to remove written files if needed.")
+            self._out.print("Use 'roar pop' to remove this job and delete safe written files.")
+
+        self._out.print("")
+        self._out.print("Next:")
+        self._out.print(f"  roar show --job {result.job_uid}")
+        if result.interrupted and result.outputs:
+            self._out.print("  roar pop")
+        else:
+            self._out.print("  roar dag")
 
     def show_stale_warnings(
         self,

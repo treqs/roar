@@ -16,6 +16,7 @@ class StatusArtifactSummary:
 
 @dataclass(frozen=True)
 class StatusSummary:
+    dag_hash: str
     build_steps: int
     run_steps: int
     artifacts: list[StatusArtifactSummary] = field(default_factory=list)

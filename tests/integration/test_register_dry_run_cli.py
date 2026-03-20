@@ -82,8 +82,8 @@ def test_register_dry_run_resolves_artifact_step_and_session_targets(
 
     for result in (artifact_result, step_result, session_result):
         assert result.returncode == 0
-        assert "Dry run - would register:" in result.stdout
-        assert "View on GLaaS:" in result.stdout
+        assert "Dry run: would register lineage for:" in result.stdout
+        assert "GLaaS:" in result.stdout
 
     published_session_hashes = {
         _parse_session_hash(artifact_result.stdout),
@@ -134,9 +134,9 @@ def test_register_publishes_local_lineage_with_fake_glaas(
     assert "Jobs: 1" in result.stdout
     assert "Artifacts:" in result.stdout
     assert "Links:" in result.stdout
-    assert "To reproduce this artifact:" in result.stdout
+    assert "Next:" in result.stdout
     assert "roar reproduce " in result.stdout
-    assert "View on GLaaS:" in result.stdout
+    assert "GLaaS:" in result.stdout
 
     assert fake_glaas_publish_server.health_checks >= 1
     assert len(fake_glaas_publish_server.session_registrations) == 1
@@ -149,3 +149,56 @@ def test_register_publishes_local_lineage_with_fake_glaas(
     registered_jobs = fake_glaas_publish_server.job_batches[0]["jobs"]
     assert len(registered_jobs) == 1
     assert registered_jobs[0]["job_type"] == "run"
+
+
+def test_register_honors_logging_config_for_console_and_file(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    fake_glaas_publish_server: FakeGlaasServer,
+    monkeypatch,
+) -> None:
+    _configure_register_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+
+    input_path = temp_git_repo / "input.txt"
+    input_path.write_text("register me\n")
+    script = temp_git_repo / "generate_report.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        "content = Path('input.txt').read_text()\n"
+        "Path('report.txt').write_text(content.upper())\n"
+    )
+    git_commit("Add register logging fixture")
+
+    run_result = roar_cli("run", python_exe, "generate_report.py")
+    assert run_result.returncode == 0
+    git_commit("Commit tracked report for logging test")
+
+    home_dir = temp_git_repo / ".test-home"
+    home_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+
+    config_path = temp_git_repo / ".roar" / "config.toml"
+    config_text = config_path.read_text(encoding="utf-8")
+    if "[logging]" in config_text:
+        config_text = config_text.replace('level = "warning"', 'level = "debug"')
+        config_text = config_text.replace("console = false", "console = true")
+        config_text = config_text.replace("file = false", "file = true")
+    else:
+        config_text = (
+            f"{config_text.rstrip()}\n\n[logging]\nlevel = \"debug\"\nconsole = true\nfile = true\n"
+        )
+    config_path.write_text(config_text, encoding="utf-8")
+
+    log_path = home_dir / ".roar" / "roar.log"
+    if log_path.exists():
+        log_path.unlink()
+
+    result = roar_cli("register", "report.txt", "--yes")
+
+    assert result.returncode == 0
+    assert "Running GLaaS health check" in result.stderr
+    assert log_path.is_file()
+    log_output = log_path.read_text(encoding="utf-8")
+    assert "Running GLaaS health check" in log_output

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 
-from ..application.labels import render_label_lines
+from ..application.label_rendering import render_label_lines
+from ..core.step_name import omit_step_name_label
 from .formatting import format_duration, format_size, format_timestamp
 
 
@@ -130,7 +131,7 @@ class ShowRenderer:
             status = f"Failed (exit {job['exit_code']})"
         lines.append(f"Status: {status}")
 
-        self._render_labels(lines, labels)
+        self._render_labels(lines, omit_step_name_label(labels, step_name=job.get("step_name")))
 
         lines.append(f"\nCommand: {job['command']}")
 

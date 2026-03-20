@@ -15,12 +15,8 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session as SASession
 
 from ...core.interfaces.repositories import SessionRepository
-from ...execution.framework.registry import (
-    is_execution_noise_job,
-    is_execution_phase_job,
-    is_execution_task_job,
-)
 from ..models import Job, Session
+from ..step_priority import step_sort_key
 
 
 class SQLAlchemySessionRepository(SessionRepository):
@@ -327,7 +323,7 @@ class SQLAlchemySessionRepository(SessionRepository):
         jobs = self._session.execute(query).scalars().all()
         if not jobs:
             return None
-        return self._job_to_dict(max(jobs, key=self._step_sort_key))
+        return self._job_to_dict(max(jobs, key=step_sort_key))
 
     def get_step_by_name(self, session_id: int, step_name: str) -> dict[str, Any] | None:
         """
@@ -647,37 +643,6 @@ class SQLAlchemySessionRepository(SessionRepository):
             "metadata": job.metadata_,
             "telemetry": job.telemetry,
         }
-
-    @staticmethod
-    def _step_sort_key(job: Job) -> tuple[int, float, int]:
-        job_dict = {
-            "id": job.id,
-            "timestamp": job.timestamp,
-            "command": job.command,
-            "job_type": job.job_type,
-            "script": job.script,
-            "parent_job_uid": job.parent_job_uid,
-            "execution_backend": job.execution_backend,
-            "execution_role": job.execution_role,
-        }
-        if job.job_type in (None, "run") and not is_execution_task_job(job_dict):
-            if is_execution_noise_job(job_dict):
-                priority = 1
-            else:
-                priority = 6
-        elif is_execution_phase_job(job_dict):
-            priority = 5
-        elif is_execution_task_job(job_dict):
-            priority = 4
-        elif is_execution_noise_job(job_dict):
-            priority = 1
-        else:
-            priority = 2
-        return (
-            priority,
-            float(job.timestamp or 0.0),
-            int(job.id or 0),
-        )
 
 
 # Backward compatibility alias

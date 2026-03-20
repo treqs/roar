@@ -8,6 +8,7 @@ from roar.application.publish.lineage import (
     _extract_primary_digest,
     compute_io_signature,
 )
+from roar.db.context import create_database_context
 from roar.db.schema import SCHEMA, run_migrations
 
 
@@ -501,3 +502,52 @@ def test_collect_task_output_includes_parent_and_sibling_ray_tasks(tmp_path):
     assert jobs_by_uid["task-a"]["parent_job_uid"] == "driver-main"
     assert jobs_by_uid["task-b"]["parent_job_uid"] == "driver-main"
     assert jobs_by_uid["task-c"]["parent_job_uid"] == "driver-main"
+
+
+def test_collect_step_read_only_matches_collect_step_for_simple_session(tmp_path):
+    roar_dir = tmp_path / ".roar"
+    roar_dir.mkdir()
+
+    input_path = tmp_path / "input.txt"
+    output_path = tmp_path / "output.txt"
+    input_path.write_text("hello\n", encoding="utf-8")
+    output_path.write_text("world\n", encoding="utf-8")
+
+    with create_database_context(roar_dir) as db_ctx:
+        session_id = db_ctx.sessions.create(
+            git_repo="/repo",
+            git_commit="abc123",
+            make_active=True,
+        )
+        input_artifact_id, _ = db_ctx.artifacts.register(
+            {"blake3": "1" * 64},
+            size=input_path.stat().st_size,
+            path=str(input_path),
+        )
+        output_artifact_id, _ = db_ctx.artifacts.register(
+            {"blake3": "a" * 64},
+            size=output_path.stat().st_size,
+            path=str(output_path),
+        )
+        job_id, job_uid = db_ctx.jobs.create(
+            "python train.py",
+            1700000000.0,
+            session_id=session_id,
+            step_number=1,
+            duration_seconds=1.5,
+            exit_code=0,
+        )
+        db_ctx.jobs.add_input(job_id, input_artifact_id, str(input_path))
+        db_ctx.jobs.add_output(job_id, output_artifact_id, str(output_path))
+
+    collector = LineageCollector()
+    sql_lineage = collector.collect_step(session_id, 1, roar_dir)
+    query_lineage = collector.collect_step_read_only(session_id, 1, roar_dir)
+
+    assert query_lineage.pipeline == sql_lineage.pipeline
+    assert query_lineage.artifact_hashes == sql_lineage.artifact_hashes
+    assert [job["job_uid"] for job in query_lineage.jobs] == [job_uid]
+    assert [job["job_uid"] for job in sql_lineage.jobs] == [job_uid]
+    assert {artifact["id"] for artifact in query_lineage.artifacts} == {
+        artifact["id"] for artifact in sql_lineage.artifacts
+    }

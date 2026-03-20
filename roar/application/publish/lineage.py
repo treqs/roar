@@ -4,11 +4,14 @@ Shared publish lineage collection and enrichment.
 This module is the canonical home for publish-time lineage traversal.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from ...core.digests import extract_primary_digest
 from ...core.interfaces.lineage import LineageData
 from ...db.context import create_database_context
+from ...db.query_context import create_query_database_context
 from ...execution.framework.registry import is_execution_task_job
 
 
@@ -176,6 +179,70 @@ class LineageCollector:
             pipeline=session,
         )
 
+    def collect_step_read_only(
+        self,
+        session_id: int,
+        step_number: int,
+        roar_dir: Path,
+        job_type: str | None = None,
+    ) -> LineageData:
+        """Collect step lineage through the sqlite query context for preview flows."""
+        with create_query_database_context(roar_dir) as ctx_db:
+            session = ctx_db.sessions.get(session_id)
+            if not session:
+                return LineageData()
+
+            step_jobs = self._get_step_jobs(ctx_db, session_id, step_number, job_type=job_type)
+            if not step_jobs:
+                return LineageData(pipeline=session)
+
+            hydrated_step_jobs = [self._hydrate_job(ctx_db, job) for job in step_jobs]
+            target_hashes = sorted(
+                {
+                    digest
+                    for job in hydrated_step_jobs
+                    for digest in job.get("_output_hashes", [])
+                    if digest
+                }
+            )
+            if not target_hashes:
+                target_hashes = sorted(
+                    {
+                        digest
+                        for job in hydrated_step_jobs
+                        for digest in job.get("_input_hashes", [])
+                        if digest
+                    }
+                )
+
+            if target_hashes:
+                lineage_jobs = self._get_lineage_jobs_read_only(ctx_db, target_hashes)
+                if session:
+                    lineage_jobs = self._add_build_jobs(
+                        ctx_db, session, lineage_jobs, set(target_hashes)
+                    )
+                lineage_jobs = self._add_parent_jobs(ctx_db, lineage_jobs)
+                lineage_jobs = self._add_parent_linked_execution_tasks(ctx_db, lineage_jobs)
+            else:
+                lineage_jobs = []
+
+            seen_ids = {job["id"] for job in lineage_jobs}
+            for job in hydrated_step_jobs:
+                if job["id"] not in seen_ids:
+                    lineage_jobs.append(job)
+                    seen_ids.add(job["id"])
+
+            lineage_jobs.sort(key=lambda job: job["timestamp"])
+            all_hashes = self._collect_all_hashes(lineage_jobs)
+            artifacts = self._get_artifact_info(ctx_db, all_hashes)
+
+        return LineageData(
+            jobs=lineage_jobs,
+            artifacts=artifacts,
+            artifact_hashes=all_hashes,
+            pipeline=session,
+        )
+
     def collect_session(
         self,
         session_id: int,
@@ -310,6 +377,81 @@ class LineageCollector:
 
         # Combine build jobs with lineage jobs, avoiding duplicates
         return build_job_list + [j for j in lineage_jobs if j["id"] not in build_job_ids]
+
+    def _get_lineage_jobs_read_only(
+        self,
+        ctx_db,
+        artifact_ids: list[str],
+        max_depth: int = 10,
+    ) -> list[dict]:
+        """Reconstruct lineage jobs without loading the SQLAlchemy service stack."""
+        resolved_ids = []
+        for artifact_id in artifact_ids:
+            artifact = ctx_db.artifacts.get(artifact_id)
+            if artifact:
+                resolved_ids.append(artifact_id)
+                continue
+            artifact = ctx_db.artifacts.get_by_hash(artifact_id)
+            if artifact:
+                resolved_ids.append(artifact["id"])
+
+        visited_jobs: set[int] = set()
+        visited_artifacts: set[str] = set()
+        jobs: list[dict] = []
+
+        def trace_upstream(artifact_id: str, current_depth: int) -> None:
+            if current_depth > max_depth or artifact_id in visited_artifacts:
+                return
+            visited_artifacts.add(artifact_id)
+
+            artifact_jobs = ctx_db.artifacts.get_jobs(artifact_id)
+            produced_by = artifact_jobs.get("produced_by", [])
+            producer = produced_by[0] if produced_by else None
+
+            if producer and producer["id"] not in visited_jobs:
+                visited_jobs.add(producer["id"])
+                job_dict = dict(producer)
+
+                inputs = ctx_db.jobs.get_inputs(producer["id"])
+                job_dict["_input_artifact_ids"] = [inp["artifact_id"] for inp in inputs]
+                job_dict["_input_hashes"] = [
+                    h for h in (_extract_primary_digest(inp) for inp in inputs) if h
+                ]
+                job_dict["_inputs"] = [
+                    {
+                        "hash": h,
+                        "path": inp.get("path") or inp.get("first_seen_path", ""),
+                        "byte_ranges": inp.get("byte_ranges"),
+                    }
+                    for inp in inputs
+                    if (h := _extract_primary_digest(inp))
+                ]
+
+                for inp in inputs:
+                    trace_upstream(inp["artifact_id"], current_depth + 1)
+
+                outputs = ctx_db.jobs.get_outputs(producer["id"])
+                job_dict["_output_artifact_ids"] = [out["artifact_id"] for out in outputs]
+                job_dict["_output_hashes"] = [
+                    h for h in (_extract_primary_digest(out) for out in outputs) if h
+                ]
+                job_dict["_outputs"] = [
+                    {
+                        "hash": h,
+                        "path": out.get("path") or out.get("first_seen_path", ""),
+                        "byte_ranges": out.get("byte_ranges"),
+                    }
+                    for out in outputs
+                    if (h := _extract_primary_digest(out))
+                ]
+
+                jobs.append(job_dict)
+
+        for artifact_id in resolved_ids:
+            trace_upstream(artifact_id, 0)
+
+        jobs.sort(key=lambda job: job["timestamp"])
+        return jobs
 
     def _add_parent_linked_execution_tasks(self, ctx_db, lineage_jobs: list[dict]) -> list[dict]:
         """Include distributed child jobs reachable via parent_job_uid edges."""

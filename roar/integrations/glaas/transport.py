@@ -6,7 +6,13 @@ import json
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from typing import Any
+from threading import Lock
+from typing import Any, Literal
+
+_AUTH_PROBE_PATH = "/api/v1/sessions?limit=1"
+_AuthMode = Literal["unknown", "authenticated", "anonymous"]
+_AUTH_MODE_BY_BASE_URL: dict[str, _AuthMode] = {}
+_AUTH_MODE_LOCK = Lock()
 
 
 def _get_logger():
@@ -39,6 +45,53 @@ def parse_json_response(response_body: str, http_status: int) -> tuple[Any | Non
     return parsed, None
 
 
+def _extract_error_detail(error_data: Any, fallback: str) -> str:
+    if isinstance(error_data, dict):
+        detail = error_data.get("detail") or error_data.get("message")
+        nested_error = error_data.get("error")
+        if not detail and isinstance(nested_error, dict):
+            detail = nested_error.get("detail") or nested_error.get("message")
+        if detail:
+            return str(detail)
+    return fallback
+
+
+def _normalize_base_url(base_url: str) -> str:
+    return base_url.rstrip("/")
+
+
+def _get_cached_auth_mode(base_url: str) -> _AuthMode:
+    normalized = _normalize_base_url(base_url)
+    with _AUTH_MODE_LOCK:
+        return _AUTH_MODE_BY_BASE_URL.get(normalized, "unknown")
+
+
+def _set_cached_auth_mode(base_url: str, mode: _AuthMode) -> None:
+    normalized = _normalize_base_url(base_url)
+    with _AUTH_MODE_LOCK:
+        _AUTH_MODE_BY_BASE_URL[normalized] = mode
+
+
+def _mark_anonymous(base_url: str, detail: str) -> None:
+    normalized = _normalize_base_url(base_url)
+    with _AUTH_MODE_LOCK:
+        previous = _AUTH_MODE_BY_BASE_URL.get(normalized, "unknown")
+        _AUTH_MODE_BY_BASE_URL[normalized] = "anonymous"
+
+    if previous != "anonymous":
+        _get_logger().warning(
+            "GLaaS authentication failed for %s; falling back to anonymous requests for this process. %s",
+            normalized,
+            detail,
+        )
+
+
+def reset_auth_mode_cache() -> None:
+    """Reset cached per-server auth mode for tests and fresh processes."""
+    with _AUTH_MODE_LOCK:
+        _AUTH_MODE_BY_BASE_URL.clear()
+
+
 def request_json(
     *,
     base_url: str,
@@ -55,33 +108,33 @@ def request_json(
     url = f"{base_url}{path}"
     body_bytes = json.dumps(body).encode() if body else None
 
-    _get_logger().debug(
-        "API request: %s %s (body: %d bytes)",
-        method,
-        url,
-        len(body_bytes) if body_bytes else 0,
-    )
-
-    auth_header = auth_header_factory(method, path, body_bytes)
-
-    def _build_request(auth_value: str | None) -> urllib.request.Request:
-        req = urllib.request.Request(url, data=body_bytes, method=method)
+    def _perform_request(
+        *,
+        request_method: str,
+        request_path: str,
+        request_url: str,
+        request_body: bytes | None,
+        auth_value: str | None,
+    ) -> tuple[Any | None, str | None, int | None]:
+        _get_logger().debug(
+            "API request: %s %s (body: %d bytes)",
+            request_method,
+            request_url,
+            len(request_body) if request_body else 0,
+        )
+        req = urllib.request.Request(request_url, data=request_body, method=request_method)
         if auth_value:
             req.add_header("Authorization", auth_value)
-        if body_bytes:
+        if request_body:
             req.add_header("Content-Type", "application/json")
-        return req
-
-    def _perform_request(auth_value: str | None) -> tuple[Any | None, str | None, int | None]:
-        req = _build_request(auth_value)
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 http_status = resp.status
                 response_body = resp.read().decode()
                 _get_logger().debug(
                     "API response: %s %s -> HTTP %d (%d bytes)",
-                    method,
-                    path,
+                    request_method,
+                    request_path,
                     http_status,
                     len(response_body),
                 )
@@ -100,7 +153,7 @@ def request_json(
             error_body = e.read().decode() if e.fp else ""
             error_data, _ = parse_json_response(error_body, e.code)
             if error_data and isinstance(error_data, dict):
-                detail = error_data.get("detail") or error_data.get("message") or str(e)
+                detail = _extract_error_detail(error_data, str(e))
             elif error_body:
                 stripped = error_body.strip()
                 if e.code == 403 and (
@@ -120,32 +173,77 @@ def request_json(
             else:
                 detail = str(e)
             _get_logger().debug(
-                "API error: %s %s -> HTTP %d: %s", method, path, e.code, detail[:200]
+                "API error: %s %s -> HTTP %d: %s",
+                request_method,
+                request_path,
+                e.code,
+                detail[:200],
             )
             return None, f"HTTP {e.code}: {detail}", e.code
         except urllib.error.URLError as e:
-            _get_logger().debug("GLaaS connection error to %s: %s", url, e)
+            _get_logger().debug("GLaaS connection error to %s: %s", request_url, e)
             return None, f"Connection error: {e}", None
         except json.JSONDecodeError as e:
             _get_logger().debug(
-                "GLaaS invalid JSON response from %s at position %d: %s", url, e.pos, e.msg
+                "GLaaS invalid JSON response from %s at position %d: %s",
+                request_url,
+                e.pos,
+                e.msg,
             )
             return None, f"Invalid JSON response at position {e.pos}: {e.msg}", None
         except Exception as e:
-            _get_logger().debug("GLaaS request to %s failed: %s", url, e)
+            _get_logger().debug("GLaaS request to %s failed: %s", request_url, e)
             return None, str(e), None
 
-    result, error, status_code = _perform_request(auth_header)
+    auth_mode = _get_cached_auth_mode(base_url)
+    auth_header = None if auth_mode == "anonymous" else auth_header_factory(method, path, body_bytes)
+
+    if auth_mode == "unknown" and auth_header:
+        probe_auth_header = auth_header_factory("GET", _AUTH_PROBE_PATH, None)
+        if probe_auth_header:
+            _probe_result, probe_error, probe_status = _perform_request(
+                request_method="GET",
+                request_path=_AUTH_PROBE_PATH,
+                request_url=f"{base_url}{_AUTH_PROBE_PATH}",
+                request_body=None,
+                auth_value=probe_auth_header,
+            )
+            if probe_error is None:
+                _set_cached_auth_mode(base_url, "authenticated")
+            elif probe_status == 401:
+                _mark_anonymous(base_url, "The configured SSH key was rejected by the server.")
+                auth_header = None
+            else:
+                _get_logger().debug(
+                    "GLaaS auth probe for %s was inconclusive; proceeding with request auth path: %s",
+                    base_url,
+                    probe_error,
+                )
+
+    result, error, status_code = _perform_request(
+        request_method=method,
+        request_path=path,
+        request_url=url,
+        request_body=body_bytes,
+        auth_value=auth_header,
+    )
     if error is None:
         return result, None
 
     if auth_header and status_code == 401:
+        _mark_anonymous(base_url, f"The server returned HTTP 401 for {method} {path}.")
         _get_logger().debug(
             "GLaaS optional-auth fallback: retrying %s %s without Authorization after 401",
             method,
             path,
         )
-        retry_result, retry_error, _retry_status = _perform_request(None)
+        retry_result, retry_error, _retry_status = _perform_request(
+            request_method=method,
+            request_path=path,
+            request_url=url,
+            request_body=body_bytes,
+            auth_value=None,
+        )
         if retry_error is None:
             return retry_result, None
         return retry_result, retry_error

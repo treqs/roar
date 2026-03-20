@@ -11,6 +11,7 @@ from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
 from ...db.context import create_database_context
 from ...db.hashing.backend import compute_hashes_batch
+from ...db.query_context import create_query_database_context
 from .lineage import LineageCollector
 from .session import PublishSessionService
 from .targets import (
@@ -39,6 +40,7 @@ def collect_register_lineage(
     lineage_collector: LineageCollector,
     session_service: PublishSessionService,
     logger: ILogger,
+    dry_run: bool = False,
 ) -> tuple[CollectedRegisterLineage | None, str | None]:
     """Collect local lineage for a resolved register target."""
     if target.kind == "step_reference":
@@ -46,6 +48,7 @@ def collect_register_lineage(
             step_reference=target.value,
             roar_dir=roar_dir,
             lineage_collector=lineage_collector,
+            dry_run=dry_run,
         )
     if target.kind == "job_uid":
         return _collect_job_lineage(
@@ -82,18 +85,35 @@ def _collect_step_lineage(
     step_reference: str,
     roar_dir: Path,
     lineage_collector: LineageCollector,
+    dry_run: bool,
 ) -> tuple[CollectedRegisterLineage | None, str | None]:
     parsed = parse_register_step_reference(step_reference)
     if parsed is None:
         return None, f"Invalid DAG reference: {step_reference}"
     step_number, is_build = parsed
 
-    with create_database_context(roar_dir) as db_ctx:
-        session = db_ctx.sessions.get_active()
-        if not session:
-            return None, "No active session. Run 'roar run' to create a session first."
+    if dry_run:
+        with create_query_database_context(roar_dir) as db_ctx:
+            session = db_ctx.sessions.get_active()
+            if not session:
+                return None, "No active session. Run 'roar run' to create a session first."
+            session_id = int(session["id"])
+
+        lineage = lineage_collector.collect_step_read_only(
+            session_id=session_id,
+            step_number=step_number,
+            roar_dir=roar_dir,
+            job_type="build" if is_build else None,
+        )
+    else:
+        with create_database_context(roar_dir) as db_ctx:
+            session = db_ctx.sessions.get_active()
+            if not session:
+                return None, "No active session. Run 'roar run' to create a session first."
+            session_id = int(session["id"])
+
         lineage = lineage_collector.collect_step(
-            session_id=int(session["id"]),
+            session_id=session_id,
             step_number=step_number,
             roar_dir=roar_dir,
             job_type="build" if is_build else None,

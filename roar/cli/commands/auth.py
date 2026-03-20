@@ -74,14 +74,14 @@ def auth(ctx: click.Context) -> None:
     """Manage authentication with https://glaas.ai
 
     \b
-    To register with GLaaS:
-        1. Run 'roar auth register' to display your public key
+    To set up GLaaS auth:
+        1. Run 'roar auth key' to display your public key
         2. Sign up for GLaaS at https://glaas.ai where you can paste your public key
         3. Once added, run 'roar auth test' to verify
 
     \b
     Examples:
-        roar auth register    # Show your SSH key
+        roar auth key         # Show your SSH key
         roar auth test        # Test connection
         roar auth status      # Show auth status
     """
@@ -89,9 +89,8 @@ def auth(ctx: click.Context) -> None:
         click.echo(ctx.get_help())
 
 
-@auth.command("register")
-def auth_register() -> None:
-    """Show SSH public key for registration."""
+def _show_auth_key() -> None:
+    """Render the SSH public key guidance used by auth key and its legacy alias."""
     key_info = _find_ssh_pubkey()
 
     if not key_info:
@@ -99,7 +98,7 @@ def auth_register() -> None:
             "No SSH public key found.\n\n"
             "Generate one with:\n"
             "  ssh-keygen -t ed25519\n\n"
-            "Then run 'roar auth register' again."
+            "Then run 'roar auth key' again."
         )
 
     key_type, pubkey, path = key_info
@@ -111,6 +110,35 @@ def auth_register() -> None:
     click.echo(f"Path: {path}")
     click.echo("")
     click.echo("Copy and paste this key when you sign up at https://glaas.ai")
+
+
+def _extract_auth_error_detail(error_body: str, fallback: str) -> str:
+    try:
+        error_data = json.loads(error_body)
+    except Exception:
+        return fallback
+
+    if isinstance(error_data, dict):
+        detail = error_data.get("detail") or error_data.get("message")
+        nested_error = error_data.get("error")
+        if not detail and isinstance(nested_error, dict):
+            detail = nested_error.get("detail") or nested_error.get("message")
+        if detail:
+            return str(detail)
+
+    return fallback
+
+
+@auth.command("key")
+def auth_key() -> None:
+    """Show SSH public key for GLaaS signup."""
+    _show_auth_key()
+
+
+@auth.command("register", hidden=True)
+def auth_register() -> None:
+    """Backward-compatible alias for 'roar auth key'."""
+    _show_auth_key()
 
 
 @auth.command("test")
@@ -150,15 +178,15 @@ def auth_test() -> None:
 
     key_info = glaas_find_ssh_pubkey()
     if not key_info:
-        raise click.ClickException("No SSH key found. Run 'roar auth register' first.")
+        raise click.ClickException("No SSH key found. Run 'roar auth key' first.")
 
     _, pubkey, key_path = key_info
     fingerprint = compute_pubkey_fingerprint(pubkey)
     click.echo(f"Using key: {key_path}")
     click.echo(f"Fingerprint: {fingerprint}")
 
-    # Try to get a non-existent artifact (will fail with 404 if auth works, 401 if not)
-    test_path = "/api/v1/artifacts/00000000"
+    # Probe a route that requires real auth so anonymous access cannot look successful.
+    test_path = "/api/v1/sessions?limit=1"
     auth_header = make_auth_header("GET", test_path, None)
 
     if not auth_header:
@@ -170,19 +198,17 @@ def auth_test() -> None:
         req.add_header("Authorization", auth_header)
 
         with urllib.request.urlopen(req, timeout=10) as resp:
-            # 200 means it found something (unlikely with our dummy hash)
-            click.echo("Authentication successful!")
+            if resp.status == 200:
+                click.echo("Authentication successful!")
+            else:
+                raise click.ClickException(f"Server returned status {resp.status}")
 
     except urllib.error.HTTPError as e:
-        if e.code == 404:
-            # 404 = auth worked, artifact just doesn't exist
-            click.echo("Authentication successful!")
-        elif e.code == 401:
+        if e.code == 401:
             # Try to get error detail
             try:
                 error_body = e.read().decode()
-                error_data = json.loads(error_body)
-                detail = error_data.get("detail", "Unknown error")
+                detail = _extract_auth_error_detail(error_body, "Unknown error")
             except Exception:
                 detail = str(e)
             raise click.ClickException(

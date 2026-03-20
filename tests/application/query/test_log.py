@@ -5,8 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import roar.application.query.log as log_module
-from roar.application.query import LogQueryRequest, render_log
+from roar.application.query import LogQueryRequest
 from roar.application.query.results import LogSummary
 
 
@@ -17,7 +19,7 @@ def _request(tmp_path: Path, *, use_color: bool = False) -> LogQueryRequest:
 
 
 def test_build_log_summary_returns_typed_jobs_in_display_order(tmp_path: Path) -> None:
-    with patch.object(log_module, "create_database_context") as mock_db:
+    with patch.object(log_module, "create_query_database_context") as mock_db:
         db_ctx = MagicMock()
         mock_db.return_value.__enter__.return_value = db_ctx
         db_ctx.sessions.get_active.return_value = {"id": 11}
@@ -49,12 +51,14 @@ def test_build_log_summary_returns_typed_jobs_in_display_order(tmp_path: Path) -
     assert summary.jobs[0].command == "python preprocess.py"
 
 
-def test_render_log_without_active_session_returns_message(tmp_path: Path) -> None:
-    with patch.object(log_module, "create_database_context") as mock_db:
+def test_render_log_without_active_session_raises_query_error(tmp_path: Path) -> None:
+    with patch.object(log_module, "create_query_database_context") as mock_db:
         db_ctx = MagicMock()
         mock_db.return_value.__enter__.return_value = db_ctx
         db_ctx.sessions.get_active.return_value = None
 
-        rendered = render_log(_request(tmp_path))
-
-    assert rendered == "No active session."
+        with pytest.raises(
+            log_module.LogQueryError,
+            match=r"No active session\. Run 'roar run' to create a session first\.",
+        ):
+            log_module.render_log(_request(tmp_path))

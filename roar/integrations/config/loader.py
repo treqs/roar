@@ -207,6 +207,8 @@ class RoarSettings(BaseSettings):
     composites: CompositesConfig = CompositesConfig()
     env: dict[str, str] = {}
     _backend_configs: dict[str, dict[str, Any]] = PrivateAttr(default_factory=dict)
+    _backend_config_source: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _backend_configs_loaded: bool = PrivateAttr(default=False)
 
     # Internal fields (not from config)
     _config_file: str | None = None
@@ -285,6 +287,7 @@ class RoarSettings(BaseSettings):
 
     def to_dict(self) -> dict[str, Any]:
         """Convert settings to dict format compatible with legacy config."""
+        self._ensure_backend_configs()
         result: dict[str, Any] = {
             "output": self.output.model_dump(),
             "analyzers": self.analyzers.model_dump(),
@@ -306,6 +309,13 @@ class RoarSettings(BaseSettings):
         if self._config_error:
             result["_config_error"] = self._config_error
         return result
+
+    def _ensure_backend_configs(self) -> None:
+        if self._backend_configs_loaded:
+            return
+
+        self._backend_configs = _resolve_backend_config_sections(self._backend_config_source)
+        self._backend_configs_loaded = True
 
 
 # Module-level variables for passing to settings_customise_sources
@@ -339,7 +349,10 @@ def load_settings(config_path: Path | None = None, start_dir: str | None = None)
             settings._config_file = toml_data["_config_file"]
         if "_config_error" in toml_data:
             settings._config_error = toml_data["_config_error"]
-        settings._backend_configs = _resolve_backend_config_sections(toml_data)
+        settings._backend_config_source = {
+            key: value for key, value in toml_data.items() if not str(key).startswith("_")
+        }
+        settings._backend_configs_loaded = False
 
         return settings
     finally:

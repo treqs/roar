@@ -251,6 +251,29 @@ def load_config(config_path: Path | None = None, start_dir: str | None = None) -
     return settings.to_dict()
 
 
+_MISSING = object()
+
+
+def _coerce_settings_value(value: Any) -> Any:
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
+    return value
+
+
+def _get_nested_from_settings(settings: Any, key: str, default: Any = _MISSING) -> Any:
+    current: Any = settings
+    for part in key.split("."):
+        if hasattr(current, part):
+            current = getattr(current, part)
+            continue
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+            continue
+        return default
+    return _coerce_settings_value(current)
+
+
 def get_roar_dir(start_dir: str | None = None) -> Path:
     """
     Get the .roar directory path, creating it if needed.
@@ -388,7 +411,12 @@ def save_config(config: dict, config_path: Path):
 
 def config_get(key: str, start_dir: str | None = None):
     """Get a config value."""
-    config = load_config(start_dir=start_dir)
+    settings = load_settings(start_dir=start_dir)
+    value = _get_nested_from_settings(settings, key, _MISSING)
+    if value is not _MISSING:
+        return value
+
+    config = settings.to_dict()
     return _get_nested(config, key)
 
 

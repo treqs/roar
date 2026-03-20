@@ -17,6 +17,14 @@ from roar.core.exceptions import (
     GlaasNotConfiguredError,
 )
 from roar.integrations.glaas import GlaasClient
+from roar.integrations.glaas.transport import reset_auth_mode_cache
+
+
+@pytest.fixture(autouse=True)
+def reset_glaas_auth_mode() -> None:
+    reset_auth_mode_cache()
+    yield
+    reset_auth_mode_cache()
 
 
 class TestGlaasClientExceptions:
@@ -32,6 +40,14 @@ class TestGlaasClientExceptions:
                 client.health_check()
 
             assert "not configured" in str(exc_info.value).lower()
+
+    def test_empty_base_url_does_not_fall_back_to_config_lookup(self):
+        """An explicit empty URL should stay unconfigured without reading config."""
+        with patch("roar.integrations.glaas.client.get_glaas_url") as get_glaas_url:
+            client = GlaasClient(base_url="")
+
+        get_glaas_url.assert_not_called()
+        assert client.base_url is None
 
     def test_health_check_raises_connection_error_on_network_failure(self):
         """health_check should raise GlaasConnectionError on network errors."""
@@ -123,6 +139,15 @@ class TestExceptionHierarchy:
 class TestOptionalAuth:
     """Test that _request() works without SSH keys (optional auth)."""
 
+    @staticmethod
+    def _json_response(payload: bytes) -> MagicMock:
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = payload
+        response.__enter__ = MagicMock(return_value=response)
+        response.__exit__ = MagicMock(return_value=False)
+        return response
+
     def test_request_succeeds_without_auth_header(self):
         """_request proceeds without Authorization header when no SSH keys available."""
         client = GlaasClient(base_url="http://localhost:9999")
@@ -131,12 +156,7 @@ class TestOptionalAuth:
             patch("roar.integrations.glaas.client.make_auth_header", return_value=None),
             patch("urllib.request.urlopen") as mock_urlopen,
         ):
-            mock_response = MagicMock()
-            mock_response.status = 200
-            mock_response.read.return_value = b'{"success": true, "data": {"id": 1}}'
-            mock_response.__enter__ = MagicMock(return_value=mock_response)
-            mock_response.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_response
+            mock_urlopen.return_value = self._json_response(b'{"success": true, "data": {"id": 1}}')
 
             _result, error = client._request("POST", "/api/v1/test", {"key": "val"})
 
@@ -158,20 +178,50 @@ class TestOptionalAuth:
             ),
             patch("urllib.request.urlopen") as mock_urlopen,
         ):
-            mock_response = MagicMock()
-            mock_response.status = 200
-            mock_response.read.return_value = b'{"success": true, "data": {}}'
-            mock_response.__enter__ = MagicMock(return_value=mock_response)
-            mock_response.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_response
+            mock_urlopen.side_effect = [
+                self._json_response(b'{"success": true, "data": {"items": []}}'),
+                self._json_response(b'{"success": true, "data": {}}'),
+            ]
 
             _result, error = client._request("POST", "/api/v1/test", {"key": "val"})
 
             assert error is None
+            assert mock_urlopen.call_count == 2
 
-            # Verify Authorization header was set
-            req = mock_urlopen.call_args[0][0]
-            assert req.get_header("Authorization") == "SSH-SIG test-signature"
+            probe_request = mock_urlopen.call_args_list[0][0][0]
+            request = mock_urlopen.call_args_list[1][0][0]
+            assert probe_request.full_url == "http://localhost:9999/api/v1/sessions?limit=1"
+            assert probe_request.get_header("Authorization") == "SSH-SIG test-signature"
+            assert request.get_header("Authorization") == "SSH-SIG test-signature"
+
+    def test_authenticated_probe_is_cached_after_first_success(self):
+        """Once a protected probe succeeds, later requests should not re-probe."""
+        client = GlaasClient(base_url="http://localhost:9999")
+
+        with (
+            patch(
+                "roar.integrations.glaas.client.make_auth_header",
+                return_value="SSH-SIG test-signature",
+            ),
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_urlopen.side_effect = [
+                self._json_response(b'{"success": true, "data": {"items": []}}'),
+                self._json_response(b'{"success": true, "data": {"id": 1}}'),
+                self._json_response(b'{"success": true, "data": {"id": 2}}'),
+            ]
+
+            first_result, first_error = client._request("GET", "/api/v1/test", None)
+            second_result, second_error = client._request("GET", "/api/v1/test-2", None)
+
+            assert first_error is None
+            assert second_error is None
+            assert first_result == {"id": 1}
+            assert second_result == {"id": 2}
+            assert mock_urlopen.call_count == 3
+            assert mock_urlopen.call_args_list[0][0][0].full_url.endswith("/api/v1/sessions?limit=1")
+            assert mock_urlopen.call_args_list[1][0][0].full_url.endswith("/api/v1/test")
+            assert mock_urlopen.call_args_list[2][0][0].full_url.endswith("/api/v1/test-2")
 
     def test_request_retries_without_auth_after_401(self):
         """Optional-auth endpoints should fall back to anonymous access after 401."""
@@ -191,14 +241,13 @@ class TestOptionalAuth:
                 "roar.integrations.glaas.client.make_auth_header",
                 return_value="SSH-SIG test-signature",
             ),
+            patch("roar.integrations.glaas.transport._get_logger") as mock_get_logger,
             patch("urllib.request.urlopen") as mock_urlopen,
         ):
-            mock_response = MagicMock()
-            mock_response.status = 200
-            mock_response.read.return_value = b'{"success": true, "data": {"id": 1}}'
-            mock_response.__enter__ = MagicMock(return_value=mock_response)
-            mock_response.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.side_effect = [unauthorized, mock_response]
+            mock_urlopen.side_effect = [
+                unauthorized,
+                self._json_response(b'{"success": true, "data": {"id": 1}}'),
+            ]
 
             result, error = client._request("GET", "/api/v1/test", None)
 
@@ -208,8 +257,10 @@ class TestOptionalAuth:
 
             first_request = mock_urlopen.call_args_list[0][0][0]
             second_request = mock_urlopen.call_args_list[1][0][0]
+            assert first_request.full_url == "http://localhost:9999/api/v1/sessions?limit=1"
             assert first_request.get_header("Authorization") == "SSH-SIG test-signature"
             assert second_request.get_header("Authorization") is None
+            mock_get_logger.return_value.warning.assert_called_once()
 
     def test_request_returns_original_401_when_anonymous_retry_also_fails(self):
         """If optional-auth fallback still fails, surface the original auth failure."""
@@ -247,6 +298,74 @@ class TestOptionalAuth:
             assert result is None
             assert error == "HTTP 403: Forbidden"
             assert mock_urlopen.call_count == 2
+
+    def test_request_extracts_nested_api_error_message(self):
+        """HTTP errors should surface nested API error.message details."""
+        client = GlaasClient(base_url="http://localhost:9999")
+
+        unauthorized = urllib.error.HTTPError(
+            url="http://localhost:9999/api/v1/test",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=None,
+        )
+        unauthorized.read = MagicMock(
+            return_value=b'{"success": false, "error": {"message": "Unknown key"}}'
+        )
+
+        with (
+            patch("roar.integrations.glaas.client.make_auth_header", return_value=None),
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_urlopen.side_effect = unauthorized
+
+            result, error = client._request("GET", "/api/v1/test", None)
+
+            assert result is None
+            assert error == "HTTP 401: Unknown key"
+
+    def test_anonymous_fallback_is_cached_after_first_auth_failure(self):
+        """Once auth is rejected, future requests should skip auth and the probe."""
+        client = GlaasClient(base_url="http://localhost:9999")
+
+        unauthorized = urllib.error.HTTPError(
+            url="http://localhost:9999/api/v1/sessions?limit=1",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=None,
+        )
+        unauthorized.read = MagicMock(return_value=b'{"detail":"Unknown key"}')
+
+        with (
+            patch(
+                "roar.integrations.glaas.client.make_auth_header",
+                return_value="SSH-SIG test-signature",
+            ),
+            patch("roar.integrations.glaas.transport._get_logger") as mock_get_logger,
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_urlopen.side_effect = [
+                unauthorized,
+                self._json_response(b'{"success": true, "data": {"id": 1}}'),
+                self._json_response(b'{"success": true, "data": {"id": 2}}'),
+            ]
+
+            first_result, first_error = client._request("GET", "/api/v1/test", None)
+            second_result, second_error = client._request("GET", "/api/v1/test-2", None)
+
+            assert first_error is None
+            assert second_error is None
+            assert first_result == {"id": 1}
+            assert second_result == {"id": 2}
+            assert mock_urlopen.call_count == 3
+            assert mock_urlopen.call_args_list[0][0][0].full_url.endswith("/api/v1/sessions?limit=1")
+            assert mock_urlopen.call_args_list[1][0][0].full_url.endswith("/api/v1/test")
+            assert mock_urlopen.call_args_list[1][0][0].get_header("Authorization") is None
+            assert mock_urlopen.call_args_list[2][0][0].full_url.endswith("/api/v1/test-2")
+            assert mock_urlopen.call_args_list[2][0][0].get_header("Authorization") is None
+            mock_get_logger.return_value.warning.assert_called_once()
 
 
 class TestRegisterJobsBatch:

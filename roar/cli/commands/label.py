@@ -12,17 +12,19 @@ from __future__ import annotations
 
 import click
 
-from ...application.query import (
-    LabelCopyRequest,
-    LabelHistoryRequest,
-    LabelSetRequest,
-    LabelShowRequest,
+from ...application.query.label import (
     copy_labels,
     set_labels,
     show_labels,
 )
-from ...application.query import (
+from ...application.query.label import (
     label_history as render_label_history,
+)
+from ...application.query.requests import (
+    LabelCopyRequest,
+    LabelHistoryRequest,
+    LabelSetRequest,
+    LabelShowRequest,
 )
 from ..context import RoarContext
 from ..decorators import require_init

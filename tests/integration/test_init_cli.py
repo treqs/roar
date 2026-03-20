@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +23,15 @@ def _run_roar_init(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _active_session_row(repo_root: Path) -> sqlite3.Row | None:
+    db_path = repo_root / ".roar" / "roar.db"
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        return conn.execute(
+            "SELECT id, is_active, current_step FROM sessions WHERE is_active = 1 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+
 def test_init_with_yes_adds_roar_to_gitignore(tmp_path: Path) -> None:
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
     gitignore_path = tmp_path / ".gitignore"
@@ -33,6 +43,10 @@ def test_init_with_yes_adds_roar_to_gitignore(tmp_path: Path) -> None:
     assert (tmp_path / ".roar").is_dir()
     assert (tmp_path / ".roar" / "roar.db").is_file()
     assert (tmp_path / ".roar" / "config.toml").is_file()
+    active_session = _active_session_row(tmp_path)
+    assert active_session is not None
+    assert active_session["is_active"] == 1
+    assert active_session["current_step"] == 1
     assert "Added .roar/ to .gitignore" in result.stdout
     assert gitignore_path.read_text().endswith(".roar/\n")
 
@@ -47,6 +61,9 @@ def test_init_with_no_preserves_gitignore(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / ".roar").is_dir()
+    active_session = _active_session_row(tmp_path)
+    assert active_session is not None
+    assert active_session["is_active"] == 1
     assert "Skipped .gitignore update." in result.stdout
     assert gitignore_path.read_text() == original_gitignore
 
@@ -61,5 +78,8 @@ def test_init_with_path_initializes_target_directory(tmp_path: Path) -> None:
     assert (project_dir / ".roar").is_dir()
     assert (project_dir / ".roar" / "roar.db").is_file()
     assert (project_dir / ".roar" / "config.toml").is_file()
+    active_session = _active_session_row(project_dir)
+    assert active_session is not None
+    assert active_session["is_active"] == 1
     assert not (tmp_path / ".roar").exists()
     assert "Created" in result.stdout

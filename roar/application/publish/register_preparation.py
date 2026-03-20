@@ -7,7 +7,6 @@ from pathlib import Path
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
-from ...integrations.config import config_get
 from ..git import build_roar_git_tag_name, ensure_clean_git_repo, resolve_roar_git_context
 from .runtime import PublishRuntime
 from .session import prepare_publish_session
@@ -41,9 +40,13 @@ def prepare_register_execution(
     git_tag_name: str | None = None
     git_tag_repo_root: Path | None = None
 
-    tagging_enabled = config_get("registration.tagging.enabled")
-    if tagging_enabled is None:
-        tagging_enabled = True
+    tagging_enabled = True
+    if not dry_run:
+        from ...integrations.config import config_get
+
+        tagging_enabled = config_get("registration.tagging.enabled")
+        if tagging_enabled is None:
+            tagging_enabled = True
 
     if not dry_run and tagging_enabled and git_context.commit:
         git_state = ensure_clean_git_repo(

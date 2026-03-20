@@ -5,9 +5,7 @@ Consolidates session hash computation and GLaaS registration logic
 from put.py and coordinator.py.
 """
 
-import hashlib
 from functools import cached_property
-from pathlib import Path
 
 from ....core.interfaces.logger import ILogger
 from ....core.interfaces.registration import (
@@ -16,6 +14,7 @@ from ....core.interfaces.registration import (
     SessionRegistrationResult,
 )
 from ....core.logging import get_logger
+from ....core.session_hash import compute_local_session_hash
 from ....core.validation import validate_session_registration
 from ..client import GlaasClient
 
@@ -66,23 +65,15 @@ class SessionRegistrationService(ISessionRegistrar):
         Returns:
             SHA256 hash of the session identifier string
         """
-        roar_dir_abs = Path(roar_dir)
-
-        if session_id is not None:
-            session_id_str = f"{roar_dir_abs}:{session_id}"
-        elif fallback_suffix:
-            session_id_str = f"{roar_dir_abs}:{fallback_suffix}"
-        else:
-            # Generate a unique session for external files
-            import time
-
-            session_id_str = f"{roar_dir_abs}:external:{time.time()}"
-
-        session_hash = hashlib.sha256(session_id_str.encode()).hexdigest()
+        session_hash = compute_local_session_hash(
+            roar_dir=roar_dir,
+            session_id=session_id,
+            fallback_suffix=fallback_suffix,
+        )
         self._logger.debug(
-            "Computed session hash: %s from %s",
+            "Computed session hash: %s for session_id=%s",
             session_hash[:12],
-            session_id_str[:50],
+            session_id if session_id is not None else fallback_suffix or "external",
         )
         return session_hash
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from ..core.step_name import resolve_step_name
 from ..db.context import optional_repo
 from ..execution.framework.registry import (
     is_execution_noise_job,
@@ -251,6 +252,7 @@ class DagDataBuilder:
         for step in steps_to_show:
             job_id = step["id"]
             step_number = step["step_number"]
+            labels = self._current_labels("job", job_id=int(job_id))
 
             # Get inputs and outputs
             inputs = self._db_ctx.jobs.get_inputs(job_id)
@@ -288,7 +290,7 @@ class DagDataBuilder:
                 "job_id": job_id,
                 "job_uid": step.get("job_uid"),
                 "command": step.get("command", ""),
-                "step_name": step.get("step_name"),
+                "step_name": resolve_step_name(labels, step.get("step_name")),
                 "state": state,
                 "is_build": step.get("job_type") == "build",
                 "exit_code": step.get("exit_code"),
@@ -298,7 +300,7 @@ class DagDataBuilder:
                     "consumed": consumed,
                 },
                 "dependencies": sorted(dependencies),
-                "labels": self._current_labels("job", job_id=int(job_id)),
+                "labels": labels,
             }
             nodes.append(node)
 

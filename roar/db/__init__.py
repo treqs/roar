@@ -1,65 +1,47 @@
-"""
-Roar database layer.
+"""Lazy exports for the roar database layer."""
 
-This package provides the database layer for roar lineage tracking,
-following SOLID principles:
+from __future__ import annotations
 
-- Models: SQLAlchemy ORM models for all entities
-- Repositories: Focused data access interfaces
-- Services: Business logic orchestration
-- Hashing: Strategy pattern for hash algorithms
-- Engine: SQLAlchemy engine and session configuration
+from importlib import import_module
+from typing import Any
 
-Usage:
-    Use the DatabaseContext for database access:
+_EXPORTS = {
+    "Artifact": ".models",
+    "ArtifactHash": ".models",
+    "Base": ".models",
+    "Collection": ".models",
+    "CollectionMember": ".models",
+    "CompositeArtifactComponent": ".models",
+    "CompositeMembershipIndex": ".models",
+    "DatabaseContext": ".context",
+    "HashCache": ".models",
+    "Job": ".models",
+    "JobInput": ".models",
+    "JobOutput": ".models",
+    "Label": ".models",
+    "QueryDatabaseContext": ".query_context",
+    "SchemaVersion": ".models",
+    "Session": ".models",
+    "create_database_context": ".context",
+    "create_query_database_context": ".query_context",
+    "create_roar_engine": ".engine",
+    "create_session_factory": ".engine",
+    "init_database": ".engine",
+}
 
-        from roar.db.context import create_database_context
+__all__ = sorted(_EXPORTS)
 
-        with create_database_context(roar_dir) as ctx:
-            artifacts = ctx.artifacts.get_all()
-            jobs = ctx.jobs.get_recent()
-"""
 
-from .context import DatabaseContext, create_database_context
-from .engine import create_roar_engine, create_session_factory, init_database
-from .models import (
-    Artifact,
-    ArtifactHash,
-    Base,
-    Collection,
-    CollectionMember,
-    CompositeArtifactComponent,
-    CompositeMembershipIndex,
-    HashCache,
-    Job,
-    JobInput,
-    JobOutput,
-    Label,
-    SchemaVersion,
-    Session,
-)
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__all__ = [
-    "Artifact",
-    "ArtifactHash",
-    # Models
-    "Base",
-    "Collection",
-    "CollectionMember",
-    "CompositeArtifactComponent",
-    "CompositeMembershipIndex",
-    # Context
-    "DatabaseContext",
-    "HashCache",
-    "Job",
-    "JobInput",
-    "JobOutput",
-    "Label",
-    "SchemaVersion",
-    "Session",
-    "create_database_context",
-    # Engine
-    "create_roar_engine",
-    "create_session_factory",
-    "init_database",
-]
+    module = import_module(module_name, __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
