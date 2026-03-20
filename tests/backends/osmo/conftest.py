@@ -383,7 +383,10 @@ def osmo_harness() -> dict[str, str]:
             for key in (
                 "OSMO_DOCKERHUB_USERNAME",
                 "OSMO_DOCKERHUB_PASSWORD",
+                "OSMO_KAI_SCHEDULER_VERSION",
                 "OSMO_PRELOAD_DOCKERHUB_IMAGES",
+                "OSMO_PRELOAD_PULL_RETRIES",
+                "OSMO_QUICK_START_CHART_VERSION",
             )
             if (value := os.environ.get(key))
         }
