@@ -35,6 +35,8 @@ BOOTSTRAP_TIMEOUT_SECONDS = 45 * 60
 QUERY_TIMEOUT_SECONDS = 12 * 60
 POLL_INTERVAL_SECONDS = 5
 PORT_FORWARD_TIMEOUT_SECONDS = 5 * 60
+LOCALSTACK_FORWARD_PORT = os.environ.get("OSMO_LOCALSTACK_PORT", "34566")
+LOCALSTACK_HOST_OVERRIDE_URL = f"http://127.0.0.1:{LOCALSTACK_FORWARD_PORT}"
 DEFAULT_OSMO_TEST_PYTHON_IMAGE = (
     f"public.ecr.aws/docker/library/python:{sys.version_info.major}.{sys.version_info.minor}-slim"
 )
@@ -193,6 +195,31 @@ def restore_host_path_ownership(path: str | Path) -> None:
         raise RuntimeError(
             "Failed to restore host path ownership from osmo-tools:\n"
             f"path: {repo_path}\n"
+            f"stdout:\n{textwrap.indent(result.stdout, '  ')}\n"
+            f"stderr:\n{textwrap.indent(result.stderr, '  ')}"
+        )
+
+
+def patch_local_osmo_data_override_url(override_url: str) -> None:
+    script = f"""
+cat <<'EOF' >/root/.config/osmo/config.yaml
+auth:
+  data:
+    s3://osmo:
+      access_key: test
+      access_key_id: test
+      override_url: {override_url}
+      region: us-east-1
+EOF
+"""
+    result = exec_on_service(
+        "osmo-tools",
+        ["bash", "-lc", script],
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Failed to patch local OSMO data override URL.\n"
             f"stdout:\n{textwrap.indent(result.stdout, '  ')}\n"
             f"stderr:\n{textwrap.indent(result.stderr, '  ')}"
         )
@@ -403,6 +430,7 @@ def osmo_harness() -> dict[str, str]:
                 f"stdout:\n{textwrap.indent(bootstrap.stdout, '  ')}\n"
                 f"stderr:\n{textwrap.indent(bootstrap.stderr, '  ')}"
             )
+        patch_local_osmo_data_override_url(LOCALSTACK_HOST_OVERRIDE_URL)
         yield {
             "base_url": BASE_URL,
             "container_downloads_dir": str(CONTAINER_DOWNLOADS_DIR),

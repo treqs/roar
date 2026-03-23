@@ -11,6 +11,7 @@ quick_start_chart_version="${OSMO_QUICK_START_CHART_VERSION:-1.0.1}"
 localstack_port="${OSMO_LOCALSTACK_PORT:-34566}"
 localstack_forward_log="/tmp/osmo-localstack-port-forward.log"
 localstack_forward_pid="/tmp/osmo-localstack-port-forward.pid"
+localstack_cluster_url="http://localstack-s3.osmo:4566"
 localstack_override_url="http://127.0.0.1:${localstack_port}"
 dockerhub_username="${OSMO_DOCKERHUB_USERNAME:-}"
 dockerhub_password="${OSMO_DOCKERHUB_PASSWORD:-}"
@@ -124,6 +125,190 @@ resolve_preload_nodes_csv() {
   printf '%s\n' "${selected_nodes_csv}"
 }
 
+wait_for_osmo_dev_login() {
+  local deadline=$((SECONDS + 600))
+  while (( SECONDS < deadline )); do
+    if osmo login "${base_url}" --method=dev --username=testuser >/tmp/osmo-login.out 2>/tmp/osmo-login.err; then
+      return 0
+    fi
+    sleep 5
+  done
+
+  echo "Timed out waiting for OSMO dev login" >&2
+  cat /tmp/osmo-login.err >&2 || true
+  return 1
+}
+
+patch_local_osmo_data_override_url() {
+  cat <<EOF >/root/.config/osmo/config.yaml
+auth:
+  data:
+    s3://osmo:
+      access_key: test
+      access_key_id: test
+      override_url: ${localstack_override_url}
+      region: us-east-1
+EOF
+}
+
+patch_osmo_pod_templates_for_kind() {
+  local response
+  response="$(
+    curl \
+      --max-time 30 \
+      --retry 3 \
+      --retry-delay 5 \
+      --fail-with-body \
+      -w 'HTTP_STATUS:%{http_code}' \
+      -X PUT \
+      -H "Content-Type: application/json" \
+      -H "x-osmo-user: testuser" \
+      "${base_url}/api/configs/pod_template" \
+      -d '{
+        "configs": {
+          "default_compute": {
+            "spec": {
+              "containers": [
+                {
+                  "name": "{{USER_CONTAINER_NAME}}",
+                  "env": [
+                    {
+                      "name": "AWS_ENDPOINT_URL_S3",
+                      "value": "http://localstack-s3.osmo:4566"
+                    },
+                    {
+                      "name": "AWS_S3_FORCE_PATH_STYLE",
+                      "value": "true"
+                    },
+                    {
+                      "name": "AWS_DEFAULT_REGION",
+                      "value": "us-east-1"
+                    },
+                    {
+                      "name": "OSMO_LOGIN_DEV",
+                      "value": "true"
+                    },
+                    {
+                      "name": "OSMO_SKIP_DATA_AUTH",
+                      "value": "1"
+                    }
+                  ]
+                },
+                {
+                  "name": "osmo-ctrl",
+                  "env": [
+                    {
+                      "name": "AWS_ENDPOINT_URL_S3",
+                      "value": "http://localstack-s3.osmo:4566"
+                    },
+                    {
+                      "name": "AWS_S3_FORCE_PATH_STYLE",
+                      "value": "true"
+                    },
+                    {
+                      "name": "AWS_DEFAULT_REGION",
+                      "value": "us-east-1"
+                    },
+                    {
+                      "name": "OSMO_LOGIN_DEV",
+                      "value": "true"
+                    },
+                    {
+                      "name": "OSMO_SKIP_DATA_AUTH",
+                      "value": "1"
+                    }
+                  ]
+                }
+              ],
+              "nodeSelector": {
+                "node_group": "compute"
+              }
+            }
+          },
+          "default_user": {
+            "spec": {
+              "containers": [
+                {
+                  "name": "{{USER_CONTAINER_NAME}}",
+                  "resources": {
+                    "limits": {
+                      "cpu": "{{USER_CPU}}",
+                      "memory": "{{USER_MEMORY}}",
+                      "ephemeral-storage": "{{USER_STORAGE}}"
+                    },
+                    "requests": {
+                      "cpu": "{{USER_CPU}}",
+                      "memory": "{{USER_MEMORY}}",
+                      "ephemeral-storage": "{{USER_STORAGE}}"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "description": "Adapt OSMO pod templates for KIND-based roar tests"
+      }'
+  )"
+
+  local http_code body
+  http_code="$(printf '%s' "${response}" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)"
+  body="$(printf '%s' "${response}" | sed 's/HTTP_STATUS:[0-9]*$//')"
+  if [[ -z "${http_code}" || "${http_code}" -ge 400 ]]; then
+    echo "Failed to patch OSMO pod templates for KIND." >&2
+    echo "HTTP status: ${http_code:-unknown}" >&2
+    echo "Response body: ${body}" >&2
+    return 1
+  fi
+}
+
+ensure_backend_operator_token() {
+  osmo user create backend-operator --roles osmo-backend --format-type json >/tmp/osmo-backend-user.out 2>/tmp/osmo-backend-user.err || true
+  osmo user update testuser --add-roles osmo-backend --format-type json >/tmp/osmo-backend-role.out 2>/tmp/osmo-backend-role.err || true
+
+  local token_name="backend-operator-token-$(date +%s)"
+  local token_json
+  token_json="$(
+    osmo token set "${token_name}" \
+      --user backend-operator \
+      --roles osmo-backend \
+      --format-type json
+  )"
+  local token
+  token="$(
+    printf '%s' "${token_json}" \
+      | python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])'
+  )"
+
+  kubectl patch secret backend-operator-token \
+    -n osmo \
+    --type merge \
+    -p "{\"stringData\":{\"token\":\"${token}\"}}" >/dev/null
+}
+
+patch_backend_operator_deployments() {
+  local patch_file="/tmp/osmo-remove-wait-token.json"
+  cat <<'JSON' >"${patch_file}"
+[
+  {"op":"remove","path":"/spec/template/spec/initContainers/1"}
+]
+JSON
+
+  kubectl patch deployment osmo-osmo-backend-listener \
+    -n osmo \
+    --type json \
+    --patch-file "${patch_file}" >/dev/null || true
+  kubectl patch deployment osmo-osmo-backend-worker \
+    -n osmo \
+    --type json \
+    --patch-file "${patch_file}" >/dev/null || true
+
+  kubectl rollout restart deployment/osmo-osmo-backend-listener -n osmo >/dev/null
+  kubectl rollout restart deployment/osmo-osmo-backend-worker -n osmo >/dev/null
+  kubectl rollout status deployment/osmo-osmo-backend-listener -n osmo --timeout=5m
+  kubectl rollout status deployment/osmo-osmo-backend-worker -n osmo --timeout=5m
+}
+
 main() {
   kind delete cluster --name "${cluster_name}" >/dev/null 2>&1 || true
   docker ps -a --format '{{.Names}}' | grep "^${cluster_name}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
@@ -170,7 +355,6 @@ main() {
     --version "${quick_start_chart_version}" \
     --namespace osmo \
     --create-namespace \
-    --wait \
     --timeout 20m
 
   kubectl patch configmap quick-start \
@@ -181,6 +365,10 @@ main() {
   kubectl rollout status deployment/quick-start -n osmo --timeout=5m
 
   kubectl rollout status deployment/localstack-s3 -n osmo --timeout=5m
+  wait_for_osmo_dev_login
+  ensure_backend_operator_token
+  patch_backend_operator_deployments
+  patch_osmo_pod_templates_for_kind
 
   nohup kubectl port-forward \
     --address 127.0.0.1 \
@@ -205,7 +393,7 @@ main() {
 
   deadline=$((SECONDS + 900))
   while (( SECONDS < deadline )); do
-    if osmo login "${base_url}" --method=dev --username=testuser >/tmp/osmo-login.out 2>/tmp/osmo-login.err; then
+    if wait_for_osmo_dev_login; then
       if osmo pool list --format-type json >/tmp/osmo-pools.json 2>/tmp/osmo-pools.err; then
         if python - <<'PY'
 import json
@@ -225,11 +413,13 @@ PY
             --type DATA \
             --payload \
             endpoint=s3://osmo \
+            override_url="${localstack_cluster_url}" \
             region=us-east-1 \
             access_key_id=test \
             access_key=test >/tmp/osmo-credential.out 2>/tmp/osmo-credential.err \
             && osmo profile set bucket osmo >/tmp/osmo-profile.out 2>/tmp/osmo-profile.err
           then
+            patch_local_osmo_data_override_url
             exit 0
           fi
         fi
