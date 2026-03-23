@@ -187,7 +187,7 @@ def test_register_honors_logging_config_for_console_and_file(
         config_text = config_text.replace("file = false", "file = true")
     else:
         config_text = (
-            f"{config_text.rstrip()}\n\n[logging]\nlevel = \"debug\"\nconsole = true\nfile = true\n"
+            f'{config_text.rstrip()}\n\n[logging]\nlevel = "debug"\nconsole = true\nfile = true\n'
         )
     config_path.write_text(config_text, encoding="utf-8")
 

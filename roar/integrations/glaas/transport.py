@@ -196,7 +196,9 @@ def request_json(
             return None, str(e), None
 
     auth_mode = _get_cached_auth_mode(base_url)
-    auth_header = None if auth_mode == "anonymous" else auth_header_factory(method, path, body_bytes)
+    auth_header = (
+        None if auth_mode == "anonymous" else auth_header_factory(method, path, body_bytes)
+    )
 
     if auth_mode == "unknown" and auth_header:
         probe_auth_header = auth_header_factory("GET", _AUTH_PROBE_PATH, None)

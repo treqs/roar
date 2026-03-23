@@ -1,0 +1,54 @@
+workflow:
+  name: {{workflow_name}}
+  resources: {{resources}}
+  timeout:
+    exec_timeout: {{timeout}}
+  tasks:
+  - name: master
+    image: public.ecr.aws/docker/library/python:3.11-slim
+    command: [bash, /tmp/master.sh]
+    files:
+    - path: /tmp/master.sh
+      contents: |
+        set -euo pipefail
+        python3 -m pip install --no-cache-dir "ray[default]=={{ray_version}}"
+        export RAY_USAGE_STATS_ENABLED=0
+        ray start \
+          --head \
+          --port={{ray_port}} \
+          --dashboard-host=0.0.0.0 \
+          --dashboard-port={{dashboard_port}} \
+          --num-cpus={{ray_cpus_per_node}}
+        python3 - <<'PY'
+        import json
+        import time
+        import urllib.request
+
+        url = "http://127.0.0.1:{{dashboard_port}}/api/version"
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(url, timeout=5) as response:
+                    payload = json.load(response)
+                if payload.get("ray_version"):
+                    break
+            except Exception:
+                time.sleep(2)
+        else:
+            raise SystemExit("ray dashboard did not become ready")
+        PY
+        echo "ROAR_OSMO_RAY_HEAD_READY"
+        sleep infinity
+
+default-values:
+  workflow_name: roar-osmo-ray
+  ray_version: "2.44.1"
+  ray_port: 6379
+  dashboard_port: 8265
+  ray_cpus_per_node: 1
+  resources:
+    default:
+      cpu: 1
+      memory: 2Gi
+      storage: 4Gi
+  timeout: 1h

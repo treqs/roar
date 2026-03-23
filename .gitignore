@@ -221,6 +221,7 @@ CLAUDE.md
 # roar
 roar/bin/*
 .roar/
+.tmp-osmo-e2e/
 
 .ralph
 # Ray benchmark results

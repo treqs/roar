@@ -41,6 +41,7 @@ dependencies = [
     "cryptography>=42.0.0",
     "dependency-injector>=4.40.0",
     "msgpack>=1.0.0",
+    "PyYAML>=6.0",
     "sqlalchemy>=2.0.0",
     "pysqlite3-binary>=0.5.0; sys_platform == 'linux' and platform_machine == 'x86_64'",  # Fallback when stdlib sqlite3 unavailable
     "pydantic>=2.0.0",
@@ -74,6 +75,7 @@ roar-worker = "roar.execution.runtime.worker_bootstrap:main"
 
 [project.entry-points."roar.execution_backends"]
 ray = "roar.backends.ray.plugin:register"
+osmo = "roar.backends.osmo.plugin:register"
 
 [tool.maturin]
 manifest-path = "rust/crates/artifact-hash-py/Cargo.toml"
@@ -103,6 +105,7 @@ markers = [
     "happy_path: Happy path tests for core functionality",
     "diagnostic: Opt-in diagnostics or aspirational performance budgets outside the default gate",
     "large_pipeline: Stress-style pipeline coverage with larger DAG fixtures",
+    "osmo_e2e: OSMO end-to-end tests requiring a Docker Compose managed KIND harness",
     "ray_e2e: Ray end-to-end tests requiring a running Docker cluster",
     "ray_contract: User-facing Ray contract tests using `roar run ray job submit ...`",
     "ray_diagnostic: Diagnostic Ray tests that intentionally inspect internal runtime details",

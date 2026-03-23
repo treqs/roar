@@ -39,6 +39,7 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "label": ("roar.cli.commands.label", "label", "Manage local labels"),
     "lineage": ("roar.cli.commands.lineage", "lineage", "Inspect lineage for a tracked artifact"),
     "log": ("roar.cli.commands.log", "log", "List jobs in the active session"),
+    "osmo": ("roar.cli.commands.osmo", "osmo", "Manage OSMO workflow attachment"),
     "pop": ("roar.cli.commands.pop", "pop", "Remove the last local step"),
     "proxy": ("roar.cli.commands.proxy", "proxy", "Manage S3 proxy for lineage tracking"),
     "put": ("roar.cli.commands.put", "put", "Publish artifacts and register lineage"),

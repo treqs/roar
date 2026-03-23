@@ -71,9 +71,7 @@ def _clear_remote_label_storage() -> None:
 def _clear_remote_labels(_serialize_external_label_tests):
     del _serialize_external_label_tests
     rows = composite_live._db_query_rows("SELECT 1 AS ok")
-    assert rows and str(rows[0].get("ok")) == "1", (
-        f"Unexpected GLaaS database probe result: {rows}"
-    )
+    assert rows and str(rows[0].get("ok")) == "1", f"Unexpected GLaaS database probe result: {rows}"
     _clear_remote_label_storage()
 
 

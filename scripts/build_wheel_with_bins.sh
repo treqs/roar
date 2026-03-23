@@ -126,6 +126,55 @@ resolve_built_artifact() {
   return 1
 }
 
+build_python_wheel() {
+  if command -v uv >/dev/null 2>&1; then
+    echo "▶ Building wheel with uv..."
+    uv build --wheel --out-dir "$OUT_DIR"
+    return
+  fi
+
+  local python_candidate
+  for python_candidate in "${PYTHON:-}" python3 python; do
+    if [[ -z "$python_candidate" ]]; then
+      continue
+    fi
+    if [[ "$python_candidate" == */* ]]; then
+      if [[ ! -x "$python_candidate" ]]; then
+        continue
+      fi
+    elif ! command -v "$python_candidate" >/dev/null 2>&1; then
+      continue
+    fi
+    if command -v maturin >/dev/null 2>&1; then
+      echo "▶ Building wheel with maturin..."
+      (
+        cd "$ROOT_DIR"
+        maturin build \
+          --release \
+          --manifest-path rust/crates/artifact-hash-py/Cargo.toml \
+          --interpreter "$python_candidate" \
+          --out "$OUT_DIR"
+      )
+      return
+    fi
+    if "$python_candidate" -m maturin --help >/dev/null 2>&1; then
+      echo "▶ Building wheel with $python_candidate -m maturin..."
+      (
+        cd "$ROOT_DIR"
+        "$python_candidate" -m maturin build \
+          --release \
+          --manifest-path rust/crates/artifact-hash-py/Cargo.toml \
+          --interpreter "$python_candidate" \
+          --out "$OUT_DIR"
+      )
+      return
+    fi
+  done
+
+  echo "error: wheel build requires either uv or maturin available" >&2
+  exit 1
+}
+
 ensure_binary "roar-proxy" "roar-proxy"
 ensure_binary "roar-tracer" "roar-tracer"
 ensure_binary "roar-tracer-ebpf" "roar-tracer-ebpf"
@@ -190,7 +239,7 @@ if [[ "$sync_preload_lib" -eq 1 ]]; then
 fi
 
 echo "▶ Building roar wheel into $OUT_DIR..."
-uv build --wheel --out-dir "$OUT_DIR"
+build_python_wheel
 
 echo "▶ Verifying wheel contents..."
 (

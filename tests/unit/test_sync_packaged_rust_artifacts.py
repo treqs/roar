@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import scripts.sync_packaged_rust_artifacts as sync_module
 from scripts.sync_packaged_rust_artifacts import (
     ArtifactSpec,
     SyncLayout,
@@ -128,3 +129,50 @@ def test_sync_packaged_rust_artifacts_copies_release_outputs(tmp_path: Path) -> 
     assert (layout.package_bin_dir / "libroar_tracer_preload.so").read_text(
         encoding="utf-8"
     ) == "release-library\n"
+
+
+def test_sync_packaged_rust_artifacts_uses_fallback_release_dir_without_rebuild(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root_dir = tmp_path
+    rust_manifest = root_dir / "rust" / "Cargo.toml"
+    portable_release_dir = root_dir / "rust" / "target" / "x86_64-unknown-linux-gnu" / "release"
+    host_release_dir = root_dir / "rust" / "target" / "release"
+    package_bin_dir = root_dir / "roar" / "bin"
+    layout = SyncLayout(
+        root_dir=root_dir,
+        rust_manifest=rust_manifest,
+        release_dir=portable_release_dir,
+        fallback_release_dirs=(host_release_dir,),
+        package_bin_dir=package_bin_dir,
+        artifacts=(
+            ArtifactSpec(
+                package_name="roar-tracer",
+                source_paths=(
+                    rust_manifest,
+                    root_dir / "rust" / "Cargo.lock",
+                    root_dir / "rust" / "tracers" / "ptrace",
+                ),
+                binary_names=("roar-tracer",),
+            ),
+        ),
+        portable_target="x86_64-unknown-linux-gnu.2.17",
+    )
+
+    _write_file(layout.rust_manifest, "[workspace]\n")
+    _write_file(layout.root_dir / "rust" / "Cargo.lock", "")
+    _write_file(
+        layout.root_dir / "rust" / "tracers" / "ptrace" / "src" / "main.rs", "ptrace source\n"
+    )
+    _write_file(host_release_dir / "roar-tracer", "release-tracer\n")
+
+    def fail_build(*args, **kwargs):
+        raise AssertionError("expected fallback release artifact to avoid rebuild")
+
+    monkeypatch.setattr(sync_module.subprocess, "run", fail_build)
+
+    sync_packaged_rust_artifacts(layout)
+
+    assert (layout.package_bin_dir / "roar-tracer").read_text(
+        encoding="utf-8"
+    ) == "release-tracer\n"
