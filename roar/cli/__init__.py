@@ -39,10 +39,13 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "label": ("roar.cli.commands.label", "label", "Manage local labels"),
     "lineage": ("roar.cli.commands.lineage", "lineage", "Inspect lineage for a tracked artifact"),
     "log": ("roar.cli.commands.log", "log", "List jobs in the active session"),
+    "login": ("roar.cli.commands.login", "login", "Store global treqs auth state"),
+    "logout": ("roar.cli.commands.logout", "logout", "Clear global treqs auth state"),
     "osmo": ("roar.cli.commands.osmo", "osmo", "Manage OSMO workflow attachment"),
     "pop": ("roar.cli.commands.pop", "pop", "Remove the last local step"),
     "proxy": ("roar.cli.commands.proxy", "proxy", "Manage S3 proxy for lineage tracking"),
     "put": ("roar.cli.commands.put", "put", "Publish artifacts and register lineage"),
+    "project": ("roar.cli.commands.project", "project", "Manage repo-local treqs binding"),
     "register": ("roar.cli.commands.register", "register", "Register local lineage with GLaaS"),
     "reproduce": ("roar.cli.commands.reproduce", "reproduce", "Generate a reproduction plan"),
     "reset": ("roar.cli.commands.reset", "reset", "Reset roar state"),
@@ -50,13 +53,14 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "show": ("roar.cli.commands.show", "show", "Inspect a session, job, or artifact"),
     "status": ("roar.cli.commands.status", "status", "Show the active session summary"),
     "tracer": ("roar.cli.commands.tracer", "tracer", "Configure tracer backend defaults"),
+    "whoami": ("roar.cli.commands.whoami", "whoami", "Show current treqs login and repo binding"),
 }
 
 HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Start Here", ("init", "run", "build", "dag")),
     ("Inspect Local Lineage", ("status", "log", "show", "lineage", "pop", "reproduce")),
     ("Share and Publish", ("put", "register", "get", "label")),
-    ("Setup and Admin", ("auth", "config", "env", "tracer", "proxy", "reset")),
+    ("Setup and Admin", ("login", "logout", "whoami", "project", "auth", "config", "env", "tracer", "proxy", "reset")),
 )
 
 
