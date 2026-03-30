@@ -257,6 +257,37 @@ Display recent job execution history.
 roar log                  # Show recent job history
 ```
 
+### `roar label`
+
+Manage local labels for DAGs (sessions), jobs, and artifacts.
+
+```bash
+# Set labels (patches the current label document)
+roar label set dag current owner=alice team=ml
+roar label set job @2 phase=train lr=0.001
+roar label set artifact ./outputs/model.pt model.name=resnet50 stage=baseline
+
+# Copy labels from one entity to another
+roar label cp job @2 artifact ./outputs/model.pt
+
+# Show current labels
+roar label show dag current
+roar label show job @2
+roar label show artifact ./outputs/model.pt
+
+# Show label history (all versions)
+roar label history dag current
+roar label history artifact <artifact-hash>
+```
+
+**Entity targets:**
+
+- `dag`: `current` or a session hash prefix
+- `job`: step ref (`@N` or `@BN`) or job UID
+- `artifact`: file path or artifact hash
+
+Labels are stored locally and included in lineage registration/publish flows to GLaaS when supported by the configured server.
+
 ### `roar register`
 
 Register session, job, step, or artifact lineage with GLaaS.
