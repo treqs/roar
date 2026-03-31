@@ -3,8 +3,10 @@
 import contextlib
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
+from ...publish_auth import PublishAuthContext, load_publish_auth_context
 from . import auth as _auth
 from .transport import parse_json_response, request_json
 
@@ -62,9 +64,16 @@ def make_auth_header(
 class GlaasClient:
     """Client for interacting with GLaaS server."""
 
-    def __init__(self, base_url: str | None = None):
+    def __init__(
+        self,
+        base_url: str | None = None,
+        *,
+        start_dir: str | Path | None = None,
+        publish_auth: PublishAuthContext | None = None,
+    ):
         resolved_base_url = get_glaas_url() if base_url is None else base_url
         self.base_url = resolved_base_url.rstrip("/") if resolved_base_url else None
+        self._publish_auth = publish_auth or load_publish_auth_context(start_dir)
 
     def is_configured(self) -> bool:
         """Check if GLaaS is configured."""
@@ -125,8 +134,13 @@ class GlaasClient:
             method=method,
             path=path,
             body=body,
-            auth_header_factory=make_auth_header,
+            auth_header_factory=self._make_auth_header,
         )
+
+    def _make_auth_header(self, method: str, path: str, body: bytes | None = None) -> str | None:
+        if self._publish_auth.access_token:
+            return f"Bearer {self._publish_auth.access_token}"
+        return make_auth_header(method, path, body)
 
     def register_artifact(
         self,
@@ -421,6 +435,8 @@ class GlaasClient:
             "git_commit": git_commit,
             "git_branch": git_branch,
         }
+        if self._publish_auth.scope_request:
+            body["scope_request"] = dict(self._publish_auth.scope_request)
 
         result, error = self._request("POST", "/api/v1/sessions", body)
         return result, error

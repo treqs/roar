@@ -17,6 +17,7 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.job_batches: list[dict[str, Any]] = []
         self.job_creates: list[dict[str, Any]] = []
         self.artifact_batches: list[list[dict[str, Any]]] = []
+        self.auth_headers: list[dict[str, Any]] = []
         self.input_links: list[dict[str, Any]] = []
         self.output_links: list[dict[str, Any]] = []
         self.label_syncs: list[list[dict[str, Any]]] = []
@@ -85,6 +86,11 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         payload = self._read_json()
+        authorization = self.headers.get("Authorization")
+        self.server.auth_headers.append({"path": self.path, "authorization": authorization})
+        if not authorization or not authorization.startswith("Bearer "):
+            self._write_json(401, {"error": "Missing or invalid bearer auth"})
+            return
 
         if self.path == "/api/v1/sessions":
             self.server.session_registrations.append(payload)
@@ -218,6 +224,10 @@ class FakeGlaasServer:
     @property
     def artifact_batches(self) -> list[list[dict[str, Any]]]:
         return self._server.artifact_batches
+
+    @property
+    def auth_headers(self) -> list[dict[str, Any]]:
+        return self._server.auth_headers
 
     @property
     def input_links(self) -> list[dict[str, Any]]:
