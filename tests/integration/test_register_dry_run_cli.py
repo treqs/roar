@@ -74,7 +74,7 @@ def test_register_dry_run_resolves_artifact_step_and_session_targets(
     script.write_text("from pathlib import Path\nPath('report.txt').write_text('register me')\n")
     git_commit("Add register fixture")
 
-    run_result = roar_cli("run", python_exe, "generate_report.py", env_overrides=env)
+    run_result = roar_cli("run", python_exe, "generate_report.py")
     assert run_result.returncode == 0
     assert (temp_git_repo / "report.txt").read_text() == "register me"
 

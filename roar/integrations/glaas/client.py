@@ -429,7 +429,7 @@ class GlaasClient:
         Returns (session_info, error_message).
         session_info contains: hash, url, created (bool)
         """
-        body = {
+        body: dict[str, Any] = {
             "hash": session_hash,
             "git_repo": git_repo,
             "git_commit": git_commit,
