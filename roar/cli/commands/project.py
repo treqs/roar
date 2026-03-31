@@ -83,6 +83,11 @@ def _validate_binding_against_treqs(
     if matched_owner is None:
         raise click.ClickException(f"Owner not available in treqs access context: {owner_type} {owner_id}")
 
+    if owner_type == "organization" and matched_owner.get("role") not in {"owner", "admin"}:
+        raise click.ClickException(
+            f"Organization binding requires owner or admin role: {owner_id}"
+        )
+
     if project_id is None:
         return
 
@@ -95,7 +100,12 @@ def _validate_binding_against_treqs(
         raise click.ClickException("Invalid treqs access-context response: owner projects invalid")
 
     for project in owner_projects:
-        if isinstance(project, dict) and project.get("id") == project_id:
-            return
+        if not isinstance(project, dict) or project.get("id") != project_id:
+            continue
+        if project.get("can_write") is False:
+            raise click.ClickException(
+                f"Project is visible but not writable in treqs access context: {project_id}"
+            )
+        return
 
     raise click.ClickException(f"Project not available in treqs access context: {project_id}")

@@ -59,8 +59,16 @@ class _FakeTreqsHandler(BaseHTTPRequestHandler):
                                 "id": "proj-789",
                                 "name": "foundation-models",
                                 "visibility": "private",
+                                "can_write": True,
+                            },
+                            {
+                                "id": "proj-readonly",
+                                "name": "readonly-project",
+                                "visibility": "private",
+                                "can_write": False,
                             }
-                        ]
+                        ],
+                        "user-123": [],
                     },
                 },
             },
@@ -170,6 +178,45 @@ def test_project_link_validates_against_access_context_server(
     config_text = (temp_git_repo / ".roar" / "config.toml").read_text(encoding="utf-8")
     assert 'owner_id = "org-456"' in config_text
     assert 'project_id = "proj-789"' in config_text
+
+
+def test_project_link_rejects_readonly_project_from_access_context(
+    temp_git_repo: Path,
+    tmp_path: Path,
+    fake_treqs_server: _FakeTreqsServer,
+) -> None:
+    xdg_config_home = tmp_path / "xdg"
+    token_file = tmp_path / "token-file.json"
+    _write_auth_token_file(token_file)
+
+    login_result = _run_roar(
+        "login",
+        "--token-file",
+        str(token_file),
+        cwd=temp_git_repo,
+        env_overrides={"XDG_CONFIG_HOME": str(xdg_config_home)},
+    )
+    assert login_result.returncode == 0, login_result.stderr
+
+    treqs_api_url = f"http://127.0.0.1:{fake_treqs_server.server_address[1]}"
+    result = _run_roar(
+        "project",
+        "link",
+        "--owner-id",
+        "org-456",
+        "--owner-type",
+        "organization",
+        "--project-id",
+        "proj-readonly",
+        "--treqs-api-url",
+        treqs_api_url,
+        cwd=temp_git_repo,
+        env_overrides={"XDG_CONFIG_HOME": str(xdg_config_home)},
+    )
+
+    combined_output = f"{result.stdout}\n{result.stderr}"
+    assert result.returncode != 0
+    assert "Project is visible but not writable in treqs access context: proj-readonly" in combined_output
 
 
 def test_project_link_rejects_unknown_project_from_access_context(
