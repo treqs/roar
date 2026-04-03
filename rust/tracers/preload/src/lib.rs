@@ -660,10 +660,12 @@ fn emit_path_write(path: String) {
     });
 }
 
+#[cfg(target_os = "macos")]
 fn mode_implies_read(mode: &str) -> bool {
     mode.contains('r') || mode.contains('+')
 }
 
+#[cfg(target_os = "macos")]
 fn mode_implies_write(mode: &str) -> bool {
     mode.contains('w') || mode.contains('a') || mode.contains('x') || mode.contains('+')
 }
@@ -689,6 +691,7 @@ fn flags_imply_write(flags: c_int) -> bool {
         || (flags & O_TMPFILE_FLAG) != 0
 }
 
+#[cfg(target_os = "macos")]
 fn emit_path_mode(path: String, mode: &str) {
     if path.is_empty() {
         return;
@@ -1220,6 +1223,11 @@ pub unsafe extern "C" fn fopen(path: *const c_char, mode: *const c_char) -> *mut
         return std::ptr::null_mut();
     };
     let ret = real(path, mode);
+    // On macOS, emit read/write from fopen since the read/write hooks use direct
+    // syscalls and won't capture fopen-based I/O. On Linux, the read/write hooks
+    // already cover this via /proc/self/fd path resolution, so skip to avoid
+    // duplicate events with mismatched relative/absolute paths.
+    #[cfg(target_os = "macos")]
     if !ret.is_null() && !in_hook() {
         with_hook_guard(|| {
             let Some(path_s) = c_str_to_owned(path) else {
@@ -1241,6 +1249,7 @@ pub unsafe extern "C" fn fdopen(fd: c_int, mode: *const c_char) -> *mut libc::FI
         return std::ptr::null_mut();
     };
     let ret = real(fd, mode);
+    #[cfg(target_os = "macos")]
     if !ret.is_null() && !in_hook() {
         with_hook_guard(|| {
             let Some(path) = fd_path(fd) else {
@@ -1266,6 +1275,7 @@ pub unsafe extern "C" fn freopen(
         return std::ptr::null_mut();
     };
     let ret = real(path, mode, stream);
+    #[cfg(target_os = "macos")]
     if !ret.is_null() && !in_hook() {
         with_hook_guard(|| {
             let Some(path_s) = c_str_to_owned(path) else {
@@ -1287,6 +1297,7 @@ pub unsafe extern "C" fn fopen64(path: *const c_char, mode: *const c_char) -> *m
         return std::ptr::null_mut();
     };
     let ret = real(path, mode);
+    #[cfg(target_os = "macos")]
     if !ret.is_null() && !in_hook() {
         with_hook_guard(|| {
             let Some(path_s) = c_str_to_owned(path) else {
