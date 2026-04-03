@@ -293,3 +293,27 @@ class ShowArtifactSummary:
 
 
 ShowSummary = ShowSessionSummary | ShowJobSummary | ShowArtifactSummary
+
+
+@dataclass(frozen=True)
+class InputArtifactSummary:
+    artifact_id: str
+    path: str
+    size: int
+    hashes: list[ShowHashSummary] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class InputsSummary:
+    target_ref: str
+    is_root: bool
+    artifacts: list[InputArtifactSummary] = field(default_factory=list)
+    message: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "target": self.target_ref,
+            "is_root": self.is_root,
+            "inputs": [asdict(a) for a in self.artifacts],
+            **({"message": self.message} if self.message else {}),
+        }

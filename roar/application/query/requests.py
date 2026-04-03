@@ -81,3 +81,17 @@ class LabelHistoryRequest:
     cwd: Path
     entity_type: str
     target: str
+
+
+InputsQuerySelector = Literal["auto", "path", "job", "artifact"]
+
+
+@dataclass(frozen=True)
+class InputsQueryRequest:
+    roar_dir: Path
+    cwd: Path
+    ref: str
+    selector: InputsQuerySelector = "auto"
+    direct: bool = False
+    show_all: bool = False
+    output_json: bool = False
