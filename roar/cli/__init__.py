@@ -36,6 +36,7 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "env": ("roar.cli.commands.env", "env", "Manage persistent environment variables"),
     "get": ("roar.cli.commands.get", "get", "Download published artifacts"),
     "init": ("roar.cli.commands.init", "init", "Set up roar in a project"),
+    "inputs": ("roar.cli.commands.inputs", "inputs", "Show root input artifacts for a target"),
     "label": ("roar.cli.commands.label", "label", "Manage local labels"),
     "lineage": ("roar.cli.commands.lineage", "lineage", "Inspect lineage for a tracked artifact"),
     "log": ("roar.cli.commands.log", "log", "List jobs in the active session"),
@@ -54,7 +55,7 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
 
 HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Start Here", ("init", "run", "build", "dag")),
-    ("Inspect Local Lineage", ("status", "log", "show", "lineage", "pop", "reproduce")),
+    ("Inspect Local Lineage", ("status", "log", "show", "lineage", "inputs", "pop", "reproduce")),
     ("Share and Publish", ("put", "register", "get", "label")),
     ("Setup and Admin", ("auth", "config", "env", "tracer", "proxy", "reset")),
 )
