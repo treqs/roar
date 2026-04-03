@@ -289,6 +289,90 @@ pub fn sys_exit_read(ctx: TracePointContext) -> u32 {
     0
 }
 
+// ── pread64 ──────────────────────────────────────────────────────────────────
+// pread64(fd, buf, count, offset) — positional read without moving the cursor.
+
+#[tracepoint]
+pub fn sys_enter_pread64(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_enter_pread64(&ctx);
+    0
+}
+
+fn try_sys_enter_pread64(ctx: &TracePointContext) -> Result<(), i64> {
+    let pid = current_pid();
+    if !pid_tracked(pid) {
+        return Ok(());
+    }
+    let fd = unsafe { read_sys_enter_arg(ctx, 0)? };
+    let offset = unsafe { read_sys_enter_arg(ctx, 3)? };
+
+    let scratch = get_scratch().ok_or(1i64)?;
+    unsafe {
+        (*scratch).syscall_nr = roar_ebpf_common::syscall_nr::PREAD64;
+        (*scratch).arg0 = fd;
+        (*scratch).arg1 = offset;
+        (*scratch).arg2 = 0;
+        (*scratch).arg3 = 0;
+        (*scratch).arg4 = 0;
+    }
+    stash_scratch();
+    Ok(())
+}
+
+#[tracepoint]
+pub fn sys_exit_pread64(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_exit_preadwrite(&ctx, EventType::PRead);
+    0
+}
+
+// ── pwrite64 ─────────────────────────────────────────────────────────────────
+// pwrite64(fd, buf, count, offset) — positional write without moving the cursor.
+
+#[tracepoint]
+pub fn sys_enter_pwrite64(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_enter_pread64(&ctx); // same arg layout as pread64
+    0
+}
+
+#[tracepoint]
+pub fn sys_exit_pwrite64(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_exit_preadwrite(&ctx, EventType::PWrite);
+    0
+}
+
+/// Common exit handler for pread64/pwrite64 — emits SmallEvent with fd, offset, and bytes.
+fn try_sys_exit_preadwrite(ctx: &TracePointContext, event_type: EventType) -> Result<(), i64> {
+    let pid = current_pid();
+    if !pid_tracked(pid) {
+        return Ok(());
+    }
+
+    let key = current_pid_tgid();
+    let args = unsafe { PENDING_ARGS.get(&key).ok_or(1i64)? };
+    let fd = args.arg0;
+    let offset = args.arg1;
+
+    let ret = unsafe { read_sys_exit_ret(ctx)? };
+
+    let _ = PENDING_ARGS.remove(&key);
+
+    if ret <= 0 {
+        return Ok(());
+    }
+
+    emit_small(&SmallEvent {
+        pid,
+        thread_id: bpf_get_current_pid_tgid() as u32,
+        event_type: event_type as u16,
+        _pad: 0,
+        ret_val: ret,
+        arg0: fd,
+        arg1: offset,
+    });
+
+    Ok(())
+}
+
 // ── write ─────────────────────────────────────────────────────────────────────
 
 #[tracepoint]
@@ -382,6 +466,101 @@ fn try_sys_exit_close(ctx: &TracePointContext) -> Result<(), i64> {
         arg0: fd,
         arg1: 0,
     });
+
+    Ok(())
+}
+
+// ── mmap ─────────────────────────────────────────────────────────────────────
+// mmap(addr, length, prot, flags, fd, offset)
+// PyArrow and other libraries use mmap for reading parquet/columnar files.
+
+#[tracepoint]
+pub fn sys_enter_mmap(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_enter_mmap(&ctx);
+    0
+}
+
+fn try_sys_enter_mmap(ctx: &TracePointContext) -> Result<(), i64> {
+    let pid = current_pid();
+    if !pid_tracked(pid) {
+        return Ok(());
+    }
+    let length = unsafe { read_sys_enter_arg(ctx, 1)? }; // arg1 = length
+    let prot = unsafe { read_sys_enter_arg(ctx, 2)? }; // arg2 = prot
+    let flags = unsafe { read_sys_enter_arg(ctx, 3)? }; // arg3 = flags
+    let fd = unsafe { read_sys_enter_arg(ctx, 4)? }; // arg4 = fd
+    let offset = unsafe { read_sys_enter_arg(ctx, 5)? }; // arg5 = offset
+
+    let scratch = get_scratch().ok_or(1i64)?;
+    unsafe {
+        (*scratch).syscall_nr = roar_ebpf_common::syscall_nr::MMAP;
+        (*scratch).arg0 = fd;
+        (*scratch).arg1 = offset;
+        (*scratch).arg2 = length;
+        (*scratch).arg3 = prot;
+        (*scratch).arg4 = flags;
+    }
+    stash_scratch();
+    Ok(())
+}
+
+#[tracepoint]
+pub fn sys_exit_mmap(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_exit_mmap(&ctx);
+    0
+}
+
+fn try_sys_exit_mmap(ctx: &TracePointContext) -> Result<(), i64> {
+    let pid = current_pid();
+    if !pid_tracked(pid) {
+        return Ok(());
+    }
+
+    let key = current_pid_tgid();
+    let args = unsafe { PENDING_ARGS.get(&key).ok_or(1i64)? };
+    let fd = args.arg0;
+    let offset = args.arg1;
+    let length = args.arg2;
+    let prot = args.arg3;
+    let flags = args.arg4;
+
+    let ret = unsafe { read_sys_exit_ret(ctx)? };
+    let _ = PENDING_ARGS.remove(&key);
+
+    // MAP_FAILED = -1; also skip anonymous mappings (fd < 0 as signed)
+    if ret == -1 || (fd as i64) < 0 {
+        return Ok(());
+    }
+
+    const PROT_READ: u64 = 1;
+    const PROT_WRITE: u64 = 2;
+    const MAP_SHARED: u64 = 1;
+
+    let thread_id = bpf_get_current_pid_tgid() as u32;
+
+    if prot & PROT_READ != 0 {
+        emit_small(&SmallEvent {
+            pid,
+            thread_id,
+            event_type: EventType::MmapRead as u16,
+            _pad: 0,
+            ret_val: length as i64,
+            arg0: fd,
+            arg1: offset,
+        });
+    }
+
+    if (flags & MAP_SHARED != 0) && (prot & PROT_WRITE != 0) {
+        emit_small(&SmallEvent {
+            pid,
+            thread_id,
+            event_type: EventType::MmapWrite as u16,
+            _pad: 0,
+            ret_val: length as i64,
+            arg0: fd,
+            arg1: offset,
+        });
+    }
 
     Ok(())
 }
