@@ -505,4 +505,91 @@ mod tests {
 
         assert_eq!(state.fd.fd_state.get(&(1, 3)).unwrap().cursor, 4096);
     }
+
+    #[test]
+    fn test_pread64_event() {
+        let mut state = TracerState::new(None);
+        state.handle_open(1, 3, "/tmp/test.parquet".to_string(), 0);
+
+        let event = SmallEvent {
+            pid: 1,
+            thread_id: 11,
+            event_type: EventType::PRead as u16,
+            _pad: 0,
+            ret_val: 4096,  // bytes read
+            arg0: 3,        // fd
+            arg1: 1024,     // offset
+        };
+
+        process_small_event(&mut state, &event);
+
+        let fd_state = state.fd.fd_state.get(&(1, 3)).unwrap();
+        assert!(fd_state.was_read);
+        // pread does not advance the sequential cursor
+        assert_eq!(fd_state.cursor, 0);
+    }
+
+    #[test]
+    fn test_pwrite64_event() {
+        let mut state = TracerState::new(None);
+        state.handle_open(1, 3, "/tmp/output.bin".to_string(), 0);
+
+        let event = SmallEvent {
+            pid: 1,
+            thread_id: 11,
+            event_type: EventType::PWrite as u16,
+            _pad: 0,
+            ret_val: 2048,  // bytes written
+            arg0: 3,        // fd
+            arg1: 512,      // offset
+        };
+
+        process_small_event(&mut state, &event);
+
+        let fd_state = state.fd.fd_state.get(&(1, 3)).unwrap();
+        assert!(fd_state.was_written);
+        assert_eq!(fd_state.cursor, 0);
+    }
+
+    #[test]
+    fn test_mmap_read_event() {
+        let mut state = TracerState::new(None);
+        state.handle_open(1, 3, "/tmp/data.parquet".to_string(), 0);
+
+        let event = SmallEvent {
+            pid: 1,
+            thread_id: 11,
+            event_type: EventType::MmapRead as u16,
+            _pad: 0,
+            ret_val: 65536,  // mmap length
+            arg0: 3,         // fd
+            arg1: 0,         // offset
+        };
+
+        process_small_event(&mut state, &event);
+
+        let fd_state = state.fd.fd_state.get(&(1, 3)).unwrap();
+        assert!(fd_state.was_read);
+    }
+
+    #[test]
+    fn test_mmap_write_event() {
+        let mut state = TracerState::new(None);
+        state.handle_open(1, 3, "/tmp/shared.dat".to_string(), 0);
+
+        let event = SmallEvent {
+            pid: 1,
+            thread_id: 11,
+            event_type: EventType::MmapWrite as u16,
+            _pad: 0,
+            ret_val: 4096,  // mmap length
+            arg0: 3,        // fd
+            arg1: 0,        // offset
+        };
+
+        process_small_event(&mut state, &event);
+
+        let fd_state = state.fd.fd_state.get(&(1, 3)).unwrap();
+        assert!(fd_state.was_written);
+    }
 }

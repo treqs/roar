@@ -31,9 +31,19 @@ fn attach_all_tracepoints(bpf: &mut Ebpf) -> Result<()> {
     attach_tp(bpf, "sys_enter_write", "syscalls", "sys_enter_write")?;
     attach_tp(bpf, "sys_exit_write", "syscalls", "sys_exit_write")?;
 
+    // pread64 / pwrite64
+    attach_tp(bpf, "sys_enter_pread64", "syscalls", "sys_enter_pread64")?;
+    attach_tp(bpf, "sys_exit_pread64", "syscalls", "sys_exit_pread64")?;
+    attach_tp(bpf, "sys_enter_pwrite64", "syscalls", "sys_enter_pwrite64")?;
+    attach_tp(bpf, "sys_exit_pwrite64", "syscalls", "sys_exit_pwrite64")?;
+
     // close
     attach_tp(bpf, "sys_enter_close", "syscalls", "sys_enter_close")?;
     attach_tp(bpf, "sys_exit_close", "syscalls", "sys_exit_close")?;
+
+    // mmap
+    attach_tp(bpf, "sys_enter_mmap", "syscalls", "sys_enter_mmap")?;
+    attach_tp(bpf, "sys_exit_mmap", "syscalls", "sys_exit_mmap")?;
 
     // copy_file_range
     attach_tp(
