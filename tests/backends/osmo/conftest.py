@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import functools
 import hashlib
 import json
@@ -37,6 +38,8 @@ POLL_INTERVAL_SECONDS = 5
 PORT_FORWARD_TIMEOUT_SECONDS = 5 * 60
 LOCALSTACK_FORWARD_PORT = os.environ.get("OSMO_LOCALSTACK_PORT", "34566")
 LOCALSTACK_HOST_OVERRIDE_URL = f"http://127.0.0.1:{LOCALSTACK_FORWARD_PORT}"
+HARNESS_STATE_PATH = HOST_TMP_DIR / "harness-state.json"
+HARNESS_LOCK_PATH = HOST_TMP_DIR / "harness.lock"
 DEFAULT_OSMO_TEST_PYTHON_IMAGE = (
     f"public.ecr.aws/docker/library/python:{sys.version_info.major}.{sys.version_info.minor}-slim"
 )
@@ -369,6 +372,88 @@ def _prepare_host_tmp_dirs() -> None:
     HOST_WHEELS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _read_harness_state() -> dict[str, int | bool]:
+    if not HARNESS_STATE_PATH.exists():
+        return {"active": False, "refs": 0}
+    return json.loads(HARNESS_STATE_PATH.read_text(encoding="utf-8"))
+
+
+def _write_harness_state(state: Mapping[str, int | bool]) -> None:
+    HARNESS_STATE_PATH.write_text(json.dumps(dict(state)), encoding="utf-8")
+
+
+@contextlib.contextmanager
+def _harness_lock() -> None:
+    HOST_TMP_DIR.mkdir(parents=True, exist_ok=True)
+    with HARNESS_LOCK_PATH.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _teardown_osmo_harness() -> None:
+    exec_on_service(
+        "osmo-tools",
+        ["bash", "tests/backends/osmo/scripts/destroy_osmo.sh"],
+        timeout=10 * 60,
+    )
+    run_docker(
+        _compose_args("down", "-v", "--remove-orphans"),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10 * 60,
+    )
+
+
+def _setup_osmo_harness() -> None:
+    run_docker(
+        _compose_args("down", "-v", "--remove-orphans"),
+        check=False,
+        capture_output=True,
+        text=True,
+        env=_compose_env(),
+        timeout=10 * 60,
+    )
+    run_docker(
+        _compose_args("up", "-d", "--build", "osmo-tools"),
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_compose_env(),
+        timeout=30 * 60,
+    )
+
+    bootstrap_env = {
+        key: value
+        for key in (
+            "OSMO_DOCKERHUB_USERNAME",
+            "OSMO_DOCKERHUB_PASSWORD",
+            "OSMO_KAI_SCHEDULER_VERSION",
+            "OSMO_PRELOAD_DOCKERHUB_IMAGES",
+            "OSMO_PRELOAD_PULL_RETRIES",
+            "OSMO_QUICK_START_CHART_VERSION",
+        )
+        if (value := os.environ.get(key))
+    }
+    bootstrap_env["OSMO_TEST_PYTHON_IMAGE"] = OSMO_TEST_PYTHON_IMAGE
+    bootstrap = exec_on_service(
+        "osmo-tools",
+        ["bash", "tests/backends/osmo/scripts/bootstrap_osmo.sh"],
+        env=bootstrap_env or None,
+        timeout=BOOTSTRAP_TIMEOUT_SECONDS,
+    )
+    if bootstrap.returncode != 0:
+        raise RuntimeError(
+            "OSMO bootstrap failed.\n"
+            f"stdout:\n{textwrap.indent(bootstrap.stdout, '  ')}\n"
+            f"stderr:\n{textwrap.indent(bootstrap.stderr, '  ')}"
+        )
+    patch_local_osmo_data_override_url(LOCALSTACK_HOST_OVERRIDE_URL)
+
+
 def _popen_docker(
     args: Sequence[str],
     *,
@@ -395,42 +480,20 @@ def osmo_harness() -> dict[str, str]:
     _prepare_host_tmp_dirs()
     HOST_DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-    run_docker(
-        _compose_args("up", "-d", "--build", "osmo-tools"),
-        check=True,
-        capture_output=True,
-        text=True,
-        env=_compose_env(),
-        timeout=30 * 60,
-    )
+    with _harness_lock():
+        state = _read_harness_state()
+        if state.get("active"):
+            _write_harness_state({"active": True, "refs": int(state.get("refs", 0)) + 1})
+        else:
+            try:
+                _setup_osmo_harness()
+            except Exception:
+                _teardown_osmo_harness()
+                _write_harness_state({"active": False, "refs": 0})
+                raise
+            _write_harness_state({"active": True, "refs": 1})
 
     try:
-        bootstrap_env = {
-            key: value
-            for key in (
-                "OSMO_DOCKERHUB_USERNAME",
-                "OSMO_DOCKERHUB_PASSWORD",
-                "OSMO_KAI_SCHEDULER_VERSION",
-                "OSMO_PRELOAD_DOCKERHUB_IMAGES",
-                "OSMO_PRELOAD_PULL_RETRIES",
-                "OSMO_QUICK_START_CHART_VERSION",
-            )
-            if (value := os.environ.get(key))
-        }
-        bootstrap_env["OSMO_TEST_PYTHON_IMAGE"] = OSMO_TEST_PYTHON_IMAGE
-        bootstrap = exec_on_service(
-            "osmo-tools",
-            ["bash", "tests/backends/osmo/scripts/bootstrap_osmo.sh"],
-            env=bootstrap_env or None,
-            timeout=BOOTSTRAP_TIMEOUT_SECONDS,
-        )
-        if bootstrap.returncode != 0:
-            raise RuntimeError(
-                "OSMO bootstrap failed.\n"
-                f"stdout:\n{textwrap.indent(bootstrap.stdout, '  ')}\n"
-                f"stderr:\n{textwrap.indent(bootstrap.stderr, '  ')}"
-            )
-        patch_local_osmo_data_override_url(LOCALSTACK_HOST_OVERRIDE_URL)
         yield {
             "base_url": BASE_URL,
             "container_downloads_dir": str(CONTAINER_DOWNLOADS_DIR),
@@ -438,18 +501,16 @@ def osmo_harness() -> dict[str, str]:
             "container_wheels_dir": str(CONTAINER_WHEELS_DIR),
         }
     finally:
-        exec_on_service(
-            "osmo-tools",
-            ["bash", "tests/backends/osmo/scripts/destroy_osmo.sh"],
-            timeout=10 * 60,
-        )
-        run_docker(
-            _compose_args("down", "-v"),
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10 * 60,
-        )
+        with _harness_lock():
+            state = _read_harness_state()
+            refs = max(int(state.get("refs", 0)) - 1, 0)
+            if refs > 0:
+                _write_harness_state({"active": True, "refs": refs})
+            else:
+                try:
+                    _teardown_osmo_harness()
+                finally:
+                    _write_harness_state({"active": False, "refs": 0})
 
 
 @pytest.fixture(scope="session")
@@ -571,36 +632,42 @@ def osmo_port_forward(
         ],
     )
 
-    with log_path.open("w+", encoding="utf-8") as log_file:
-        process = _popen_docker(command, stdout=log_file, stderr=subprocess.STDOUT)
-        try:
-            deadline = time.monotonic() + PORT_FORWARD_TIMEOUT_SECONDS
+    deadline = time.monotonic() + PORT_FORWARD_TIMEOUT_SECONDS
+    process: subprocess.Popen[str] | None = None
+    last_log = ""
+
+    try:
+        while time.monotonic() < deadline:
+            with log_path.open("w", encoding="utf-8") as log_file:
+                process = _popen_docker(command, stdout=log_file, stderr=subprocess.STDOUT)
+
             while time.monotonic() < deadline:
                 if process.poll() is not None:
-                    raise RuntimeError(
-                        "OSMO port-forward exited early.\n"
-                        f"log:\n{log_path.read_text(encoding='utf-8')}"
-                    )
+                    last_log = log_path.read_text(encoding="utf-8")
+                    process = None
+                    time.sleep(2)
+                    break
 
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.settimeout(1)
                     if sock.connect_ex((host, local_port)) == 0:
-                        break
+                        yield {
+                            "host": host,
+                            "local_port": str(local_port),
+                            "task_port": str(task_port),
+                            "url": f"http://{host}:{local_port}",
+                            "log_path": str(log_path),
+                        }
+                        return
                 time.sleep(1)
-            else:
-                raise RuntimeError(
-                    "Timed out waiting for OSMO port-forward.\n"
-                    f"log:\n{log_path.read_text(encoding='utf-8')}"
-                )
 
-            yield {
-                "host": host,
-                "local_port": str(local_port),
-                "task_port": str(task_port),
-                "url": f"http://{host}:{local_port}",
-                "log_path": str(log_path),
-            }
-        finally:
+        log = log_path.read_text(encoding="utf-8") if log_path.exists() else last_log
+        raise RuntimeError(
+            "Timed out waiting for OSMO port-forward.\n"
+            f"log:\n{log}"
+        )
+    finally:
+        if process is not None:
             process.terminate()
             try:
                 process.wait(timeout=10)

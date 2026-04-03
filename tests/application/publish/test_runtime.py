@@ -9,6 +9,8 @@ from roar.application.publish.runtime import build_publish_runtime
 def test_build_publish_runtime_builds_shared_dependency_stack() -> None:
     client = MagicMock()
     session_service = MagicMock()
+    artifact_service = MagicMock()
+    job_service = MagicMock()
     coordinator = MagicMock()
 
     with (
@@ -17,6 +19,14 @@ def test_build_publish_runtime_builds_shared_dependency_stack() -> None:
             "roar.application.publish.runtime.SessionRegistrationService",
             return_value=session_service,
         ) as session_cls,
+        patch(
+            "roar.application.publish.runtime.ArtifactRegistrationService",
+            return_value=artifact_service,
+        ) as artifact_cls,
+        patch(
+            "roar.application.publish.runtime.JobRegistrationService",
+            return_value=job_service,
+        ) as job_cls,
         patch(
             "roar.application.publish.runtime.RegistrationCoordinator",
             return_value=coordinator,
@@ -28,6 +38,12 @@ def test_build_publish_runtime_builds_shared_dependency_stack() -> None:
     assert runtime.session_service is session_service
     assert runtime.registration_coordinator is coordinator
     assert isinstance(runtime.lineage_collector, LineageCollector)
-    client_cls.assert_called_once_with("http://localhost:3001")
+    client_cls.assert_called_once_with("http://localhost:3001", start_dir=None)
     session_cls.assert_called_once_with(client)
-    coordinator_cls.assert_called_once_with()
+    artifact_cls.assert_called_once_with(client)
+    job_cls.assert_called_once_with(client)
+    coordinator_cls.assert_called_once_with(
+        session_service=session_service,
+        artifact_service=artifact_service,
+        job_service=job_service,
+    )
