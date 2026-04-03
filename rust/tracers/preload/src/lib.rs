@@ -800,6 +800,8 @@ type RenameAtFn = unsafe extern "C" fn(c_int, *const c_char, c_int, *const c_cha
 #[cfg(not(target_os = "macos"))]
 type MmapFn = unsafe extern "C" fn(*mut c_void, size_t, c_int, c_int, c_int, off_t) -> *mut c_void;
 type FOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut libc::FILE;
+type FReadFn = unsafe extern "C" fn(*mut c_void, size_t, size_t, *mut libc::FILE) -> size_t;
+type FWriteFn = unsafe extern "C" fn(*const c_void, size_t, size_t, *mut libc::FILE) -> size_t;
 type FdOpenFn = unsafe extern "C" fn(c_int, *const c_char) -> *mut libc::FILE;
 type FreOpenFn =
     unsafe extern "C" fn(*const c_char, *const c_char, *mut libc::FILE) -> *mut libc::FILE;
@@ -1275,5 +1277,78 @@ pub unsafe extern "C" fn freopen(
             emit_path_mode(path_s, &mode_s);
         });
     }
+    ret
+}
+
+#[cfg_attr(not(target_os = "macos"), no_mangle)]
+pub unsafe extern "C" fn fopen64(path: *const c_char, mode: *const c_char) -> *mut libc::FILE {
+    let Some(real) = resolve_symbol::<FOpenFn>(b"fopen64\0") else {
+        set_errno(libc::ENOSYS);
+        return std::ptr::null_mut();
+    };
+    let ret = real(path, mode);
+    if !ret.is_null() && !in_hook() {
+        with_hook_guard(|| {
+            let Some(path_s) = c_str_to_owned(path) else {
+                return;
+            };
+            let Some(mode_s) = c_str_to_owned(mode) else {
+                return;
+            };
+            emit_path_mode(path_s, &mode_s);
+        });
+    }
+    ret
+}
+
+#[cfg_attr(not(target_os = "macos"), no_mangle)]
+pub unsafe extern "C" fn fread(
+    ptr: *mut c_void,
+    size: size_t,
+    nmemb: size_t,
+    stream: *mut libc::FILE,
+) -> size_t {
+    let Some(real) = resolve_symbol::<FReadFn>(b"fread\0") else {
+        set_errno(libc::ENOSYS);
+        return 0;
+    };
+    // Set hook guard BEFORE the real call so that nested read() calls
+    // from within glibc's fread are suppressed (avoiding double-counting).
+    if in_hook() {
+        return real(ptr, size, nmemb, stream);
+    }
+    IN_HOOK.with(|flag| flag.set(true));
+    let ret = real(ptr, size, nmemb, stream);
+    if ret > 0 {
+        let fd = libc::fileno(stream);
+        emit_fd_read(fd);
+    }
+    IN_HOOK.with(|flag| flag.set(false));
+    ret
+}
+
+#[cfg_attr(not(target_os = "macos"), no_mangle)]
+pub unsafe extern "C" fn fwrite(
+    ptr: *const c_void,
+    size: size_t,
+    nmemb: size_t,
+    stream: *mut libc::FILE,
+) -> size_t {
+    let Some(real) = resolve_symbol::<FWriteFn>(b"fwrite\0") else {
+        set_errno(libc::ENOSYS);
+        return 0;
+    };
+    // Set hook guard BEFORE the real call so that nested write() calls
+    // from within glibc's fwrite are suppressed (avoiding double-counting).
+    if in_hook() {
+        return real(ptr, size, nmemb, stream);
+    }
+    IN_HOOK.with(|flag| flag.set(true));
+    let ret = real(ptr, size, nmemb, stream);
+    if ret > 0 {
+        let fd = libc::fileno(stream);
+        emit_fd_write(fd);
+    }
+    IN_HOOK.with(|flag| flag.set(false));
     ret
 }
