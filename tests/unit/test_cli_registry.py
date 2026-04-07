@@ -29,7 +29,11 @@ def test_help_groups_commands_by_workflow() -> None:
     assert "Share and Publish:" in result.output
     assert "Setup and Admin:" in result.output
     assert "GLaaS / TReqs Account:" in result.output
-    assert result.output.index("Setup and Admin:") < result.output.index("GLaaS / TReqs Account:") < result.output.index("Other Commands:")
+    assert (
+        result.output.index("Setup and Admin:")
+        < result.output.index("GLaaS / TReqs Account:")
+        < result.output.index("Other Commands:")
+    )
     assert "Track a command with provenance" in result.output
     assert "Publish artifacts and register lineage" in result.output
 

@@ -25,20 +25,28 @@ def fetch_access_context(glaas_api_url: str, access_token: str | None = None) ->
         raise GlaasClientError(f"Failed to fetch GLaaS auth access context: {exc}") from exc
 
 
-def fetch_user_projects(glaas_api_url: str, access_token: str | None = None) -> list[dict[str, Any]]:
+def fetch_user_projects(
+    glaas_api_url: str, access_token: str | None = None
+) -> list[dict[str, Any]]:
     access_context = fetch_access_context(glaas_api_url, access_token=access_token)
 
     projects_by_owner = access_context.get("projects_by_owner")
     if not isinstance(projects_by_owner, dict):
-        raise GlaasClientError("Invalid GLaaS auth access-context payload: projects_by_owner missing")
+        raise GlaasClientError(
+            "Invalid GLaaS auth access-context payload: projects_by_owner missing"
+        )
 
     projects: list[dict[str, Any]] = []
     for owner_projects in projects_by_owner.values():
         if not isinstance(owner_projects, list):
-            raise GlaasClientError("Invalid GLaaS auth access-context payload: owner projects invalid")
+            raise GlaasClientError(
+                "Invalid GLaaS auth access-context payload: owner projects invalid"
+            )
         for project in owner_projects:
             if not isinstance(project, dict):
-                raise GlaasClientError("Invalid GLaaS auth access-context payload: owner projects invalid")
+                raise GlaasClientError(
+                    "Invalid GLaaS auth access-context payload: owner projects invalid"
+                )
             projects.append(project)
     return projects
 
@@ -108,7 +116,8 @@ def _refresh_stored_access_token(auth_state) -> str:
         "client_id": token_response.client_id or raw_data.get("client_id") or auth_state.client_id,
         "access_token": token_response.access_token,
         "refresh_token": token_response.refresh_token or auth_state.refresh_token,
-        "refresh_expires_at": token_response.refresh_expires_at or raw_data.get("refresh_expires_at"),
+        "refresh_expires_at": token_response.refresh_expires_at
+        or raw_data.get("refresh_expires_at"),
         "id_token": token_response.id_token or raw_data.get("id_token"),
         "expires_at": _compute_expires_at(token_response.expires_in) or raw_data.get("expires_at"),
         "user": user_payload,
@@ -146,5 +155,8 @@ def _compute_expires_at(expires_in: float | None) -> str | None:
     if expires_in is None:
         return None
     return (
-        datetime.now(timezone.utc) + timedelta(seconds=max(expires_in, 0.0))
-    ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        (datetime.now(timezone.utc) + timedelta(seconds=max(expires_in, 0.0)))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )

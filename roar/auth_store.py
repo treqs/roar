@@ -103,7 +103,9 @@ def parse_auth_state_expiry(expires_at: str | None) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError as exc:
-        raise click.ClickException(f"Auth state has invalid expires_at timestamp: {expires_at}") from exc
+        raise click.ClickException(
+            f"Auth state has invalid expires_at timestamp: {expires_at}"
+        ) from exc
 
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)

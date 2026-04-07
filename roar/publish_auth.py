@@ -25,7 +25,9 @@ def load_publish_auth_context(start_dir: str | Path | None = None) -> PublishAut
 
     binding = _load_repo_binding(start_dir)
     if binding and not access_token:
-        raise RuntimeError("Repo is linked to GLaaS but no global auth state is available. Run `roar login`.")
+        raise RuntimeError(
+            "Repo is linked to GLaaS but no global auth state is available. Run `roar login`."
+        )
 
     scope_request = None
     if binding:

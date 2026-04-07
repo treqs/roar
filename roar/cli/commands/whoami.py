@@ -36,7 +36,9 @@ def whoami() -> None:
     click.echo(f"Auth store: {auth_store_path()}")
     if auth_state.expires_at:
         click.echo(f"Token expires at: {auth_state.expires_at}")
-        for status_line in _build_expiry_status_lines(auth_state.expires_at, has_refresh_token=bool(auth_state.refresh_token)):
+        for status_line in _build_expiry_status_lines(
+            auth_state.expires_at, has_refresh_token=bool(auth_state.refresh_token)
+        ):
             click.echo(status_line)
 
     binding = _load_repo_binding()
@@ -83,7 +85,9 @@ def _build_expiry_status_lines(expires_at: str, *, has_refresh_token: bool) -> l
     if remaining_seconds <= 5 * 60:
         minutes = max(1, remaining_seconds // 60)
         if has_refresh_token:
-            return [f"Session status: expiring soon (~{minutes}m remaining; refresh token available)"]
+            return [
+                f"Session status: expiring soon (~{minutes}m remaining; refresh token available)"
+            ]
         return [f"Session status: expiring soon (~{minutes}m remaining; no refresh token stored)"]
 
     if has_refresh_token:

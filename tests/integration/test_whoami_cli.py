@@ -12,12 +12,16 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-def _run_roar(*args: str, cwd: Path, env_overrides: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_roar(
+    *args: str, cwd: Path, env_overrides: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.update(env_overrides)
     repo_root = str(Path(__file__).resolve().parents[2])
     current_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{repo_root}{os.pathsep}{current_pythonpath}" if current_pythonpath else repo_root
+    env["PYTHONPATH"] = (
+        f"{repo_root}{os.pathsep}{current_pythonpath}" if current_pythonpath else repo_root
+    )
     return subprocess.run(
         [sys.executable, "-m", "roar", *args],
         cwd=cwd,
@@ -40,7 +44,9 @@ def test_whoami_reports_missing_login(temp_git_repo: Path, tmp_path: Path) -> No
     assert "roar login" in combined_output
 
 
-def test_whoami_prints_global_auth_identity_and_repo_binding(temp_git_repo: Path, tmp_path: Path) -> None:
+def test_whoami_prints_global_auth_identity_and_repo_binding(
+    temp_git_repo: Path, tmp_path: Path
+) -> None:
     xdg_config_home = tmp_path / "xdg"
     auth_dir = xdg_config_home / "roar"
     auth_dir.mkdir(parents=True, exist_ok=True)
@@ -120,7 +126,9 @@ def test_whoami_flags_expired_session(temp_git_repo: Path, tmp_path: Path) -> No
     assert "Session status: expired (run `roar login`)" in result.stdout
 
 
-def test_whoami_flags_expiring_session_with_refresh_token(temp_git_repo: Path, tmp_path: Path) -> None:
+def test_whoami_flags_expiring_session_with_refresh_token(
+    temp_git_repo: Path, tmp_path: Path
+) -> None:
     xdg_config_home = tmp_path / "xdg"
     auth_dir = xdg_config_home / "roar"
     auth_dir.mkdir(parents=True, exist_ok=True)

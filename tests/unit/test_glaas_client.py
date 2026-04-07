@@ -35,14 +35,18 @@ def test_fetch_access_context_rejects_expired_stored_session(
     monkeypatch.setattr(
         treqs_client,
         "fetch_access_context_via_auth_api",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("network call should not occur for expired tokens")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("network call should not occur for expired tokens")
+        ),
     )
 
     with pytest.raises(GlaasClientError, match=r"Session expired\. Run `roar login`\."):
         fetch_access_context("https://api.treqs.ai")
 
 
-def test_fetch_access_context_surfaces_sanitized_auth_api_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fetch_access_context_surfaces_sanitized_auth_api_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         treqs_client,
         "fetch_access_context_via_auth_api",
@@ -110,7 +114,9 @@ def test_fetch_access_context_refreshes_near_expiry_token(
     monkeypatch.setattr(
         treqs_client,
         "fetch_access_context_via_auth_api",
-        lambda api_url, *, access_token: captured_auth_tokens.append(access_token) or {"user": {"id": "user-123"}},
+        lambda api_url, *, access_token: (
+            captured_auth_tokens.append(access_token) or {"user": {"id": "user-123"}}
+        ),
     )
 
     payload = fetch_access_context("https://api.glaas.ai")
@@ -146,7 +152,9 @@ def test_fetch_access_context_reports_refresh_failure(
     monkeypatch.setattr(
         treqs_client,
         "refresh_access_token",
-        lambda *args, **kwargs: (_ for _ in ()).throw(treqs_client.GlaasAuthError("refresh rejected")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            treqs_client.GlaasAuthError("refresh rejected")
+        ),
     )
 
     with pytest.raises(GlaasClientError, match="Session refresh failed: refresh rejected"):

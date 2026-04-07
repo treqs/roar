@@ -46,7 +46,11 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "pop": ("roar.cli.commands.pop", "pop", "Remove the last local step"),
     "proxy": ("roar.cli.commands.proxy", "proxy", "Manage S3 proxy for lineage tracking"),
     "put": ("roar.cli.commands.put", "put", "Publish artifacts and register lineage"),
-    "projects": ("roar.cli.commands.projects", "projects", "Manage GLaaS projects visible through your TReqs account"),
+    "projects": (
+        "roar.cli.commands.projects",
+        "projects",
+        "Manage GLaaS projects visible through your TReqs account",
+    ),
     "register": ("roar.cli.commands.register", "register", "Register local lineage with GLaaS"),
     "reproduce": ("roar.cli.commands.reproduce", "reproduce", "Generate a reproduction plan"),
     "reset": ("roar.cli.commands.reset", "reset", "Reset roar state"),
@@ -54,7 +58,11 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "show": ("roar.cli.commands.show", "show", "Inspect a session, job, or artifact"),
     "status": ("roar.cli.commands.status", "status", "Show the active session summary"),
     "tracer": ("roar.cli.commands.tracer", "tracer", "Configure tracer backend defaults"),
-    "whoami": ("roar.cli.commands.whoami", "whoami", "Show current GLaaS/TReqs login and repo binding"),
+    "whoami": (
+        "roar.cli.commands.whoami",
+        "whoami",
+        "Show current GLaaS/TReqs login and repo binding",
+    ),
 }
 
 HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (

@@ -79,7 +79,9 @@ def projects_list(glaas_api_url: str | None) -> None:
     ]
 
     if not rows:
-        raise click.ClickException("Invalid GLaaS projects response: expected a list of project objects")
+        raise click.ClickException(
+            "Invalid GLaaS projects response: expected a list of project objects"
+        )
 
     headers = (
         ("id", "ID"),
@@ -94,7 +96,9 @@ def projects_list(glaas_api_url: str | None) -> None:
         click.echo("  ".join(row[key].ljust(widths[key]) for key, _label in headers))
 
 
-def _resolve_project_binding_from_access_context(*, glaas_api_url: str, project_id: str) -> tuple[str, str]:
+def _resolve_project_binding_from_access_context(
+    *, glaas_api_url: str, project_id: str
+) -> tuple[str, str]:
     access_context = fetch_access_context(glaas_api_url)
 
     owners = access_context.get("owners")
@@ -108,12 +112,16 @@ def _resolve_project_binding_from_access_context(*, glaas_api_url: str, project_
 
     projects_by_owner = access_context.get("projects_by_owner")
     if not isinstance(projects_by_owner, dict):
-        raise click.ClickException("Invalid GLaaS auth access-context response: projects_by_owner missing")
+        raise click.ClickException(
+            "Invalid GLaaS auth access-context response: projects_by_owner missing"
+        )
 
     matches: list[tuple[str, str]] = []
     for owner_id, owner_projects in projects_by_owner.items():
         if not isinstance(owner_id, str) or not isinstance(owner_projects, list):
-            raise click.ClickException("Invalid GLaaS auth access-context response: owner projects invalid")
+            raise click.ClickException(
+                "Invalid GLaaS auth access-context response: owner projects invalid"
+            )
 
         owner = owner_by_id.get(owner_id)
         if owner is None:
@@ -121,7 +129,9 @@ def _resolve_project_binding_from_access_context(*, glaas_api_url: str, project_
 
         owner_type = owner.get("type")
         if not isinstance(owner_type, str):
-            raise click.ClickException("Invalid GLaaS auth access-context response: owner type missing")
+            raise click.ClickException(
+                "Invalid GLaaS auth access-context response: owner type missing"
+            )
 
         for project in owner_projects:
             if not isinstance(project, dict) or project.get("id") != project_id:
@@ -133,7 +143,9 @@ def _resolve_project_binding_from_access_context(*, glaas_api_url: str, project_
             matches.append((owner_id, owner_type))
 
     if not matches:
-        raise click.ClickException(f"Project not available in GLaaS auth access context: {project_id}")
+        raise click.ClickException(
+            f"Project not available in GLaaS auth access context: {project_id}"
+        )
     if len(matches) > 1:
         raise click.ClickException(
             f"Project ID {project_id} is ambiguous across multiple owners in GLaaS auth access context"

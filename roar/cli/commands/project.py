@@ -82,23 +82,27 @@ def _validate_binding_against_access_context(
             break
 
     if matched_owner is None:
-        raise click.ClickException(f"Owner not available in GLaaS auth access context: {owner_type} {owner_id}")
+        raise click.ClickException(
+            f"Owner not available in GLaaS auth access context: {owner_type} {owner_id}"
+        )
 
     if owner_type == "organization" and matched_owner.get("role") not in {"owner", "admin"}:
-        raise click.ClickException(
-            f"Organization binding requires owner or admin role: {owner_id}"
-        )
+        raise click.ClickException(f"Organization binding requires owner or admin role: {owner_id}")
 
     if project_id is None:
         return
 
     projects_by_owner = access_context.get("projects_by_owner")
     if not isinstance(projects_by_owner, dict):
-        raise click.ClickException("Invalid GLaaS auth access-context response: projects_by_owner missing")
+        raise click.ClickException(
+            "Invalid GLaaS auth access-context response: projects_by_owner missing"
+        )
 
     owner_projects = projects_by_owner.get(owner_id, [])
     if not isinstance(owner_projects, list):
-        raise click.ClickException("Invalid GLaaS auth access-context response: owner projects invalid")
+        raise click.ClickException(
+            "Invalid GLaaS auth access-context response: owner projects invalid"
+        )
 
     for project in owner_projects:
         if not isinstance(project, dict) or project.get("id") != project_id:

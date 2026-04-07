@@ -42,7 +42,10 @@ class _FakeDeviceAuthHandler(BaseHTTPRequestHandler):
         if self.path == "/api/v1/auth/device/token":
             self.server.poll_count += 1
             if self.server.poll_count == 1:
-                self._write_json(200, {"success": True, "data": {"status": "authorization_pending", "interval": 0}})
+                self._write_json(
+                    200,
+                    {"success": True, "data": {"status": "authorization_pending", "interval": 0}},
+                )
                 return
 
             self._write_json(
@@ -101,7 +104,6 @@ class _FakeDeviceAuthHandler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-
 def fake_device_auth_server() -> _FakeDeviceAuthServer:
     server = _FakeDeviceAuthServer(("127.0.0.1", 0), _FakeDeviceAuthHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -114,13 +116,16 @@ def fake_device_auth_server() -> _FakeDeviceAuthServer:
         thread.join()
 
 
-
-def _run_roar(*args: str, cwd: Path, env_overrides: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_roar(
+    *args: str, cwd: Path, env_overrides: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.update(env_overrides)
     repo_root = str(Path(__file__).resolve().parents[2])
     current_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{repo_root}{os.pathsep}{current_pythonpath}" if current_pythonpath else repo_root
+    env["PYTHONPATH"] = (
+        f"{repo_root}{os.pathsep}{current_pythonpath}" if current_pythonpath else repo_root
+    )
     return subprocess.run(
         [sys.executable, "-m", "roar", *args],
         cwd=cwd,
@@ -128,7 +133,6 @@ def _run_roar(*args: str, cwd: Path, env_overrides: dict[str, str]) -> subproces
         text=True,
         env=env,
     )
-
 
 
 def test_login_device_flow_creates_global_auth_state(

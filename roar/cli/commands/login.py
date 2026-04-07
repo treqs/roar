@@ -48,7 +48,9 @@ from ...glaas_auth import (
     is_flag=True,
     help="Replace any existing session without prompting.",
 )
-def login(token_file: Path | None, dev_email: str | None, auth_api_url: str | None, force: bool) -> None:
+def login(
+    token_file: Path | None, dev_email: str | None, auth_api_url: str | None, force: bool
+) -> None:
     """Store global GLaaS auth state."""
     if token_file is not None and dev_email is not None:
         raise click.ClickException("Provide at most one of --token-file or --dev-email")
@@ -93,12 +95,16 @@ def _run_device_login(resolved_api_url: str) -> dict[str, object]:
     if open_browser(verification_url):
         click.echo("Opened browser to the GLaaS approval page. Enter the code shown above.")
     else:
-        click.echo("Could not open a browser automatically. Open the URL above manually and enter the code shown above.")
+        click.echo(
+            "Could not open a browser automatically. Open the URL above manually and enter the code shown above."
+        )
 
     click.echo("Waiting for approval...")
     try:
         token_response = poll_device_token(resolved_api_url, session)
-        access_context = fetch_access_context_via_auth_api(resolved_api_url, access_token=token_response.access_token)
+        access_context = fetch_access_context_via_auth_api(
+            resolved_api_url, access_token=token_response.access_token
+        )
     except GlaasAuthError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -120,7 +126,9 @@ def _load_auth_state_from_token_file(token_file: Path, *, glaas_api_url: str) ->
     try:
         access_context = fetch_access_context_via_auth_api(glaas_api_url, access_token=access_token)
     except GlaasAuthError as exc:
-        raise click.ClickException(f"Token file contains an invalid or expired token: {exc}") from exc
+        raise click.ClickException(
+            f"Token file contains an invalid or expired token: {exc}"
+        ) from exc
 
     user = access_context.get("user")
     if isinstance(user, dict):

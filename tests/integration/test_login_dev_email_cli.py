@@ -11,12 +11,16 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-def _run_roar(*args: str, cwd: Path, env_overrides: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_roar(
+    *args: str, cwd: Path, env_overrides: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.update(env_overrides)
     repo_root = str(Path(__file__).resolve().parents[2])
     current_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{repo_root}{os.pathsep}{current_pythonpath}" if current_pythonpath else repo_root
+    env["PYTHONPATH"] = (
+        f"{repo_root}{os.pathsep}{current_pythonpath}" if current_pythonpath else repo_root
+    )
     return subprocess.run(
         [sys.executable, "-m", "roar", *args],
         cwd=cwd,
@@ -26,7 +30,9 @@ def _run_roar(*args: str, cwd: Path, env_overrides: dict[str, str]) -> subproces
     )
 
 
-def test_login_dev_email_requires_explicit_feature_flag(temp_git_repo: Path, tmp_path: Path) -> None:
+def test_login_dev_email_requires_explicit_feature_flag(
+    temp_git_repo: Path, tmp_path: Path
+) -> None:
     xdg_config_home = tmp_path / "xdg"
 
     blocked_result = _run_roar(

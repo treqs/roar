@@ -93,12 +93,16 @@ def fake_glaas_projects_server() -> _FakeGlaasProjectsServer:
         thread.join()
 
 
-def _run_roar(*args: str, cwd: Path, env_overrides: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_roar(
+    *args: str, cwd: Path, env_overrides: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.update(env_overrides)
     repo_root = str(Path(__file__).resolve().parents[2])
     current_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{repo_root}{os.pathsep}{current_pythonpath}" if current_pythonpath else repo_root
+    env["PYTHONPATH"] = (
+        f"{repo_root}{os.pathsep}{current_pythonpath}" if current_pythonpath else repo_root
+    )
     return subprocess.run(
         [sys.executable, "-m", "roar", *args],
         cwd=cwd,

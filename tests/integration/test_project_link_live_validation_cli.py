@@ -66,7 +66,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                                 "name": "readonly-project",
                                 "visibility": "private",
                                 "can_write": False,
-                            }
+                            },
                         ],
                         "user-123": [],
                     },
@@ -99,12 +99,16 @@ def fake_glaas_server() -> _FakeGlaasServer:
         thread.join()
 
 
-def _run_roar(*args: str, cwd: Path, env_overrides: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_roar(
+    *args: str, cwd: Path, env_overrides: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.update(env_overrides)
     repo_root = str(Path(__file__).resolve().parents[2])
     current_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{repo_root}{os.pathsep}{current_pythonpath}" if current_pythonpath else repo_root
+    env["PYTHONPATH"] = (
+        f"{repo_root}{os.pathsep}{current_pythonpath}" if current_pythonpath else repo_root
+    )
     return subprocess.run(
         [sys.executable, "-m", "roar", *args],
         cwd=cwd,
@@ -207,7 +211,10 @@ def test_project_link_rejects_readonly_project_from_access_context(
 
     combined_output = f"{result.stdout}\n{result.stderr}"
     assert result.returncode != 0
-    assert "Project is visible but not writable in GLaaS auth access context: proj-readonly" in combined_output
+    assert (
+        "Project is visible but not writable in GLaaS auth access context: proj-readonly"
+        in combined_output
+    )
 
 
 def test_project_link_rejects_unknown_project_from_access_context(

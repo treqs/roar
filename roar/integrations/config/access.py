@@ -396,20 +396,26 @@ def save_config(config: dict, config_path: Path):
     Preserves unknown top-level sections that are already present in the file.
     """
     existing_unknown_sections: dict[str, Any] = {}
-    raw_path = find_raw_config_file(start_dir=str(config_path.parent.parent if config_path.name == 'config.toml' else config_path.parent))
-    if raw_path and raw_path.exists() and raw_path.suffix == '.toml':
+    raw_path = find_raw_config_file(
+        start_dir=str(
+            config_path.parent.parent if config_path.name == "config.toml" else config_path.parent
+        )
+    )
+    if raw_path and raw_path.exists() and raw_path.suffix == ".toml":
         try:
             try:
                 import tomllib
             except ImportError:
                 import tomli as tomllib
-            with raw_path.open('rb') as handle:
+            with raw_path.open("rb") as handle:
                 raw_data = tomllib.load(handle)
-            if raw_path.name == 'pyproject.toml':
-                raw_data = raw_data.get('tool', {}).get('roar', {})
+            if raw_path.name == "pyproject.toml":
+                raw_data = raw_data.get("tool", {}).get("roar", {})
             defaults = _get_default_config()
             existing_unknown_sections = {
-                key: value for key, value in raw_data.items() if key not in defaults and key not in config
+                key: value
+                for key, value in raw_data.items()
+                if key not in defaults and key not in config
             }
         except Exception:
             existing_unknown_sections = {}

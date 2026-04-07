@@ -24,7 +24,9 @@ class PublishRuntime:
     lineage_collector: LineageCollector
 
 
-def build_publish_runtime(*, glaas_url: str | None = None, start_dir: str | None = None) -> PublishRuntime:
+def build_publish_runtime(
+    *, glaas_url: str | None = None, start_dir: str | None = None
+) -> PublishRuntime:
     """Build the default dependency stack for publish entrypoints."""
     glaas_client = GlaasClient(glaas_url, start_dir=start_dir)
     session_service = SessionRegistrationService(glaas_client)

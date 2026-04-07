@@ -662,10 +662,7 @@ def osmo_port_forward(
                 time.sleep(1)
 
         log = log_path.read_text(encoding="utf-8") if log_path.exists() else last_log
-        raise RuntimeError(
-            "Timed out waiting for OSMO port-forward.\n"
-            f"log:\n{log}"
-        )
+        raise RuntimeError(f"Timed out waiting for OSMO port-forward.\nlog:\n{log}")
     finally:
         if process is not None:
             process.terminate()

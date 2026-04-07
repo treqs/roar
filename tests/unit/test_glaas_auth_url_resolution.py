@@ -27,9 +27,10 @@ def test_resolve_auth_api_url_allows_localhost_http(monkeypatch: pytest.MonkeyPa
     assert resolve_auth_api_url("http://127.0.0.1:3001") == "http://127.0.0.1:3001"
 
 
-def test_resolve_auth_api_url_rejects_non_local_http_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_auth_api_url_rejects_non_local_http_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("ROAR_ALLOW_HTTP", raising=False)
 
     with pytest.raises(GlaasAuthError, match="non-local insecure HTTP GLaaS API URL"):
         resolve_auth_api_url("http://example.com")
-

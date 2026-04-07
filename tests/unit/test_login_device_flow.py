@@ -124,7 +124,12 @@ def test_open_browser_can_be_disabled_and_injected(monkeypatch) -> None:
 
     monkeypatch.delenv("ROAR_DISABLE_BROWSER_OPEN", raising=False)
     opened_urls: list[str] = []
-    assert open_browser("https://glaas.ai/login/device", opener=lambda url: opened_urls.append(url) or True) is True
+    assert (
+        open_browser(
+            "https://glaas.ai/login/device", opener=lambda url: opened_urls.append(url) or True
+        )
+        is True
+    )
     assert opened_urls == ["https://glaas.ai/login/device"]
 
 

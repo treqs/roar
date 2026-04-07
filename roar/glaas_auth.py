@@ -145,7 +145,9 @@ def poll_device_token(
                 sleep(interval)
                 continue
             if error_code == "expired_token":
-                raise GlaasAuthError("Device authorization expired. Run `roar login` again.") from exc
+                raise GlaasAuthError(
+                    "Device authorization expired. Run `roar login` again."
+                ) from exc
             if error_code == "access_denied":
                 raise GlaasAuthError(message or "Device authorization was denied.") from exc
             if message:
@@ -161,7 +163,9 @@ def poll_device_token(
         if status not in {None, "approved"}:
             raise GlaasAuthError(f"Unexpected device authorization status from auth API: {status}")
 
-        access_token = _optional_string(data.get("access_token")) or _optional_string(data.get("token"))
+        access_token = _optional_string(data.get("access_token")) or _optional_string(
+            data.get("token")
+        )
         if access_token is None:
             raise GlaasAuthError("Invalid auth API response: missing access_token")
 
@@ -301,7 +305,9 @@ def fetch_access_context_via_auth_api(glaas_api_url: str, *, access_token: str) 
             _error_code, message = _extract_error_details(exc.payload)
             if message:
                 raise GlaasAuthError(message) from exc
-            raise GlaasAuthError(f"Failed to fetch GLaaS auth access context: HTTP {exc.status}") from exc
+            raise GlaasAuthError(
+                f"Failed to fetch GLaaS auth access context: HTTP {exc.status}"
+            ) from exc
 
     data = _unwrap_success_payload(payload, context="auth access context")
     user = data.get("user")

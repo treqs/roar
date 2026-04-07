@@ -50,17 +50,17 @@ def _configure_register_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[
         capture_output=True,
         check=True,
     )
-    xdg_config_home = repo / '.xdg'
-    token_file = repo / 'token-file.json'
+    xdg_config_home = repo / ".xdg"
+    token_file = repo / "token-file.json"
     token_file.write_text(
         '{"version":1,"provider":"treqs-cognito","access_token":"test-access-token","user":{"sub":"treqs-user-123","db_user_id":"user-123","email":"trevor@example.com","username":"trevor"}}',
-        encoding='utf-8',
+        encoding="utf-8",
     )
-    env = {'XDG_CONFIG_HOME': str(xdg_config_home), 'GLAAS_API_URL': fake_glaas_url}
-    roar_cli('login', '--token-file', str(token_file), env_overrides=env)
-    roar_cli('projects', 'link', 'proj-test', env_overrides=env)
-    roar_cli('config', 'set', 'glaas.url', fake_glaas_url, env_overrides=env)
-    roar_cli('config', 'set', 'glaas.web_url', fake_glaas_url, env_overrides=env)
+    env = {"XDG_CONFIG_HOME": str(xdg_config_home), "GLAAS_API_URL": fake_glaas_url}
+    roar_cli("login", "--token-file", str(token_file), env_overrides=env)
+    roar_cli("projects", "link", "proj-test", env_overrides=env)
+    roar_cli("config", "set", "glaas.url", fake_glaas_url, env_overrides=env)
+    roar_cli("config", "set", "glaas.web_url", fake_glaas_url, env_overrides=env)
     return env
 
 
