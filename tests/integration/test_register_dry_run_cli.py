@@ -43,15 +43,25 @@ def _parse_session_hash(output: str) -> str:
     return match.group(1)
 
 
-def _configure_register_repo(repo: Path, roar_cli, fake_glaas_url: str) -> None:
+def _configure_register_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[str, str]:
     subprocess.run(
         ["git", "remote", "add", "origin", "https://github.com/test/repo.git"],
         cwd=repo,
         capture_output=True,
         check=True,
     )
-    roar_cli("config", "set", "glaas.url", fake_glaas_url)
-    roar_cli("config", "set", "glaas.web_url", fake_glaas_url)
+    xdg_config_home = repo / '.xdg'
+    token_file = repo / 'token-file.json'
+    token_file.write_text(
+        '{"version":1,"provider":"treqs-cognito","access_token":"test-access-token","user":{"sub":"treqs-user-123","db_user_id":"user-123","email":"trevor@example.com","username":"trevor"}}',
+        encoding='utf-8',
+    )
+    env = {'XDG_CONFIG_HOME': str(xdg_config_home), 'GLAAS_API_URL': fake_glaas_url}
+    roar_cli('login', '--token-file', str(token_file), env_overrides=env)
+    roar_cli('projects', 'link', 'proj-test', env_overrides=env)
+    roar_cli('config', 'set', 'glaas.url', fake_glaas_url, env_overrides=env)
+    roar_cli('config', 'set', 'glaas.web_url', fake_glaas_url, env_overrides=env)
+    return env
 
 
 def test_register_dry_run_resolves_artifact_step_and_session_targets(
@@ -109,7 +119,7 @@ def test_register_publishes_local_lineage_with_fake_glaas(
     python_exe: str,
     fake_glaas_publish_server: FakeGlaasServer,
 ) -> None:
-    _configure_register_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    env = _configure_register_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
 
     input_path = temp_git_repo / "input.txt"
     input_path.write_text("register me\n")
@@ -121,13 +131,13 @@ def test_register_publishes_local_lineage_with_fake_glaas(
     )
     git_commit("Add register publish fixture")
 
-    run_result = roar_cli("run", python_exe, "generate_report.py")
+    run_result = roar_cli("run", python_exe, "generate_report.py", env_overrides=env)
     assert run_result.returncode == 0
     assert (temp_git_repo / "report.txt").read_text() == "REGISTER ME\n"
 
     git_commit("Commit tracked report")
 
-    result = roar_cli("register", "report.txt", "--yes")
+    result = roar_cli("register", "report.txt", "--yes", env_overrides=env)
 
     assert result.returncode == 0
     assert "Registered lineage for: report.txt" in result.stdout
@@ -140,6 +150,16 @@ def test_register_publishes_local_lineage_with_fake_glaas(
 
     assert fake_glaas_publish_server.health_checks >= 1
     assert len(fake_glaas_publish_server.session_registrations) == 1
+    assert fake_glaas_publish_server.session_registrations[0]["scope_request"] == {
+        "owner_id": "owner-test",
+        "owner_type": "organization",
+        "project_id": "proj-test",
+        "visibility": "private",
+    }
+    assert any(
+        entry.get("authorization") == "Bearer test-access-token"
+        for entry in fake_glaas_publish_server.auth_headers
+    )
     assert len(fake_glaas_publish_server.job_batches) == 1
     assert len(fake_glaas_publish_server.job_creates) == 0
     assert len(fake_glaas_publish_server.artifact_batches) >= 1
@@ -159,7 +179,7 @@ def test_register_honors_logging_config_for_console_and_file(
     fake_glaas_publish_server: FakeGlaasServer,
     monkeypatch,
 ) -> None:
-    _configure_register_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    env = _configure_register_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
 
     input_path = temp_git_repo / "input.txt"
     input_path.write_text("register me\n")
@@ -171,7 +191,7 @@ def test_register_honors_logging_config_for_console_and_file(
     )
     git_commit("Add register logging fixture")
 
-    run_result = roar_cli("run", python_exe, "generate_report.py")
+    run_result = roar_cli("run", python_exe, "generate_report.py", env_overrides=env)
     assert run_result.returncode == 0
     git_commit("Commit tracked report for logging test")
 
@@ -195,7 +215,7 @@ def test_register_honors_logging_config_for_console_and_file(
     if log_path.exists():
         log_path.unlink()
 
-    result = roar_cli("register", "report.txt", "--yes")
+    result = roar_cli("register", "report.txt", "--yes", env_overrides=env)
 
     assert result.returncode == 0
     assert "Running GLaaS health check" in result.stderr

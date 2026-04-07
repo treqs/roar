@@ -17,6 +17,7 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.job_batches: list[dict[str, Any]] = []
         self.job_creates: list[dict[str, Any]] = []
         self.artifact_batches: list[list[dict[str, Any]]] = []
+        self.auth_headers: list[dict[str, Any]] = []
         self.input_links: list[dict[str, Any]] = []
         self.output_links: list[dict[str, Any]] = []
         self.label_syncs: list[list[dict[str, Any]]] = []
@@ -56,6 +57,47 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
+        authorization = self.headers.get("Authorization")
+        if self.path == "/api/v1/auth/access-context":
+            self.server.auth_headers.append({"path": self.path, "authorization": authorization})
+            if not authorization or not authorization.startswith("Bearer "):
+                self._write_json(401, {"error": "Missing or invalid bearer auth"})
+                return
+            self._write_json(
+                200,
+                {
+                    "success": True,
+                    "data": {
+                        "user": {
+                            "id": "user-123",
+                            "sub": "treqs-user-123",
+                            "username": "trevor",
+                            "email": "trevor@example.com",
+                        },
+                        "owners": [
+                            {
+                                "id": "owner-test",
+                                "type": "organization",
+                                "username": "acme",
+                                "display_name": "Acme AI",
+                                "role": "admin",
+                            }
+                        ],
+                        "projects_by_owner": {
+                            "owner-test": [
+                                {
+                                    "id": "proj-test",
+                                    "name": "test-project",
+                                    "visibility": "private",
+                                    "can_write": True,
+                                }
+                            ]
+                        },
+                    },
+                },
+            )
+            return
+
         if self.path == "/api/v1/health":
             self.server.health_checks += 1
             self._write_json(200, {"success": True, "status": "healthy"})
@@ -85,6 +127,11 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         payload = self._read_json()
+        authorization = self.headers.get("Authorization")
+        self.server.auth_headers.append({"path": self.path, "authorization": authorization})
+        if not authorization or not authorization.startswith("Bearer "):
+            self._write_json(401, {"error": "Missing or invalid bearer auth"})
+            return
 
         if self.path == "/api/v1/sessions":
             self.server.session_registrations.append(payload)
@@ -218,6 +265,10 @@ class FakeGlaasServer:
     @property
     def artifact_batches(self) -> list[list[dict[str, Any]]]:
         return self._server.artifact_batches
+
+    @property
+    def auth_headers(self) -> list[dict[str, Any]]:
+        return self._server.auth_headers
 
     @property
     def input_links(self) -> list[dict[str, Any]]:

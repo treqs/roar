@@ -18,6 +18,7 @@ from roar.core.exceptions import (
 )
 from roar.integrations.glaas import GlaasClient
 from roar.integrations.glaas.transport import reset_auth_mode_cache
+from roar.publish_auth import PublishAuthContext
 
 
 @pytest.fixture(autouse=True)
@@ -25,6 +26,13 @@ def reset_glaas_auth_mode() -> None:
     reset_auth_mode_cache()
     yield
     reset_auth_mode_cache()
+
+
+def _optional_auth_client() -> GlaasClient:
+    return GlaasClient(
+        base_url="http://localhost:9999",
+        publish_auth=PublishAuthContext(access_token=None, scope_request=None),
+    )
 
 
 class TestGlaasClientExceptions:
@@ -51,7 +59,7 @@ class TestGlaasClientExceptions:
 
     def test_health_check_raises_connection_error_on_network_failure(self):
         """health_check should raise GlaasConnectionError on network errors."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
@@ -63,7 +71,7 @@ class TestGlaasClientExceptions:
 
     def test_health_check_raises_api_error_on_bad_status(self):
         """health_check should raise GlaasApiError on non-200 status."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_response = MagicMock()
@@ -79,7 +87,7 @@ class TestGlaasClientExceptions:
 
     def test_health_check_returns_true_on_success(self):
         """health_check should return True on success."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_response = MagicMock()
@@ -93,7 +101,7 @@ class TestGlaasClientExceptions:
 
     def test_get_artifact_raises_on_not_found(self):
         """get_artifact should raise GlaasApiError on 404."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with patch.object(client, "_request") as mock_request:
             mock_request.side_effect = GlaasApiError("Not found", status_code=404)
@@ -105,7 +113,7 @@ class TestGlaasClientExceptions:
 
     def test_get_artifact_returns_dict_on_success(self):
         """get_artifact should return dict directly on success."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         expected = {"hash": "abc123", "size": 100}
         with patch.object(client, "_request") as mock_request:
@@ -150,7 +158,7 @@ class TestOptionalAuth:
 
     def test_request_succeeds_without_auth_header(self):
         """_request proceeds without Authorization header when no SSH keys available."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with (
             patch("roar.integrations.glaas.client.make_auth_header", return_value=None),
@@ -169,7 +177,7 @@ class TestOptionalAuth:
 
     def test_request_includes_auth_header_when_keys_available(self):
         """_request includes Authorization header when SSH keys are available."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with (
             patch(
@@ -196,7 +204,7 @@ class TestOptionalAuth:
 
     def test_authenticated_probe_is_cached_after_first_success(self):
         """Once a protected probe succeeds, later requests should not re-probe."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with (
             patch(
@@ -227,7 +235,7 @@ class TestOptionalAuth:
 
     def test_request_retries_without_auth_after_401(self):
         """Optional-auth endpoints should fall back to anonymous access after 401."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         unauthorized = urllib.error.HTTPError(
             url="http://localhost:9999/api/v1/test",
@@ -266,7 +274,7 @@ class TestOptionalAuth:
 
     def test_request_returns_original_401_when_anonymous_retry_also_fails(self):
         """If optional-auth fallback still fails, surface the original auth failure."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         unauthorized = urllib.error.HTTPError(
             url="http://localhost:9999/api/v1/test",
@@ -303,7 +311,7 @@ class TestOptionalAuth:
 
     def test_request_extracts_nested_api_error_message(self):
         """HTTP errors should surface nested API error.message details."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         unauthorized = urllib.error.HTTPError(
             url="http://localhost:9999/api/v1/test",
@@ -329,7 +337,7 @@ class TestOptionalAuth:
 
     def test_anonymous_fallback_is_cached_after_first_auth_failure(self):
         """Once auth is rejected, future requests should skip auth and the probe."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         unauthorized = urllib.error.HTTPError(
             url="http://localhost:9999/api/v1/sessions?limit=1",
@@ -377,7 +385,7 @@ class TestRegisterJobsBatch:
 
     def test_empty_jobs_returns_empty(self):
         """Empty jobs list returns empty results without making request."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         job_ids, errors, error = client.register_jobs_batch(
             session_hash="session123",
@@ -390,7 +398,7 @@ class TestRegisterJobsBatch:
 
     def test_batch_calls_correct_endpoint(self):
         """Batch uses session-scoped /jobs/batch endpoint."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with patch.object(client, "_request") as mock_request:
             mock_request.return_value = (
@@ -414,7 +422,7 @@ class TestRegisterJobsBatch:
 
     def test_batch_propagates_overall_error(self):
         """Overall request error is returned for all jobs."""
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with patch.object(client, "_request") as mock_request:
             mock_request.return_value = (None, "HTTP 500: Internal Server Error")
@@ -433,7 +441,7 @@ class TestParentJobUidPayload:
     """Ensure optional parent_job_uid is serialized correctly."""
 
     def test_register_job_includes_parent_job_uid_when_present(self):
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with patch.object(client, "_request") as mock_request:
             mock_request.return_value = ({"id": 1}, None)
@@ -456,7 +464,7 @@ class TestParentJobUidPayload:
             assert body["parent_job_uid"] == "parent-abc"
 
     def test_register_job_omits_parent_job_uid_when_absent(self):
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with patch.object(client, "_request") as mock_request:
             mock_request.return_value = ({"id": 1}, None)
@@ -478,7 +486,7 @@ class TestParentJobUidPayload:
             assert "parent_job_uid" not in body
 
     def test_register_jobs_batch_preserves_parent_job_uid_fields(self):
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with patch.object(client, "_request") as mock_request:
             mock_request.return_value = (
@@ -522,7 +530,7 @@ class TestCompositeAndLabelWrappers:
     """Test thin client wrappers for composite artifact endpoints."""
 
     def test_register_composite_artifact_calls_expected_endpoint(self):
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
         payload = {"hash": "abc12345", "components": []}
 
         with patch.object(client, "_request") as mock_request:
@@ -535,7 +543,7 @@ class TestCompositeAndLabelWrappers:
             assert result == {"artifact_id": "a1"}
 
     def test_get_composite_components_calls_expected_endpoint(self):
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
 
         with patch.object(client, "_request") as mock_request:
             mock_request.return_value = ({"components": [{"relativePath": "f"}]}, None)
@@ -583,7 +591,7 @@ class TestArtifactHashMapping:
         assert mapped == [{"hash": "abc123def456", "path": "/data/input.csv"}]
 
     def test_register_job_inputs_sends_mapped_payload(self):
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
         with patch.object(client, "_request") as mock_request:
             mock_request.return_value = ({"inputs_linked": 1}, None)
 
@@ -597,7 +605,7 @@ class TestArtifactHashMapping:
             assert call_body == {"artifacts": [{"hash": "hash123abc", "path": "/input.csv"}]}
 
     def test_register_job_outputs_sends_mapped_payload(self):
-        client = GlaasClient(base_url="http://localhost:9999")
+        client = _optional_auth_client()
         with patch.object(client, "_request") as mock_request:
             mock_request.return_value = ({"outputs_linked": 1}, None)
 
