@@ -187,7 +187,7 @@ Use for setup that should run before the main pipeline (compiling, installing).
 
 ### `roar auth`
 
-Manage GLaaS authentication.
+Manage SSH-key-based GLaaS registration settings.
 
 ```bash
 roar auth register    # Show SSH public key for registration
@@ -195,11 +195,24 @@ roar auth test        # Test connection to GLaaS server
 roar auth status      # Show current auth status
 ```
 
-To register with GLaaS:
+To register SSH auth with GLaaS:
 
 1. Run `roar auth register` to display your public key
 2. Sign up at <https://glaas.ai> where you can paste your public key
 3. Run `roar auth test` to verify
+
+### `roar login`, `roar logout`, and `roar whoami`
+
+Manage your browser/device login for the GLaaS/TReqs account system.
+
+```bash
+roar login                     # Start device login via the GLaaS auth API
+roar login --glaas-api-url ... # Override the public GLaaS auth API base URL
+roar logout                    # Clear the stored browser/device auth state
+roar whoami                    # Show current auth identity and repo binding
+```
+
+`roar login` opens the GLaaS approval page without embedding the device code in the URL. You manually enter the one-time code printed by the CLI on the `/login/device` page. Internally, this authenticates you against the TReqs-backed account system through the public GLaaS auth surface.
 
 ### `roar config`
 
