@@ -40,10 +40,13 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "label": ("roar.cli.commands.label", "label", "Manage local labels"),
     "lineage": ("roar.cli.commands.lineage", "lineage", "Inspect lineage for a tracked artifact"),
     "log": ("roar.cli.commands.log", "log", "List jobs in the active session"),
+    "login": ("roar.cli.commands.login", "login", "Store global GLaaS/TReqs auth state"),
+    "logout": ("roar.cli.commands.logout", "logout", "Clear global GLaaS/TReqs auth state"),
     "osmo": ("roar.cli.commands.osmo", "osmo", "Manage OSMO workflow attachment"),
     "pop": ("roar.cli.commands.pop", "pop", "Remove the last local step"),
     "proxy": ("roar.cli.commands.proxy", "proxy", "Manage S3 proxy for lineage tracking"),
     "put": ("roar.cli.commands.put", "put", "Publish artifacts and register lineage"),
+    "projects": ("roar.cli.commands.projects", "projects", "Manage GLaaS projects visible through your TReqs account"),
     "register": ("roar.cli.commands.register", "register", "Register local lineage with GLaaS"),
     "reproduce": ("roar.cli.commands.reproduce", "reproduce", "Generate a reproduction plan"),
     "reset": ("roar.cli.commands.reset", "reset", "Reset roar state"),
@@ -51,6 +54,7 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "show": ("roar.cli.commands.show", "show", "Inspect a session, job, or artifact"),
     "status": ("roar.cli.commands.status", "status", "Show the active session summary"),
     "tracer": ("roar.cli.commands.tracer", "tracer", "Configure tracer backend defaults"),
+    "whoami": ("roar.cli.commands.whoami", "whoami", "Show current GLaaS/TReqs login and repo binding"),
 }
 
 HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -58,6 +62,7 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Inspect Local Lineage", ("status", "log", "show", "lineage", "inputs", "pop", "reproduce")),
     ("Share and Publish", ("put", "register", "get", "label")),
     ("Setup and Admin", ("auth", "config", "env", "tracer", "proxy", "reset")),
+    ("GLaaS / TReqs Account", ("login", "logout", "whoami", "projects")),
 )
 
 
@@ -184,7 +189,7 @@ class LazyGroup(click.Group):
 def cli(ctx: click.Context) -> None:
     """roar - Run Observation & Artifact Registration
 
-    A local front-end to TReqs' Lineage-as-a-Service (GLaaS).
+    A local front-end to GLaaS (Global Lineage as a Service).
     Tracks data artifacts and execution steps in ML pipelines.
 
     \b
