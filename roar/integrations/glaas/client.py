@@ -70,10 +70,14 @@ class GlaasClient:
         *,
         start_dir: str | Path | None = None,
         publish_auth: PublishAuthContext | None = None,
+        allow_public_without_binding: bool = False,
     ):
         resolved_base_url = get_glaas_url() if base_url is None else base_url
         self.base_url = resolved_base_url.rstrip("/") if resolved_base_url else None
-        self._publish_auth = publish_auth or load_publish_auth_context(start_dir)
+        self._publish_auth = publish_auth or load_publish_auth_context(
+            start_dir,
+            allow_public_without_binding=allow_public_without_binding,
+        )
 
     def is_configured(self) -> bool:
         """Check if GLaaS is configured."""

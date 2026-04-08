@@ -27,7 +27,6 @@ def test_dev_email_works_when_feature_flag_enabled(tmp_path: Path) -> None:
         env={
             "XDG_CONFIG_HOME": str(tmp_path / "xdg"),
             "ROAR_ENABLE_DEV_EMAIL_LOGIN": "1",
-            "TREQS_API_URL": "https://api.treqs.ai",
         },
     )
 

@@ -119,11 +119,20 @@ def RegisterService(*args: Any, **kwargs: Any) -> Any:
     return _RegisterService(*args, **kwargs)
 
 
-def build_publish_runtime(*, glaas_url: str | None = None, start_dir: str | None = None) -> Any:
+def build_publish_runtime(
+    *,
+    glaas_url: str | None = None,
+    start_dir: str | None = None,
+    allow_public_without_binding: bool = False,
+) -> Any:
     """Load publish runtime assembly only when publish workflows execute."""
     from .runtime import build_publish_runtime as _build_publish_runtime
 
-    return _build_publish_runtime(glaas_url=glaas_url, start_dir=start_dir)
+    return _build_publish_runtime(
+        glaas_url=glaas_url,
+        start_dir=start_dir,
+        allow_public_without_binding=allow_public_without_binding,
+    )
 
 
 def resolve_register_lineage_target(*args: Any, **kwargs: Any) -> Any:
@@ -176,9 +185,13 @@ def build_register_preview_runtime() -> Any:
     """Build only the dependencies needed for local register preview flows."""
     from ...integrations.glaas.client import GlaasClient
     from ...integrations.glaas.registration.session import SessionRegistrationService
+    from ...publish_auth import PublishAuthContext
     from .lineage import LineageCollector
 
-    glaas_client = GlaasClient("")
+    glaas_client = GlaasClient(
+        "",
+        publish_auth=PublishAuthContext(access_token=None, scope_request=None),
+    )
     return _RegisterPreviewRuntime(
         glaas_client=glaas_client,
         session_service=SessionRegistrationService(glaas_client),
@@ -337,7 +350,11 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
     runtime = (
         build_register_preview_runtime()
         if request.dry_run
-        else build_publish_runtime(glaas_url=get_glaas_url(), start_dir=str(request.cwd))
+        else build_publish_runtime(
+            glaas_url=get_glaas_url(),
+            start_dir=str(request.cwd),
+            allow_public_without_binding=request.public,
+        )
     )
     collected_lineage, error = collect_register_lineage(
         target=resolved_target,
@@ -458,7 +475,11 @@ def put_artifacts(request: PutRequest) -> PutResponse:
     else:
         with create_database_context(request.roar_dir) as db_ctx:
             backend = resolve_publish_storage_backend(request.destination)
-            runtime = build_publish_runtime(glaas_url=get_glaas_url(), start_dir=str(repo_root))
+            runtime = build_publish_runtime(
+                glaas_url=get_glaas_url(),
+                start_dir=str(repo_root),
+                allow_public_without_binding=request.public,
+            )
             service = PutService(
                 db_context=db_ctx,
                 backend=backend,

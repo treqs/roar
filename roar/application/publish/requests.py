@@ -16,6 +16,7 @@ class RegisterLineageRequest:
     cwd: Path
     dry_run: bool = False
     as_blake3: bool = False
+    public: bool = False
     skip_confirmation: bool = False
     confirm_callback: Callable[[list[str]], bool] | None = None
 
@@ -31,4 +32,5 @@ class PutRequest:
     destination: str
     message: str
     dry_run: bool = False
+    public: bool = False
     no_tag: bool = False

@@ -25,10 +25,17 @@ class PublishRuntime:
 
 
 def build_publish_runtime(
-    *, glaas_url: str | None = None, start_dir: str | None = None
+    *,
+    glaas_url: str | None = None,
+    start_dir: str | None = None,
+    allow_public_without_binding: bool = False,
 ) -> PublishRuntime:
     """Build the default dependency stack for publish entrypoints."""
-    glaas_client = GlaasClient(glaas_url, start_dir=start_dir)
+    glaas_client = GlaasClient(
+        glaas_url,
+        start_dir=start_dir,
+        allow_public_without_binding=allow_public_without_binding,
+    )
     session_service = SessionRegistrationService(glaas_client)
     artifact_service = ArtifactRegistrationService(glaas_client)
     job_service = JobRegistrationService(glaas_client)

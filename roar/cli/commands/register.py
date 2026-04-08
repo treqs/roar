@@ -54,9 +54,21 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     is_flag=True,
     help="Upgrade tracked S3 artifacts from ETag-only hashes to BLAKE3 before registration",
 )
+@click.option(
+    "--public",
+    is_flag=True,
+    help="Publish without a repo owner/project binding. Required for intentional public publication.",
+)
 @click.pass_obj
 @require_init
-def register(ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3: bool) -> None:
+def register(
+    ctx: RoarContext,
+    target: str,
+    dry_run: bool,
+    yes: bool,
+    as_blake3: bool,
+    public: bool,
+) -> None:
     """Register lineage with GLaaS.
 
     Submits lineage to the GLaaS server, starting from one of:
@@ -99,6 +111,7 @@ def register(ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3:
             cwd=ctx.cwd,
             dry_run=dry_run,
             as_blake3=as_blake3,
+            public=public,
             skip_confirmation=yes,
             confirm_callback=_confirm_secrets if not yes else None,
         )

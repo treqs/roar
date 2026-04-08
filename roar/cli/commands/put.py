@@ -49,6 +49,11 @@ def _resolve_glaas_web_url() -> str:
     is_flag=True,
     help="Skip creating and pushing git tag.",
 )
+@click.option(
+    "--public",
+    is_flag=True,
+    help="Publish without a repo owner/project binding. Required for intentional public publication.",
+)
 @click.pass_obj
 @require_init
 def put(
@@ -57,6 +62,7 @@ def put(
     message: str,
     dry_run: bool,
     no_tag: bool,
+    public: bool,
 ) -> None:
     """Publish artifacts to cloud storage and register with GLaaS.
 
@@ -110,6 +116,7 @@ def put(
                 destination=destination,
                 message=message,
                 dry_run=dry_run,
+                public=public,
                 no_tag=no_tag,
             )
         )

@@ -159,9 +159,9 @@ def test_poll_device_token_retries_pending_and_slow_down_then_succeeds(monkeypat
             return response
         raise _make_response_error(400, {"error": {"code": "slow_down", "message": "slow down"}})
 
-    import roar.glaas_auth as treqs_auth
+    import roar.glaas_auth as glaas_auth
 
-    monkeypatch.setattr(treqs_auth, "_request_json", _fake_request_json)
+    monkeypatch.setattr(glaas_auth, "_request_json", _fake_request_json)
 
     session = DeviceAuthorizationSession(
         device_code="device-123",
@@ -324,6 +324,6 @@ def test_login_force_replaces_existing_session_without_prompt(monkeypatch, tmp_p
 
 
 def _make_response_error(status: int, payload: dict[str, object]):
-    import roar.glaas_auth as treqs_auth
+    import roar.glaas_auth as glaas_auth
 
-    return treqs_auth._GlaasApiResponseError(status, payload)
+    return glaas_auth._GlaasApiResponseError(status, payload)

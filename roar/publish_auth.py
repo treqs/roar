@@ -17,7 +17,11 @@ class PublishAuthContext:
     scope_request: dict[str, str] | None
 
 
-def load_publish_auth_context(start_dir: str | Path | None = None) -> PublishAuthContext:
+def load_publish_auth_context(
+    start_dir: str | Path | None = None,
+    *,
+    allow_public_without_binding: bool = False,
+) -> PublishAuthContext:
     access_token = None
     auth_state = load_auth_state()
     if auth_state is not None:
@@ -27,6 +31,10 @@ def load_publish_auth_context(start_dir: str | Path | None = None) -> PublishAut
     if binding and not access_token:
         raise RuntimeError(
             "Repo is linked to GLaaS but no global auth state is available. Run `roar login`."
+        )
+    if not binding and not allow_public_without_binding:
+        raise RuntimeError(
+            "No GLaaS repo binding found for this publish. Link the repo to a TReqs owner/project first, or rerun with --public to publish publicly."
         )
 
     scope_request = None
