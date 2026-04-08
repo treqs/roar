@@ -8,12 +8,16 @@ from roar.core.models.dataset_identifier import DatasetIdentifier
 from roar.db.context import create_database_context
 from roar.execution.recording import DatasetIdentifierInferer, ExecutionJobRecorder
 
+TEST_REPO_ROOT = (Path(__file__).resolve().parent / "fixtures" / "lance_demo").resolve()
+TEST_REPO_ROOT_STR = str(TEST_REPO_ROOT)
+TEST_REPO_ROOT_URI = TEST_REPO_ROOT.as_uri()
+
 
 def _raw_session_paths() -> list[str]:
     paths: list[str] = []
     for i in range(10):
         session = f"session_{i:04d}_42"
-        base = f"/home/trevor/dev/lance_demo/data/raw/{session}"
+        base = f"{TEST_REPO_ROOT_STR}/data/raw/{session}"
         paths.append(f"{base}/manifest.json")
         paths.append(f"{base}/{session}.mcap")
     return paths
@@ -24,8 +28,7 @@ def _extracted_internal_paths() -> list[str]:
     for i in range(10):
         session = f"session_{i:04d}_42.lance"
         paths.append(
-            "/home/trevor/dev/lance_demo/data/extracted/"
-            f"{session}/_versions/18446744073709551614.manifest"
+            f"{TEST_REPO_ROOT_STR}/data/extracted/{session}/_versions/18446744073709551614.manifest"
         )
     return paths
 
@@ -37,7 +40,7 @@ def test_infers_raw_dataset_with_high_confidence():
 
     assert len(results) == 1
     candidate = results[0]
-    assert candidate["dataset_id"] == "file:///home/trevor/dev/lance_demo/data/raw"
+    assert candidate["dataset_id"] == f"{TEST_REPO_ROOT_URI}/data/raw"
     assert candidate["confidence"] >= 0.8
     assert "manifest_anchor" in candidate["evidence"]
     assert "session_cluster" in candidate["evidence"]
@@ -47,21 +50,19 @@ def test_infers_extracted_dataset_from_lance_internal_paths():
     inferer = DatasetIdentifierInferer()
     paths = [
         *_extracted_internal_paths(),
-        "/home/trevor/dev/lance_demo/data/training/manifest.json",
-        "/home/trevor/dev/lance_demo/data/eval/metrics.json",
+        f"{TEST_REPO_ROOT_STR}/data/training/manifest.json",
+        f"{TEST_REPO_ROOT_STR}/data/eval/metrics.json",
     ]
 
     results = inferer.infer(paths)
     ids = {str(item["dataset_id"]) for item in results}
 
-    assert "file:///home/trevor/dev/lance_demo/data/extracted" in ids
-    assert "file:///home/trevor/dev/lance_demo/data/training" not in ids
-    assert "file:///home/trevor/dev/lance_demo/data/eval" not in ids
+    assert f"{TEST_REPO_ROOT_URI}/data/extracted" in ids
+    assert f"{TEST_REPO_ROOT_URI}/data/training" not in ids
+    assert f"{TEST_REPO_ROOT_URI}/data/eval" not in ids
 
     extracted = next(
-        item
-        for item in results
-        if item["dataset_id"] == "file:///home/trevor/dev/lance_demo/data/extracted"
+        item for item in results if item["dataset_id"] == f"{TEST_REPO_ROOT_URI}/data/extracted"
     )
     assert extracted["confidence"] >= 0.7
     assert "container_internal_collapse" in extracted["evidence"]
@@ -70,7 +71,7 @@ def test_infers_extracted_dataset_from_lance_internal_paths():
 
 def test_execution_metadata_includes_dataset_identifiers():
     recorder = ExecutionJobRecorder()
-    ctx = SimpleNamespace(repo_root="/home/trevor/dev/lance_demo")
+    ctx = SimpleNamespace(repo_root=TEST_REPO_ROOT_STR)
     prov = {"executables": {"code": {"git": {}}}}
 
     metadata_json = recorder._build_metadata_json(
@@ -78,15 +79,13 @@ def test_execution_metadata_includes_dataset_identifiers():
         prov=prov,
         git_info={},
         read_files=_raw_session_paths(),
-        written_files=["/home/trevor/dev/lance_demo/data/training/manifest.json"],
+        written_files=[f"{TEST_REPO_ROOT_STR}/data/training/manifest.json"],
     )
 
     assert metadata_json is not None
     metadata = json.loads(metadata_json)
     assert "dataset_identifiers" in metadata
-    assert metadata["dataset_identifiers"][0]["dataset_id"] == (
-        "file:///home/trevor/dev/lance_demo/data/raw"
-    )
+    assert metadata["dataset_identifiers"][0]["dataset_id"] == (f"{TEST_REPO_ROOT_URI}/data/raw")
 
 
 def test_record_materializes_local_composite_outputs(tmp_path: Path):
@@ -267,15 +266,15 @@ def test_extract_dataset_hint_paths_parses_common_flags():
         "42",
     ]
 
-    hints = recorder._extract_dataset_hint_paths(command, "/home/trevor/dev/lance_demo")
+    hints = recorder._extract_dataset_hint_paths(command, TEST_REPO_ROOT_STR)
 
-    assert "/home/trevor/dev/lance_demo/data/raw" in hints
-    assert "/home/trevor/dev/lance_demo/data/extracted" in hints
+    assert f"{TEST_REPO_ROOT_STR}/data/raw" in hints
+    assert f"{TEST_REPO_ROOT_STR}/data/extracted" in hints
 
 
 def test_metadata_uses_dataset_hint_paths_when_observation_is_sparse():
     recorder = ExecutionJobRecorder()
-    ctx = SimpleNamespace(repo_root="/home/trevor/dev/lance_demo")
+    ctx = SimpleNamespace(repo_root=TEST_REPO_ROOT_STR)
     prov = {"executables": {"code": {"git": {}}}}
 
     metadata_json = recorder._build_metadata_json(
@@ -283,17 +282,17 @@ def test_metadata_uses_dataset_hint_paths_when_observation_is_sparse():
         prov=prov,
         git_info={},
         read_files=[
-            "/home/trevor/dev/lance_demo/data/extracted/"
+            f"{TEST_REPO_ROOT_STR}/data/extracted/"
             "session_0000_42.lance/_versions/18446744073709551614.manifest"
         ],
-        written_files=["/home/trevor/dev/lance_demo/data/training/manifest.json"],
-        dataset_hint_paths=["/home/trevor/dev/lance_demo/data/extracted"],
+        written_files=[f"{TEST_REPO_ROOT_STR}/data/training/manifest.json"],
+        dataset_hint_paths=[f"{TEST_REPO_ROOT_STR}/data/extracted"],
     )
 
     assert metadata_json is not None
     metadata = json.loads(metadata_json)
     ids = {item["dataset_id"] for item in metadata["dataset_identifiers"]}
-    assert "file:///home/trevor/dev/lance_demo/data/extracted" in ids
+    assert f"{TEST_REPO_ROOT_URI}/data/extracted" in ids
 
 
 def test_collect_session_window_paths_includes_recent_steps():
