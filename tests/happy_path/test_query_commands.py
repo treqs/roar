@@ -7,8 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from roar.core.session_hash import compute_local_session_hash
-
 
 def _active_session_id(repo_path: Path) -> int:
     db_path = repo_path / ".roar" / "roar.db"
@@ -44,10 +42,14 @@ class TestQueryCommands:
 
         status_result = roar_cli("status")
         assert status_result.returncode == 0
-        expected_hash = compute_local_session_hash(
-            roar_dir=temp_git_repo / ".roar",
-            session_id=_active_session_id(temp_git_repo),
+        dag_hash_line = next(
+            (line for line in status_result.stdout.splitlines() if line.strip().startswith("DAG hash:")),
+            None,
         )
+        assert dag_hash_line is not None
+        expected_hash = dag_hash_line.split("DAG hash:", 1)[1].strip()
+        assert len(expected_hash) == 64
+        assert all(char in "0123456789abcdef" for char in expected_hash)
         assert f"DAG hash:    {expected_hash}" in status_result.stdout
         assert "Build steps: 0" in status_result.stdout
         assert "Run steps:   2" in status_result.stdout

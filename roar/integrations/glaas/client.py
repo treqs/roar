@@ -79,6 +79,10 @@ class GlaasClient:
             allow_public_without_binding=allow_public_without_binding,
         )
 
+    @property
+    def publish_auth(self) -> PublishAuthContext:
+        return self._publish_auth
+
     def is_configured(self) -> bool:
         """Check if GLaaS is configured."""
         return self.base_url is not None

@@ -5,6 +5,7 @@ Live GLaaS tests for label synchronization semantics.
 import fcntl
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -14,7 +15,6 @@ from urllib.parse import urlencode
 
 import pytest
 
-from roar.integrations.glaas.registration.session import SessionRegistrationService
 from tests.live_glaas import test_composite_live as composite_live
 
 pytest_plugins = ("tests.live_glaas.test_composite_live",)
@@ -172,11 +172,11 @@ def _computed_remote_session_hash(repo: Path) -> str:
             (local_session_hash,),
         ).fetchone()
     assert row is not None, f"Active local session not found for hash {local_session_hash}"
-    session_id = int(row[0])
-    return SessionRegistrationService().compute_session_hash(
-        roar_dir=str(repo / ".roar"),
-        session_id=session_id,
-    )
+    status_result = _run_roar(repo, "status")
+    assert status_result.returncode == 0, status_result.stderr or status_result.stdout
+    match = re.search(r"DAG hash:\s+([a-f0-9]{64})", status_result.stdout)
+    assert match is not None, status_result.stdout
+    return match.group(1)
 
 
 def _local_job_uid(repo: Path, step_number: int) -> str:

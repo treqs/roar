@@ -15,6 +15,9 @@ from .auth_store import load_auth_state
 class PublishAuthContext:
     access_token: str | None
     scope_request: dict[str, str] | None
+    auth_provider: str | None = None
+    user_sub: str | None = None
+    db_user_id: str | None = None
 
 
 def load_publish_auth_context(
@@ -23,9 +26,15 @@ def load_publish_auth_context(
     allow_public_without_binding: bool = False,
 ) -> PublishAuthContext:
     access_token = None
+    auth_provider = None
+    user_sub = None
+    db_user_id = None
     auth_state = load_auth_state()
     if auth_state is not None:
         access_token = auth_state.access_token
+        auth_provider = auth_state.provider
+        user_sub = auth_state.user.sub or None
+        db_user_id = auth_state.user.db_user_id
 
     binding = _load_repo_binding(start_dir)
     if binding and not access_token:
@@ -48,7 +57,22 @@ def load_publish_auth_context(
         if project_id:
             scope_request["project_id"] = project_id
 
-    return PublishAuthContext(access_token=access_token, scope_request=scope_request)
+    return PublishAuthContext(
+        access_token=access_token,
+        scope_request=scope_request,
+        auth_provider=auth_provider,
+        user_sub=user_sub,
+        db_user_id=db_user_id,
+    )
+
+
+def resolve_publish_creator_identity(context: PublishAuthContext) -> str:
+    provider = (context.auth_provider or "").strip().lower()
+    if provider.startswith("treqs") and context.user_sub:
+        return f"treqs:user:{context.user_sub}"
+    if context.db_user_id:
+        return f"glaas:user:{context.db_user_id}"
+    return "anonymous"
 
 
 def _load_repo_binding(start_dir: str | Path | None = None) -> dict[str, str] | None:

@@ -243,13 +243,16 @@ def _active_session_id(repo: Path) -> int:
 
 
 def _compute_active_session_hash(repo: Path) -> str:
-    from roar.integrations.glaas.registration.session import SessionRegistrationService
-
-    session_id = _active_session_id(repo)
-    return SessionRegistrationService().compute_session_hash(
-        roar_dir=str(repo / ".roar"),
-        session_id=session_id,
+    result = subprocess.run(
+        [sys.executable, "-m", "roar", "status"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
     )
+    match = re.search(r"DAG hash:\s+([a-f0-9]{64})", result.stdout)
+    assert match is not None, result.stdout
+    return match.group(1)
 
 
 def _register_active_session_hash(repo: Path, roar_cli) -> str:

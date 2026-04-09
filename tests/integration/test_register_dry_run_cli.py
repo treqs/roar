@@ -43,6 +43,14 @@ def _parse_session_hash(output: str) -> str:
     return match.group(1)
 
 
+def _status_session_hash(repo: Path, roar_cli) -> str:
+    result = roar_cli("status")
+    assert result.returncode == 0, result.stderr or result.stdout
+    match = re.search(r"DAG hash:\s+([0-9a-f]{64})", result.stdout)
+    assert match is not None, f"Missing DAG hash in status output: {result.stdout}"
+    return match.group(1)
+
+
 def _configure_register_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[str, str]:
     subprocess.run(
         ["git", "remote", "add", "origin", "https://github.com/test/repo.git"],
@@ -78,13 +86,7 @@ def test_register_dry_run_resolves_artifact_step_and_session_targets(
     assert run_result.returncode == 0
     assert (temp_git_repo / "report.txt").read_text() == "register me"
 
-    active_sessions = _query_rows(
-        temp_git_repo,
-        "SELECT hash FROM sessions WHERE is_active = 1 ORDER BY id DESC LIMIT 1",
-    )
-    assert active_sessions
-    session_hash = active_sessions[0]["hash"]
-    assert isinstance(session_hash, str) and len(session_hash) >= 12
+    session_hash = _status_session_hash(temp_git_repo, roar_cli)
 
     artifact_result = roar_cli("register", "--dry-run", "report.txt")
     step_result = roar_cli("register", "--dry-run", "@1")

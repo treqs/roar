@@ -14,7 +14,6 @@ from typing import Any
 import pytest
 
 from roar.db.context import create_database_context
-from roar.integrations.glaas.registration.session import SessionRegistrationService
 from tests.live_glaas import test_composite_live as composite_live
 
 managed_glaas_url = composite_live.managed_glaas_url
@@ -59,9 +58,16 @@ def _active_session_id(repo: Path) -> int:
         row = conn.execute(
             "SELECT id FROM sessions WHERE is_active = 1 ORDER BY id DESC LIMIT 1"
         ).fetchone()
-    if row is None or row[0] is None:
-        raise AssertionError("Expected an active local roar session")
+    assert row is not None, "No active local session found"
     return int(row[0])
+
+
+def _current_status_session_hash(repo: Path, roar_cli) -> str:
+    status_result = roar_cli("status")
+    assert status_result.returncode == 0, status_result.stderr or status_result.stdout
+    match = re.search(r"DAG hash:\s+([a-f0-9]{64})", status_result.stdout)
+    assert match is not None, status_result.stdout
+    return match.group(1)
 
 
 def _parse_session_hash(output: str) -> str:
@@ -244,11 +250,7 @@ print("built {output_name}")
     job_row = _job_row_for_script(repo, script_name)
     composite_root = str((repo / "exports" / "bundle").resolve())
     composite_hash = _seed_composite_output(repo, root_path=composite_root)
-    session_id = _active_session_id(repo)
-    session_hash = SessionRegistrationService().compute_session_hash(
-        roar_dir=str(repo / ".roar"),
-        session_id=session_id,
-    )
+    session_hash = _current_status_session_hash(repo, roar_cli)
 
     return {
         "local_output_path": local_output_path,
@@ -313,11 +315,7 @@ print("built local_model.json")
     composite_root = str((repo / "exports" / "bundle").resolve())
     composite_hash = _seed_composite_output(repo, root_path=composite_root)
 
-    session_id = _active_session_id(repo)
-    session_hash = SessionRegistrationService().compute_session_hash(
-        roar_dir=str(repo / ".roar"),
-        session_id=session_id,
-    )
+    session_hash = _current_status_session_hash(repo, roar_cli)
 
     register_result = roar_cli("register", session_hash, "--yes")
     assert register_result.returncode == 0, register_result.stderr or register_result.stdout
@@ -546,11 +544,7 @@ print("built prefix_model.json")
 
     local_output_path = str((repo / "artifacts" / "prefix_model.json").resolve())
     local_hash = _artifact_hash_for_output(repo, local_output_path, "blake3")
-    session_id = _active_session_id(repo)
-    session_hash = SessionRegistrationService().compute_session_hash(
-        roar_dir=str(repo / ".roar"),
-        session_id=session_id,
-    )
+    session_hash = _current_status_session_hash(repo, roar_cli)
     session_hash_prefix = session_hash[:8]
 
     register_result = roar_cli("register", session_hash_prefix, "--yes")
