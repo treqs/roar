@@ -70,7 +70,7 @@ class GlaasClient:
         *,
         start_dir: str | Path | None = None,
         publish_auth: PublishAuthContext | None = None,
-        allow_public_without_binding: bool = False,
+        allow_public_without_binding: bool = True,
     ):
         resolved_base_url = get_glaas_url() if base_url is None else base_url
         self.base_url = resolved_base_url.rstrip("/") if resolved_base_url else None

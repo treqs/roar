@@ -382,7 +382,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         else build_publish_runtime(
             glaas_url=get_glaas_url(),
             start_dir=str(request.cwd),
-            allow_public_without_binding=True,
+            allow_public_without_binding=request.public,
         )
     )
     collected_lineage, error = collect_register_lineage(
