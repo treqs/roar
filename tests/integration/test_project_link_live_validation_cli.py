@@ -180,6 +180,53 @@ def test_project_link_validates_against_access_context_server(
     assert 'project_id = "proj-789"' in config_text
 
 
+def test_projects_unlink_removes_repo_project_binding(
+    temp_git_repo: Path,
+    tmp_path: Path,
+    fake_glaas_server: _FakeGlaasServer,
+) -> None:
+    xdg_config_home = tmp_path / "xdg"
+    token_file = tmp_path / "token-file.json"
+    _write_auth_token_file(token_file)
+
+    glaas_api_url = f"http://127.0.0.1:{fake_glaas_server.server_address[1]}"
+    login_result = _run_roar(
+        "login",
+        "--token-file",
+        str(token_file),
+        cwd=temp_git_repo,
+        env_overrides={"XDG_CONFIG_HOME": str(xdg_config_home), "GLAAS_API_URL": glaas_api_url},
+    )
+    assert login_result.returncode == 0, login_result.stderr
+
+    link_result = _run_roar(
+        "projects",
+        "link",
+        "proj-789",
+        "--glaas-api-url",
+        glaas_api_url,
+        cwd=temp_git_repo,
+        env_overrides={"XDG_CONFIG_HOME": str(xdg_config_home)},
+    )
+    assert link_result.returncode == 0, link_result.stderr
+    assert 'project_id = "proj-789"' in (temp_git_repo / ".roar" / "config.toml").read_text(
+        encoding="utf-8"
+    )
+
+    unlink_result = _run_roar(
+        "projects",
+        "unlink",
+        cwd=temp_git_repo,
+        env_overrides={"XDG_CONFIG_HOME": str(xdg_config_home)},
+    )
+    assert unlink_result.returncode == 0, unlink_result.stderr
+    assert "Unlinked repo project binding." in unlink_result.stdout
+
+    config_text = (temp_git_repo / ".roar" / "config.toml").read_text(encoding="utf-8")
+    assert "[treqs]" not in config_text
+    assert 'project_id = "proj-789"' not in config_text
+
+
 def test_project_link_rejects_readonly_project_from_access_context(
     temp_git_repo: Path,
     tmp_path: Path,

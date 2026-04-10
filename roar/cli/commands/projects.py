@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+try:
+    import tomllib
+except ImportError:  # pragma: no cover
+    import tomli as tomllib
+
 import click
 
 from ...glaas_auth import resolve_auth_api_url
 from ...glaas_client import GlaasClientError, fetch_access_context, fetch_user_projects
 from ...integrations.config import get_config_path_for_write, load_config, save_config
+from ...integrations.config.loader import find_config_file
 
 
 @click.group("projects", invoke_without_command=True)
@@ -96,6 +102,25 @@ def projects_list(glaas_api_url: str | None) -> None:
         click.echo("  ".join(row[key].ljust(widths[key]) for key, _label in headers))
 
 
+@projects.command("unlink")
+def projects_unlink() -> None:
+    """Remove this repo's GLaaS project binding."""
+    config_path = get_config_path_for_write()
+    existing_binding = _load_existing_repo_binding()
+
+    if not isinstance(existing_binding, dict) or not existing_binding:
+        click.echo("No repo project binding found.")
+        return
+
+    config = load_config()
+    # Keep key present to avoid unknown-section preservation during save.
+    config["treqs"] = {}
+    save_config(config, config_path)
+
+    click.echo("Unlinked repo project binding.")
+    click.echo(f"Saved to {config_path}")
+
+
 def _resolve_project_binding_from_access_context(
     *, glaas_api_url: str, project_id: str
 ) -> tuple[str, str]:
@@ -152,3 +177,17 @@ def _resolve_project_binding_from_access_context(
         )
 
     return matches[0]
+
+
+def _load_existing_repo_binding() -> dict[str, object] | None:
+    config_path = find_config_file()
+    if config_path is None or config_path.name != "config.toml":
+        return None
+
+    with config_path.open("rb") as handle:
+        data = tomllib.load(handle)
+
+    binding = data.get("treqs")
+    if not isinstance(binding, dict):
+        return None
+    return binding
