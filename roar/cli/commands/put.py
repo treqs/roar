@@ -52,7 +52,10 @@ def _resolve_glaas_web_url() -> str:
 @click.option(
     "--public",
     is_flag=True,
-    help="Publish without a repo owner/project binding. Required for intentional public publication.",
+    help=(
+        "Submit as public lineage. --public allows public+anonymous or public+attributed "
+        "submission; without it, non-public submission must be private+attributed."
+    ),
 )
 @click.pass_obj
 @require_init
@@ -75,6 +78,11 @@ def put(
     sources (files, directories, @N job references). If no sources are
     specified before the destination, all outputs from the current session
     are uploaded.
+
+    Visibility / attribution matrix:
+    - no --public -> private + attributed only
+    - --public -> public + anonymous OR public + attributed
+    - private + anonymous is not allowed
 
     \b
     Destination formats:

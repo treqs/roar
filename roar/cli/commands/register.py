@@ -57,7 +57,10 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
 @click.option(
     "--public",
     is_flag=True,
-    help="Publish without a repo owner/project binding. Required for intentional public publication.",
+    help=(
+        "Submit as public lineage. --public allows public+anonymous or public+attributed "
+        "submission; without it, non-public submission must be private+attributed."
+    ),
 )
 @click.pass_obj
 @require_init
@@ -78,6 +81,11 @@ def register(
     - a local session hash/prefix previously shown by roar
 
     Artifact paths must refer to files tracked by roar.
+
+    Visibility / attribution matrix:
+    - no --public -> private + attributed only
+    - --public -> public + anonymous OR public + attributed
+    - private + anonymous is not allowed
 
     If secrets are detected in the data (API keys, tokens, passwords, etc.),
     you will be prompted to confirm. Use --yes to skip the prompt and
