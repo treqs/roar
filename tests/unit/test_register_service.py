@@ -194,7 +194,10 @@ class TestRegisterService:
         assert jobs_by_uid["phase-job"]["parent_job_uid"] == "local-submit"
 
     def test_register_prepared_lineage_dry_run(self, tmp_path: Path) -> None:
-        with patch("roar.application.publish.register_execution.config_get", return_value=False):
+        with (
+            patch("roar.application.publish.register_execution.config_get", return_value=False),
+            patch("roar.application.publish.register_execution.Spinner") as spinner_cls,
+        ):
             result = self.service.register_prepared_lineage(
                 lineage=_lineage_data(
                     jobs=[{"id": 1, "job_uid": "job1"}, {"id": 2, "job_uid": "job2"}],
@@ -215,6 +218,7 @@ class TestRegisterService:
         assert result.jobs_registered == 2
         assert result.artifacts_registered == 3
         self.mock_coordinator.register_lineage.assert_not_called()
+        spinner_cls.assert_not_called()
 
     def test_register_prepared_lineage_dry_run_filters_known_ray_noise_jobs(
         self, tmp_path: Path
@@ -373,3 +377,26 @@ class TestRegisterService:
                 "session_hash": "session-hash-123",
             }
         ]
+
+    def test_register_prepared_lineage_shows_spinner_for_publish_path(self, tmp_path: Path) -> None:
+        with (
+            patch("roar.application.publish.register_execution.config_get", return_value=False),
+            patch("roar.application.publish.register_execution.Spinner") as spinner_cls,
+        ):
+            result = self.service.register_prepared_lineage(
+                lineage=_lineage_data(
+                    jobs=[{"id": 1, "job_uid": "job1"}],
+                    artifacts=[{"id": "a1"}],
+                    artifact_hashes={"hash1"},
+                ),
+                roar_dir=tmp_path / ".roar",
+                artifact_hash="hash1",
+                dry_run=False,
+                as_blake3=False,
+                skip_confirmation=False,
+                confirm_callback=None,
+                prepared=_prepared_execution(tmp_path),
+            )
+
+        assert result.success is True
+        spinner_cls.assert_called_once_with("Publishing lineage to GLaaS...")
