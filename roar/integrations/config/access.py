@@ -504,6 +504,17 @@ def _update_existing_config_text(text: str, key: str, value: Any) -> str:
         lines[index] = f"{indent}{field_name} = {rendered_value}"
         return "\n".join(lines) + "\n"
 
+    commented_assignment_pattern = re.compile(
+        rf"^(?P<indent>\s*)#\s*{re.escape(field_name)}\s*="
+    )
+    for index in range(content_start, end_index):
+        match = commented_assignment_pattern.match(lines[index])
+        if match is None:
+            continue
+        indent = match.group("indent")
+        lines[index] = f"{indent}{field_name} = {rendered_value}"
+        return "\n".join(lines) + "\n"
+
     insert_index = end_index
     while insert_index > content_start and not lines[insert_index - 1].strip():
         insert_index -= 1

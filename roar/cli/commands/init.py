@@ -100,6 +100,10 @@ names = [
 # pattern = "[a-f0-9]{32}-us[0-9]{1,2}"
 # description = "Mailchimp API keys"
 
+[registration.tagging]
+# Create git tag on successful registration
+enabled = true
+
 [hash]
 # Primary hash algorithm (blake3, sha256, sha512, md5)
 primary = "blake3"
@@ -109,6 +113,10 @@ get = ["sha256"]
 put = []
 # Additional algorithms for roar run
 run = []
+
+[proxy]
+# Enable S3 proxy for lineage tracking during roar run
+enabled = false
 
 [tracer]
 # Default tracer backend policy (auto, ebpf, preload, ptrace)

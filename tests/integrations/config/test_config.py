@@ -14,6 +14,11 @@ from pathlib import Path
 
 import pytest
 
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+
 from roar.cli.commands.init import DEFAULT_CONFIG_TEMPLATE
 from roar.integrations.config import (
     CONFIGURABLE_KEYS,
@@ -160,9 +165,16 @@ class TestDefaultConfigTemplate:
         config = load_config(config_path=config_path)
 
         assert config["registration"]["omit"]["enabled"] is True
+        assert config["registration"]["tagging"]["enabled"] is True
         assert "WANDB_API_KEY" in config["registration"]["omit"]["env_vars"]["names"]
         assert "OPENAI_API_KEY" in config["registration"]["omit"]["env_vars"]["names"]
         assert "ANTHROPIC_API_KEY" in config["registration"]["omit"]["env_vars"]["names"]
+
+    def test_template_includes_materialized_tagging_and_proxy_sections(self) -> None:
+        raw = tomllib.loads(DEFAULT_CONFIG_TEMPLATE)
+
+        assert raw["registration"]["tagging"]["enabled"] is True
+        assert raw["proxy"]["enabled"] is False
 
     def test_template_hash_defaults(self, tmp_path: Path) -> None:
         """Template has correct hash section defaults."""
@@ -176,6 +188,16 @@ class TestDefaultConfigTemplate:
         assert config["hash"]["get"] == ["sha256"]
         assert config["hash"]["put"] == []
         assert config["hash"]["run"] == []
+
+    def test_template_proxy_defaults(self, tmp_path: Path) -> None:
+        """Template has correct proxy section defaults."""
+        config_path = tmp_path / ".roar" / "config.toml"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
+
+        config = load_config(config_path=config_path)
+
+        assert config["proxy"]["enabled"] is False
 
     def test_template_reversible_defaults(self, tmp_path: Path) -> None:
         """Template has correct reversible section defaults."""
@@ -254,6 +276,11 @@ class TestDefaultsMatchPydanticModels:
             template_config["registration"]["omit"]["env_vars"]["names"]
             == pydantic_defaults["registration"]["omit"]["env_vars"]["names"]
         )
+        assert (
+            template_config["registration"]["tagging"]["enabled"]
+            == pydantic_defaults["registration"]["tagging"]["enabled"]
+        )
+        assert template_config["proxy"] == pydantic_defaults["proxy"]
 
 
 class TestConfigLoading:
@@ -383,6 +410,19 @@ class TestConfigSaveLoad:
         assert "quiet = true" in content
         assert 'primary = "blake3"' in content
         assert 'default = "auto"' in content
+
+    def test_config_set_reuses_commented_placeholder_when_present(
+        self, tmp_path: Path
+    ) -> None:
+        config_path = tmp_path / ".roar" / "config.toml"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
+
+        config_set("glaas.key", "/tmp/test-key", start_dir=str(tmp_path))
+
+        content = config_path.read_text(encoding="utf-8")
+        assert 'key = "/tmp/test-key"' in content
+        assert '# key = ""' not in content
 
 
 class TestConfigurableKeys:
