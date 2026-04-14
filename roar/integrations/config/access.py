@@ -1,12 +1,22 @@
 """Configuration loading and management for roar."""
 
+import re
 from collections.abc import Iterator, Mapping
+from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
+
+from pydantic import ValidationError
 
 from ...core.tracer_modes import VALID_TRACER_MODES
 from .loader import find_config_file, find_roar_dir, load_settings
 from .raw import find_raw_config_file
+
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
 
 # Valid hash algorithms
 VALID_HASH_ALGORITHMS = {"blake3", "sha256", "sha512", "md5"}
@@ -209,6 +219,17 @@ class _ConfigurableKeysView(Mapping[str, dict[str, Any]]):
 CONFIGURABLE_KEYS: Mapping[str, dict[str, Any]] = _ConfigurableKeysView()
 
 
+@dataclass(frozen=True)
+class ConfigSetResult:
+    config_path: Path
+    typed_value: Any
+    warnings: tuple[str, ...] = ()
+
+    def __iter__(self) -> Iterator[Any]:
+        yield self.config_path
+        yield self.typed_value
+
+
 def _get_default_config() -> dict:
     """Get default config from Pydantic models."""
     from .schema import RoarConfig
@@ -230,11 +251,21 @@ def _get_nested(d: dict, key: str, default=None):
 def _set_nested(d: dict, key: str, value):
     """Set a nested key like 'output.track_repo_files'."""
     parts = key.split(".")
+    current = d
+    traversed: list[str] = []
+
     for part in parts[:-1]:
-        if part not in d:
-            d[part] = {}
-        d = d[part]
-    d[parts[-1]] = value
+        traversed.append(part)
+        next_value = current.get(part)
+        if next_value is None:
+            current[part] = {}
+            next_value = current[part]
+        elif not isinstance(next_value, dict):
+            path = ".".join(traversed)
+            raise ValueError(f"Cannot set {key}: {path} is not a table in config")
+        current = next_value
+
+    current[parts[-1]] = value
 
 
 def load_config(config_path: Path | None = None, start_dir: str | None = None) -> dict:
@@ -253,6 +284,100 @@ def load_config(config_path: Path | None = None, start_dir: str | None = None) -
 
 
 _MISSING = object()
+
+
+def _build_nested_payload(key: str, value: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    _set_nested(payload, key, value)
+    return payload
+
+
+def _load_raw_config_for_write(config_path: Path) -> dict[str, Any]:
+    if not config_path.exists():
+        return {}
+
+    try:
+        with open(config_path, "rb") as handle:
+            data = tomllib.load(handle)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"Failed to parse config file {config_path}: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"Failed to read config file {config_path}: {exc}") from exc
+
+    if config_path.name == "pyproject.toml":
+        tool_data = data.get("tool", {}) if isinstance(data, dict) else {}
+        if isinstance(tool_data, dict):
+            roar_data = tool_data.get("roar", {})
+            return roar_data if isinstance(roar_data, dict) else {}
+        return {}
+
+    return data if isinstance(data, dict) else {}
+
+
+def _format_validation_location(location: tuple[Any, ...]) -> str:
+    rendered = ""
+    for part in location:
+        if isinstance(part, int):
+            rendered += f"[{part}]"
+            continue
+        part_text = str(part)
+        rendered = f"{rendered}.{part_text}" if rendered else part_text
+    return rendered
+
+
+def _format_validation_message(error: Mapping[str, Any]) -> str:
+    location = _format_validation_location(tuple(error.get("loc", ())))
+    message = str(error.get("msg", "Invalid value"))
+    if message.startswith("Value error, "):
+        message = message[len("Value error, ") :]
+    return f"{location}: {message}" if location else message
+
+
+def _is_validation_error_for_key(location: tuple[Any, ...], key: str) -> bool:
+    if not location:
+        return False
+
+    target = tuple(key.split("."))
+    return location[: len(target)] == target or target[: len(location)] == location
+
+
+def _collect_config_validation_messages(
+    config: dict[str, Any],
+    *,
+    target_key: str,
+) -> tuple[list[str], list[str]]:
+    from .schema import RoarConfig
+
+    try:
+        RoarConfig.from_dict(config)
+    except ValidationError as exc:
+        targeted: list[str] = []
+        unrelated: list[str] = []
+        for error in exc.errors():
+            message = _format_validation_message(error)
+            location = tuple(error.get("loc", ()))
+            if _is_validation_error_for_key(location, target_key):
+                targeted.append(message)
+            else:
+                unrelated.append(message)
+        return targeted, unrelated
+
+    return [], []
+
+
+def _validate_targeted_config_value(key: str, value: Any) -> Any:
+    from .schema import RoarConfig
+
+    try:
+        config = RoarConfig.from_dict(_build_nested_payload(key, value))
+    except ValidationError as exc:
+        messages = [_format_validation_message(error) for error in exc.errors()]
+        raise ValueError("; ".join(messages)) from exc
+
+    validated = config.get(key, _MISSING)
+    if validated is _MISSING:
+        return value
+    return _coerce_settings_value(validated)
 
 
 def _coerce_settings_value(value: Any) -> Any:
@@ -307,6 +432,10 @@ def get_config_path_for_write(start_dir: str | None = None) -> Path:
     return roar_dir / "config.toml"
 
 
+_TABLE_HEADER_RE = re.compile(r"^\s*\[(?P<path>[^\]]+)\]\s*(?:#.*)?$")
+_ARRAY_TABLE_HEADER_RE = re.compile(r"^\s*\[\[(?P<path>[^\]]+)\]\]\s*(?:#.*)?$")
+
+
 def _format_toml_string(value: str) -> str:
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
@@ -323,27 +452,102 @@ def _format_toml_value(value: Any) -> str:
     return str(value)
 
 
+def _find_table_bounds(lines: list[str], table_path: str) -> tuple[int, int, int] | None:
+    header_index: int | None = None
+    content_start = 0
+
+    for index, line in enumerate(lines):
+        match = _TABLE_HEADER_RE.match(line)
+        if match is None:
+            continue
+        if match.group("path").strip() != table_path:
+            continue
+        header_index = index
+        content_start = index + 1
+        break
+
+    if header_index is None:
+        return None
+
+    end_index = len(lines)
+    for index in range(content_start, len(lines)):
+        if _TABLE_HEADER_RE.match(lines[index]) or _ARRAY_TABLE_HEADER_RE.match(lines[index]):
+            end_index = index
+            break
+
+    return header_index, content_start, end_index
+
+
+def _update_existing_config_text(text: str, key: str, value: Any) -> str:
+    parts = key.split(".")
+    table_path = ".".join(parts[:-1])
+    field_name = parts[-1]
+    rendered_value = _format_toml_value(value)
+    lines = text.splitlines()
+
+    bounds = _find_table_bounds(lines, table_path)
+    if bounds is None:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        if lines:
+            lines.append("")
+        lines.extend([f"[{table_path}]", f"{field_name} = {rendered_value}"])
+        return "\n".join(lines) + "\n"
+
+    _header_index, content_start, end_index = bounds
+    assignment_pattern = re.compile(rf"^(?P<indent>\s*){re.escape(field_name)}\s*=")
+    for index in range(content_start, end_index):
+        match = assignment_pattern.match(lines[index])
+        if match is None:
+            continue
+        indent = match.group("indent")
+        lines[index] = f"{indent}{field_name} = {rendered_value}"
+        return "\n".join(lines) + "\n"
+
+    insert_index = end_index
+    while insert_index > content_start and not lines[insert_index - 1].strip():
+        insert_index -= 1
+    lines.insert(insert_index, f"{field_name} = {rendered_value}")
+    return "\n".join(lines) + "\n"
+
+
+def _update_config_file_in_place(config_path: Path, key: str, value: Any) -> bool:
+    if config_path.name != "config.toml" or not config_path.exists():
+        return False
+
+    original_text = config_path.read_text(encoding="utf-8")
+    updated_text = _update_existing_config_text(original_text, key, value)
+    config_path.write_text(updated_text, encoding="utf-8")
+    return True
+
+
 def _emit_toml_table(
     lines: list[str],
     table_path: str,
     table_data: dict[str, Any],
     default_data: dict[str, Any],
+    preserve_data: Mapping[str, Any] | None = None,
 ) -> None:
     if not isinstance(table_data, dict):
         return
 
     scalar_items: list[tuple[str, Any]] = []
-    nested_tables: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
-    array_tables: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] = []
+    nested_tables: list[tuple[str, dict[str, Any], dict[str, Any], Mapping[str, Any] | None]] = []
+    array_tables: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]], bool]] = []
 
     for key, value in table_data.items():
         default_value = default_data.get(key)
-        if value == default_value:
-            continue
+        preserved_value = preserve_data.get(key, _MISSING) if preserve_data is not None else _MISSING
+        preserve_key = preserved_value is not _MISSING
 
         if isinstance(value, dict):
             nested_tables.append(
-                (key, value, default_value if isinstance(default_value, dict) else {})
+                (
+                    key,
+                    value,
+                    default_value if isinstance(default_value, dict) else {},
+                    preserved_value if isinstance(preserved_value, Mapping) else None,
+                )
             )
             continue
 
@@ -359,11 +563,14 @@ def _emit_toml_table(
                     key,
                     cast(list[dict[str, Any]], value),
                     cast(list[dict[str, Any]], default_array),
+                    preserve_key,
                 )
             )
             continue
 
         if value is None:
+            continue
+        if value == default_value and not preserve_key:
             continue
         scalar_items.append((key, value))
 
@@ -373,11 +580,17 @@ def _emit_toml_table(
             lines.append(f"{key} = {_format_toml_value(value)}")
         lines.append("")
 
-    for key, nested_value, nested_defaults in nested_tables:
-        _emit_toml_table(lines, f"{table_path}.{key}", nested_value, nested_defaults)
+    for key, nested_value, nested_defaults, nested_preserve in nested_tables:
+        _emit_toml_table(
+            lines,
+            f"{table_path}.{key}",
+            nested_value,
+            nested_defaults,
+            nested_preserve,
+        )
 
-    for key, array_values, array_defaults in array_tables:
-        if array_values == array_defaults or not array_values:
+    for key, array_values, array_defaults, preserve_key in array_tables:
+        if (array_values == array_defaults and not preserve_key) or not array_values:
             continue
         for item in array_values:
             lines.append(f"[[{table_path}.{key}]]")
@@ -388,11 +601,16 @@ def _emit_toml_table(
             lines.append("")
 
 
-def save_config(config: dict, config_path: Path):
+def save_config(
+    config: dict,
+    config_path: Path,
+    *,
+    preserve_existing: Mapping[str, Any] | None = None,
+):
     """
     Save configuration to a .roar.toml file.
 
-    Only saves non-default values.
+    Only saves non-default values unless they were already materialized.
     Preserves unknown top-level sections that are already present in the file.
     """
     existing_unknown_sections: dict[str, Any] = {}
@@ -434,7 +652,12 @@ def save_config(config: dict, config_path: Path):
         section_defaults = defaults.get(section, {})
         if not isinstance(section_defaults, dict):
             section_defaults = {}
-        _emit_toml_table(lines, section, section_data, section_defaults)
+        preserved_section = (
+            preserve_existing.get(section)
+            if preserve_existing is not None and isinstance(preserve_existing.get(section), Mapping)
+            else None
+        )
+        _emit_toml_table(lines, section, section_data, section_defaults, preserved_section)
 
     config_path.write_text("\n".join(lines))
 
@@ -450,10 +673,8 @@ def config_get(key: str, start_dir: str | None = None):
     return _get_nested(config, key)
 
 
-def config_set(key: str, value: str, start_dir: str | None = None):
+def config_set(key: str, value: str, start_dir: str | None = None) -> ConfigSetResult:
     """Set a config value and save to .roar.toml."""
-    from typing import Any
-
     configurable_keys = get_configurable_keys()
     if key not in configurable_keys:
         raise ValueError(
@@ -520,14 +741,19 @@ def config_set(key: str, value: str, start_dir: str | None = None):
     if key == "composites.run.max_roots_per_job" and int(typed_value) < 1:
         raise ValueError("composites.run.max_roots_per_job must be >= 1")
 
-    # Load existing config, update, and save
-    config = load_config(start_dir=start_dir)
-    _set_nested(config, key, typed_value)
+    typed_value = _validate_targeted_config_value(key, typed_value)
 
     config_path = get_config_path_for_write(start_dir)
-    save_config(config, config_path)
+    raw_config = deepcopy(_load_raw_config_for_write(config_path))
+    _set_nested(raw_config, key, typed_value)
 
-    return config_path, typed_value
+    targeted_errors, warnings = _collect_config_validation_messages(raw_config, target_key=key)
+    if targeted_errors:
+        raise ValueError("; ".join(targeted_errors))
+
+    if not _update_config_file_in_place(config_path, key, typed_value):
+        save_config(raw_config, config_path, preserve_existing=raw_config)
+    return ConfigSetResult(config_path, typed_value, tuple(warnings))
 
 
 def config_list():

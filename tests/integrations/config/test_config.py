@@ -367,6 +367,23 @@ class TestConfigSaveLoad:
         ]
         assert 'primary = "blake3"' not in lines
 
+    def test_config_set_preserves_materialized_defaults_in_existing_file(
+        self, tmp_path: Path
+    ) -> None:
+        config_path = tmp_path / ".roar" / "config.toml"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
+
+        config_set("output.quiet", "true", start_dir=str(tmp_path))
+
+        content = config_path.read_text(encoding="utf-8")
+        assert "# roar configuration file" in content
+        assert "# Suppress written files report after run" in content
+        assert "track_repo_files = false" in content
+        assert "quiet = true" in content
+        assert 'primary = "blake3"' in content
+        assert 'default = "auto"' in content
+
 
 class TestConfigurableKeys:
     """Tests for CONFIGURABLE_KEYS metadata."""
@@ -392,6 +409,12 @@ class TestConfigurableKeys:
         assert defaults["hash"]["primary"] in VALID_HASH_ALGORITHMS
         for algo in defaults["hash"]["get"]:
             assert algo in VALID_HASH_ALGORITHMS
+
+
+class TestConfigSetValidation:
+    def test_config_set_invalid_glaas_url_is_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match=r"glaas\.url"):
+            config_set("glaas.url", "not-a-url", start_dir=str(tmp_path))
 
 
 class TestTracerConfig:

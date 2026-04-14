@@ -41,6 +41,35 @@ def test_config_set_get_and_list_round_trip(temp_git_repo: Path, roar_cli) -> No
     assert "output.quiet" in list_result.stdout
 
 
+def test_config_set_warns_but_updates_when_unrelated_field_is_invalid(
+    temp_git_repo: Path,
+    roar_cli,
+) -> None:
+    config_path = temp_git_repo / ".roar" / "config.toml"
+    config_path.write_text(
+        """
+[output]
+quiet = false
+
+[glaas]
+url = "not-a-url"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = roar_cli("config", "set", "output.quiet", "true")
+
+    assert result.returncode == 0
+    assert "Set output.quiet = True" in result.stdout
+    assert "Warning: other config fields are invalid:" in result.stdout
+    assert "glaas.url: GLaaS URL must start with http:// or https://" in result.stdout
+
+    saved = config_path.read_text(encoding="utf-8")
+    assert "quiet = true" in saved
+    assert 'url = "not-a-url"' in saved
+
+
 def test_env_set_get_list_and_unset_round_trip(temp_git_repo: Path, roar_cli) -> None:
     set_result = roar_cli("env", "set", "FOO", "bar")
     assert set_result.returncode == 0

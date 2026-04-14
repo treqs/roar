@@ -23,7 +23,9 @@ def test_proxy_enable_disable_round_trip_updates_status_and_config(
     assert enable_result.returncode == 0
     assert "S3 proxy enabled for roar run." in enable_result.stdout
     assert str(config_path) in enable_result.stdout
-    assert "enabled = true" in config_path.read_text()
+    enabled_config = config_path.read_text(encoding="utf-8")
+    assert "[proxy]" in enabled_config
+    assert "enabled = true" in enabled_config
 
     status_after_enable = roar_cli("proxy", "status")
     assert status_after_enable.returncode == 0
@@ -33,7 +35,9 @@ def test_proxy_enable_disable_round_trip_updates_status_and_config(
     assert disable_result.returncode == 0
     assert "S3 proxy disabled." in disable_result.stdout
     assert str(config_path) in disable_result.stdout
-    assert "enabled = true" not in config_path.read_text()
+    disabled_config = config_path.read_text(encoding="utf-8")
+    assert "[proxy]" in disabled_config
+    assert "enabled = false" in disabled_config
 
     status_after_disable = roar_cli("proxy")
     assert status_after_disable.returncode == 0

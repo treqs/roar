@@ -12,6 +12,7 @@ _EXPORTS = {
     "CORE_CONFIGURABLE_KEYS": ".access",
     "CompositesConfig": ".schema",
     "ConfigBaseModel": ".schema",
+    "ConfigSetResult": ".access",
     "FiltersConfig": ".schema",
     "GlaasConfig": ".schema",
     "HashConfig": ".schema",

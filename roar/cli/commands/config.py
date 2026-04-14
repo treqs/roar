@@ -6,7 +6,16 @@ Usage: roar config [list|get|set] [key] [value]
 
 import click
 
-from ...integrations.config import config_get, config_list, config_set
+from ...integrations.config import ConfigSetResult, config_get, config_list, config_set
+
+
+def _echo_config_set_warnings(result: ConfigSetResult) -> None:
+    if not result.warnings:
+        return
+
+    click.echo("Warning: other config fields are invalid:")
+    for warning in result.warnings:
+        click.echo(f"  - {warning}")
 
 
 @click.group("config", invoke_without_command=True)
@@ -74,8 +83,10 @@ def config_set_cmd(key: str, value: str) -> None:
         VALUE  The value to set
     """
     try:
-        config_path, typed_value = config_set(key, value)
+        result = config_set(key, value)
+        config_path, typed_value = result
         click.echo(f"Set {key} = {typed_value}")
         click.echo(f"Saved to {config_path}")
+        _echo_config_set_warnings(result)
     except ValueError as e:
         raise click.ClickException(str(e)) from e
