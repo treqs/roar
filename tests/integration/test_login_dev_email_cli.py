@@ -16,6 +16,7 @@ def _run_roar(
 ) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.update(env_overrides)
+    env.setdefault("ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS", "1")
     repo_root = str(Path(__file__).resolve().parents[2])
     current_pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = (

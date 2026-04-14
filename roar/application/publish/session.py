@@ -55,7 +55,10 @@ def build_canonical_session_payload(
                     }
                     for artifact in job.get("_inputs", [])
                 ],
-                key=lambda artifact: (str(artifact.get("hash") or ""), str(artifact.get("path") or "")),
+                key=lambda artifact: (
+                    str(artifact.get("hash") or ""),
+                    str(artifact.get("path") or ""),
+                ),
             ),
             "outputs": sorted(
                 [
@@ -65,7 +68,10 @@ def build_canonical_session_payload(
                     }
                     for artifact in job.get("_outputs", [])
                 ],
-                key=lambda artifact: (str(artifact.get("hash") or ""), str(artifact.get("path") or "")),
+                key=lambda artifact: (
+                    str(artifact.get("hash") or ""),
+                    str(artifact.get("path") or ""),
+                ),
             ),
             "metadata": _normalize_metadata(job.get("metadata")),
         }

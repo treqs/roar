@@ -64,7 +64,11 @@ def _configure_register_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[
         '{"version":1,"provider":"treqs-cognito","access_token":"test-access-token","user":{"sub":"treqs-user-123","db_user_id":"user-123","email":"trevor@example.com","username":"trevor"}}',
         encoding="utf-8",
     )
-    env = {"XDG_CONFIG_HOME": str(xdg_config_home), "GLAAS_API_URL": fake_glaas_url}
+    env = {
+        "XDG_CONFIG_HOME": str(xdg_config_home),
+        "GLAAS_API_URL": fake_glaas_url,
+        "ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS": "1",
+    }
     roar_cli("login", "--token-file", str(token_file), env_overrides=env)
     roar_cli("projects", "link", "proj-test", env_overrides=env)
     roar_cli("config", "set", "glaas.url", fake_glaas_url, env_overrides=env)

@@ -213,7 +213,9 @@ def test_register_s3_path_after_ray_submit_publishes_remote_artifact(
     )
     if register_result.returncode != 0:
         assert "Artifact not tracked by roar" in (register_result.stderr or register_result.stdout)
-        pytest.xfail("Ray S3 host-submit fixture does not always record the remote output path in the local DB")
+        pytest.xfail(
+            "Ray S3 host-submit fixture does not always record the remote output path in the local DB"
+        )
 
     session_hash = _parse_session_hash(register_result.stdout)
     assert len(session_hash) == 64

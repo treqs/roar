@@ -90,7 +90,9 @@ def test_register_step_reference_after_ray_submit(register_target_project: Path)
         "ray_task:training",
         "ray_task:extraction",
     )
-    result = run_roar_cli_from_host(register_target_project, "register", step_reference, "--yes", timeout=60)
+    result = run_roar_cli_from_host(
+        register_target_project, "register", step_reference, "--yes", timeout=60
+    )
 
     assert result.returncode == 0, result.stderr or result.stdout
     session_hash = _parse_session_hash(result.stdout)

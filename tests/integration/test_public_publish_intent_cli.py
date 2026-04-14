@@ -44,14 +44,20 @@ def _configure_unbound_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[s
         ),
         encoding="utf-8",
     )
-    env = {"XDG_CONFIG_HOME": str(xdg_config_home), "GLAAS_API_URL": fake_glaas_url}
+    env = {
+        "XDG_CONFIG_HOME": str(xdg_config_home),
+        "GLAAS_API_URL": fake_glaas_url,
+        "ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS": "1",
+    }
     roar_cli("login", "--token-file", str(token_file), env_overrides=env)
     roar_cli("config", "set", "glaas.url", fake_glaas_url, env_overrides=env)
     roar_cli("config", "set", "glaas.web_url", fake_glaas_url, env_overrides=env)
     return env
 
 
-def _create_register_fixture(repo: Path, roar_cli, git_commit, python_exe: str, env: dict[str, str]) -> None:
+def _create_register_fixture(
+    repo: Path, roar_cli, git_commit, python_exe: str, env: dict[str, str]
+) -> None:
     input_path = repo / "input.txt"
     input_path.write_text("register me\n")
     script = repo / "generate_report.py"
@@ -66,7 +72,9 @@ def _create_register_fixture(repo: Path, roar_cli, git_commit, python_exe: str, 
     git_commit("Commit register public outputs")
 
 
-def _create_put_fixture(repo: Path, roar_cli, git_commit, python_exe: str, env: dict[str, str]) -> None:
+def _create_put_fixture(
+    repo: Path, roar_cli, git_commit, python_exe: str, env: dict[str, str]
+) -> None:
     script = repo / "train.py"
     script.write_text(
         "from pathlib import Path\n"

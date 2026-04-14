@@ -53,7 +53,9 @@ def test_build_canonical_session_payload_normalizes_job_and_artifact_order() -> 
     assert [item["hash"] for item in payload["jobs"][1]["outputs"]] == ["output-a", "output-b"]
 
 
-def test_build_canonical_session_payload_changes_only_creator_identity_when_lineage_matches() -> None:
+def test_build_canonical_session_payload_changes_only_creator_identity_when_lineage_matches() -> (
+    None
+):
     lineage = _lineage()
 
     first = build_canonical_session_payload(

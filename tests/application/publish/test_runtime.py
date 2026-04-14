@@ -38,7 +38,11 @@ def test_build_publish_runtime_builds_shared_dependency_stack() -> None:
     assert runtime.session_service is session_service
     assert runtime.registration_coordinator is coordinator
     assert isinstance(runtime.lineage_collector, LineageCollector)
-    client_cls.assert_called_once_with("http://localhost:3001", start_dir=None)
+    client_cls.assert_called_once_with(
+        "http://localhost:3001",
+        start_dir=None,
+        allow_public_without_binding=False,
+    )
     session_cls.assert_called_once_with(client)
     artifact_cls.assert_called_once_with(client)
     job_cls.assert_called_once_with(client)

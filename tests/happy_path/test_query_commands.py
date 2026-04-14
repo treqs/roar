@@ -43,7 +43,11 @@ class TestQueryCommands:
         status_result = roar_cli("status")
         assert status_result.returncode == 0
         dag_hash_line = next(
-            (line for line in status_result.stdout.splitlines() if line.strip().startswith("DAG hash:")),
+            (
+                line
+                for line in status_result.stdout.splitlines()
+                if line.strip().startswith("DAG hash:")
+            ),
             None,
         )
         assert dag_hash_line is not None
