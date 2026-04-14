@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
+from ...publish_auth import resolve_publish_creator_identity
 from ..git import build_roar_git_tag_name, ensure_clean_git_repo, resolve_roar_git_context
 from .runtime import PublishRuntime
 from .session import prepare_publish_session
@@ -33,6 +35,7 @@ def prepare_register_execution(
     dry_run: bool,
     session_hash_override: str | None,
     logger: ILogger,
+    lineage: LineageData | None = None,
 ) -> PreparedRegisterExecution:
     """Resolve the local context needed to execute a register workflow."""
     git_context = resolve_roar_git_context(cwd, logger=logger)
@@ -56,6 +59,7 @@ def prepare_register_execution(
         git_tag_name = build_roar_git_tag_name(git_context.commit, short=True)
         git_tag_repo_root = git_state.repo_root
 
+    creator_identity = resolve_publish_creator_identity(runtime.glaas_client.publish_auth)
     publish_session = prepare_publish_session(
         glaas_client=runtime.glaas_client,
         session_service=runtime.session_service,
@@ -66,6 +70,8 @@ def prepare_register_execution(
         register_with_glaas=not dry_run,
         configured_error="GLaaS not configured. Run 'roar config set glaas.url <url>' first.",
         session_hash_override=session_hash_override,
+        lineage=lineage,
+        creator_identity=creator_identity,
     )
 
     return PreparedRegisterExecution(

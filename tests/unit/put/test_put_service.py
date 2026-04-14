@@ -394,18 +394,51 @@ class TestPutService:
             registration_coordinator=_create_mock_coordinator(),
         )
 
-        result = service.put_prepared(
-            prepared=_prepared_put(tmp_path, sources=[model_file]),
-            sources=[str(model_file)],
-            message="publish model",
-            dry_run=True,
-        )
+        with patch("roar.application.publish.put_execution.Spinner") as spinner_cls:
+            result = service.put_prepared(
+                prepared=_prepared_put(tmp_path, sources=[model_file]),
+                sources=[str(model_file)],
+                message="publish model",
+                dry_run=True,
+            )
 
         assert result.success is True
         assert result.dry_run is True
         assert result.session_hash == "session_hash_abc123"
         assert result.would_upload == [PutDryRunItem(path=str(model_file.resolve()), exists=True)]
         backend.upload.assert_not_called()
+        spinner_cls.assert_not_called()
+
+    def test_put_prepared_shows_spinner_during_publish(self, tmp_path: Path) -> None:
+        model_file = tmp_path / "model.pt"
+        model_file.write_bytes(b"model data")
+
+        service = PutService(
+            db_context=_create_mock_db(),
+            backend=MemoryBackend(bucket="test-bucket", prefix="models"),
+            destination="memory://test-bucket/models",
+            repo_root=tmp_path,
+            lineage_collector=MagicMock(),
+            registration_coordinator=_create_mock_coordinator(),
+        )
+        service._lineage_collector.collect.return_value = LineageData(
+            jobs=[],
+            artifacts=[],
+            artifact_hashes=set(),
+            pipeline={"id": 1},
+        )
+
+        with patch("roar.application.publish.put_execution.Spinner") as spinner_cls:
+            result = service.put_prepared(
+                prepared=_prepared_put(tmp_path, sources=[model_file]),
+                sources=[str(model_file)],
+                message="publish model",
+            )
+
+        assert result.success is True
+        assert spinner_cls.call_count == 2
+        assert spinner_cls.call_args_list[0].args == ("Publishing lineage to GLaaS...",)
+        assert spinner_cls.call_args_list[1].args == ("Finalizing lineage links...",)
 
     def test_put_prepared_stores_urls_in_job_metadata(self, tmp_path: Path) -> None:
         model_file = tmp_path / "model.pt"

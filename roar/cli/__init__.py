@@ -12,6 +12,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
 from importlib import import_module
 
@@ -40,10 +41,17 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "label": ("roar.cli.commands.label", "label", "Manage local labels"),
     "lineage": ("roar.cli.commands.lineage", "lineage", "Inspect lineage for a tracked artifact"),
     "log": ("roar.cli.commands.log", "log", "List jobs in the active session"),
+    "login": ("roar.cli.commands.login", "login", "Store global GLaaS/TReqs auth state"),
+    "logout": ("roar.cli.commands.logout", "logout", "Clear global GLaaS/TReqs auth state"),
     "osmo": ("roar.cli.commands.osmo", "osmo", "Manage OSMO workflow attachment"),
     "pop": ("roar.cli.commands.pop", "pop", "Remove the last local step"),
     "proxy": ("roar.cli.commands.proxy", "proxy", "Manage S3 proxy for lineage tracking"),
     "put": ("roar.cli.commands.put", "put", "Publish artifacts and register lineage"),
+    "projects": (
+        "roar.cli.commands.projects",
+        "projects",
+        "Manage GLaaS projects visible through your TReqs account",
+    ),
     "register": ("roar.cli.commands.register", "register", "Register local lineage with GLaaS"),
     "reproduce": ("roar.cli.commands.reproduce", "reproduce", "Generate a reproduction plan"),
     "reset": ("roar.cli.commands.reset", "reset", "Reset roar state"),
@@ -51,6 +59,11 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "show": ("roar.cli.commands.show", "show", "Inspect a session, job, or artifact"),
     "status": ("roar.cli.commands.status", "status", "Show the active session summary"),
     "tracer": ("roar.cli.commands.tracer", "tracer", "Configure tracer backend defaults"),
+    "whoami": (
+        "roar.cli.commands.whoami",
+        "whoami",
+        "Show current GLaaS/TReqs login and repo binding",
+    ),
 }
 
 HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -58,7 +71,25 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Inspect Local Lineage", ("status", "log", "show", "lineage", "inputs", "pop", "reproduce")),
     ("Share and Publish", ("put", "register", "get", "label")),
     ("Setup and Admin", ("auth", "config", "env", "tracer", "proxy", "reset")),
+    ("GLaaS / TReqs Account", ("login", "logout", "whoami", "projects")),
 )
+
+EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG = "ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS"
+_EXPERIMENTAL_ACCOUNT_COMMANDS = frozenset({"login", "logout", "whoami", "projects"})
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes"})
+
+
+def experimental_account_commands_enabled() -> bool:
+    """Return whether unreleased account commands should be exposed."""
+    return (
+        os.environ.get(EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG, "").strip().lower() in _TRUTHY_ENV_VALUES
+    )
+
+
+def _command_is_available(command_name: str) -> bool:
+    if command_name not in _EXPERIMENTAL_ACCOUNT_COMMANDS:
+        return True
+    return experimental_account_commands_enabled()
 
 
 class LazyCommand(click.Command):
@@ -131,7 +162,13 @@ class LazyGroup(click.Group):
 
     def list_commands(self, ctx: click.Context) -> list[str]:
         """List all available commands."""
-        return sorted(super().list_commands(ctx))
+        return sorted(name for name in super().list_commands(ctx) if _command_is_available(name))
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        """Resolve commands, hiding unreleased account commands by default."""
+        if not _command_is_available(cmd_name):
+            return None
+        return super().get_command(ctx, cmd_name)
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         """Render top-level commands grouped by workflow."""
@@ -184,7 +221,7 @@ class LazyGroup(click.Group):
 def cli(ctx: click.Context) -> None:
     """roar - Run Observation & Artifact Registration
 
-    A local front-end to TReqs' Lineage-as-a-Service (GLaaS).
+    A local front-end to GLaaS (Global Lineage as a Service).
     Tracks data artifacts and execution steps in ML pipelines.
 
     \b
@@ -222,7 +259,9 @@ def cli(ctx: click.Context) -> None:
 
 # Export public API
 __all__ = [
+    "EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG",
     "LazyGroup",
     "__version__",
     "cli",
+    "experimental_account_commands_enabled",
 ]

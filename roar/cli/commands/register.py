@@ -54,9 +54,24 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     is_flag=True,
     help="Upgrade tracked S3 artifacts from ETag-only hashes to BLAKE3 before registration",
 )
+@click.option(
+    "--public",
+    is_flag=True,
+    help=(
+        "Submit as public lineage. --public allows public+anonymous or public+attributed "
+        "submission; without it, non-public submission must be private+attributed."
+    ),
+)
 @click.pass_obj
 @require_init
-def register(ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3: bool) -> None:
+def register(
+    ctx: RoarContext,
+    target: str,
+    dry_run: bool,
+    yes: bool,
+    as_blake3: bool,
+    public: bool,
+) -> None:
     """Register lineage with GLaaS.
 
     Submits lineage to the GLaaS server, starting from one of:
@@ -66,6 +81,11 @@ def register(ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3:
     - a local session hash/prefix previously shown by roar
 
     Artifact paths must refer to files tracked by roar.
+
+    Visibility / attribution matrix:
+    - no --public -> private + attributed only
+    - --public -> public + anonymous OR public + attributed
+    - private + anonymous is not allowed
 
     If secrets are detected in the data (API keys, tokens, passwords, etc.),
     you will be prompted to confirm. Use --yes to skip the prompt and
@@ -99,6 +119,7 @@ def register(ctx: RoarContext, target: str, dry_run: bool, yes: bool, as_blake3:
             cwd=ctx.cwd,
             dry_run=dry_run,
             as_blake3=as_blake3,
+            public=public,
             skip_confirmation=yes,
             confirm_callback=_confirm_secrets if not yes else None,
         )

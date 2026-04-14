@@ -114,17 +114,25 @@ os.environ["PYTHONPATH"] = _subprocess_env()["PYTHONPATH"]
 os.environ["PATH"] = _subprocess_env()["PATH"]
 
 
-def _run_roar_cmd(*args: str, cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
+def _run_roar_cmd(
+    *args: str,
+    cwd: Path,
+    check: bool = True,
+    env_overrides: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     """Run a roar command using the current Python interpreter."""
     if args and args[0] in {"run", "build"}:
         _ensure_repo_local_ptrace_tracer()
     command = [sys.executable, "-m", "roar", *args]
+    env = _subprocess_env()
+    if env_overrides:
+        env.update(env_overrides)
     result = subprocess.run(
         command,
         cwd=cwd,
         capture_output=True,
         text=True,
-        env=_subprocess_env(),
+        env=env,
     )
     if check and result.returncode != 0:
         stdout = result.stdout or "<empty>"
@@ -218,18 +226,23 @@ def roar_cli(temp_git_repo: Path) -> Callable[..., subprocess.CompletedProcess]:
         A callable that runs roar commands and returns CompletedProcess
     """
 
-    def run_roar(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    def run_roar(
+        *args: str,
+        check: bool = True,
+        env_overrides: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess:
         """
         Run a roar command.
 
         Args:
             *args: Arguments to pass to roar (e.g., "run", "python", "script.py")
             check: Whether to raise on non-zero exit code
+            env_overrides: Extra environment variables for this invocation
 
         Returns:
             CompletedProcess with stdout/stderr as strings
         """
-        return _run_roar_cmd(*args, cwd=temp_git_repo, check=check)
+        return _run_roar_cmd(*args, cwd=temp_git_repo, check=check, env_overrides=env_overrides)
 
     return run_roar
 

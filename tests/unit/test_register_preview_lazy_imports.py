@@ -54,7 +54,7 @@ prepared = SimpleNamespace(
     git_tag_repo_root=None,
 )
 
-service.build_register_preview_runtime = lambda: runtime
+service.build_register_preview_runtime = lambda **kwargs: runtime
 service.resolve_register_lineage_target = (
     lambda target, cwd, roar_dir: ResolvedRegisterTarget(kind="artifact_path", value="model.pt")
 )

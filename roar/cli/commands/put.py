@@ -49,6 +49,14 @@ def _resolve_glaas_web_url() -> str:
     is_flag=True,
     help="Skip creating and pushing git tag.",
 )
+@click.option(
+    "--public",
+    is_flag=True,
+    help=(
+        "Submit as public lineage. --public allows public+anonymous or public+attributed "
+        "submission; without it, non-public submission must be private+attributed."
+    ),
+)
 @click.pass_obj
 @require_init
 def put(
@@ -57,6 +65,7 @@ def put(
     message: str,
     dry_run: bool,
     no_tag: bool,
+    public: bool,
 ) -> None:
     """Publish artifacts to cloud storage and register with GLaaS.
 
@@ -69,6 +78,11 @@ def put(
     sources (files, directories, @N job references). If no sources are
     specified before the destination, all outputs from the current session
     are uploaded.
+
+    Visibility / attribution matrix:
+    - no --public -> private + attributed only
+    - --public -> public + anonymous OR public + attributed
+    - private + anonymous is not allowed
 
     \b
     Destination formats:
@@ -110,6 +124,7 @@ def put(
                 destination=destination,
                 message=message,
                 dry_run=dry_run,
+                public=public,
                 no_tag=no_tag,
             )
         )

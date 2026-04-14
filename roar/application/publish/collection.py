@@ -12,8 +12,9 @@ from ...core.interfaces.logger import ILogger
 from ...db.context import create_database_context
 from ...db.hashing.backend import compute_hashes_batch
 from ...db.query_context import create_query_database_context
+from ...publish_auth import load_publish_auth_context, resolve_publish_creator_identity
 from .lineage import LineageCollector
-from .session import PublishSessionService
+from .session import PublishSessionService, compute_canonical_lineage_session_hash
 from .targets import (
     ResolvedRegisterTarget,
     parse_register_step_reference,
@@ -140,11 +141,12 @@ def _collect_session_lineage(
     session_service: PublishSessionService,
 ) -> tuple[CollectedRegisterLineage | None, str | None]:
     with create_database_context(roar_dir) as db_ctx:
-        session, resolved_hash, error = resolve_local_session_target(
+        session, _resolved_hash, error = resolve_local_session_target(
             db_ctx=db_ctx,
             roar_dir=roar_dir,
             session_hash=session_hash,
             session_service=session_service,
+            lineage_collector=lineage_collector,
         )
         if session is None:
             return None, error or "Session not found."
@@ -155,7 +157,7 @@ def _collect_session_lineage(
             lineage=lineage,
             session_id=int(session["id"]),
             artifact_hash="",
-            session_hash_override=resolved_hash,
+            session_hash_override=None,
         ),
         None,
     )
@@ -271,13 +273,18 @@ def resolve_local_session_target(
     roar_dir: Path,
     session_hash: str,
     session_service: PublishSessionService,
+    lineage_collector: LineageCollector,
 ) -> tuple[dict | None, str | None, str | None]:
     """Resolve a local session hash or prefix to a concrete local session."""
+    creator_identity = _resolve_current_creator_identity(roar_dir)
     candidates: list[tuple[dict, str]] = []
     for session in db_ctx.sessions.get_all():
-        resolved_hash = session_service.compute_session_hash(
-            roar_dir=str(roar_dir),
-            session_id=int(session["id"]),
+        resolved_hash = _compute_local_canonical_session_hash(
+            roar_dir=roar_dir,
+            session=session,
+            session_service=session_service,
+            lineage_collector=lineage_collector,
+            creator_identity=creator_identity,
         )
         if resolved_hash.startswith(session_hash):
             candidates.append((session, resolved_hash))
@@ -296,9 +303,12 @@ def resolve_local_session_target(
 
     local_session = db_ctx.sessions.get_by_hash_prefix(session_hash)
     if local_session:
-        resolved_hash = session_service.compute_session_hash(
-            roar_dir=str(roar_dir),
-            session_id=int(local_session["id"]),
+        resolved_hash = _compute_local_canonical_session_hash(
+            roar_dir=roar_dir,
+            session=local_session,
+            session_service=session_service,
+            lineage_collector=lineage_collector,
+            creator_identity=creator_identity,
         )
         return local_session, resolved_hash, None
 
@@ -311,6 +321,35 @@ def select_representative_hash(lineage: LineageData) -> str:
     if len(hashes) == 1:
         return hashes[0]
     return ""
+
+
+def _resolve_current_creator_identity(roar_dir: Path) -> str:
+    context = load_publish_auth_context(
+        roar_dir.parent,
+        allow_public_without_binding=True,
+    )
+    return resolve_publish_creator_identity(context)
+
+
+def _compute_local_canonical_session_hash(
+    *,
+    roar_dir: Path,
+    session: dict,
+    session_service: PublishSessionService,
+    lineage_collector: LineageCollector,
+    creator_identity: str,
+) -> str:
+    session_id = int(session["id"])
+    lineage = lineage_collector.collect_session(session_id, roar_dir)
+    if lineage.jobs:
+        return compute_canonical_lineage_session_hash(
+            lineage=lineage,
+            creator_identity=creator_identity,
+        )
+    return session_service.compute_session_hash(
+        roar_dir=str(roar_dir),
+        session_id=session_id,
+    )
 
 
 def _artifact_not_tracked_error(artifact_path: str) -> str:

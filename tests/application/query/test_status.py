@@ -9,7 +9,6 @@ import pytest
 
 from roar.application.query import StatusQueryRequest
 from roar.application.query.status import StatusQueryError, build_status_summary
-from roar.core.session_hash import compute_local_session_hash
 
 
 def test_build_status_summary_groups_steps_and_artifacts(tmp_path: Path) -> None:
@@ -51,12 +50,27 @@ def test_build_status_summary_groups_steps_and_artifacts(tmp_path: Path) -> None
 
     from unittest.mock import patch
 
-    with patch("roar.application.query.status.create_query_database_context") as mock_db:
+    with (
+        patch("roar.application.query.status.create_query_database_context") as mock_db,
+        patch(
+            "roar.application.query.status.load_publish_auth_context",
+            return_value=SimpleNamespace(),
+        ),
+        patch(
+            "roar.application.query.status.resolve_publish_creator_identity",
+            return_value="anonymous",
+        ),
+        patch(
+            "roar.application.query.status.compute_canonical_lineage_session_hash",
+            return_value="canonical-session-hash",
+        ) as compute_hash,
+    ):
         mock_db.return_value.__enter__.return_value = db_ctx
         summary = build_status_summary(request)
 
     assert summary is not None
-    assert summary.dag_hash == compute_local_session_hash(roar_dir=request.roar_dir, session_id=7)
+    assert summary.dag_hash == "canonical-session-hash"
+    compute_hash.assert_called_once()
     assert summary.build_steps == 1
     assert summary.run_steps == 1
     assert len(summary.artifacts) == 2

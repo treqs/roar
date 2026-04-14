@@ -30,6 +30,7 @@ from ...db.context import DatabaseContext
 from ...db.hashing import hash_files_blake3
 from ...integrations.glaas.registration import RegistrationCoordinator
 from ...integrations.storage.base import StorageBackend
+from ...presenters.spinner import Spinner
 from .job_links import (
     build_put_job_link_inputs,
     build_put_job_link_outputs,
@@ -260,78 +261,82 @@ class PutService:
 
         # Register lineage with GLaaS (session already registered above)
         coordinator = self._registration_coordinator or RegistrationCoordinator()
-        pre_registration_errors: list[str] = []
-        lineage_composite_registrations = preregister_put_lineage_composites_with_glaas(
-            db_ctx=self._db,
-            glaas_client=client,
-            lineage_artifacts=lineage.artifacts,
-            session_hash=session_hash or "",
-            registration_errors=pre_registration_errors,
-            dataset_identifiers=dataset_identifiers,
-            composite_builder=self._composite_builder,
-            logger=self._logger,
-        )
+        with Spinner("Publishing lineage to GLaaS...") as spin:
+            pre_registration_errors: list[str] = []
+            spin.update("Registering lineage composites...")
+            lineage_composite_registrations = preregister_put_lineage_composites_with_glaas(
+                db_ctx=self._db,
+                glaas_client=client,
+                lineage_artifacts=lineage.artifacts,
+                session_hash=session_hash or "",
+                registration_errors=pre_registration_errors,
+                dataset_identifiers=dataset_identifiers,
+                composite_builder=self._composite_builder,
+                logger=self._logger,
+            )
 
-        # Prepare artifacts for registration (add session_hash)
-        uploaded_artifacts = self._build_uploaded_artifacts_for_registration(
-            uploads,
-            normalize_registration_source_type(destination_type),
-        )
-        prepared_artifacts = prepare_batch_registration_artifacts(
-            uploaded_artifacts + lineage.artifacts,
-            session_hash or "",
-        )
-        self._logger.debug("Prepared %d artifact(s) for registration", len(prepared_artifacts))
+            # Prepare artifacts for registration (add session_hash)
+            uploaded_artifacts = self._build_uploaded_artifacts_for_registration(
+                uploads,
+                normalize_registration_source_type(destination_type),
+            )
+            prepared_artifacts = prepare_batch_registration_artifacts(
+                uploaded_artifacts + lineage.artifacts,
+                session_hash or "",
+            )
+            self._logger.debug("Prepared %d artifact(s) for registration", len(prepared_artifacts))
 
-        self._logger.debug(
-            "Registering lineage: session=%s, jobs=%d, artifacts=%d",
-            session_hash[:12],
-            len(lineage.jobs),
-            len(prepared_artifacts),
-        )
-        registration_result = register_publish_lineage(
-            coordinator=coordinator,
-            glaas_client=client,
-            session_hash=session_hash or "",
-            git_context=git_context,
-            jobs=lineage.jobs,
-            artifacts=prepared_artifacts,
-            db_ctx=self._db,
-            session_id=int(session_id),
-            label_artifacts=[
-                *lineage.artifacts,
-                *[{"id": u.artifact_id, "hash": u.hash} for u in uploads],
-            ],
-            pre_registration_errors=pre_registration_errors,
-        )
+            self._logger.debug(
+                "Registering lineage: session=%s, jobs=%d, artifacts=%d",
+                session_hash[:12],
+                len(lineage.jobs),
+                len(prepared_artifacts),
+            )
+            spin.update("Registering jobs, artifacts, and links...")
+            registration_result = register_publish_lineage(
+                coordinator=coordinator,
+                glaas_client=client,
+                session_hash=session_hash or "",
+                git_context=git_context,
+                jobs=lineage.jobs,
+                artifacts=prepared_artifacts,
+                db_ctx=self._db,
+                session_id=int(session_id),
+                label_artifacts=[
+                    *lineage.artifacts,
+                    *[{"id": u.artifact_id, "hash": u.hash} for u in uploads],
+                ],
+                pre_registration_errors=pre_registration_errors,
+            )
 
-        self._logger.debug(
-            "Registration result: jobs=%d/%d, artifacts=%d/%d, links=%d, errors=%d",
-            registration_result.jobs_created,
-            registration_result.jobs_created + registration_result.jobs_failed,
-            registration_result.artifacts_registered,
-            registration_result.artifacts_registered + registration_result.artifacts_failed,
-            registration_result.links_created,
-            len(registration_result.errors),
-        )
+            self._logger.debug(
+                "Registration result: jobs=%d/%d, artifacts=%d/%d, links=%d, errors=%d",
+                registration_result.jobs_created,
+                registration_result.jobs_created + registration_result.jobs_failed,
+                registration_result.artifacts_registered,
+                registration_result.artifacts_registered + registration_result.artifacts_failed,
+                registration_result.links_created,
+                len(registration_result.errors),
+            )
 
-        # Register directory composites after primitive artifacts exist in GLaaS.
-        composite_results = build_publish_composite_results(
-            resolved_sources=resolved,
-            hashes_by_path=hashes_by_path,
-            session_hash=session_hash or "",
-            source_type=composite_source_type,
-            additional_composite_roots=additional_composite_roots,
-            composite_builder=self._composite_builder,
-        )
-        composite_registrations = register_put_composites_with_glaas(
-            db_ctx=self._db,
-            glaas_client=client,
-            composite_results=composite_results,
-            registration_errors=registration_result.errors,
-            dataset_identifiers=dataset_identifiers,
-            logger=self._logger,
-        )
+            # Register directory composites after primitive artifacts exist in GLaaS.
+            composite_results = build_publish_composite_results(
+                resolved_sources=resolved,
+                hashes_by_path=hashes_by_path,
+                session_hash=session_hash or "",
+                source_type=composite_source_type,
+                additional_composite_roots=additional_composite_roots,
+                composite_builder=self._composite_builder,
+            )
+            spin.update("Registering output composites...")
+            composite_registrations = register_put_composites_with_glaas(
+                db_ctx=self._db,
+                glaas_client=client,
+                composite_results=composite_results,
+                registration_errors=registration_result.errors,
+                dataset_identifiers=dataset_identifiers,
+                logger=self._logger,
+            )
         composite_result_items = [
             PutCompositeRegistration(
                 root_path=(str(item["root_path"]) if item.get("root_path") is not None else None),
@@ -407,25 +412,28 @@ class PutService:
             lineage_artifacts=lineage.artifacts,
             composite_registrations=composite_registrations,
         )
-        self._register_put_job_with_glaas(
-            coordinator=coordinator,
-            command=command,
-            session_hash=session_hash_value,
-            job_uid=job_uid,
-            git_context=git_context,
-            step_number=step_number,
-            metadata_json=metadata_json,
-            registration_errors=registration_result.errors,
-        )
-        self._link_put_job_artifacts_with_glaas(
-            coordinator=coordinator,
-            session_hash=session_hash_value,
-            job_uid=job_uid,
-            uploaded_files=uploaded_files,
-            lineage_artifacts=lineage.artifacts,
-            composite_registrations=composite_registrations,
-            registration_errors=registration_result.errors,
-        )
+        with Spinner("Finalizing lineage links...") as spin:
+            spin.update("Registering put job...")
+            self._register_put_job_with_glaas(
+                coordinator=coordinator,
+                command=command,
+                session_hash=session_hash_value,
+                job_uid=job_uid,
+                git_context=git_context,
+                step_number=step_number,
+                metadata_json=metadata_json,
+                registration_errors=registration_result.errors,
+            )
+            spin.update("Linking put job artifacts...")
+            self._link_put_job_artifacts_with_glaas(
+                coordinator=coordinator,
+                session_hash=session_hash_value,
+                job_uid=job_uid,
+                uploaded_files=uploaded_files,
+                lineage_artifacts=lineage.artifacts,
+                composite_registrations=composite_registrations,
+                registration_errors=registration_result.errors,
+            )
 
         registration_error = (
             "; ".join(registration_result.errors) if registration_result.errors else None

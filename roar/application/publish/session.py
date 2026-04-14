@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
+from ...core.canonical_session import compute_canonical_session_hash
+from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext, SessionRegistrationResult
 from ...integrations.glaas import GlaasClient
@@ -33,6 +35,122 @@ class PreparedPublishSession:
     session_url: str | None = None
 
 
+def build_canonical_session_payload(
+    *,
+    lineage: LineageData,
+    git_context: GitContext,
+    creator_identity: str,
+) -> dict:
+    jobs = [
+        {
+            "command": job.get("command"),
+            "job_type": job.get("job_type"),
+            "step_number": job.get("step_number"),
+            "parent_step_number": _resolve_parent_step_number(job, lineage.jobs),
+            "inputs": sorted(
+                [
+                    {
+                        "hash": artifact.get("artifact_hash") or artifact.get("hash"),
+                        "path": artifact.get("path"),
+                    }
+                    for artifact in job.get("_inputs", [])
+                ],
+                key=lambda artifact: (
+                    str(artifact.get("hash") or ""),
+                    str(artifact.get("path") or ""),
+                ),
+            ),
+            "outputs": sorted(
+                [
+                    {
+                        "hash": artifact.get("artifact_hash") or artifact.get("hash"),
+                        "path": artifact.get("path"),
+                    }
+                    for artifact in job.get("_outputs", [])
+                ],
+                key=lambda artifact: (
+                    str(artifact.get("hash") or ""),
+                    str(artifact.get("path") or ""),
+                ),
+            ),
+            "metadata": _normalize_metadata(job.get("metadata")),
+        }
+        for job in lineage.jobs
+    ]
+    jobs.sort(key=_job_payload_sort_key)
+    return {
+        "canonical_version": 1,
+        "creator_identity": creator_identity,
+        "git": {
+            "repo": git_context.repo,
+            "commit": git_context.commit,
+            "branch": git_context.branch,
+        },
+        "jobs": jobs,
+    }
+
+
+def build_git_context_from_lineage(lineage: LineageData) -> GitContext:
+    pipeline = lineage.pipeline if isinstance(lineage.pipeline, dict) else {}
+    return GitContext(
+        repo=_pipeline_string(pipeline, "git_repo", "repo"),
+        commit=_pipeline_string(pipeline, "git_commit", "commit"),
+        branch=_pipeline_string(pipeline, "git_branch", "branch"),
+    )
+
+
+def compute_canonical_lineage_session_hash(
+    *,
+    lineage: LineageData,
+    creator_identity: str,
+    git_context: GitContext | None = None,
+) -> str:
+    resolved_git_context = git_context or build_git_context_from_lineage(lineage)
+    return compute_canonical_session_hash(
+        build_canonical_session_payload(
+            lineage=lineage,
+            git_context=resolved_git_context,
+            creator_identity=creator_identity,
+        )
+    )
+
+
+def _resolve_parent_step_number(job: dict, all_jobs: list[dict]) -> int | None:
+    parent_uid = job.get("parent_job_uid")
+    if not parent_uid:
+        return None
+    for candidate in all_jobs:
+        if candidate.get("job_uid") == parent_uid:
+            parent_step = candidate.get("step_number")
+            return int(parent_step) if parent_step is not None else None
+    return None
+
+
+def _job_payload_sort_key(job: dict[str, object]) -> tuple[int, str]:
+    raw_step = job.get("step_number")
+    if isinstance(raw_step, int):
+        step_number = raw_step
+    else:
+        step_number = 0
+    raw_command = job.get("command")
+    command = raw_command if isinstance(raw_command, str) else ""
+    return step_number, command
+
+
+def _pipeline_string(pipeline: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = pipeline.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _normalize_metadata(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return dict(sorted(value.items()))
+
+
 def prepare_publish_session(
     *,
     glaas_client: GlaasClient,
@@ -44,10 +162,20 @@ def prepare_publish_session(
     register_with_glaas: bool,
     configured_error: str | None = None,
     session_hash_override: str | None = None,
+    lineage: LineageData | None = None,
+    creator_identity: str | None = None,
 ) -> PreparedPublishSession:
     """Compute and optionally register the publish session."""
     if session_hash_override:
         session_hash = session_hash_override
+    elif lineage is not None and creator_identity is not None:
+        session_hash = compute_canonical_session_hash(
+            build_canonical_session_payload(
+                lineage=lineage,
+                git_context=git_context,
+                creator_identity=creator_identity,
+            )
+        )
     else:
         if session_id is None:
             raise ValueError("Cannot compute a session hash without a local session id.")

@@ -20,15 +20,41 @@ def fake_glaas_publish_server() -> FakeGlaasServer:
         yield server
 
 
-def _configure_put_repo(repo: Path, roar_cli, fake_glaas_url: str) -> None:
+def _configure_put_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[str, str]:
     subprocess.run(
         ["git", "remote", "add", "origin", "https://github.com/test/repo.git"],
         cwd=repo,
         capture_output=True,
         check=True,
     )
-    roar_cli("config", "set", "glaas.url", fake_glaas_url)
-    roar_cli("config", "set", "glaas.web_url", fake_glaas_url)
+    xdg_config_home = repo / ".xdg"
+    token_file = repo / "token-file.json"
+    token_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "provider": "treqs-cognito",
+                "access_token": "test-access-token",
+                "user": {
+                    "sub": "treqs-user-123",
+                    "db_user_id": "user-123",
+                    "email": "trevor@example.com",
+                    "username": "trevor",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = {
+        "XDG_CONFIG_HOME": str(xdg_config_home),
+        "GLAAS_API_URL": fake_glaas_url,
+        "ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS": "1",
+    }
+    roar_cli("login", "--token-file", str(token_file), env_overrides=env)
+    roar_cli("projects", "link", "proj-test", env_overrides=env)
+    roar_cli("config", "set", "glaas.url", fake_glaas_url, env_overrides=env)
+    roar_cli("config", "set", "glaas.web_url", fake_glaas_url, env_overrides=env)
+    return env
 
 
 def _create_repo_with_outputs(
@@ -37,6 +63,7 @@ def _create_repo_with_outputs(
     roar_cli,
     git_commit,
     python_exe: str,
+    env_overrides: dict[str, str] | None = None,
 ) -> None:
     script = repo / "train.py"
     script.write_text(
@@ -46,7 +73,7 @@ def _create_repo_with_outputs(
     )
     git_commit("Add training script")
 
-    run_result = roar_cli("run", python_exe, "train.py")
+    run_result = roar_cli("run", python_exe, "train.py", env_overrides=env_overrides)
     assert run_result.returncode == 0
 
     git_commit("Add training outputs")
@@ -64,16 +91,19 @@ def test_put_registers_lineage_with_fake_glaas_and_updates_local_dag(
     monkeypatch,
     fake_glaas_publish_server: FakeGlaasServer,
 ) -> None:
-    _configure_put_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    env = _configure_put_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
     _create_repo_with_outputs(
         temp_git_repo,
         roar_cli=roar_cli,
         git_commit=git_commit,
         python_exe=python_exe,
+        env_overrides=env,
     )
     monkeypatch.setenv("ROAR_PUT_SKIP_UPLOAD", "1")
 
-    result = roar_cli("put", "model.pt", "s3://test-bucket/models", "-m", "publish model")
+    result = roar_cli(
+        "put", "model.pt", "s3://test-bucket/models", "-m", "publish model", env_overrides=env
+    )
 
     assert result.returncode == 0
     assert "Published 1 file(s) to s3://test-bucket/models" in result.stdout
@@ -93,6 +123,16 @@ def test_put_registers_lineage_with_fake_glaas_and_updates_local_dag(
 
     assert fake_glaas_publish_server.health_checks >= 1
     assert len(fake_glaas_publish_server.session_registrations) == 1
+    assert fake_glaas_publish_server.session_registrations[0]["scope_request"] == {
+        "owner_id": "owner-test",
+        "owner_type": "organization",
+        "project_id": "proj-test",
+        "visibility": "private",
+    }
+    assert any(
+        entry.get("authorization") == "Bearer test-access-token"
+        for entry in fake_glaas_publish_server.auth_headers
+    )
     assert len(fake_glaas_publish_server.job_batches) == 1
     assert len(fake_glaas_publish_server.job_creates) == 1
     assert len(fake_glaas_publish_server.artifact_batches) >= 1
@@ -112,12 +152,13 @@ def test_put_dry_run_does_not_create_local_or_remote_publish_jobs(
     monkeypatch,
     fake_glaas_publish_server: FakeGlaasServer,
 ) -> None:
-    _configure_put_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    env = _configure_put_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
     _create_repo_with_outputs(
         temp_git_repo,
         roar_cli=roar_cli,
         git_commit=git_commit,
         python_exe=python_exe,
+        env_overrides=env,
     )
     monkeypatch.setenv("ROAR_PUT_SKIP_UPLOAD", "1")
 
@@ -131,6 +172,7 @@ def test_put_dry_run_does_not_create_local_or_remote_publish_jobs(
         "-m",
         "test",
         "--dry-run",
+        env_overrides=env,
     )
 
     assert result.returncode == 0

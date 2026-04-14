@@ -40,7 +40,7 @@ def test_register_lineage_target_uses_local_preview_path_for_dry_run(tmp_path: P
         patch(
             "roar.application.publish.service.build_register_preview_runtime",
             return_value=runtime,
-        ),
+        ) as build_preview_runtime,
         patch("roar.application.publish.service.get_logger", return_value=logger),
         patch(
             "roar.application.publish.service.resolve_register_lineage_target",
@@ -71,6 +71,10 @@ def test_register_lineage_target_uses_local_preview_path_for_dry_run(tmp_path: P
 
     assert response == expected
     mock_cls.assert_not_called()
+    build_preview_runtime.assert_called_once_with(
+        start_dir=str(tmp_path),
+        allow_public_without_binding=False,
+    )
     collect_lineage.assert_called_once_with(
         target=ResolvedRegisterTarget(kind="artifact_path", value="model.pt"),
         roar_dir=tmp_path / ".roar",
@@ -87,6 +91,7 @@ def test_register_lineage_target_uses_local_preview_path_for_dry_run(tmp_path: P
         session_id=7,
         session_hash_override=None,
         logger=logger,
+        lineage=collected.lineage,
     )
     preview_register.assert_called_once_with(
         lineage=collected.lineage,
@@ -354,6 +359,8 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
         git_commit=None, expected_tag=None, warnings=("Git operation failed: git unavailable",)
     )
 
+    runtime = MagicMock()
+
     with (
         patch("roar.application.publish.service.bootstrap"),
         patch("roar.application.publish.service.get_logger", return_value=MagicMock()),
@@ -364,6 +371,10 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
         patch(
             "roar.application.publish.service.resolve_publish_storage_backend",
             return_value=MagicMock(),
+        ),
+        patch(
+            "roar.application.publish.service.build_publish_runtime",
+            return_value=runtime,
         ),
         patch(
             "roar.application.publish.service.prepare_put_execution",

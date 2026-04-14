@@ -6,11 +6,29 @@ from unittest.mock import MagicMock
 import pytest
 
 from roar.application.publish.session import PreparedPublishSession, prepare_publish_session
+from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import GitContext, SessionRegistrationResult
 
 
 def _git_context() -> GitContext:
     return GitContext(repo="https://github.com/test/repo", commit="deadbeef", branch="main")
+
+
+def _lineage() -> LineageData:
+    return LineageData(
+        jobs=[
+            {
+                "job_uid": "job-1",
+                "command": "python train.py",
+                "job_type": "run",
+                "step_number": 1,
+                "parent_job_uid": None,
+                "_inputs": [{"artifact_hash": "input-1", "path": "data/input.csv"}],
+                "_outputs": [{"artifact_hash": "output-1", "path": "models/output.bin"}],
+                "metadata": {"runner": "python"},
+            }
+        ]
+    )
 
 
 def test_prepare_publish_session_computes_hash_without_registering(tmp_path: Path) -> None:
@@ -31,6 +49,31 @@ def test_prepare_publish_session_computes_hash_without_registering(tmp_path: Pat
 
     assert result == PreparedPublishSession(session_hash="session-hash")
     glaas_client.health_check.assert_not_called()
+    session_service.register.assert_not_called()
+
+
+def test_prepare_publish_session_uses_canonical_hash_when_lineage_and_creator_identity_are_provided(
+    tmp_path: Path,
+) -> None:
+    glaas_client = MagicMock()
+    session_service = MagicMock()
+    logger = MagicMock()
+
+    result = prepare_publish_session(
+        glaas_client=glaas_client,
+        session_service=session_service,
+        roar_dir=tmp_path / ".roar",
+        session_id=7,
+        git_context=_git_context(),
+        logger=logger,
+        register_with_glaas=False,
+        lineage=_lineage(),
+        creator_identity="treqs:user:user-123",
+    )
+
+    assert len(result.session_hash) == 64
+    glaas_client.health_check.assert_not_called()
+    session_service.compute_session_hash.assert_not_called()
     session_service.register.assert_not_called()
 
 

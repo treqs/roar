@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from ...core.tracer_modes import VALID_TRACER_MODES
 from .loader import find_config_file, find_roar_dir, load_settings
+from .raw import find_raw_config_file
 
 # Valid hash algorithms
 VALID_HASH_ALGORITHMS = {"blake3", "sha256", "sha512", "md5"}
@@ -392,13 +393,42 @@ def save_config(config: dict, config_path: Path):
     Save configuration to a .roar.toml file.
 
     Only saves non-default values.
+    Preserves unknown top-level sections that are already present in the file.
     """
+    existing_unknown_sections: dict[str, Any] = {}
+    raw_path = find_raw_config_file(
+        start_dir=str(
+            config_path.parent.parent if config_path.name == "config.toml" else config_path.parent
+        )
+    )
+    if raw_path and raw_path.exists() and raw_path.suffix == ".toml":
+        try:
+            try:
+                import tomllib
+            except ImportError:
+                import tomli as tomllib
+            with raw_path.open("rb") as handle:
+                raw_data = tomllib.load(handle)
+            if raw_path.name == "pyproject.toml":
+                raw_data = raw_data.get("tool", {}).get("roar", {})
+            defaults = _get_default_config()
+            existing_unknown_sections = {
+                key: value
+                for key, value in raw_data.items()
+                if key not in defaults and key not in config
+            }
+        except Exception:
+            existing_unknown_sections = {}
+
+    merged_config = dict(config)
+    merged_config.update(existing_unknown_sections)
+
     lines: list[str] = []
     defaults = _get_default_config()
-    section_order = list(defaults.keys()) + [key for key in config if key not in defaults]
+    section_order = list(defaults.keys()) + [key for key in merged_config if key not in defaults]
 
     for section in section_order:
-        section_data = config.get(section)
+        section_data = merged_config.get(section)
         if not isinstance(section_data, dict):
             continue
         section_defaults = defaults.get(section, {})

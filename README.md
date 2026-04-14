@@ -187,7 +187,7 @@ Use for setup that should run before the main pipeline (compiling, installing).
 
 ### `roar auth`
 
-Manage GLaaS authentication.
+Manage SSH-key-based GLaaS registration settings.
 
 ```bash
 roar auth register    # Show SSH public key for registration
@@ -195,7 +195,7 @@ roar auth test        # Test connection to GLaaS server
 roar auth status      # Show current auth status
 ```
 
-To register with GLaaS:
+To register SSH auth with GLaaS:
 
 1. Run `roar auth register` to display your public key
 2. Sign up at <https://glaas.ai> where you can paste your public key

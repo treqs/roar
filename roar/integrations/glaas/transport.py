@@ -199,8 +199,9 @@ def request_json(
     auth_header = (
         None if auth_mode == "anonymous" else auth_header_factory(method, path, body_bytes)
     )
+    bearer_auth = bool(auth_header and auth_header.startswith("Bearer "))
 
-    if auth_mode == "unknown" and auth_header:
+    if auth_mode == "unknown" and auth_header and not bearer_auth:
         probe_auth_header = auth_header_factory("GET", _AUTH_PROBE_PATH, None)
         if probe_auth_header:
             _probe_result, probe_error, probe_status = _perform_request(
@@ -232,7 +233,7 @@ def request_json(
     if error is None:
         return result, None
 
-    if auth_header and status_code == 401:
+    if auth_header and status_code == 401 and not bearer_auth:
         _mark_anonymous(base_url, f"The server returned HTTP 401 for {method} {path}.")
         _get_logger().debug(
             "GLaaS optional-auth fallback: retrying %s %s without Authorization after 401",

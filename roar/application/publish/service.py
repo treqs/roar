@@ -119,11 +119,20 @@ def RegisterService(*args: Any, **kwargs: Any) -> Any:
     return _RegisterService(*args, **kwargs)
 
 
-def build_publish_runtime(*, glaas_url: str | None = None) -> Any:
+def build_publish_runtime(
+    *,
+    glaas_url: str | None = None,
+    start_dir: str | None = None,
+    allow_public_without_binding: bool = False,
+) -> Any:
     """Load publish runtime assembly only when publish workflows execute."""
     from .runtime import build_publish_runtime as _build_publish_runtime
 
-    return _build_publish_runtime(glaas_url=glaas_url)
+    return _build_publish_runtime(
+        glaas_url=glaas_url,
+        start_dir=start_dir,
+        allow_public_without_binding=allow_public_without_binding,
+    )
 
 
 def resolve_register_lineage_target(*args: Any, **kwargs: Any) -> Any:
@@ -172,13 +181,29 @@ class _PreparedRegisterPreviewExecution:
     git_tag_repo_root: Path | None = None
 
 
-def build_register_preview_runtime() -> Any:
+def build_register_preview_runtime(
+    *,
+    start_dir: str | None = None,
+    allow_public_without_binding: bool = False,
+) -> Any:
     """Build only the dependencies needed for local register preview flows."""
     from ...integrations.glaas.client import GlaasClient
     from ...integrations.glaas.registration.session import SessionRegistrationService
+    from ...publish_auth import PublishAuthContext
     from .lineage import LineageCollector
 
-    glaas_client = GlaasClient("")
+    glaas_client = GlaasClient(
+        "",
+        start_dir=start_dir,
+        publish_auth=PublishAuthContext(
+            access_token=None,
+            scope_request=None,
+            auth_provider=None,
+            user_sub=None,
+            db_user_id=None,
+        ),
+        allow_public_without_binding=allow_public_without_binding,
+    )
     return _RegisterPreviewRuntime(
         glaas_client=glaas_client,
         session_service=SessionRegistrationService(glaas_client),
@@ -194,11 +219,25 @@ def prepare_register_preview_execution(
     session_id: int | None,
     session_hash_override: str | None,
     logger: Any,
+    lineage: Any | None = None,
 ) -> Any:
     """Prepare local register preview state without importing full git workflow helpers."""
+    from ...core.canonical_session import compute_canonical_session_hash
+    from ...publish_auth import resolve_publish_creator_identity
+    from .session import build_canonical_session_payload
+
     git_context = _resolve_register_preview_git_context(path=cwd, logger=logger)
     if session_hash_override:
         session_hash = session_hash_override
+    elif lineage is not None:
+        creator_identity = resolve_publish_creator_identity(runtime.glaas_client.publish_auth)
+        session_hash = compute_canonical_session_hash(
+            build_canonical_session_payload(
+                lineage=lineage,
+                git_context=git_context,
+                creator_identity=creator_identity,
+            )
+        )
     else:
         if session_id is None:
             raise ValueError("Cannot compute a session hash without a local session id.")
@@ -335,9 +374,16 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         roar_dir=request.roar_dir,
     )
     runtime = (
-        build_register_preview_runtime()
+        build_register_preview_runtime(
+            start_dir=str(request.cwd),
+            allow_public_without_binding=request.public,
+        )
         if request.dry_run
-        else build_publish_runtime(glaas_url=get_glaas_url())
+        else build_publish_runtime(
+            glaas_url=get_glaas_url(),
+            start_dir=str(request.cwd),
+            allow_public_without_binding=request.public,
+        )
     )
     collected_lineage, error = collect_register_lineage(
         target=resolved_target,
@@ -360,6 +406,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
                 session_id=collected_lineage.session_id,
                 session_hash_override=collected_lineage.session_hash_override,
                 logger=logger,
+                lineage=collected_lineage.lineage,
             )
         else:
             prepared = prepare_register_execution(
@@ -370,6 +417,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
                 dry_run=False,
                 session_hash_override=collected_lineage.session_hash_override,
                 logger=logger,
+                lineage=collected_lineage.lineage,
             )
     except ValueError as exc:
         return RegisterLineageResponse(
@@ -458,7 +506,11 @@ def put_artifacts(request: PutRequest) -> PutResponse:
     else:
         with create_database_context(request.roar_dir) as db_ctx:
             backend = resolve_publish_storage_backend(request.destination)
-            runtime = build_publish_runtime(glaas_url=get_glaas_url())
+            runtime = build_publish_runtime(
+                glaas_url=get_glaas_url(),
+                start_dir=str(repo_root),
+                allow_public_without_binding=request.public,
+            )
             service = PutService(
                 db_context=db_ctx,
                 backend=backend,

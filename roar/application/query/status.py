@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ...core.session_hash import compute_local_session_hash
 from ...db.query_context import create_query_database_context
 from ...presenters.formatting import format_size
+from ...publish_auth import load_publish_auth_context, resolve_publish_creator_identity
+from ..publish.lineage import LineageCollector
+from ..publish.session import compute_canonical_lineage_session_hash
 from .requests import StatusQueryRequest
 from .results import StatusArtifactSummary, StatusSummary
 
@@ -59,10 +61,6 @@ def build_status_summary(request: StatusQueryRequest) -> StatusSummary:
         if not session:
             raise StatusQueryError(_NO_ACTIVE_SESSION_MESSAGE)
 
-        dag_hash = compute_local_session_hash(
-            roar_dir=request.roar_dir,
-            session_id=int(session["id"]),
-        )
         jobs = db_ctx.jobs.get_by_session(session["id"], limit=10000)
 
         build_steps: set[int] = set()
@@ -97,6 +95,15 @@ def build_status_summary(request: StatusQueryRequest) -> StatusSummary:
                     present=Path(output["path"]).exists(),
                 )
             )
+
+        creator_identity = resolve_publish_creator_identity(
+            load_publish_auth_context(request.roar_dir.parent, allow_public_without_binding=True)
+        )
+        lineage = LineageCollector().collect_session(int(session["id"]), request.roar_dir)
+        dag_hash = compute_canonical_lineage_session_hash(
+            lineage=lineage,
+            creator_identity=creator_identity,
+        )
 
     return StatusSummary(
         dag_hash=dag_hash,

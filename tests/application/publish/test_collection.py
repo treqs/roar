@@ -11,6 +11,7 @@ from roar.application.publish.collection import (
 )
 from roar.application.publish.targets import ResolvedRegisterTarget
 from roar.core.interfaces.lineage import LineageData
+from roar.publish_auth import PublishAuthContext
 
 
 def test_collect_register_lineage_returns_missing_file_error(tmp_path: Path) -> None:
@@ -108,38 +109,75 @@ def test_resolve_local_session_target_returns_unique_prefix(tmp_path: Path) -> N
     db_ctx = MagicMock()
     db_ctx.sessions.get_all.return_value = [{"id": 1}, {"id": 2}]
     session_service = MagicMock()
-    session_service.compute_session_hash.side_effect = [
-        "abc123456789",
-        "ffffeeee1111",
+    collector = MagicMock()
+    collector.collect_session.side_effect = [
+        LineageData(jobs=[{"job_uid": "job-1"}], pipeline={"id": 1}),
+        LineageData(jobs=[{"job_uid": "job-2"}], pipeline={"id": 2}),
     ]
 
-    session, resolved_hash, error = resolve_local_session_target(
-        db_ctx=db_ctx,
-        roar_dir=tmp_path / ".roar",
-        session_hash="abc123",
-        session_service=session_service,
-    )
+    with (
+        patch(
+            "roar.application.publish.collection.load_publish_auth_context",
+            return_value=PublishAuthContext(
+                access_token=None,
+                scope_request=None,
+                auth_provider=None,
+                user_sub=None,
+                db_user_id=None,
+            ),
+        ),
+        patch(
+            "roar.application.publish.collection.compute_canonical_lineage_session_hash",
+            side_effect=["abc123456789", "ffffeeee1111"],
+        ) as compute_hash,
+    ):
+        session, resolved_hash, error = resolve_local_session_target(
+            db_ctx=db_ctx,
+            roar_dir=tmp_path / ".roar",
+            session_hash="abc123",
+            session_service=session_service,
+            lineage_collector=collector,
+        )
 
     assert session == {"id": 1}
     assert resolved_hash == "abc123456789"
     assert error is None
+    assert compute_hash.call_count == 2
 
 
 def test_resolve_local_session_target_rejects_ambiguous_prefix(tmp_path: Path) -> None:
     db_ctx = MagicMock()
     db_ctx.sessions.get_all.return_value = [{"id": 1}, {"id": 2}]
     session_service = MagicMock()
-    session_service.compute_session_hash.side_effect = [
-        "abc123456789",
-        "abc123ffff00",
+    collector = MagicMock()
+    collector.collect_session.side_effect = [
+        LineageData(jobs=[{"job_uid": "job-1"}], pipeline={"id": 1}),
+        LineageData(jobs=[{"job_uid": "job-2"}], pipeline={"id": 2}),
     ]
 
-    session, resolved_hash, error = resolve_local_session_target(
-        db_ctx=db_ctx,
-        roar_dir=tmp_path / ".roar",
-        session_hash="abc123",
-        session_service=session_service,
-    )
+    with (
+        patch(
+            "roar.application.publish.collection.load_publish_auth_context",
+            return_value=PublishAuthContext(
+                access_token=None,
+                scope_request=None,
+                auth_provider=None,
+                user_sub=None,
+                db_user_id=None,
+            ),
+        ),
+        patch(
+            "roar.application.publish.collection.compute_canonical_lineage_session_hash",
+            side_effect=["abc123456789", "abc123ffff00"],
+        ),
+    ):
+        session, resolved_hash, error = resolve_local_session_target(
+            db_ctx=db_ctx,
+            roar_dir=tmp_path / ".roar",
+            session_hash="abc123",
+            session_service=session_service,
+            lineage_collector=collector,
+        )
 
     assert session is None
     assert resolved_hash is None

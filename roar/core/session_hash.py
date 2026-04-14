@@ -1,4 +1,8 @@
-"""Utilities for computing canonical local DAG/session hashes."""
+"""Utilities for computing legacy local DAG/session hashes.
+
+These helpers are still used by legacy local-only flows. New registration work
+should prefer canonical session hashing from lineage content.
+"""
 
 from __future__ import annotations
 
