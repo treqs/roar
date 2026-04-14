@@ -504,9 +504,7 @@ def _update_existing_config_text(text: str, key: str, value: Any) -> str:
         lines[index] = f"{indent}{field_name} = {rendered_value}"
         return "\n".join(lines) + "\n"
 
-    commented_assignment_pattern = re.compile(
-        rf"^(?P<indent>\s*)#\s*{re.escape(field_name)}\s*="
-    )
+    commented_assignment_pattern = re.compile(rf"^(?P<indent>\s*)#\s*{re.escape(field_name)}\s*=")
     for index in range(content_start, end_index):
         match = commented_assignment_pattern.match(lines[index])
         if match is None:
@@ -548,7 +546,9 @@ def _emit_toml_table(
 
     for key, value in table_data.items():
         default_value = default_data.get(key)
-        preserved_value = preserve_data.get(key, _MISSING) if preserve_data is not None else _MISSING
+        preserved_value = (
+            preserve_data.get(key, _MISSING) if preserve_data is not None else _MISSING
+        )
         preserve_key = preserved_value is not _MISSING
 
         if isinstance(value, dict):

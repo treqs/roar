@@ -411,9 +411,7 @@ class TestConfigSaveLoad:
         assert 'primary = "blake3"' in content
         assert 'default = "auto"' in content
 
-    def test_config_set_reuses_commented_placeholder_when_present(
-        self, tmp_path: Path
-    ) -> None:
+    def test_config_set_reuses_commented_placeholder_when_present(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".roar" / "config.toml"
         config_path.parent.mkdir(parents=True)
         config_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
