@@ -9,6 +9,7 @@ import os
 
 from sqlalchemy.orm import Session as SASession
 
+from ...core.label_origins import LABEL_ORIGIN_USER
 from ...core.step_name import STEP_NAME_LABEL_KEY, get_step_name_label
 from ..repositories import (
     SQLAlchemyArtifactRepository,
@@ -206,7 +207,12 @@ class JobRecordingService:
 
         merged = dict(current_metadata)
         merged[STEP_NAME_LABEL_KEY] = step_name
-        self._label_repo.create_version("job", merged, job_id=job_id)
+        self._label_repo.create_version(
+            "job",
+            merged,
+            job_id=job_id,
+            write_origin=LABEL_ORIGIN_USER,
+        )
 
     def _assign_to_session(
         self,

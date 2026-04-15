@@ -140,6 +140,7 @@ class Label(Base):
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     metadata_: Mapped[str] = mapped_column("metadata", Text, nullable=False)
+    write_origin: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     synced_at: Mapped[float | None] = mapped_column(Float)
     synced_server_label_id: Mapped[str | None] = mapped_column(String)

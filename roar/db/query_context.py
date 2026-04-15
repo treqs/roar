@@ -571,7 +571,7 @@ class _QueryLabelRepository(_QueryRepository):
         row = self._fetchone(
             f"""
             SELECT id, entity_type, session_id, job_id, artifact_id, version, metadata,
-                   created_at, synced_at, synced_server_label_id
+                   write_origin, created_at, synced_at, synced_server_label_id
             FROM labels
             WHERE entity_type = ? AND {clauses}
             ORDER BY version DESC
@@ -590,6 +590,7 @@ class _QueryLabelRepository(_QueryRepository):
             "artifact_id": row["artifact_id"],
             "version": int(row["version"]),
             "metadata": json.loads(row["metadata"]),
+            "write_origin": row["write_origin"],
             "created_at": row["created_at"],
             "synced_at": row["synced_at"],
             "synced_server_label_id": row["synced_server_label_id"],

@@ -331,6 +331,7 @@ class LabelRepository(Protocol):
         session_id: int | None = None,
         job_id: int | None = None,
         artifact_id: str | None = None,
+        write_origin: str | None = None,
     ) -> dict[str, Any]:
         """Append a new label version for a target."""
         ...

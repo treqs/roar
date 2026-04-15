@@ -66,6 +66,7 @@ class SQLAlchemyLabelRepository(LabelRepository):
         session_id: int | None = None,
         job_id: int | None = None,
         artifact_id: str | None = None,
+        write_origin: str | None = None,
     ) -> dict[str, Any]:
         current_max = self._session.execute(
             select(func.max(Label.version)).where(
@@ -81,6 +82,7 @@ class SQLAlchemyLabelRepository(LabelRepository):
             artifact_id=artifact_id,
             version=version,
             metadata_=json.dumps(metadata, sort_keys=True, separators=(",", ":")),
+            write_origin=write_origin,
             created_at=time.time(),
         )
         self._session.add(row)
@@ -115,6 +117,7 @@ class SQLAlchemyLabelRepository(LabelRepository):
             "artifact_id": row.artifact_id,
             "version": row.version,
             "metadata": json.loads(row.metadata_),
+            "write_origin": row.write_origin,
             "created_at": row.created_at,
             "synced_at": row.synced_at,
             "synced_server_label_id": row.synced_server_label_id,

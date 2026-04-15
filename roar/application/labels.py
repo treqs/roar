@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from ..core.label_origins import LABEL_ORIGIN_USER, build_current_key_origins
 from ..db.context import DatabaseContext
 from ..execution.recording.dataset_metadata import AUTO_DATASET_LABEL_KEYS
 from .label_rendering import flatten_label_metadata
@@ -180,6 +181,7 @@ class LabelService:
             session_id=target.session_id,
             job_id=target.job_id,
             artifact_id=target.artifact_id,
+            write_origin=LABEL_ORIGIN_USER,
         )
         return LabelWriteResult(
             changed=True,
@@ -216,6 +218,7 @@ class LabelService:
             session_id=destination.session_id,
             job_id=destination.job_id,
             artifact_id=destination.artifact_id,
+            write_origin=LABEL_ORIGIN_USER,
         )
         return LabelWriteResult(
             changed=True,
@@ -246,11 +249,13 @@ def collect_label_sync_payloads(
     if session_id is not None:
         current = db_ctx.labels.get_current("dag", session_id=session_id)
         if current and isinstance(current.get("metadata"), dict):
+            history = db_ctx.labels.get_history("dag", session_id=session_id)
             payloads.append(
                 {
                     "entity_type": "dag",
                     "session_hash": session_hash,
                     "metadata": current["metadata"],
+                    "key_origins": build_current_key_origins(history),
                 }
             )
 
@@ -266,12 +271,14 @@ def collect_label_sync_payloads(
         seen_jobs.add(dedupe_key)
         current = db_ctx.labels.get_current("job", job_id=job_id)
         if current and isinstance(current.get("metadata"), dict):
+            history = db_ctx.labels.get_history("job", job_id=job_id)
             payloads.append(
                 {
                     "entity_type": "job",
                     "session_hash": session_hash,
                     "job_uid": job_uid,
                     "metadata": current["metadata"],
+                    "key_origins": build_current_key_origins(history),
                 }
             )
 
@@ -290,11 +297,13 @@ def collect_label_sync_payloads(
         seen_artifacts.add(artifact_hash)
         current = db_ctx.labels.get_current("artifact", artifact_id=artifact_id)
         if current and isinstance(current.get("metadata"), dict):
+            history = db_ctx.labels.get_history("artifact", artifact_id=artifact_id)
             payloads.append(
                 {
                     "entity_type": "artifact",
                     "artifact_hash": artifact_hash,
                     "metadata": current["metadata"],
+                    "key_origins": build_current_key_origins(history),
                 }
             )
 

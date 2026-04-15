@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlparse
 
+from ...core.label_origins import LABEL_ORIGIN_SYSTEM
 from ...db.context import optional_repo
 from ...db.hashing import hash_files_blake3
 from .dataset_identifier import DatasetIdentifierInferer
@@ -519,7 +520,12 @@ class CompositeOutputMaterializer:
         if merged == current_metadata:
             return
 
-        labels_repo.create_version("artifact", merged, artifact_id=artifact_id)
+        labels_repo.create_version(
+            "artifact",
+            merged,
+            artifact_id=artifact_id,
+            write_origin=LABEL_ORIGIN_SYSTEM,
+        )
 
     @staticmethod
     def _merge_dataset_labels(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
