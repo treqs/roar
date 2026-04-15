@@ -26,6 +26,7 @@ class ShowQueryRequest:
     cwd: Path
     ref: str | None
     selector: ShowQuerySelector = "auto"
+    show_all: bool = False
 
 
 @dataclass(frozen=True)

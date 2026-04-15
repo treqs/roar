@@ -20,6 +20,12 @@ from ..decorators import require_init
 )
 @click.option("--artifact", "artifact_ref", metavar="HASH", help="Show an artifact by hash.")
 @click.option("--session", "show_session", is_flag=True, help="Show the active session.")
+@click.option(
+    "--all",
+    "show_all",
+    is_flag=True,
+    help="Show all items without truncation (packages, env vars, jobs, etc.).",
+)
 @click.argument("ref", required=False)
 @click.pass_obj
 @require_init
@@ -29,6 +35,7 @@ def show(
     job_ref: str | None,
     artifact_ref: str | None,
     show_session: bool,
+    show_all: bool,
     ref: str | None,
 ) -> None:
     """Show session, job, or artifact details.
@@ -64,6 +71,7 @@ def show(
         job_ref=job_ref,
         artifact_ref=artifact_ref,
         show_session=show_session,
+        show_all=show_all,
     )
     try:
         click.echo(render_show(request))
@@ -79,6 +87,7 @@ def _build_show_request(
     job_ref: str | None,
     artifact_ref: str | None,
     show_session: bool,
+    show_all: bool,
 ) -> ShowQueryRequest:
     explicit_targets: list[tuple[str, str | None, ShowQuerySelector]] = []
     if path_ref is not None:
@@ -104,6 +113,7 @@ def _build_show_request(
             cwd=ctx.cwd,
             ref=explicit_ref,
             selector=selector,
+            show_all=show_all,
         )
 
-    return ShowQueryRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, ref=ref)
+    return ShowQueryRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, ref=ref, show_all=show_all)

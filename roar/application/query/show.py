@@ -37,7 +37,7 @@ def render_show(request: ShowQueryRequest) -> str:
     """Render session, job, or artifact details."""
     summary = build_show_summary(request)
 
-    renderer = ShowRenderer()
+    renderer = ShowRenderer(show_all=request.show_all)
     if isinstance(summary, ShowSessionSummary):
         session, jobs, labels = summary.to_renderer_args()
         return renderer.render_session(session, jobs, labels=labels)
