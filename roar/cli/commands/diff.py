@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import click
 
 from ...application.query.diff import DiffError, render_diff
-from ...application.query.requests import DiffQueryRequest
+from ...application.query.requests import DiffFormat, DiffQueryRequest
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -22,7 +24,9 @@ from ..decorators import require_init
     default="summary",
     help="Output format.",
 )
-@click.option("--analyze", is_flag=True, help="Add LLM-assisted analysis (requires ANTHROPIC_API_KEY).")
+@click.option(
+    "--analyze", is_flag=True, help="Add LLM-assisted analysis (requires ANTHROPIC_API_KEY)."
+)
 @click.pass_obj
 @require_init
 def diff(
@@ -67,7 +71,7 @@ def diff(
         ref_b=ref_b,
         output_json=output_json,
         depth=depth,
-        format=fmt,
+        format=cast(DiffFormat, fmt),
         analyze=analyze,
     )
     try:

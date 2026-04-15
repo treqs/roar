@@ -69,7 +69,10 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
 
 HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Start Here", ("init", "run", "build", "dag")),
-    ("Inspect Local Lineage", ("status", "log", "show", "diff", "lineage", "inputs", "pop", "reproduce")),
+    (
+        "Inspect Local Lineage",
+        ("status", "log", "show", "diff", "lineage", "inputs", "pop", "reproduce"),
+    ),
     ("Share and Publish", ("put", "register", "get", "label")),
     ("Setup and Admin", ("auth", "config", "env", "tracer", "proxy", "reset")),
     ("GLaaS / TReqs Account", ("login", "logout", "whoami", "projects")),

@@ -5,11 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..application.query.diff import (
-    AtomicDiff,
-    DiffCategory,
-    DiffResult,
-)
+from ..application.query.diff_graph import JobNode
+from ..application.query.results import AtomicDiff, DiffCategory, DiffResult
 
 
 class DiffRenderer:
@@ -93,10 +90,10 @@ class DiffRenderer:
         if (result.only_in_a or result.only_in_b) and DiffCategory.PIPELINE not in by_category:
             lines.append("STRUCTURE")
             for j in result.only_in_a:
-                step = f"@{j.step_number}" if j.step_number else j.job_uid
+                step = _job_step_label(j)
                 lines.append(f"  - {step}: {_truncate(j.command, 60)}")
             for j in result.only_in_b:
-                step = f"@{j.step_number}" if j.step_number else j.job_uid
+                step = _job_step_label(j)
                 lines.append(f"  + {step}: {_truncate(j.command, 60)}")
 
         # LLM analysis
@@ -171,8 +168,8 @@ class DiffRenderer:
         # Matched jobs in order
         for m in sorted(result.matched_jobs, key=lambda m: m.job_a.step_number or 0):
             ja, jb = m.job_a, m.job_b
-            step_a = f"@{ja.step_number}" if ja.step_number else ja.job_uid
-            step_b = f"@{jb.step_number}" if jb.step_number else jb.job_uid
+            step_a = _job_step_label(ja)
+            step_b = _job_step_label(jb)
             script_a, _ = _extract_script(ja.command)
             script_b, _ = _extract_script(jb.command)
 
@@ -196,13 +193,13 @@ class DiffRenderer:
 
         # Steps only in A
         for j in result.only_in_a:
-            step = f"@{j.step_number}" if j.step_number else j.job_uid
+            step = _job_step_label(j)
             script, _ = _extract_script(j.command)
             lines.append(f"{f'{step} {script}':<{col_width}}  {'':^{col_width}}  REMOVED")
 
         # Steps only in B
         for j in result.only_in_b:
-            step = f"@{j.step_number}" if j.step_number else j.job_uid
+            step = _job_step_label(j)
             script, _ = _extract_script(j.command)
             lines.append(f"{'':^{col_width}}  {f'{step} {script}':<{col_width}}  ADDED")
 
@@ -258,6 +255,10 @@ def _truncate(s: str, max_len: int) -> str:
     if len(s) <= max_len:
         return s
     return s[: max_len - 3] + "..."
+
+
+def _job_step_label(job: JobNode) -> str:
+    return f"@{job.step_number}" if job.step_number else job.job_uid
 
 
 def _extract_script(command: str) -> tuple[str, list[str]]:

@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from enum import Enum
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .diff_graph import JobMatch, JobNode
 
 
 @dataclass(frozen=True)
@@ -319,3 +323,47 @@ class InputsSummary:
             "inputs": [asdict(a) for a in self.artifacts],
             **({"message": self.message} if self.message else {}),
         }
+
+
+class ChangeType(str, Enum):
+    CONTENT_CHANGED = "content_changed"
+    PARAM_CHANGED = "param_changed"
+    CODE_CHANGED = "code_changed"
+    ENV_CHANGED = "env_changed"
+    ADDED = "added"
+    REMOVED = "removed"
+
+
+class DiffCategory(str, Enum):
+    DATA = "data"
+    CODE = "code"
+    PARAMS = "params"
+    COMPUTE = "compute"
+    PIPELINE = "pipeline"
+
+
+@dataclass(frozen=True)
+class AtomicDiff:
+    change_type: ChangeType
+    category: DiffCategory
+    description: str
+    detail: dict[str, Any] = field(default_factory=dict)
+    impact: float = 0.0
+    is_root_cause: bool = False
+
+
+@dataclass(frozen=True)
+class DiffResult:
+    ref_a: str
+    ref_b: str
+    target_a_hash: str | None
+    target_b_hash: str | None
+    target_a_path: str | None
+    target_b_path: str | None
+    targets_identical: bool
+    diffs: list[AtomicDiff]
+    matched_jobs: list[JobMatch] = field(default_factory=list)
+    only_in_a: list[JobNode] = field(default_factory=list)
+    only_in_b: list[JobNode] = field(default_factory=list)
+    root_cause: AtomicDiff | None = None
+    analysis: str | None = None

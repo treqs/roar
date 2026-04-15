@@ -4,16 +4,9 @@ from __future__ import annotations
 
 import json
 
-from roar.application.query.diff import (
-    AtomicDiff,
-    ChangeType,
-    DiffCategory,
-    DiffResult,
-    JobMatch,
-    JobNode,
-)
+from roar.application.query.diff_graph import JobMatch, JobNode
+from roar.application.query.results import AtomicDiff, ChangeType, DiffCategory, DiffResult
 from roar.presenters.diff_renderer import DiffRenderer
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -131,14 +124,17 @@ class TestSummaryView:
         assert "STRUCTURE" not in output
 
     def test_analysis_section(self):
-        r = _result(analysis="The model differs because of data drift.")
-        # Need at least one diff for analysis to render (not identical)
-        r.diffs = [AtomicDiff(
-            change_type=ChangeType.CONTENT_CHANGED,
-            category=DiffCategory.DATA,
-            description="data changed",
-            impact=0.5,
-        )]
+        r = _result(
+            analysis="The model differs because of data drift.",
+            diffs=[
+                AtomicDiff(
+                    change_type=ChangeType.CONTENT_CHANGED,
+                    category=DiffCategory.DATA,
+                    description="data changed",
+                    impact=0.5,
+                )
+            ],
+        )
         output = DiffRenderer().render_text(r)
         assert "ANALYSIS" in output
         assert "data drift" in output
