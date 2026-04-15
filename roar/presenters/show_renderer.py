@@ -22,6 +22,9 @@ class ShowRenderer:
     keeping presentation separate from data access.
     """
 
+    def __init__(self, *, show_all: bool = False) -> None:
+        self.show_all = show_all
+
     @staticmethod
     def _render_labels(lines: list[str], metadata: dict | None) -> None:
         if not metadata:
@@ -77,7 +80,7 @@ class ShowRenderer:
 
             command = job["command"] or ""
             # Truncate long commands for table display
-            if len(command) > 50:
+            if not self.show_all and len(command) > 50:
                 command = command[:47] + "..."
 
             lines.append(f"{step:<6}  {uid:<8}  {status:<6}  {command}")
@@ -196,7 +199,10 @@ class ShowRenderer:
                 lines.append(f"\n  Environment Variables ({len(env_vars)}):")
                 for name, value in sorted(env_vars.items()):
                     # Truncate long values
-                    display_val = value if len(value) <= 60 else value[:57] + "..."
+                    if self.show_all:
+                        display_val = value
+                    else:
+                        display_val = value if len(value) <= 60 else value[:57] + "..."
                     lines.append(f"    {name}={display_val}")
 
             # Packages
@@ -205,12 +211,15 @@ class ShowRenderer:
                 for manager, pkgs in packages.items():
                     if pkgs and isinstance(pkgs, dict):
                         lines.append(f"\n  Packages ({manager}, {len(pkgs)}):")
-                        for name, version in sorted(pkgs.items())[:15]:
+                        pkg_items = sorted(pkgs.items())
+                        if not self.show_all:
+                            pkg_items = pkg_items[:15]
+                        for name, version in pkg_items:
                             if version:
                                 lines.append(f"    {name}=={version}")
                             else:
                                 lines.append(f"    {name}")
-                        if len(pkgs) > 15:
+                        if not self.show_all and len(pkgs) > 15:
                             lines.append(f"    ... and {len(pkgs) - 15} more")
 
         # Telemetry (external service links)
@@ -316,15 +325,21 @@ class ShowRenderer:
         produced_by = jobs.get("produced_by", [])
         if produced_by:
             lines.append(f"\nProduced by ({len(produced_by)} job(s)):")
-            for job in produced_by[:5]:
-                cmd = (job.get("command") or "?")[:47]
+            visible = produced_by if self.show_all else produced_by[:5]
+            for job in visible:
+                cmd = job.get("command") or "?"
+                if not self.show_all:
+                    cmd = cmd[:47]
                 lines.append(f"  [{job.get('job_uid', '?')}] {cmd}")
 
         consumed_by = jobs.get("consumed_by", [])
         if consumed_by:
             lines.append(f"\nConsumed by ({len(consumed_by)} job(s)):")
-            for job in consumed_by[:5]:
-                cmd = (job.get("command") or "?")[:47]
+            visible = consumed_by if self.show_all else consumed_by[:5]
+            for job in visible:
+                cmd = job.get("command") or "?"
+                if not self.show_all:
+                    cmd = cmd[:47]
                 lines.append(f"  [{job.get('job_uid', '?')}] {cmd}")
 
         if composite_summary is not None and isinstance(composite_summary, dict):
