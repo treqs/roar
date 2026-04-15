@@ -179,6 +179,54 @@ with open(output_file, "w", encoding="utf-8") as handle:
 
 
 @pytest.mark.timeout(120)
+def test_roar_diff_can_compare_local_artifact_to_glaas_reference(
+    glaas_configured_repo: Path,
+    pm2_glaas_available: bool,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+) -> None:
+    """The product-path ``roar diff`` command should consume the real GLaaS DAG shape."""
+    if not pm2_glaas_available:
+        pytest.skip("pm2-managed GLaaS API not available")
+
+    repo = glaas_configured_repo
+    token = hashlib.sha256(str(repo).encode("utf-8")).hexdigest()[:12]
+
+    (repo / "preprocess.py").write_text(
+        """
+import sys
+
+input_file = sys.argv[1]
+output_file = sys.argv[2]
+
+with open(input_file, "r", encoding="utf-8") as handle:
+    data = handle.read()
+
+with open(output_file, "w", encoding="utf-8") as handle:
+    handle.write(data.upper())
+""".strip()
+        + "\n"
+    )
+    (repo / "input.csv").write_text(f"id,value\n1,{token}\n", encoding="utf-8")
+    git_commit("Add diff live CLI fixture")
+
+    run_result = roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
+    assert run_result.returncode == 0, run_result.stderr
+    git_commit("Track processed output for diff CLI live test")
+
+    artifact_hash = _artifact_hash(roar_cli, "processed.csv")
+
+    register_result = roar_cli("register", "processed.csv")
+    assert register_result.returncode == 0, register_result.stderr
+
+    diff_result = roar_cli("diff", "processed.csv", f"glaas:{artifact_hash[:16]}")
+    assert diff_result.returncode == 0, diff_result.stderr
+    output = diff_result.stdout.lower()
+    assert "no differences found in lineage" in output or "identical" in output
+
+
+@pytest.mark.timeout(120)
 def test_registered_artifact_dag_preserves_nested_child_jobs(
     pm2_glaas_available: bool,
     pm2_glaas_client: GlaasClient,

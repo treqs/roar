@@ -218,6 +218,23 @@ class TestDagView:
         output = DiffRenderer().render_text(r, format="dag")
         assert "REMOVED" in output
 
+    def test_python_module_step_uses_module_name(self):
+        ja = _job(job_id=1, command="python -m pkg.train --lr 0.01", step_number=1)
+        jb = _job(job_id=2, command="python -m pkg.train --lr 0.001", step_number=1)
+        diff = AtomicDiff(
+            change_type=ChangeType.PARAM_CHANGED,
+            category=DiffCategory.PARAMS,
+            description="lr changed",
+            detail={"step": "@1"},
+            impact=0.8,
+        )
+
+        r = _result(diffs=[diff], matched_jobs=[JobMatch(ja, jb)])
+        output = DiffRenderer().render_text(r, format="dag")
+
+        assert "pkg.train" in output
+        assert "@1 -m" not in output
+
 
 # ---------------------------------------------------------------------------
 # JSON output

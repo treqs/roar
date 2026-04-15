@@ -72,7 +72,7 @@ def compare_lineage_graphs(
 
 
 def extract_script_and_args(command: str) -> tuple[str, list[str]]:
-    """Extract the script name and trailing args from a command string."""
+    """Extract the script/module name and trailing args from a command string."""
     import shlex
 
     try:
@@ -80,19 +80,46 @@ def extract_script_and_args(command: str) -> tuple[str, list[str]]:
     except ValueError:
         parts = command.split()
 
-    script = ""
-    args: list[str] = []
-    found_script = False
-    for part in parts:
-        if not found_script and part.endswith(".py"):
-            script = os.path.basename(part)
-            found_script = True
-        elif found_script:
-            args.append(part)
-        elif not found_script and part not in ("python", "python3"):
-            script = os.path.basename(part)
-            found_script = True
-    return script, args
+    if not parts:
+        return "", []
+
+    for index, part in enumerate(parts):
+        base = os.path.basename(part)
+        if _is_python_command(base):
+            return _extract_python_target(parts, index + 1, fallback=base)
+        if part.endswith(".py"):
+            return os.path.basename(part), parts[index + 1 :]
+        if not part.startswith("-"):
+            return base, parts[index + 1 :]
+
+    return "", []
+
+
+def _is_python_command(command_name: str) -> bool:
+    """Return whether a token looks like a Python interpreter executable."""
+    return command_name == "python" or command_name.startswith("python3")
+
+
+def _extract_python_target(
+    parts: list[str],
+    start_index: int,
+    *,
+    fallback: str,
+) -> tuple[str, list[str]]:
+    """Extract a Python script or module target after interpreter flags."""
+    index = start_index
+    while index < len(parts):
+        part = parts[index]
+        if part == "-m" and index + 1 < len(parts):
+            return parts[index + 1], parts[index + 2 :]
+        if part.startswith("-"):
+            index += 1
+            continue
+        if part.endswith(".py"):
+            return os.path.basename(part), parts[index + 1 :]
+        return os.path.basename(part), parts[index + 1 :]
+
+    return fallback, []
 
 
 def match_jobs(
@@ -296,9 +323,11 @@ def diff_matched_jobs(matched: list[JobMatch]) -> list[AtomicDiff]:
                     and diff.detail.get("input") in removable
                 )
             ]
-            for name_a, name_b in zip(only_a_names, only_b_names, strict=True):
-                _, hash_a = paths_a[name_a]
-                _, hash_b = paths_b[name_b]
+            renamed_changes = pair_renamed_inputs(
+                {name: paths_a[name] for name in only_a_names},
+                {name: paths_b[name] for name in only_b_names},
+            )
+            for name_a, name_b, hash_a, hash_b in renamed_changes:
                 diffs.append(
                     AtomicDiff(
                         change_type=ChangeType.CONTENT_CHANGED,
@@ -317,6 +346,36 @@ def diff_matched_jobs(matched: list[JobMatch]) -> list[AtomicDiff]:
         diff_env(job_a, job_b, step_label, diffs)
 
     return diffs
+
+
+def pair_renamed_inputs(
+    only_in_a: dict[str, tuple[str, str | None]],
+    only_in_b: dict[str, tuple[str, str | None]],
+) -> list[tuple[str, str, str | None, str | None]]:
+    """Pair renamed inputs, ignoring same-hash renames and returning changed pairs."""
+    matched_b_names: set[str] = set()
+    available_b_by_hash: dict[str, list[str]] = {}
+
+    for name_b, (_artifact_id, hash_b) in sorted(only_in_b.items()):
+        if hash_b:
+            available_b_by_hash.setdefault(hash_b, []).append(name_b)
+
+    unmatched_a_names: list[str] = []
+    for name_a, (_artifact_id, hash_a) in sorted(only_in_a.items()):
+        if hash_a and available_b_by_hash.get(hash_a):
+            matched_b_names.add(available_b_by_hash[hash_a].pop(0))
+            continue
+        unmatched_a_names.append(name_a)
+
+    unmatched_b_names = [name for name in sorted(only_in_b) if name not in matched_b_names]
+
+    changed_pairs: list[tuple[str, str, str | None, str | None]] = []
+    for name_a, name_b in zip(unmatched_a_names, unmatched_b_names, strict=True):
+        _artifact_id_a, hash_a = only_in_a[name_a]
+        _artifact_id_b, hash_b = only_in_b[name_b]
+        changed_pairs.append((name_a, name_b, hash_a, hash_b))
+
+    return changed_pairs
 
 
 def zip_path_hash(

@@ -163,54 +163,9 @@ def glaas_payload_to_graph(ref_key: str, payload: dict[str, Any] | None) -> Line
             target_hash = hashes[0].get("digest") if isinstance(hashes[0], dict) else None
         target_path = artifact.get("first_seen_path") or artifact.get("path")
 
-    jobs_list = payload.get("jobs", [])
-    for i, job_data in enumerate(jobs_list):
-        if not isinstance(job_data, dict):
-            continue
-
-        input_hashes: dict[str, str] = {}
-        input_paths: dict[str, str] = {}
-        for inp in job_data.get("inputs", []):
-            if isinstance(inp, dict):
-                artifact_hash = inp.get("hash", inp.get("artifact_hash", ""))
-                path = inp.get("path", "")
-                if artifact_hash:
-                    input_hashes[artifact_hash] = artifact_hash
-                    input_paths[artifact_hash] = path
-
-        output_hashes: dict[str, str] = {}
-        output_paths: dict[str, str] = {}
-        for out in job_data.get("outputs", []):
-            if isinstance(out, dict):
-                artifact_hash = out.get("hash", out.get("artifact_hash", ""))
-                path = out.get("path", "")
-                if artifact_hash:
-                    output_hashes[artifact_hash] = artifact_hash
-                    output_paths[artifact_hash] = path
-
-        metadata = None
-        raw_meta = job_data.get("metadata")
-        if isinstance(raw_meta, str):
-            with suppress(json.JSONDecodeError):
-                metadata = json.loads(raw_meta)
-        elif isinstance(raw_meta, dict):
-            metadata = raw_meta
-
-        job_nodes.append(
-            JobNode(
-                job_id=-(i + 1),
-                job_uid=job_data.get("job_uid", f"remote-{i}"),
-                command=job_data.get("command", ""),
-                step_number=job_data.get("step_number"),
-                git_commit=job_data.get("git_commit"),
-                git_branch=job_data.get("git_branch"),
-                metadata=metadata,
-                input_hashes=input_hashes,
-                output_hashes=output_hashes,
-                input_paths=input_paths,
-                output_paths=output_paths,
-            )
-        )
+    next_remote_job_id = -1
+    for job_data in payload.get("jobs", []):
+        next_remote_job_id = append_glaas_job_nodes(job_data, job_nodes, next_remote_job_id)
 
     job_nodes.sort(key=lambda job: (job.step_number or 0, job.job_id))
 
@@ -220,6 +175,106 @@ def glaas_payload_to_graph(ref_key: str, payload: dict[str, Any] | None) -> Line
         target_path=target_path,
         jobs=job_nodes,
     )
+
+
+def append_glaas_job_nodes(
+    job_data: Any,
+    job_nodes: list[JobNode],
+    next_remote_job_id: int,
+) -> int:
+    """Append one GLaaS job and any nested children to the normalized graph."""
+    if not isinstance(job_data, dict):
+        return next_remote_job_id
+
+    fallback_job_id = next_remote_job_id
+    input_hashes, input_paths = collect_glaas_artifact_info(job_data.get("inputs", []))
+    output_hashes, output_paths = collect_glaas_artifact_info(job_data.get("outputs", []))
+
+    job_nodes.append(
+        JobNode(
+            job_id=coerce_glaas_job_id(job_data.get("id"), fallback_job_id),
+            job_uid=str(
+                first_present(job_data, "jobUid", "job_uid") or f"remote-{abs(fallback_job_id)}"
+            ),
+            command=str(job_data.get("command") or ""),
+            step_number=coerce_int(first_present(job_data, "stepNumber", "step_number")),
+            git_commit=coerce_optional_str(first_present(job_data, "gitCommit", "git_commit")),
+            git_branch=coerce_optional_str(first_present(job_data, "gitBranch", "git_branch")),
+            metadata=parse_metadata(job_data.get("metadata")),
+            input_hashes=input_hashes,
+            output_hashes=output_hashes,
+            input_paths=input_paths,
+            output_paths=output_paths,
+        )
+    )
+    next_remote_job_id -= 1
+
+    children = job_data.get("children", [])
+    if isinstance(children, list):
+        for child in children:
+            next_remote_job_id = append_glaas_job_nodes(child, job_nodes, next_remote_job_id)
+
+    return next_remote_job_id
+
+
+def collect_glaas_artifact_info(entries: Any) -> tuple[dict[str, str], dict[str, str]]:
+    """Normalize GLaaS job I/O entries into hash/path maps keyed by digest."""
+    hashes: dict[str, str] = {}
+    paths: dict[str, str] = {}
+    if not isinstance(entries, list):
+        return hashes, paths
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        artifact_hash = entry.get("hash") or entry.get("artifact_hash")
+        if not artifact_hash:
+            continue
+        artifact_key = str(artifact_hash)
+        hashes[artifact_key] = artifact_key
+        paths[artifact_key] = str(entry.get("path") or entry.get("first_seen_path") or "")
+
+    return hashes, paths
+
+
+def first_present(mapping: dict[str, Any], *keys: str) -> Any:
+    """Return the first non-None field from a mapping."""
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def coerce_glaas_job_id(raw_job_id: Any, fallback_job_id: int) -> int:
+    """Coerce a remote job id into an integer, falling back to a synthetic id."""
+    if isinstance(raw_job_id, bool):
+        return fallback_job_id
+    if isinstance(raw_job_id, int):
+        return raw_job_id
+    if isinstance(raw_job_id, str):
+        with suppress(ValueError):
+            return int(raw_job_id)
+    return fallback_job_id
+
+
+def coerce_int(value: Any) -> int | None:
+    """Coerce a value to ``int`` when possible."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        with suppress(ValueError):
+            return int(value)
+    return None
+
+
+def coerce_optional_str(value: Any) -> str | None:
+    """Return ``str(value)`` for present values, otherwise ``None``."""
+    if value is None:
+        return None
+    return str(value)
 
 
 def build_local_lineage_graph(

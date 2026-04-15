@@ -119,6 +119,11 @@ class TestExtractScriptAndArgs:
         assert script == "train.py"
         assert args == ["--lr", "0.01"]
 
+    def test_python_module(self):
+        script, args = extract_script_and_args("python -m pkg.train --lr 0.01 --epochs 10")
+        assert script == "pkg.train"
+        assert args == ["--lr", "0.01", "--epochs", "10"]
+
 
 # ---------------------------------------------------------------------------
 # parse_kv_args
@@ -287,6 +292,16 @@ class TestMatchJobs:
         assert len(only_b) == 1
         assert only_b[0].command == "python preprocess.py"
 
+    def test_python_module_names_do_not_false_match(self):
+        ja = _job(job_id=1, command="python -m pkg.train --lr 0.01")
+        jb = _job(job_id=2, command="python -m pkg.evaluate --lr 0.01")
+
+        matched, only_a, only_b = match_jobs(_graph([ja]), _graph([jb]))
+
+        assert matched == []
+        assert only_a == [ja]
+        assert only_b == [jb]
+
 
 # ---------------------------------------------------------------------------
 # diff_matched_jobs
@@ -346,6 +361,21 @@ class TestDiffMatchedJobs:
         # Should NOT have added/removed, only the positional comparison
         assert all(d.change_type != ChangeType.ADDED for d in data_diffs)
         assert all(d.change_type != ChangeType.REMOVED for d in data_diffs)
+
+    def test_same_hash_renamed_inputs_do_not_register_as_content_change(self):
+        ja = _job(
+            input_hashes={"a": "same-hash"},
+            input_paths={"a": "/data/train_feats.npz"},
+        )
+        jb = _job(
+            input_hashes={"b": "same-hash"},
+            input_paths={"b": "/data/eval_feats.npz"},
+        )
+
+        diffs = diff_matched_jobs([JobMatch(ja, jb)])
+        data_diffs = [d for d in diffs if d.category == DiffCategory.DATA]
+
+        assert data_diffs == []
 
     def test_env_diff(self):
         ja = _job(metadata={"packages": {"pip": {"scipy": "1.16.1"}}})

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..application.query.diff_engine import extract_script_and_args
 from ..application.query.diff_graph import JobNode
 from ..application.query.results import AtomicDiff, DiffCategory, DiffResult
 
@@ -263,16 +264,7 @@ def _job_step_label(job: JobNode) -> str:
 
 def _extract_script(command: str) -> tuple[str, list[str]]:
     """Extract script name from command for DAG view."""
-    import os
-    import shlex
-
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        parts = command.split()
-    for part in parts:
-        if part.endswith(".py"):
-            return os.path.basename(part), []
-        if part not in ("python", "python3"):
-            return os.path.basename(part), []
+    script, args = extract_script_and_args(command)
+    if script:
+        return script, args
     return command[:30], []
