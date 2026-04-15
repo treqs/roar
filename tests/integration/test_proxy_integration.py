@@ -342,11 +342,11 @@ class TestProxyGracefulDegradation:
         import shutil
         import subprocess
 
-        # Enable proxy in config
-        config_path = temp_git_repo / ".roar" / "config.toml"
-        config_text = config_path.read_text()
-        config_text += "\n[proxy]\nenabled = true\n"
-        config_path.write_text(config_text)
+        # Enable proxy via the product CLI so config stays valid.
+        enable_result = roar_cli("proxy", "enable", check=False)
+        assert enable_result.returncode == 0, (
+            f"proxy enable failed:\nstdout={enable_result.stdout}\nstderr={enable_result.stderr}"
+        )
 
         script = temp_git_repo / "hello.py"
         script.write_text('print("hello")\n')

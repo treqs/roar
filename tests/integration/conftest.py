@@ -35,16 +35,16 @@ def proxy_binary():
 
 
 @pytest.fixture
-def proxy_repo(temp_git_repo, fake_s3, proxy_binary, git_commit, monkeypatch):
+def proxy_repo(temp_git_repo, fake_s3, proxy_binary, roar_cli, git_commit, monkeypatch):
     """Temp git repo with proxy enabled and AWS env pointing at fake S3.
 
-    Enables proxy in config, sets AWS credentials and endpoint URL
-    so that the coordinator chains traffic through the fake S3 server.
+    Enables proxy via the product CLI, then sets AWS credentials and
+    endpoint URL so the coordinator chains traffic through the fake S3 server.
     """
-    config_path = temp_git_repo / ".roar" / "config.toml"
-    config_text = config_path.read_text()
-    config_text += "\n[proxy]\nenabled = true\n"
-    config_path.write_text(config_text)
+    enable_result = roar_cli("proxy", "enable")
+    assert enable_result.returncode == 0, (
+        f"proxy enable failed:\nstdout={enable_result.stdout}\nstderr={enable_result.stderr}"
+    )
 
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
