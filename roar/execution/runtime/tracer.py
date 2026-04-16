@@ -300,8 +300,10 @@ class TracerService:
         signal_handler.install()
 
         exit_code = 1
+        selected_backend: str | None = None
         try:
             for idx, (backend, tracer_path) in enumerate(candidates):
+                selected_backend = backend
                 # Ensure stale files from previous attempts don't mask failures.
                 for log_file in (tracer_log_file, inject_log_file):
                     try:
@@ -368,6 +370,7 @@ class TracerService:
             tracer_log_path=tracer_log_file,
             inject_log_path=inject_log_file,
             interrupted=signal_handler.is_interrupted(),
+            backend=selected_backend,
         )
 
     def get_log_paths(self, roar_dir: Path) -> tuple:

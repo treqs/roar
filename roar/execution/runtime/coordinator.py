@@ -109,6 +109,12 @@ class RunCoordinator:
         # Backup previous outputs if reversibility is enabled
         self._backup_previous_outputs(ctx)
 
+        # UX presenter for lifecycle output (stderr). Pipes through to existing
+        # IPresenter for any legacy print_error calls.
+        from ...presenters.run_report import RunReportPresenter
+
+        run_presenter = RunReportPresenter(self.presenter, quiet=ctx.quiet)
+
         # Start proxy if configured
         proxy_handle = None
         extra_env: dict[str, str] = {
@@ -151,6 +157,12 @@ class RunCoordinator:
         # Execute via tracer
         from ...core.exceptions import TracerNotFoundError
 
+        # Announce trace is starting. We don't yet know the backend (it's
+        # selected inside tracer.execute), so we just say "tracing"; the
+        # backend shows up in the "trace done" line below.
+        proxy_active = proxy_handle is not None
+        run_presenter.trace_starting(ctx.tracer_mode, proxy_active)
+
         self.logger.debug("Starting tracer execution")
         try:
             tracer_result = self._tracer.execute(
@@ -162,6 +174,7 @@ class RunCoordinator:
                 tracer_mode_override=ctx.tracer_mode,
                 fallback_enabled_override=ctx.tracer_fallback,
             )
+            run_presenter.trace_ended(tracer_result.duration, tracer_result.exit_code)
             self.logger.debug(
                 "Tracer completed: exit_code=%d, duration=%.2fs, interrupted=%s",
                 tracer_result.exit_code,
@@ -220,39 +233,35 @@ class RunCoordinator:
                 is_build=is_build,
             )
 
-        # Post-processing with progress spinner
-        from ...presenters.spinner import Spinner
+        # Collect provenance first (fast) so we know total file count for the
+        # hashing spinner.
+        self.logger.debug("Collecting provenance data")
+        inject_log = (
+            tracer_result.inject_log_path if os.path.exists(tracer_result.inject_log_path) else None
+        )
+        roar_dir = os.path.join(ctx.repo_root, ".roar")
+        provenance_service = ProvenanceService(cache_dir=roar_dir)
+        t_prov_start = time.perf_counter()
+        prov = provenance_service.collect(
+            ctx.repo_root,
+            tracer_result.tracer_log_path,
+            inject_log,
+            config,
+        )
+        t_prov_end = time.perf_counter()
+        n_read = len(prov.get("data", {}).get("read_files", []))
+        n_written = len(prov.get("data", {}).get("written_files", []))
+        self.logger.debug(
+            "Provenance collected: read_files=%d, written_files=%d",
+            n_read,
+            n_written,
+        )
 
-        with Spinner("Sniffing out provenance...", quiet=ctx.quiet) as spin:
-            # Collect provenance
-            self.logger.debug("Collecting provenance data")
-            inject_log = (
-                tracer_result.inject_log_path
-                if os.path.exists(tracer_result.inject_log_path)
-                else None
-            )
-            roar_dir = os.path.join(ctx.repo_root, ".roar")
-            provenance_service = ProvenanceService(cache_dir=roar_dir)
-            t_prov_start = time.perf_counter()
-            prov = provenance_service.collect(
-                ctx.repo_root,
-                tracer_result.tracer_log_path,
-                inject_log,
-                config,
-            )
-            t_prov_end = time.perf_counter()
-            self.logger.debug(
-                "Provenance collected: read_files=%d, written_files=%d",
-                len(prov.get("data", {}).get("read_files", [])),
-                len(prov.get("data", {}).get("written_files", [])),
-            )
+        # Stop proxy and collect S3 entries before DB recording.
+        s3_entries = stop_proxy_if_running()
 
-            # Stop proxy and collect S3 entries before DB recording.
-            s3_entries = stop_proxy_if_running()
-
-            spin.update("Hashing files and TReqing outputs...")
-
-            # Record in database
+        total_files = n_read + n_written
+        with run_presenter.hashing(total=total_files or None):
             self.logger.debug("Recording job in database")
             t_record_start = time.perf_counter()
             job_id, job_uid, read_file_info, written_file_info, stale_upstream, stale_downstream = (
@@ -275,11 +284,11 @@ class RunCoordinator:
                 len(written_file_info),
             )
 
-            spin.update("Auto-lineaging done, tidying up...")
-
             # Cleanup temp files
             self.logger.debug("Cleaning up temporary log files")
             self._cleanup_logs(tracer_result.tracer_log_path, tracer_result.inject_log_path)
+
+        run_presenter.lineage_captured()
 
         t_postrun_end = time.perf_counter()
 
@@ -304,6 +313,16 @@ class RunCoordinator:
             tracer_result.exit_code,
             tracer_result.duration,
         )
+        # UX metadata for the new run presenter.
+        exec_packages = prov.get("executables", {}).get("packages", {}) or {}
+        pip_count = len(exec_packages.get("pip", {}) or {})
+        dpkg_count = len(exec_packages.get("dpkg", {}) or {})
+        env_count = len(prov.get("runtime", {}).get("env_vars", {}) or {})
+        post_duration = t_postrun_end - t_postrun_start
+        backend_name = getattr(tracer_result, "backend", None)
+        if not isinstance(backend_name, str):
+            backend_name = None
+
         return RunResult(
             exit_code=tracer_result.exit_code,
             job_id=job_id,
@@ -315,6 +334,12 @@ class RunCoordinator:
             is_build=is_build,
             stale_upstream=stale_upstream,
             stale_downstream=stale_downstream,
+            backend=backend_name,
+            post_duration=post_duration,
+            proxy_active=proxy_active,
+            pip_count=pip_count,
+            dpkg_count=dpkg_count,
+            env_count=env_count,
         )
 
     def _record_job(
