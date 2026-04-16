@@ -6,7 +6,7 @@ from ...db.query_context import create_query_database_context
 from .diff_analysis import generate_llm_analysis
 from .diff_engine import compare_lineage_graphs
 from .diff_graph import build_diff_graph
-from .diff_refs import DiffError, classify_diff_ref
+from .diff_refs import DiffError
 from .requests import DiffQueryRequest
 from .results import DiffResult
 
@@ -15,17 +15,9 @@ def build_diff_summary(request: DiffQueryRequest) -> DiffResult:
     """Build a diff summary between two supported lineage references."""
     max_depth = request.depth if request.depth is not None else 10
 
-    ref_a_type = classify_diff_ref(request.ref_a)
-    ref_b_type = classify_diff_ref(request.ref_b)
-    needs_local = ref_a_type != "glaas" or ref_b_type != "glaas"
-
-    if needs_local:
-        with create_query_database_context(request.roar_dir) as db_ctx:
-            graph_a = build_diff_graph(db_ctx, request.ref_a, request.cwd, max_depth)
-            graph_b = build_diff_graph(db_ctx, request.ref_b, request.cwd, max_depth)
-    else:
-        graph_a = build_diff_graph(None, request.ref_a, request.cwd, max_depth)
-        graph_b = build_diff_graph(None, request.ref_b, request.cwd, max_depth)
+    with create_query_database_context(request.roar_dir) as db_ctx:
+        graph_a = build_diff_graph(db_ctx, request.ref_a, request.cwd, max_depth)
+        graph_b = build_diff_graph(db_ctx, request.ref_b, request.cwd, max_depth)
 
     comparison = compare_lineage_graphs(graph_a, graph_b)
     targets_identical = (

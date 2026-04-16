@@ -51,7 +51,10 @@ def diff(
       - Step ref:       @5, @7
       - Job UID:        017a0de0
       - Session:        session:current, session:<hash>
-      - Remote (GLaaS): glaas:<hash>
+
+    \b
+    Bare artifact hashes resolve locally first and can fall back to GLaaS when
+    `glaas.query_nonlocal_ids_on_glaas = true`.
 
     \b
     Examples:
@@ -60,7 +63,7 @@ def diff(
         roar diff @5 @7 --format dag
         roar diff @5 @7 --format category
         roar diff session:current session:<hash>
-        roar diff glaas:<hash> ./model.pkl
+        roar diff ./model.pkl deadbeefcafebabe
         roar diff @5 @7 --analyze
         roar diff @5 @7 --json
     """

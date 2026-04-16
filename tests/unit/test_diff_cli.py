@@ -87,3 +87,11 @@ class TestDiffCli:
         runner = CliRunner()
         result = runner.invoke(diff, ["@5", "@7", "--format", "invalid"], obj=_ctx(tmp_path))
         assert result.exit_code != 0
+
+    def test_help_does_not_reference_glaas_prefix(self, tmp_path: Path):
+        runner = CliRunner()
+        result = runner.invoke(diff, ["--help"], obj=_ctx(tmp_path))
+
+        assert result.exit_code == 0, result.output
+        assert "glaas:" not in result.output
+        assert "deadbeefcafebabe" in result.output

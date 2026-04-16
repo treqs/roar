@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from roar.application.query.diff_graph import glaas_payload_to_graph
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from roar.application.query.diff_graph import LineageGraph, build_diff_graph, glaas_payload_to_graph
 
 
 class TestGlaasPayloadToGraph:
@@ -63,3 +68,47 @@ class TestGlaasPayloadToGraph:
         assert parent_job.metadata == {"role": "driver"}
         assert parent_job.input_hashes == {"checkpoint-hash": "checkpoint-hash"}
         assert parent_job.output_hashes == {"final-hash": "final-hash"}
+
+
+def test_build_diff_graph_falls_back_to_remote_artifact_hash_when_enabled(tmp_path: Path) -> None:
+    db_ctx = MagicMock()
+    db_ctx.jobs.get_by_uid.return_value = None
+    db_ctx.artifacts.get_by_hash.return_value = None
+
+    remote_graph = LineageGraph(
+        target_artifact_id="remote:abc",
+        target_hash="a" * 64,
+        target_path=None,
+        jobs=[],
+    )
+
+    with (
+        patch(
+            "roar.application.query.diff_graph.remote_artifact_fallback_enabled", return_value=True
+        ),
+        patch(
+            "roar.application.query.diff_graph.build_remote_artifact_graph",
+            return_value=remote_graph,
+        ) as build_remote,
+    ):
+        graph = build_diff_graph(db_ctx, "a" * 64, tmp_path, 10)
+
+    assert graph == remote_graph
+    build_remote.assert_called_once_with("a" * 64, 10)
+
+
+def test_build_diff_graph_does_not_remote_fallback_when_disabled(tmp_path: Path) -> None:
+    db_ctx = MagicMock()
+    db_ctx.jobs.get_by_uid.return_value = None
+    db_ctx.artifacts.get_by_hash.return_value = None
+
+    with (
+        patch(
+            "roar.application.query.diff_graph.remote_artifact_fallback_enabled", return_value=False
+        ),
+        patch("roar.application.query.diff_graph.build_remote_artifact_graph") as build_remote,
+        pytest.raises(RuntimeError, match=r"Artifact not found"),
+    ):
+        build_diff_graph(db_ctx, "b" * 64, tmp_path, 10)
+
+    build_remote.assert_not_called()

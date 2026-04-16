@@ -82,9 +82,6 @@ class TestClassifyRef:
         assert classify_diff_ref("deadbeef01234567") == "artifact_hash"
         assert classify_diff_ref("a" * 64) == "artifact_hash"
 
-    def test_glaas_prefix(self):
-        assert classify_diff_ref("glaas:abc123") == "glaas"
-
     def test_session_prefix(self):
         assert classify_diff_ref("session:current") == "session"
         assert classify_diff_ref("session:abc123") == "session"

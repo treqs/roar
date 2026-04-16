@@ -10,13 +10,14 @@ from typing import Any
 
 from ...core.digests import extract_primary_digest
 from ...db.query_context import QueryDatabaseContext
-from .diff_refs import (
-    DiffError,
-    classify_diff_ref,
-    glaas_ref_key,
-    resolve_ref_to_artifact_id,
-    resolve_session_ref,
+from ..lookup import (
+    ArtifactRemoteLookupOperation,
+    lookup_remote_artifact,
+    parse_ref,
+    remote_artifact_fallback_enabled,
+    run_local_then_remote_lookup,
 )
+from .diff_refs import DiffError, classify_diff_ref, resolve_ref_to_artifact_id, resolve_session_ref
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,7 @@ class JobMatch:
 
 
 def build_diff_graph(
-    db_ctx: QueryDatabaseContext | None,
+    db_ctx: QueryDatabaseContext,
     ref: str,
     cwd: Path,
     max_depth: int,
@@ -63,19 +64,62 @@ def build_diff_graph(
     """Resolve any supported diff reference into a normalized lineage graph."""
     ref_type = classify_diff_ref(ref)
 
-    if ref_type == "glaas":
-        return build_glaas_graph(ref)
-
     if ref_type == "session":
-        if db_ctx is None:
-            raise DiffError("Local database required for session refs.")
         session = resolve_session_ref(db_ctx, ref)
         return build_session_lineage_graph(db_ctx, session)
 
-    if db_ctx is None:
-        raise DiffError("Local database required for local refs.")
+    if ref_type == "artifact_hash":
+        parsed_ref = parse_ref(ref)
+        lookup = run_local_then_remote_lookup(
+            lookup_local=lambda: _build_local_artifact_hash_graph_or_none(
+                db_ctx,
+                ref,
+                cwd,
+                max_depth,
+            ),
+            lookup_remote=lambda: _build_remote_artifact_graph_lookup(ref, max_depth),
+            allow_remote=remote_artifact_fallback_enabled(
+                ArtifactRemoteLookupOperation.DIFF,
+                parsed_ref,
+                start_dir=cwd,
+            ),
+        )
+        if lookup.error:
+            raise DiffError(lookup.error)
+        if lookup.value is not None:
+            return lookup.value
+        raise DiffError(f"Artifact not found: {ref}")
+
     artifact_id, display_path = resolve_ref_to_artifact_id(db_ctx, ref, cwd)
     return build_local_lineage_graph(db_ctx, artifact_id, display_path, max_depth)
+
+
+def _build_local_artifact_hash_graph_or_none(
+    db_ctx: QueryDatabaseContext,
+    ref: str,
+    cwd: Path,
+    max_depth: int,
+) -> LineageGraph | None:
+    """Build a local artifact lineage graph for a hash ref, returning ``None`` on miss."""
+    try:
+        artifact_id, display_path = resolve_ref_to_artifact_id(db_ctx, ref, cwd)
+    except DiffError as exc:
+        if str(exc) == f"Artifact not found: {ref}":
+            return None
+        raise
+
+    return build_local_lineage_graph(db_ctx, artifact_id, display_path, max_depth)
+
+
+def _build_remote_artifact_graph_lookup(
+    ref: str,
+    max_depth: int,
+) -> tuple[LineageGraph | None, str | None]:
+    """Build a remote artifact graph for runner-based fallback orchestration."""
+    try:
+        return build_remote_artifact_graph(ref, max_depth), None
+    except DiffError as exc:
+        return None, str(exc)
 
 
 def build_session_lineage_graph(
@@ -121,10 +165,8 @@ def build_session_lineage_graph(
     )
 
 
-def build_glaas_graph(ref: str) -> LineageGraph:
+def build_remote_artifact_graph(ref_key: str, max_depth: int) -> LineageGraph:
     """Fetch and normalize a remote GLaaS DAG/lineage payload."""
-    ref_key = glaas_ref_key(ref)
-
     try:
         from ...integrations.glaas.client import GlaasClient
     except ImportError as exc:
@@ -134,13 +176,23 @@ def build_glaas_graph(ref: str) -> LineageGraph:
     if not client.is_configured():
         raise DiffError("GLaaS URL not configured. Run 'roar config set glaas.url <url>'.")
 
-    result, error = client.get_artifact_dag(ref_key)
+    artifact, artifact_error = lookup_remote_artifact(
+        hash_prefix=ref_key,
+        artifact_reader=client,
+    )
+    if artifact_error:
+        raise DiffError(f"GLaaS lookup failed for '{ref_key}': {artifact_error}")
+    if not artifact:
+        raise DiffError(f"Artifact not found: {ref_key}")
+
+    canonical_hash = str(artifact.get("hash") or ref_key)
+    result, error = client.get_artifact_dag(canonical_hash)
     if error:
-        result, error = client.get_artifact_lineage(ref_key, depth=10)
+        result, error = client.get_artifact_lineage(canonical_hash, depth=max_depth)
         if error:
             raise DiffError(f"GLaaS lookup failed for '{ref_key}': {error}")
 
-    return glaas_payload_to_graph(ref_key, result)
+    return glaas_payload_to_graph(canonical_hash, result)
 
 
 def glaas_payload_to_graph(ref_key: str, payload: dict[str, Any] | None) -> LineageGraph:
@@ -170,7 +222,7 @@ def glaas_payload_to_graph(ref_key: str, payload: dict[str, Any] | None) -> Line
     job_nodes.sort(key=lambda job: (job.step_number or 0, job.job_id))
 
     return LineageGraph(
-        target_artifact_id=f"glaas:{ref_key}",
+        target_artifact_id=f"remote:{ref_key}",
         target_hash=target_hash,
         target_path=target_path,
         jobs=job_nodes,

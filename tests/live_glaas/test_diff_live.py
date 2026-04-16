@@ -66,6 +66,20 @@ def glaas_configured_repo(temp_git_repo: Path, pm2_glaas_url: str) -> Path:
         check=True,
         capture_output=True,
     )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "roar",
+            "config",
+            "set",
+            "glaas.query_nonlocal_ids_on_glaas",
+            "true",
+        ],
+        cwd=temp_git_repo,
+        check=True,
+        capture_output=True,
+    )
     return temp_git_repo
 
 
@@ -105,7 +119,7 @@ def test_registered_artifact_dag_uses_real_pm2_contract(
 ) -> None:
     """A product-path registration should expose the real camelCase DAG payload.
 
-    This is the payload shape that ``roar diff glaas:<hash>`` must consume.
+    This is the payload shape that ``roar diff <remote-hash>`` must consume.
     """
     if not pm2_glaas_available:
         pytest.skip("pm2-managed GLaaS API not available")
@@ -220,7 +234,7 @@ with open(output_file, "w", encoding="utf-8") as handle:
     register_result = roar_cli("register", "processed.csv")
     assert register_result.returncode == 0, register_result.stderr
 
-    diff_result = roar_cli("diff", "processed.csv", f"glaas:{artifact_hash[:16]}")
+    diff_result = roar_cli("diff", "processed.csv", artifact_hash[:16])
     assert diff_result.returncode == 0, diff_result.stderr
     output = diff_result.stdout.lower()
     assert "no differences found in lineage" in output or "identical" in output

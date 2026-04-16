@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ...db.query_context import QueryDatabaseContext
+from ..lookup import RefKind
+from ..lookup import classify_ref as classify_lookup_ref
 
 DiffRefType = Literal[
-    "glaas",
     "session",
     "job_step",
     "file_path",
@@ -18,7 +19,6 @@ DiffRefType = Literal[
     "path_candidate",
 ]
 
-_GLAAS_PREFIX = "glaas:"
 _SESSION_PREFIX = "session:"
 
 
@@ -28,18 +28,17 @@ class DiffError(RuntimeError):
 
 def classify_diff_ref(ref: str) -> DiffRefType:
     """Classify a diff reference string by the resolver path it needs."""
-    if ref.startswith(_GLAAS_PREFIX):
-        return "glaas"
     if ref.startswith(_SESSION_PREFIX):
         return "session"
-    if ref.startswith("@"):
+
+    ref_kind = classify_lookup_ref(ref)
+    if ref_kind == RefKind.JOB_STEP:
         return "job_step"
-    if "/" in ref or ref.startswith(("./", "../", "~")):
+    if ref_kind == RefKind.FILE_PATH:
         return "file_path"
-    is_hex = bool(ref) and all(c in "0123456789abcdefABCDEF" for c in ref)
-    if is_hex and len(ref) <= 8:
+    if ref_kind == RefKind.JOB_UID:
         return "job_uid"
-    if is_hex and len(ref) > 8:
+    if ref_kind == RefKind.ARTIFACT_HASH:
         return "artifact_hash"
     return "path_candidate"
 
@@ -158,10 +157,3 @@ def resolve_session_ref(db_ctx: QueryDatabaseContext, ref: str) -> dict[str, Any
         "git_commit_start": row["git_commit_start"],
         "git_commit_end": row["git_commit_end"],
     }
-
-
-def glaas_ref_key(ref: str) -> str:
-    """Strip the ``glaas:`` prefix from a remote diff reference."""
-    if not ref.startswith(_GLAAS_PREFIX):
-        raise DiffError(f"Invalid GLaaS reference: {ref}")
-    return ref[len(_GLAAS_PREFIX) :]
