@@ -74,13 +74,19 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
 HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Start Here", ("init", "run", "build", "dag")),
     ("Inspect Local Lineage", ("status", "log", "show", "lineage", "inputs", "pop", "reproduce")),
-    ("Share and Publish", ("put", "register", "get", "label", "workflow")),
+    ("Share and Publish", ("put", "register", "get", "label")),
     ("Setup and Admin", ("auth", "config", "env", "tracer", "proxy", "reset")),
-    ("GLaaS / TReqs Account", ("login", "logout", "whoami", "projects")),
+    ("GLaaS / TReqs Account", ("login", "logout", "whoami", "projects", "workflow")),
 )
 
 EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG = "ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS"
-_EXPERIMENTAL_ACCOUNT_COMMANDS = frozenset({"login", "logout", "whoami", "projects"})
+_EXPERIMENTAL_ACCOUNT_COMMANDS = frozenset({
+    "login",
+    "logout",
+    "whoami",
+    "projects",
+    "workflow",
+})
 _TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes"})
 
 

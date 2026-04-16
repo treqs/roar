@@ -10,9 +10,12 @@ from pathlib import Path
 import pytest
 import yaml
 
+from roar.cli import EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG
 from tests.conftest import _run_roar_cmd
 
 pytestmark = pytest.mark.integration
+
+_FEATURE_FLAG_ENV = {EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG: "1"}
 
 
 def _write_script(path: Path, content: str) -> None:
@@ -63,7 +66,13 @@ def test_roar_workflow_generate_writes_default_treqs_workflow_for_active_session
     assert result.returncode == 0, result.stderr or result.stdout
     git_commit("after train")
 
-    result = roar_cli("workflow", "generate", "--name", "derived-pipeline")
+    result = roar_cli(
+        "workflow",
+        "generate",
+        "--name",
+        "derived-pipeline",
+        env_overrides=_FEATURE_FLAG_ENV,
+    )
     assert result.returncode == 0, result.stderr or result.stdout
     assert "Generated TReqs workflow: .treqs/workflows/derived-pipeline.yaml" in result.stdout
     assert "Tasks: 2" in result.stdout
@@ -142,6 +151,7 @@ def test_roar_workflow_generate_can_resolve_session_by_dag_hash_and_preserve_sha
         session_hash[:12],
         "--name",
         "subdir-pipeline",
+        env_overrides=_FEATURE_FLAG_ENV,
     )
     assert result.returncode == 0, result.stderr or result.stdout
     assert "Generated TReqs workflow: .treqs/workflows/subdir-pipeline.yaml" in result.stdout
