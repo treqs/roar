@@ -1,0 +1,100 @@
+---
+name: roar
+description: Use roar (the CLI provenance tracker) to run ML/data pipeline commands with automatic lineage capture. Trigger when the user wants to track inputs/outputs, reproduce a run, query lineage, inspect artifacts/sessions/jobs, or asks "what produced this file?" / "what did this script read?". Use `roar run <cmd>` instead of bare `<cmd>` when provenance is wanted.
+---
+
+<!-- roar version: {version} -->
+
+# roar
+
+`roar` is a CLI for ML/data pipeline provenance. It wraps normal commands with `roar run` to automatically capture inputs, outputs, command args, timing, and git context. Lineage is stored locally in `.roar/roar.db` and can be published to GLaaS.
+
+## Core principle
+
+**You don't change your code to use roar — you change how you launch it.**
+Replace `python train.py` with `roar run python train.py`. Everything else (file reads, file writes, package versions, git state) is captured automatically.
+
+## When to use roar
+
+- The user wants reproducibility, lineage, or "what produced this artifact"
+- They're running ML training, data processing, or any pipeline where inputs/outputs matter
+- They've asked you to investigate provenance, trace artifacts back to producers, or compare runs
+
+## Essential commands
+
+| Command | What it does |
+|---|---|
+| `roar init` | Set up `.roar/` in the current project (one-time) |
+| `roar run <cmd>` | Execute `<cmd>` with full provenance capture |
+| `roar build <cmd>` | Track a build/setup step (separate from main pipeline) |
+| `roar status` | Show active session summary |
+| `roar log` | List jobs in the active session |
+| `roar show [REF]` | Inspect a session, job, or artifact. `REF` can be `@1` (step), 8-char hex (job UID), or longer hex (artifact hash) |
+| `roar show --all [REF]` | Same, but disable truncation of packages, env vars, and job lists |
+| `roar dag` | Visualize the local execution DAG |
+| `roar lineage <hash>` | Inspect lineage for a tracked artifact |
+| `roar inputs <ref>` | Show root input artifacts for a target |
+
+## Common workflows
+
+### Investigating a session
+```bash
+roar status              # what's the active session?
+roar log                 # what jobs ran?
+roar show @1             # details of step 1
+roar show --all @1       # full details (no truncation)
+```
+
+### Tracing an artifact
+```bash
+roar show <hash>         # who made it, what consumed it
+roar lineage <hash>      # full upstream/downstream graph
+roar inputs <hash>       # root inputs
+```
+
+### Running with provenance
+```bash
+roar run python train.py --epochs 10
+roar run bash scripts/preprocess.sh
+roar build pip install -r requirements.txt   # build step, not main pipeline
+```
+
+## Detection: is a script running under roar?
+
+If a Python script needs to *require* it's being run under `roar run`, add at the top:
+
+```python
+from roar import require   # exits with helpful message if not under `roar run`
+```
+
+The import itself walks the process tree — no env var spoofing. Set `ROAR_GUARD=0` to bypass in tests.
+
+## Tracer backends
+
+roar captures I/O via one of three tracers (auto-selected, configurable via `roar tracer`):
+- **eBPF** — kernel-level, lowest overhead, requires Linux + privileges
+- **preload** — `LD_PRELOAD` / `DYLD_INSERT_LIBRARIES`, works on Linux + macOS, no privileges
+- **ptrace** — fallback, works anywhere, slower
+
+Workloads should NOT need to know which backend is active.
+
+## Gotchas
+
+- **Ray workers**: `ROAR_WRAP=1` is set on the driver but NOT on Ray workers. `ROAR_SESSION_ID` and `ROAR_JOB_ID` are propagated. Use those if a worker needs to detect provenance context.
+- **Osmo workers**: no env var propagation today.
+- **Don't make user code import roar** for tracking purposes — capture is transparent. The only exception is `from roar import require` for the abort-if-not-tracked guard.
+- **Don't commit `.roar/`** — it's local lineage state. `roar init` offers to add it to `.gitignore`.
+
+## Reading `roar show` output
+
+By default, long lists are truncated:
+- Packages: first 15 shown, then `... and N more`
+- Env var values: cut at 60 chars
+- Producer/consumer jobs: first 5 shown
+- Commands: cut at ~50 chars
+
+Use `--all` when investigating to see everything.
+
+## When in doubt
+
+Run `roar --help` or `roar <subcommand> --help`. The CLI is the source of truth — this skill captures only the commonly needed patterns.

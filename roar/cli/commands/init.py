@@ -203,7 +203,7 @@ def init_project(cwd: Path) -> Path:
     return roar_dir
 
 
-@click.command("init")
+@click.group("init", invoke_without_command=True)
 @click.option(
     "--yes",
     "-y",
@@ -225,8 +225,10 @@ def init_project(cwd: Path) -> Path:
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
     help="Initialize roar in the given directory instead of the current directory.",
 )
-@click.pass_obj
-def init(ctx: RoarContext, yes: bool, no: bool, init_path: Path | None) -> None:
+@click.pass_context
+def init(
+    click_ctx: click.Context, yes: bool, no: bool, init_path: Path | None
+) -> None:
     """Initialize roar in current directory.
 
     Creates a .roar directory for storing tracking data, a config.toml
@@ -242,7 +244,13 @@ def init(ctx: RoarContext, yes: bool, no: bool, init_path: Path | None) -> None:
         roar init -n    # Initialize without modifying gitignore
 
         roar init --path /some/dir  # Initialize in a specific directory
+
+        roar init agents            # Install agent-facing guidance (skill + AGENTS.md)
     """
+    if click_ctx.invoked_subcommand is not None:
+        return
+
+    ctx: RoarContext = click_ctx.obj
     cwd = init_path if init_path is not None else ctx.cwd
     target_repo_root = RoarContext._get_repo_root(cwd)
 
@@ -305,3 +313,10 @@ def init(ctx: RoarContext, yes: bool, no: bool, init_path: Path | None) -> None:
             click.echo("Skipped .gitignore update.")
 
     click.echo("Done.")
+
+
+# Register subcommands. Imported here (not at top of file) so the heavier
+# commands above keep their lazy import behavior unaffected.
+from .init_agents import init_agents as _init_agents  # noqa: E402
+
+init.add_command(_init_agents)
