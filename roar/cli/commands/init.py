@@ -226,9 +226,7 @@ def init_project(cwd: Path) -> Path:
     help="Initialize roar in the given directory instead of the current directory.",
 )
 @click.pass_context
-def init(
-    click_ctx: click.Context, yes: bool, no: bool, init_path: Path | None
-) -> None:
+def init(click_ctx: click.Context, yes: bool, no: bool, init_path: Path | None) -> None:
     """Initialize roar in current directory.
 
     Creates a .roar directory for storing tracking data, a config.toml

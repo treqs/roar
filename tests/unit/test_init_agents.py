@@ -145,27 +145,21 @@ class TestCli:
 
     def test_skill_only(self, isolated_home: Path, project_dir: Path):
         runner = CliRunner()
-        result = runner.invoke(
-            cli, ["init", "agents", "--skill", "--path", str(project_dir)]
-        )
+        result = runner.invoke(cli, ["init", "agents", "--skill", "--path", str(project_dir)])
         assert result.exit_code == 0, result.output
         assert (isolated_home / ".claude" / "skills" / "roar" / "SKILL.md").exists()
         assert not (project_dir / "AGENTS.md").exists()
 
     def test_project_only(self, isolated_home: Path, project_dir: Path):
         runner = CliRunner()
-        result = runner.invoke(
-            cli, ["init", "agents", "--project", "--path", str(project_dir)]
-        )
+        result = runner.invoke(cli, ["init", "agents", "--project", "--path", str(project_dir)])
         assert result.exit_code == 0, result.output
         assert not (isolated_home / ".claude" / "skills" / "roar" / "SKILL.md").exists()
         assert (project_dir / "AGENTS.md").exists()
 
     def test_dry_run_writes_nothing(self, isolated_home: Path, project_dir: Path):
         runner = CliRunner()
-        result = runner.invoke(
-            cli, ["init", "agents", "--dry-run", "--path", str(project_dir)]
-        )
+        result = runner.invoke(cli, ["init", "agents", "--dry-run", "--path", str(project_dir)])
         assert result.exit_code == 0, result.output
         assert "would" in result.output.lower()
         assert not (isolated_home / ".claude" / "skills" / "roar" / "SKILL.md").exists()
@@ -173,24 +167,18 @@ class TestCli:
 
     def test_check_fails_when_missing(self, isolated_home: Path, project_dir: Path):
         runner = CliRunner()
-        result = runner.invoke(
-            cli, ["init", "agents", "--check", "--path", str(project_dir)]
-        )
+        result = runner.invoke(cli, ["init", "agents", "--check", "--path", str(project_dir)])
         assert result.exit_code == 1
         assert "out of date" in result.output
 
     def test_check_passes_after_install(self, isolated_home: Path, project_dir: Path):
         runner = CliRunner()
         runner.invoke(cli, ["init", "agents", "--path", str(project_dir)])
-        result = runner.invoke(
-            cli, ["init", "agents", "--check", "--path", str(project_dir)]
-        )
+        result = runner.invoke(cli, ["init", "agents", "--check", "--path", str(project_dir)])
         assert result.exit_code == 0, result.output
         assert "up to date" in result.output
 
-    def test_idempotent_second_run_is_noop(
-        self, isolated_home: Path, project_dir: Path
-    ):
+    def test_idempotent_second_run_is_noop(self, isolated_home: Path, project_dir: Path):
         runner = CliRunner()
         runner.invoke(cli, ["init", "agents", "--path", str(project_dir)])
         before = (project_dir / "AGENTS.md").read_text()
@@ -199,38 +187,28 @@ class TestCli:
         after = (project_dir / "AGENTS.md").read_text()
         assert before == after
 
-    def test_preserves_user_content_in_agents_md(
-        self, isolated_home: Path, project_dir: Path
-    ):
+    def test_preserves_user_content_in_agents_md(self, isolated_home: Path, project_dir: Path):
         agents_file = project_dir / "AGENTS.md"
         agents_file.write_text("# AGENTS.md\n\nMy custom rules.\n")
         runner = CliRunner()
-        result = runner.invoke(
-            cli, ["init", "agents", "--project", "--path", str(project_dir)]
-        )
+        result = runner.invoke(cli, ["init", "agents", "--project", "--path", str(project_dir)])
         assert result.exit_code == 0, result.output
         content = agents_file.read_text()
         assert "My custom rules." in content
         assert AGENTS_BEGIN_MARKER in content
 
-    def test_refuses_to_overwrite_modified_skill(
-        self, isolated_home: Path, project_dir: Path
-    ):
+    def test_refuses_to_overwrite_modified_skill(self, isolated_home: Path, project_dir: Path):
         skill_path = isolated_home / ".claude" / "skills" / "roar" / "SKILL.md"
         skill_path.parent.mkdir(parents=True)
         skill_path.write_text("hand-edited skill")
         runner = CliRunner()
-        result = runner.invoke(
-            cli, ["init", "agents", "--skill", "--path", str(project_dir)]
-        )
+        result = runner.invoke(cli, ["init", "agents", "--skill", "--path", str(project_dir)])
         assert result.exit_code == 0
         assert "hand-edits" in result.output
         # Untouched.
         assert skill_path.read_text() == "hand-edited skill"
 
-    def test_force_overwrites_modified_skill(
-        self, isolated_home: Path, project_dir: Path
-    ):
+    def test_force_overwrites_modified_skill(self, isolated_home: Path, project_dir: Path):
         skill_path = isolated_home / ".claude" / "skills" / "roar" / "SKILL.md"
         skill_path.parent.mkdir(parents=True)
         skill_path.write_text("hand-edited skill")
