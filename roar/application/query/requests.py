@@ -84,6 +84,20 @@ class LabelHistoryRequest:
     target: str
 
 
+DiffFormat = Literal["summary", "category", "dag"]
+
+
+@dataclass(frozen=True)
+class DiffQueryRequest:
+    roar_dir: Path
+    cwd: Path
+    ref_a: str
+    ref_b: str
+    output_json: bool = False
+    depth: int | None = None
+    format: DiffFormat = "summary"
+
+
 InputsQuerySelector = Literal["auto", "path", "job", "artifact"]
 
 
