@@ -80,13 +80,15 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG = "ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS"
-_EXPERIMENTAL_ACCOUNT_COMMANDS = frozenset({
-    "login",
-    "logout",
-    "whoami",
-    "projects",
-    "workflow",
-})
+_EXPERIMENTAL_ACCOUNT_COMMANDS = frozenset(
+    {
+        "login",
+        "logout",
+        "whoami",
+        "projects",
+        "workflow",
+    }
+)
 _TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes"})
 
 
