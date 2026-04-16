@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 import subprocess
 import sys
@@ -9,17 +10,14 @@ import textwrap
 
 import pytest
 
-# Disable the module-level guard so that ``from roar.require import ...``
-# inside individual tests does not call sys.exit().
-os.environ["ROAR_GUARD"] = "0"
-
 # ---------------------------------------------------------------------------
-# Helper: run ``from roar import require`` in an isolated subprocess so that
-# sys.exit() doesn't kill the test runner.
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-def _run_require(*, env_overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+def _run_require(
+    *, env_overrides: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("ROAR_")}
     if env_overrides:
         env.update(env_overrides)
@@ -32,6 +30,13 @@ def _run_require(*, env_overrides: dict[str, str] | None = None) -> subprocess.C
     )
 
 
+@pytest.fixture
+def require_module(monkeypatch):
+    """Import ``roar.require`` with the guard temporarily bypassed."""
+    monkeypatch.setenv("ROAR_GUARD", "0")
+    return importlib.import_module("roar.require")
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -40,6 +45,14 @@ def _run_require(*, env_overrides: dict[str, str] | None = None) -> subprocess.C
 class TestGuardEscapeHatch:
     def test_guard_passes_when_escape_hatch_set(self):
         result = _run_require(env_overrides={"ROAR_GUARD": "0"})
+        assert result.returncode == 0
+
+    def test_guard_passes_when_job_is_already_instrumented(self):
+        result = _run_require(env_overrides={"ROAR_JOB_INSTRUMENTED": "1"})
+        assert result.returncode == 0
+
+    def test_guard_passes_when_backend_job_marker_is_present(self):
+        result = _run_require(env_overrides={"RAY_JOB_ID": "job-123"})
         assert result.returncode == 0
 
     def test_guard_exits_without_roar(self):
@@ -54,57 +67,39 @@ class TestGuardEscapeHatch:
 
 class TestProcessTreeDetection:
     @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only")
-    def test_walk_linux_finds_no_roar_ancestor(self):
-        from roar.require import _walk_linux
-
+    def test_walk_linux_finds_no_roar_ancestor(self, require_module):
         # In a test runner, roar is not an ancestor.
-        assert _walk_linux() is False
+        assert require_module._walk_linux() is False
 
     @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only")
-    def test_walk_macos_finds_no_roar_ancestor(self):
-        from roar.require import _walk_macos
-
-        assert _walk_macos() is False
+    def test_walk_macos_finds_no_roar_ancestor(self, require_module):
+        assert require_module._walk_macos() is False
 
 
 class TestIsRoarProcess:
-    def test_roar_cli(self):
-        from roar.require import _is_roar_process
+    def test_roar_cli(self, require_module):
+        assert require_module._is_roar_process("roar") is True
 
-        assert _is_roar_process("roar") is True
+    def test_tracer_preload(self, require_module):
+        assert require_module._is_roar_process("roar-tracer-preload") is True
 
-    def test_tracer_preload(self):
-        from roar.require import _is_roar_process
+    def test_tracer_ebpf(self, require_module):
+        assert require_module._is_roar_process("roar-tracer-ebpf") is True
 
-        assert _is_roar_process("roar-tracer-preload") is True
+    def test_tracer_ptrace(self, require_module):
+        assert require_module._is_roar_process("roar-tracer") is True
 
-    def test_tracer_ebpf(self):
-        from roar.require import _is_roar_process
-
-        assert _is_roar_process("roar-tracer-ebpf") is True
-
-    def test_tracer_ptrace(self):
-        from roar.require import _is_roar_process
-
-        assert _is_roar_process("roar-tracer") is True
-
-    def test_truncated_preload(self):
+    def test_truncated_preload(self, require_module):
         """Linux /proc comm truncates to 15 chars."""
-        from roar.require import _is_roar_process
+        assert require_module._is_roar_process("roar-tracer-pre") is True
 
-        assert _is_roar_process("roar-tracer-pre") is True
+    def test_truncated_ebpf(self, require_module):
+        assert require_module._is_roar_process("roar-tracer-ebp") is True
 
-    def test_truncated_ebpf(self):
-        from roar.require import _is_roar_process
-
-        assert _is_roar_process("roar-tracer-ebp") is True
-
-    def test_unrelated_process(self):
-        from roar.require import _is_roar_process
-
-        assert _is_roar_process("python3") is False
-        assert _is_roar_process("bash") is False
-        assert _is_roar_process("roar-something-else") is False
+    def test_unrelated_process(self, require_module):
+        assert require_module._is_roar_process("python3") is False
+        assert require_module._is_roar_process("bash") is False
+        assert require_module._is_roar_process("roar-something-else") is False
 
 
 class TestModuleImportIdempotent:
@@ -112,7 +107,7 @@ class TestModuleImportIdempotent:
         """Python caches modules; second import should be a no-op."""
         result = _run_require(env_overrides={"ROAR_GUARD": "0"})
         assert result.returncode == 0
-        # Import twice in the same process
+
         result = subprocess.run(
             [
                 sys.executable,
@@ -120,7 +115,7 @@ class TestModuleImportIdempotent:
                 textwrap.dedent("""\
                     from roar import require
                     from roar import require
-                    print("ok")
+                    print(\"ok\")
                 """),
             ],
             capture_output=True,

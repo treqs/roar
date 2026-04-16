@@ -17,7 +17,22 @@ import sys
 def _is_under_roar() -> bool:
     if os.environ.get("ROAR_GUARD") == "0":
         return True
+    if _is_execution_backend_job_environment():
+        return True
     return _check_process_tree()
+
+
+def _is_execution_backend_job_environment() -> bool:
+    """Return True when the current process is already inside a Roar job env."""
+    try:
+        from roar.execution.framework.registry import is_execution_backend_job_environment
+    except Exception:
+        return False
+
+    try:
+        return bool(is_execution_backend_job_environment(os.environ))
+    except Exception:
+        return False
 
 
 def _check_process_tree() -> bool:
