@@ -87,6 +87,8 @@ include = [
     { path = "LICENSE", format = "wheel" },
     { path = "roar/bin/*", format = "sdist" },
     { path = "roar/bin/*", format = "wheel" },
+    { path = "roar/cli/templates/**/*", format = "sdist" },
+    { path = "roar/cli/templates/**/*", format = "wheel" },
     { path = "roar_inject.pth", format = "wheel" },
 ]
 
