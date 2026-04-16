@@ -7,6 +7,7 @@ from pathlib import Path
 from ...core.interfaces.reproduction import PipelineInfo, PipelineLookupResult
 from ...db.context import create_database_context
 from ...integrations.glaas import GlaasClient
+from ..lookup import lookup_remote_artifact, run_local_then_remote_lookup
 
 
 def lookup_pipeline_result(
@@ -17,20 +18,23 @@ def lookup_pipeline_result(
     glaas_client: GlaasClient | None,
 ) -> PipelineLookupResult:
     """Look up artifact pipeline information locally first, then via GLaaS."""
-    pipeline = _lookup_local(hash_prefix, roar_dir)
-    if pipeline:
-        return PipelineLookupResult(pipeline=pipeline, error=None, source="local")
-
-    if glaas_client or server_url:
-        pipeline, error = _lookup_remote(
+    lookup = run_local_then_remote_lookup(
+        lookup_local=lambda: _lookup_local(hash_prefix, roar_dir),
+        lookup_remote=lambda: _lookup_remote(
             hash_prefix=hash_prefix,
             server_url=server_url,
             glaas_client=glaas_client,
+        ),
+        allow_remote=bool(glaas_client or server_url),
+    )
+    if lookup.error:
+        return PipelineLookupResult(pipeline=None, error=lookup.error, source=lookup.source.value)
+    if lookup.value is not None:
+        return PipelineLookupResult(
+            pipeline=lookup.value,
+            error=None,
+            source=lookup.source.value,
         )
-        if error:
-            return PipelineLookupResult(pipeline=None, error=error, source="remote")
-        if pipeline:
-            return PipelineLookupResult(pipeline=pipeline, error=None, source="remote")
 
     return PipelineLookupResult(
         pipeline=None,
@@ -38,7 +42,7 @@ def lookup_pipeline_result(
             f"Artifact not found: {hash_prefix}\n"
             "If this artifact is on a remote server, check your authentication with 'roar auth test'."
         ),
-        source="none",
+        source=lookup.source.value,
     )
 
 
@@ -106,18 +110,18 @@ def _lookup_remote(
     if not client:
         return None, "No GLaaS server configured"
 
-    try:
-        from ...core.exceptions import GlaasApiError
-
-        artifact = client.get_artifact(hash_prefix)
-    except GlaasApiError as exc:
-        return None, str(exc)
-    except (ValueError, RuntimeError) as exc:
-        return None, str(exc)
+    artifact, artifact_error = lookup_remote_artifact(
+        hash_prefix=hash_prefix,
+        artifact_reader=client,
+        server_url=server_url,
+    )
+    if artifact_error:
+        return None, artifact_error
     if not artifact:
         return None, None
 
-    pipeline_data, error = client.get_artifact_dag(hash_prefix)
+    canonical_hash = str(artifact.get("hash") or hash_prefix)
+    pipeline_data, error = client.get_artifact_dag(canonical_hash)
     if error:
         return None, error
     if not pipeline_data:
@@ -133,7 +137,7 @@ def _lookup_remote(
 
     return (
         PipelineInfo(
-            artifact_hash=artifact.get("hash") or hash_prefix,
+            artifact_hash=canonical_hash,
             git_repo=pipeline_data.get("gitRepo"),
             git_commit=pipeline_data.get("gitCommit"),
             build_steps=build_steps,

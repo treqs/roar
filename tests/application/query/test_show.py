@@ -278,3 +278,81 @@ def test_render_show_job_step_without_active_session_raises_query_error(tmp_path
             match=r"No active session\. Run 'roar run' to create a session first\.",
         ):
             show_module.render_show(_request(tmp_path, "@1"))
+
+
+def test_build_show_summary_falls_back_to_remote_artifact_when_enabled(tmp_path: Path) -> None:
+    full_hash = "a1b2c3d4e5f67890" * 4
+
+    with (
+        patch.object(show_module, "create_query_database_context") as mock_db,
+        patch.object(show_module, "remote_artifact_fallback_enabled", return_value=True),
+        patch.object(
+            show_module,
+            "lookup_remote_artifact",
+            return_value=(
+                {
+                    "hash": full_hash,
+                    "size": "2048",
+                    "registeredAt": "2026-04-16T12:34:56+00:00",
+                    "metadata": {"dataset": {"dataset_id": "remote-ds"}},
+                    "isComposite": False,
+                },
+                None,
+            ),
+        ) as lookup_remote,
+    ):
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        db_ctx.jobs.get_by_uid.return_value = None
+        db_ctx.artifacts.get_by_hash.return_value = None
+
+        summary = show_module.build_show_summary(_request(tmp_path, full_hash))
+
+    assert isinstance(summary, ShowArtifactSummary)
+    assert summary.id == full_hash
+    assert summary.source == "remote"
+    assert summary.metadata == {"dataset": {"dataset_id": "remote-ds"}}
+    assert [hash_summary.digest for hash_summary in summary.hashes] == [full_hash]
+    lookup_remote.assert_called_once_with(hash_prefix=full_hash)
+
+
+def test_render_show_remote_artifact_includes_source_marker(tmp_path: Path) -> None:
+    full_hash = "f" * 64
+
+    with (
+        patch.object(show_module, "create_query_database_context") as mock_db,
+        patch.object(show_module, "remote_artifact_fallback_enabled", return_value=True),
+        patch.object(
+            show_module,
+            "lookup_remote_artifact",
+            return_value=({"hash": full_hash, "size": "128", "registeredAt": 1}, None),
+        ),
+    ):
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        db_ctx.jobs.get_by_uid.return_value = None
+        db_ctx.artifacts.get_by_hash.return_value = None
+
+        rendered = show_module.render_show(_request(tmp_path, full_hash))
+
+    assert "Source: GLaaS" in rendered
+    assert full_hash in rendered
+
+
+def test_build_show_summary_does_not_remote_fallback_when_disabled(tmp_path: Path) -> None:
+    full_hash = "0" * 64
+
+    with (
+        patch.object(show_module, "create_query_database_context") as mock_db,
+        patch.object(show_module, "remote_artifact_fallback_enabled", return_value=False),
+        patch.object(show_module, "lookup_remote_artifact") as lookup_remote,
+    ):
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        db_ctx.jobs.get_by_uid.return_value = None
+        db_ctx.artifacts.get_by_hash.return_value = None
+
+        with pytest.raises(show_module.ShowQueryError, match=f"Not found: {full_hash}"):
+            show_module.build_show_summary(_request(tmp_path, full_hash))
+
+    lookup_remote.assert_not_called()

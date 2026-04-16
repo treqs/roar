@@ -68,6 +68,11 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
         "default": "https://api.glaas.ai",
         "description": "GLaaS server URL (e.g., https://glaas.example.com)",
     },
+    "glaas.query_nonlocal_ids_on_glaas": {
+        "type": bool,
+        "default": False,
+        "description": "Allow read-only query commands to fall back to GLaaS for non-local artifact hashes",
+    },
     "glaas.web_url": {
         "type": str,
         "default": "https://glaas.ai",

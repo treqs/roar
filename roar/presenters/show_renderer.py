@@ -294,6 +294,8 @@ class ShowRenderer:
         lines: list[str] = []
 
         lines.append(f"\nArtifact: {artifact['id']}")
+        if artifact.get("source") == "remote":
+            lines.append("Source: GLaaS")
         kind = artifact.get("kind")
         if isinstance(kind, str):
             lines.append(f"Kind: {kind}")
