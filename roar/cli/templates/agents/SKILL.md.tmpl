@@ -80,6 +80,9 @@ Workloads should NOT need to know which backend is active.
 
 ## Gotchas
 
+- **Clean git state is required.** `roar run` refuses to execute if the git working tree has uncommitted changes — including untracked files. There's no `--dirty` bypass; commit (or stash, or gitignore) first. Lineage ties to a commit, so this is by design.
+- **Add `.roar/` to `.gitignore` before your first run.** Otherwise it becomes an untracked change that trips the clean-tree check above on the next run. `roar init` prompts to add it; say yes. If you run `roar init -n` (skip) you'll need to add it yourself.
+- **Default config filters `/tmp`.** `ignore_tmp_files = true` in the generated `config.toml` silently drops any I/O under `/tmp`. If a run shows `in:0 out:0` or a missing `Inputs/Outputs` section and you're working under `/tmp`, that's why — move the workdir or edit `.roar/config.toml` to flip the filter. Other default filters hide system reads (`/sys`, `/etc`) and installed-package reads.
 - **Ray workers**: `ROAR_WRAP=1` is set on the driver but NOT on Ray workers. `ROAR_SESSION_ID` and `ROAR_JOB_ID` are propagated. Use those if a worker needs to detect provenance context.
 - **Osmo workers**: no env var propagation today.
 - **Don't make user code import roar** for tracking purposes — capture is transparent. The only exception is `from roar import require` for the abort-if-not-tracked guard.
