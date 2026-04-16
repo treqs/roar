@@ -251,6 +251,7 @@ class ShowArtifactSummary:
     id: str
     size: int
     first_seen_at: float | int
+    source: str | None = None
     kind: str | None = None
     component_count: int | None = None
     first_seen_path: str | None = None
@@ -275,6 +276,7 @@ class ShowArtifactSummary:
     ]:
         artifact = {
             "id": self.id,
+            "source": self.source,
             "kind": self.kind,
             "component_count": self.component_count,
             "size": self.size,

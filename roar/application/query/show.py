@@ -1,9 +1,10 @@
-"""Application orchestration for the local show query."""
+"""Application orchestration for the show query."""
 
 from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,6 +13,15 @@ from ...core.step_name import resolve_step_name
 from ...db.context import optional_repo
 from ...db.query_context import create_query_database_context
 from ...presenters.show_renderer import ShowRenderer
+from ..lookup import (
+    ArtifactRemoteLookupOperation,
+    LookupSource,
+    RefKind,
+    lookup_remote_artifact,
+    parse_ref,
+    remote_artifact_fallback_enabled,
+    run_local_then_remote_lookup,
+)
 from .requests import ShowQueryRequest
 from .results import (
     ShowArtifactComponentSummary,
@@ -81,29 +91,46 @@ def build_show_summary(request: ShowQueryRequest) -> ShowSummary:
         if request.selector == "artifact":
             if request.ref is None:
                 raise ShowQueryError("Artifact hash is required.")
-            return _build_artifact_summary_for_hash(db_ctx, request.ref)
+            parsed_ref = parse_ref(request.ref, selector=request.selector)
+            return _build_artifact_summary_for_hash(
+                db_ctx,
+                request,
+                request.ref,
+                parsed_ref=parsed_ref,
+            )
 
         if request.ref is None:
             return _build_active_session_summary(db_ctx)
 
-        ref_type = _classify_ref(request.ref, request.cwd)
+        parsed_ref = parse_ref(request.ref, selector=request.selector)
         if logger:
-            logger.debug("show: ref_type=%r for ref=%r", ref_type, request.ref)
+            logger.debug(
+                "show: ref_kind=%r selector=%r for ref=%r",
+                parsed_ref.kind.value,
+                parsed_ref.selector,
+                request.ref,
+            )
 
-        if ref_type == "job_step":
+        if parsed_ref.kind == RefKind.JOB_STEP:
             return _build_job_summary_for_ref(db_ctx, request.ref)
 
-        if ref_type == "file_path":
+        if parsed_ref.kind == RefKind.FILE_PATH:
             return _build_artifact_summary_for_path(db_ctx, request.cwd, request.ref)
 
-        if ref_type == "job_uid":
+        if parsed_ref.kind == RefKind.JOB_UID:
             return _build_job_summary_for_ref(db_ctx, request.ref)
 
-        if ref_type == "artifact_hash":
+        if parsed_ref.kind == RefKind.ARTIFACT_HASH:
             job = db_ctx.jobs.get_by_uid(request.ref)
             if job:
                 return _build_job_summary(db_ctx, job)
-            return _build_artifact_summary_for_hash(db_ctx, request.ref, missing_prefix="Not found")
+            return _build_artifact_summary_for_hash(
+                db_ctx,
+                request,
+                request.ref,
+                parsed_ref=parsed_ref,
+                missing_prefix="Not found",
+            )
 
         artifact = _lookup_artifact_by_path(db_ctx, request.cwd, request.ref)
         if artifact:
@@ -131,19 +158,6 @@ def _safe_json_loads(raw: str, context: str) -> dict | None:
             )
         return None
     return parsed
-
-
-def _classify_ref(ref: str, cwd: Path) -> str:
-    if ref.startswith("@"):
-        return "job_step"
-    if "/" in ref or ref.startswith(("./", "../", "~")):
-        return "file_path"
-    is_hex = bool(ref) and all(char in "0123456789abcdefABCDEF" for char in ref)
-    if is_hex and len(ref) <= 8:
-        return "job_uid"
-    if is_hex and len(ref) > 8:
-        return "artifact_hash"
-    return "path_candidate"
 
 
 def _lookup_artifact_by_path(db_ctx, cwd: Path, ref: str) -> dict[str, Any] | None:
@@ -184,14 +198,28 @@ def _build_artifact_summary_for_path(db_ctx, cwd: Path, ref: str) -> ShowArtifac
 
 def _build_artifact_summary_for_hash(
     db_ctx,
+    request: ShowQueryRequest,
     ref: str,
     *,
+    parsed_ref,
     missing_prefix: str = "Artifact not found",
 ) -> ShowArtifactSummary:
-    artifact = db_ctx.artifacts.get_by_hash(ref)
-    if not artifact:
+    lookup = run_local_then_remote_lookup(
+        lookup_local=lambda: db_ctx.artifacts.get_by_hash(ref),
+        lookup_remote=lambda: lookup_remote_artifact(hash_prefix=ref),
+        allow_remote=remote_artifact_fallback_enabled(
+            ArtifactRemoteLookupOperation.SHOW,
+            parsed_ref,
+            start_dir=request.cwd,
+        ),
+    )
+    if lookup.error:
+        raise ShowQueryError(lookup.error)
+    if lookup.value is None:
         raise ShowQueryError(f"{missing_prefix}: {ref}")
-    return _build_artifact_summary(db_ctx, artifact)
+    if lookup.source == LookupSource.LOCAL:
+        return _build_artifact_summary(db_ctx, lookup.value)
+    return _build_remote_artifact_summary(lookup.value)
 
 
 def _resolve_job_ref(db_ctx, session_id: int, job_ref: str) -> dict | None:
@@ -343,6 +371,61 @@ def _build_artifact_summary(db_ctx, artifact: dict[str, Any]) -> ShowArtifactSum
             for component in cast(list[dict[str, Any]], components or [])
         ],
     )
+
+
+def _build_remote_artifact_summary(artifact: dict[str, Any]) -> ShowArtifactSummary:
+    metadata = cast(dict[str, Any] | None, artifact.get("metadata"))
+    if isinstance(metadata, str):
+        metadata = _safe_json_loads(metadata, "remote artifact metadata")
+
+    artifact_hash = cast(str | None, artifact.get("hash") or artifact.get("id"))
+    hashes = cast(list[dict[str, Any]], artifact.get("hashes", []))
+    if not hashes and artifact_hash:
+        hashes = [{"algorithm": "blake3", "digest": artifact_hash}]
+
+    kind = cast(str | None, artifact.get("kind"))
+    if kind is None and artifact.get("isComposite") is True:
+        kind = "composite"
+
+    return ShowArtifactSummary(
+        id=artifact_hash or "remote-artifact",
+        source=LookupSource.REMOTE.value,
+        kind=kind,
+        size=_coerce_int(artifact.get("size")),
+        first_seen_at=_parse_remote_timestamp(
+            artifact.get("registeredAt") or artifact.get("registered_at")
+        ),
+        metadata=metadata,
+        hashes=[
+            ShowHashSummary(
+                algorithm=str(hash_entry["algorithm"]),
+                digest=str(hash_entry["digest"]),
+            )
+            for hash_entry in hashes
+            if isinstance(hash_entry, dict)
+            and isinstance(hash_entry.get("algorithm"), str)
+            and isinstance(hash_entry.get("digest"), str)
+        ],
+    )
+
+
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_remote_timestamp(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str) or not value:
+        return 0.0
+    normalized = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).timestamp()
+    except ValueError:
+        return 0.0
 
 
 def _current_label_metadata(

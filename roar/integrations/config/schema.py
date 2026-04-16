@@ -64,6 +64,7 @@ class GlaasConfig(ConfigBaseModel):
     """GLaaS server configuration section."""
 
     url: Annotated[str, Field(max_length=2048)] | None = "https://api.glaas.ai"
+    query_nonlocal_ids_on_glaas: bool = False
     key: str | None = None  # SSH private key path
 
     @field_validator("url", mode="before")
