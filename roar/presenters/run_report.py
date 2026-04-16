@@ -74,9 +74,11 @@ class _ColumnPlan:
         indent = 4  # 2 (margin dot + space) + 2 more for breathing room
         # Leave a few chars of right-hand slack.
         available = max(48, width - indent - 2)
-        gutter = 4
+        # Gutter holds " │ → " (or " | > ") = 5 chars; must stay in sync with
+        # _format_row below.
+        gutter = 5
         col = (available - 2 * gutter) // 3
-        col = max(14, min(col, 28))
+        col = max(14, min(col, 24))
         return cls(col_width=col, gutter=gutter, indent=indent)
 
 
@@ -397,7 +399,8 @@ class RunReportPresenter:
             next_cmd = style("roar pop", "cyan", enabled=self._caps.can_color)
         else:
             next_cmd = style("roar dag", "cyan", enabled=self._caps.can_color)
-        self._emit_summary(f"{show_cmd}    {next_cmd}")
+        self._emit_summary(show_cmd)
+        self._emit_summary(next_cmd)
         self._emit_summary()
 
     def _format_row(
@@ -410,13 +413,18 @@ class RunReportPresenter:
         arrow: bool,
         dim_all: bool = False,
     ) -> str:
-        """Render a single row with the three columns padded to plan widths."""
+        """Render a single row with the three columns padded to plan widths.
+
+        The gutter between columns is 5 chars: ``" │ → "`` on the first data
+        row (arrow pointing into the next column), ``" │   "`` elsewhere.
+        The vertical rule ``│`` (or ``|`` without UTF-8) runs the full height
+        of the block, giving the columns clear visual separation.
+        """
         color = self._caps.can_color and dim_all
 
         def styled(s: str) -> str:
             return style(s, "dim", enabled=color) if color and s else s
 
-        # Visible length calculation when the string contains ANSI codes.
         left_visible = _visible_len(left)
         mid_visible = _visible_len(mid)
         right_visible = _visible_len(right)
@@ -425,14 +433,16 @@ class RunReportPresenter:
         mid_pad = max(0, plan.col_width - mid_visible)
         right_pad = max(0, plan.col_width - right_visible)
 
-        arrow_str = " → " if self._caps.can_emoji else " > "
-        gutter_str = " " * (plan.gutter - len(arrow_str))
-        if not arrow:
-            arrow_str = " " * len(arrow_str)
+        # Gutter: space, rule, space, arrow-or-space, space  (5 chars visible).
+        rule_char = "│" if self._caps.can_emoji else "|"
+        arrow_char = "→" if self._caps.can_emoji else ">"
+        rule = style(rule_char, "dim", enabled=self._caps.can_color)
+        arrow_vis = arrow_char if arrow else " "
+        gutter = f" {rule} {arrow_vis} "
 
         return (
-            f"{styled(left)}{' ' * left_pad}{gutter_str}{arrow_str}"
-            f"{styled(mid)}{' ' * mid_pad}{gutter_str}{arrow_str}"
+            f"{styled(left)}{' ' * left_pad}{gutter}"
+            f"{styled(mid)}{' ' * mid_pad}{gutter}"
             f"{styled(right)}{' ' * right_pad}"
         )
 
