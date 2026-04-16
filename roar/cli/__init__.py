@@ -64,12 +64,17 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
         "whoami",
         "Show current GLaaS/TReqs login and repo binding",
     ),
+    "workflow": (
+        "roar.cli.commands.workflow",
+        "workflow",
+        "Generate TReqs workflow YAML from local sessions",
+    ),
 }
 
 HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Start Here", ("init", "run", "build", "dag")),
     ("Inspect Local Lineage", ("status", "log", "show", "lineage", "inputs", "pop", "reproduce")),
-    ("Share and Publish", ("put", "register", "get", "label")),
+    ("Share and Publish", ("put", "register", "get", "label", "workflow")),
     ("Setup and Admin", ("auth", "config", "env", "tracer", "proxy", "reset")),
     ("GLaaS / TReqs Account", ("login", "logout", "whoami", "projects")),
 )
