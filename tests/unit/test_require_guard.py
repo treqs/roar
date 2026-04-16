@@ -9,6 +9,10 @@ import textwrap
 
 import pytest
 
+# Disable the module-level guard so that ``from roar.require import ...``
+# inside individual tests does not call sys.exit().
+os.environ["ROAR_GUARD"] = "0"
+
 # ---------------------------------------------------------------------------
 # Helper: run ``from roar import require`` in an isolated subprocess so that
 # sys.exit() doesn't kill the test runner.
