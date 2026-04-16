@@ -342,3 +342,12 @@ def run_migrations(conn) -> None:
             );
             """
         )
+
+    label_table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='labels'"
+    ).fetchone()
+    if label_table_exists:
+        cursor = conn.execute("PRAGMA table_info(labels)")
+        label_columns = {row["name"] for row in cursor.fetchall()}
+        if "write_origin" not in label_columns:
+            conn.execute("ALTER TABLE labels ADD COLUMN write_origin TEXT")

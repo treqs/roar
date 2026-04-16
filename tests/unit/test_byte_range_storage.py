@@ -290,3 +290,59 @@ class TestSchemaMigration:
         assert "composite_membership_indexes" in tables
 
         conn.close()
+
+    def test_schema_migration_adds_label_write_origin_column(self, tmp_path):
+        """Verify migration adds write_origin to legacy label tables."""
+        import sqlite3
+
+        db_path = tmp_path / "test_labels.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_uid TEXT UNIQUE,
+                timestamp REAL NOT NULL,
+                command TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS job_inputs (
+                job_id INTEGER NOT NULL,
+                artifact_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                PRIMARY KEY (job_id, artifact_id, path)
+            );
+            CREATE TABLE IF NOT EXISTS job_outputs (
+                job_id INTEGER NOT NULL,
+                artifact_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                PRIMARY KEY (job_id, artifact_id, path)
+            );
+            CREATE TABLE IF NOT EXISTS labels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type TEXT NOT NULL,
+                session_id INTEGER,
+                job_id INTEGER,
+                artifact_id TEXT,
+                version INTEGER NOT NULL,
+                metadata TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                synced_at REAL,
+                synced_server_label_id TEXT
+            );
+        """)
+
+        label_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(labels)").fetchall()
+        }
+        assert "write_origin" not in label_columns
+
+        run_migrations(conn)
+
+        label_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(labels)").fetchall()
+        }
+        assert "write_origin" in label_columns
+
+        conn.close()

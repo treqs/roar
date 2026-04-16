@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
-from roar.application.labels import LabelService
+from roar.application.labels import LabelService, collect_label_sync_payloads
+from roar.core.label_origins import build_current_key_origins
 
 
 def test_reject_reserved_keys_blocks_system_managed_dataset_labels() -> None:
@@ -15,3 +18,160 @@ def test_reject_reserved_keys_blocks_system_managed_dataset_labels() -> None:
                 }
             }
         )
+
+
+def test_build_current_key_origins_replays_user_and_system_versions() -> None:
+    history = [
+        {
+            "metadata": {
+                "dataset": {
+                    "id": "file:///data/train",
+                    "modality": "tabular",
+                    "type": "dataset",
+                }
+            },
+            "write_origin": "system",
+        },
+        {
+            "metadata": {
+                "dataset": {
+                    "id": "file:///data/train",
+                    "modality": "tabular",
+                    "type": "dataset",
+                },
+                "owner": "ml",
+                "stage": "gold",
+            },
+            "write_origin": "user",
+        },
+    ]
+
+    assert build_current_key_origins(history) == {
+        "dataset.id": "system",
+        "dataset.modality": "system",
+        "dataset.type": "system",
+        "owner": "user",
+        "stage": "user",
+    }
+
+
+def test_build_current_key_origins_falls_back_to_legacy_paths_when_write_origin_missing() -> None:
+    history = [
+        {
+            "metadata": {
+                "dataset": {
+                    "id": "file:///data/train",
+                    "type": "dataset",
+                }
+            }
+        },
+        {
+            "metadata": {
+                "dataset": {
+                    "id": "file:///data/train",
+                    "type": "dataset",
+                },
+                "name": "preprocess",
+            }
+        },
+    ]
+
+    assert build_current_key_origins(history) == {
+        "dataset.id": "system",
+        "dataset.type": "system",
+        "name": "user",
+    }
+
+
+def test_collect_label_sync_payloads_includes_current_key_origins() -> None:
+    histories: dict[tuple[str, object], list[dict[str, object]]] = {
+        ("dag", 7): [
+            {
+                "metadata": {
+                    "dataset": {
+                        "type": "dataset",
+                    }
+                },
+                "write_origin": "system",
+            },
+            {
+                "metadata": {
+                    "dataset": {
+                        "type": "dataset",
+                    },
+                    "project": "forecasting",
+                },
+                "write_origin": None,
+            },
+        ],
+        ("job", 11): [
+            {
+                "metadata": {"name": "preprocess", "phase": "prep"},
+                "write_origin": "user",
+            }
+        ],
+        ("artifact", "artifact-1"): [
+            {
+                "metadata": {"generated": {"phase": "profiled"}},
+                "write_origin": "system",
+            },
+            {
+                "metadata": {"generated": {"phase": "profiled"}, "stage": "gold"},
+                "write_origin": "user",
+            },
+        ],
+    }
+
+    class StubLabels:
+        def get_current(self, entity_type: str, **kwargs):
+            key = (
+                entity_type,
+                kwargs.get("session_id")
+                if entity_type == "dag"
+                else kwargs.get("job_id")
+                if entity_type == "job"
+                else kwargs.get("artifact_id"),
+            )
+            rows = histories.get(key, [])
+            return rows[-1] if rows else None
+
+        def get_history(self, entity_type: str, **kwargs):
+            key = (
+                entity_type,
+                kwargs.get("session_id")
+                if entity_type == "dag"
+                else kwargs.get("job_id")
+                if entity_type == "job"
+                else kwargs.get("artifact_id"),
+            )
+            return histories.get(key, [])
+
+    payloads = collect_label_sync_payloads(
+        SimpleNamespace(labels=StubLabels()),
+        session_id=7,
+        session_hash="s" * 64,
+        jobs=[{"id": 11, "job_uid": "job-1"}],
+        artifacts=[{"id": "artifact-1", "hash": "a" * 64}],
+    )
+
+    assert payloads == [
+        {
+            "entity_type": "dag",
+            "session_hash": "s" * 64,
+            "metadata": {"dataset": {"type": "dataset"}, "project": "forecasting"},
+            "key_origins": {"dataset.type": "system", "project": "user"},
+        },
+        {
+            "entity_type": "job",
+            "session_hash": "s" * 64,
+            "job_uid": "job-1",
+            "metadata": {"name": "preprocess", "phase": "prep"},
+            "key_origins": {"name": "user", "phase": "user"},
+        },
+        {
+            "entity_type": "artifact",
+            "artifact_hash": "a" * 64,
+            "metadata": {"generated": {"phase": "profiled"}, "stage": "gold"},
+            "key_origins": {"generated.phase": "system", "stage": "user"},
+        },
+    ]

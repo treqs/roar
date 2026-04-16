@@ -31,6 +31,23 @@ def _artifact_label_rows(repo: Path, artifact_path: Path) -> list[tuple[int, dic
     return [(int(version), json.loads(metadata)) for version, metadata in rows]
 
 
+def _artifact_label_write_origins(repo: Path, artifact_path: Path) -> list[tuple[int, str | None]]:
+    db_path = repo / ".roar" / "roar.db"
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT l.version, l.write_origin
+            FROM labels l
+            JOIN artifacts a ON a.id = l.artifact_id
+            WHERE l.entity_type = 'artifact'
+              AND a.first_seen_path = ?
+            ORDER BY l.version ASC
+            """,
+            (str(artifact_path.resolve()),),
+        ).fetchall()
+    return [(int(version), origin) for version, origin in rows]
+
+
 def _artifact_label_rows_by_hash(
     repo: Path, artifact_hash: str
 ) -> list[tuple[int, dict[str, object]]]:
@@ -66,6 +83,23 @@ def _job_label_rows(repo: Path, step_number: int) -> list[tuple[int, dict[str, o
             (step_number,),
         ).fetchall()
     return [(int(version), json.loads(metadata)) for version, metadata in rows]
+
+
+def _job_label_write_origins(repo: Path, step_number: int) -> list[tuple[int, str | None]]:
+    db_path = repo / ".roar" / "roar.db"
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT l.version, l.write_origin
+            FROM labels l
+            JOIN jobs j ON j.id = l.job_id
+            WHERE l.entity_type = 'job'
+              AND j.step_number = ?
+            ORDER BY l.version ASC
+            """,
+            (step_number,),
+        ).fetchall()
+    return [(int(version), origin) for version, origin in rows]
 
 
 @pytest.mark.happy_path
@@ -122,6 +156,7 @@ class TestLabelCommand:
         assert rows[0][1]["dataset"]["type"] == "dataset"
         assert rows[0][1]["dataset"]["id"] == dataset_root.resolve().as_uri()
         assert rows[0][1]["dataset"]["modality"] == "tabular"
+        assert _artifact_label_write_origins(temp_git_repo, dataset_root) == [(1, "system")]
 
     def test_artifact_label_set_patches_current_document_and_preserves_history(
         self,
@@ -179,6 +214,10 @@ class TestLabelCommand:
         assert rows == [
             (1, {"owner": "ml", "stage": "raw"}),
             (2, {"owner": "ml", "stage": "gold"}),
+        ]
+        assert _artifact_label_write_origins(temp_git_repo, temp_git_repo / "processed.csv") == [
+            (1, "user"),
+            (2, "user"),
         ]
 
     def test_artifact_label_set_noop_does_not_create_new_version(
@@ -334,6 +373,7 @@ class TestLabelCommand:
         assert preprocess_node["labels"] == {"name": "preprocess"}
 
         assert _job_label_rows(temp_git_repo, 1) == [(1, {"name": "preprocess"})]
+        assert _job_label_write_origins(temp_git_repo, 1) == [(1, "user")]
 
         db_path = temp_git_repo / ".roar" / "roar.db"
         with sqlite3.connect(db_path) as conn:
