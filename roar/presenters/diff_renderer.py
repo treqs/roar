@@ -97,13 +97,6 @@ class DiffRenderer:
                 step = _job_step_label(j)
                 lines.append(f"  + {step}: {_truncate(j.command, 60)}")
 
-        # LLM analysis
-        if result.analysis:
-            lines.append("")
-            lines.append("ANALYSIS")
-            for line in result.analysis.splitlines():
-                lines.append(f"  {line}")
-
         return "\n".join(lines)
 
     def _render_category(self, result: DiffResult) -> str:
@@ -132,11 +125,6 @@ class DiffRenderer:
                 marker = " <-- root cause" if d.is_root_cause else ""
                 lines.append(f"  [{d.impact:.2f}] {d.description}{marker}")
             lines.append("")
-
-        if result.analysis:
-            lines.append("ANALYSIS")
-            for line in result.analysis.splitlines():
-                lines.append(f"  {line}")
 
         return "\n".join(lines)
 
@@ -204,12 +192,6 @@ class DiffRenderer:
             script, _ = _extract_script(j.command)
             lines.append(f"{'':^{col_width}}  {f'{step} {script}':<{col_width}}  ADDED")
 
-        if result.analysis:
-            lines.append("")
-            lines.append("ANALYSIS")
-            for line in result.analysis.splitlines():
-                lines.append(f"  {line}")
-
         return "\n".join(lines)
 
     def render_json(self, result: DiffResult) -> str:
@@ -241,8 +223,6 @@ class DiffRenderer:
                 "category": result.root_cause.category.value,
                 "impact": result.root_cause.impact,
             }
-        if result.analysis:
-            data["analysis"] = result.analysis
         return json.dumps(data, indent=2)
 
 

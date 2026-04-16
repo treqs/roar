@@ -96,7 +96,6 @@ class DiffQueryRequest:
     output_json: bool = False
     depth: int | None = None
     format: DiffFormat = "summary"
-    analyze: bool = False
 
 
 InputsQuerySelector = Literal["auto", "path", "job", "artifact"]

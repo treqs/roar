@@ -42,7 +42,6 @@ def _result(
     only_in_a: list[JobNode] | None = None,
     only_in_b: list[JobNode] | None = None,
     root_cause: AtomicDiff | None = None,
-    analysis: str | None = None,
 ) -> DiffResult:
     return DiffResult(
         ref_a="./model_a.pt",
@@ -57,7 +56,6 @@ def _result(
         only_in_a=only_in_a or [],
         only_in_b=only_in_b or [],
         root_cause=root_cause,
-        analysis=analysis,
     )
 
 
@@ -122,22 +120,6 @@ class TestSummaryView:
         output = DiffRenderer().render_text(r)
         assert "PIPELINE" in output
         assert "STRUCTURE" not in output
-
-    def test_analysis_section(self):
-        r = _result(
-            analysis="The model differs because of data drift.",
-            diffs=[
-                AtomicDiff(
-                    change_type=ChangeType.CONTENT_CHANGED,
-                    category=DiffCategory.DATA,
-                    description="data changed",
-                    impact=0.5,
-                )
-            ],
-        )
-        output = DiffRenderer().render_text(r)
-        assert "ANALYSIS" in output
-        assert "data drift" in output
 
 
 # ---------------------------------------------------------------------------
@@ -280,13 +262,3 @@ class TestJsonOutput:
         r = _result()
         data = json.loads(DiffRenderer().render_json(r))
         assert data["root_cause"] is None
-
-    def test_analysis_included(self):
-        r = _result(analysis="LLM says data drift.")
-        data = json.loads(DiffRenderer().render_json(r))
-        assert data["analysis"] == "LLM says data drift."
-
-    def test_analysis_absent_when_none(self):
-        r = _result()
-        data = json.loads(DiffRenderer().render_json(r))
-        assert "analysis" not in data

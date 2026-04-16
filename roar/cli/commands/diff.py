@@ -24,9 +24,6 @@ from ..decorators import require_init
     default="summary",
     help="Output format.",
 )
-@click.option(
-    "--analyze", is_flag=True, help="Add LLM-assisted analysis (requires ANTHROPIC_API_KEY)."
-)
 @click.pass_obj
 @require_init
 def diff(
@@ -36,7 +33,6 @@ def diff(
     output_json: bool,
     depth: int | None,
     fmt: str,
-    analyze: bool,
 ) -> None:
     """Compare the provenance of two artifacts, jobs, or steps.
 
@@ -64,7 +60,6 @@ def diff(
         roar diff @5 @7 --format category
         roar diff session:current session:<hash>
         roar diff ./model.pkl deadbeefcafebabe
-        roar diff @5 @7 --analyze
         roar diff @5 @7 --json
     """
     request = DiffQueryRequest(
@@ -75,7 +70,6 @@ def diff(
         output_json=output_json,
         depth=depth,
         format=cast(DiffFormat, fmt),
-        analyze=analyze,
     )
     try:
         click.echo(render_diff(request))

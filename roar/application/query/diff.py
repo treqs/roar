@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from ...db.query_context import create_query_database_context
-from .diff_analysis import generate_llm_analysis
 from .diff_engine import compare_lineage_graphs
 from .diff_graph import build_diff_graph
 from .diff_refs import DiffError
@@ -26,7 +25,7 @@ def build_diff_summary(request: DiffQueryRequest) -> DiffResult:
         and graph_a.target_hash == graph_b.target_hash
     )
 
-    result = DiffResult(
+    return DiffResult(
         ref_a=request.ref_a,
         ref_b=request.ref_b,
         target_a_hash=graph_a.target_hash,
@@ -40,25 +39,6 @@ def build_diff_summary(request: DiffQueryRequest) -> DiffResult:
         only_in_b=comparison.only_in_b,
         root_cause=comparison.root_cause,
     )
-
-    if request.analyze and not targets_identical:
-        result = DiffResult(
-            ref_a=result.ref_a,
-            ref_b=result.ref_b,
-            target_a_hash=result.target_a_hash,
-            target_b_hash=result.target_b_hash,
-            target_a_path=result.target_a_path,
-            target_b_path=result.target_b_path,
-            targets_identical=result.targets_identical,
-            diffs=result.diffs,
-            matched_jobs=result.matched_jobs,
-            only_in_a=result.only_in_a,
-            only_in_b=result.only_in_b,
-            root_cause=result.root_cause,
-            analysis=generate_llm_analysis(result),
-        )
-
-    return result
 
 
 def build_diff(request: DiffQueryRequest) -> DiffResult:

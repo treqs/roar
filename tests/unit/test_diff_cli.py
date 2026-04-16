@@ -32,7 +32,6 @@ class TestDiffCli:
         assert request.ref_b == "./b.pt"
         assert request.output_json is False
         assert request.format == "summary"
-        assert request.analyze is False
 
     def test_json_flag(self, tmp_path: Path):
         runner = CliRunner()
@@ -50,14 +49,6 @@ class TestDiffCli:
 
         assert result.exit_code == 0
         assert mock.call_args.args[0].format == "dag"
-
-    def test_analyze_flag(self, tmp_path: Path):
-        runner = CliRunner()
-        with patch("roar.cli.commands.diff.render_diff", return_value="out") as mock:
-            result = runner.invoke(diff, ["@5", "@7", "--analyze"], obj=_ctx(tmp_path))
-
-        assert result.exit_code == 0
-        assert mock.call_args.args[0].analyze is True
 
     def test_depth_option(self, tmp_path: Path):
         runner = CliRunner()

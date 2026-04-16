@@ -366,4 +366,3 @@ class DiffResult:
     only_in_a: list[JobNode] = field(default_factory=list)
     only_in_b: list[JobNode] = field(default_factory=list)
     root_cause: AtomicDiff | None = None
-    analysis: str | None = None
