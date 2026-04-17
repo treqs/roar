@@ -159,17 +159,23 @@ class RunCoordinator:
         from ...core.exceptions import TracerNotFoundError
 
         # Resolve the backend name before execution so the trace_starting
-        # line can show the actual tracer, not "auto".
+        # line can show the actual tracer, not "auto". Mirror the same
+        # resolution logic that execute() uses (config → override → auto).
         proxy_active = proxy_handle is not None
-        resolved_mode = ctx.tracer_mode or "auto"
+        resolved_mode: str | None = None
         try:
-            fallback = ctx.tracer_fallback if ctx.tracer_fallback is not None else True
-            candidates = self._tracer._get_tracer_candidates(resolved_mode, fallback)
+            mode = ctx.tracer_mode or self._tracer._get_tracer_mode()
+            fallback = (
+                ctx.tracer_fallback
+                if ctx.tracer_fallback is not None
+                else self._tracer._get_fallback_enabled()
+            )
+            candidates = self._tracer._get_tracer_candidates(mode, fallback)
             if candidates:
                 resolved_mode = candidates[0][0]
         except Exception:
             pass
-        run_presenter.trace_starting(resolved_mode, proxy_active)
+        run_presenter.trace_starting(resolved_mode or ctx.tracer_mode, proxy_active)
 
         self.logger.debug("Starting tracer execution")
         try:
