@@ -14,13 +14,17 @@ Prerequisites:
 
 import json
 import os
+import re
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+
+from roar.integrations.glaas import make_auth_header
 
 
 @pytest.fixture
@@ -70,6 +74,30 @@ def glaas_configured(temp_git_repo, glaas_url):
 def python_exe() -> str:
     """Return the absolute path to the Python executable."""
     return sys.executable
+
+
+def _parse_session_hash(output: str) -> str:
+    match = re.search(r"/dag/([0-9a-f]{64})", output)
+    assert match is not None, f"Missing session URL in output: {output}"
+    return match.group(1)
+
+
+def _request_live_json(glaas_url: str, path: str) -> dict:
+    auth_header = make_auth_header("GET", path, None)
+    if not auth_header:
+        pytest.skip("SSH auth is not configured for live GLaaS validation")
+
+    request = urllib.request.Request(f"{glaas_url.rstrip('/')}{path}")
+    request.add_header("Authorization", auth_header)
+    request.add_header("Accept", "application/json")
+
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return json.loads(response.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            pytest.skip("SSH auth is not valid for the configured live GLaaS server")
+        raise
 
 
 @pytest.fixture
@@ -328,3 +356,37 @@ class TestRegisterLiveGlaas:
         output = result.stdout.lower()
         # Should indicate it's a dry run
         assert "dry" in output or "would" in output or "preview" in output
+
+    def test_register_public_with_valid_ssh_attributes_session_to_authenticated_user(
+        self,
+        glaas_configured,
+        glaas_available,
+        glaas_url,
+        roar_cli,
+        git_commit,
+        python_exe,
+        sample_scripts,
+        sample_data,
+    ):
+        """Public register with valid SSH auth should preserve authenticated attribution."""
+        if not glaas_available:
+            pytest.skip("GLaaS server not available")
+
+        auth_test = roar_cli("auth", "test", check=False)
+        if auth_test.returncode != 0:
+            pytest.skip("SSH auth is not configured for the live GLaaS server")
+
+        me_payload = _request_live_json(glaas_url, "/api/v1/auth/me")
+        expected_user_id = me_payload["data"]["user"]["id"]
+
+        run_result = roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
+        assert run_result.returncode == 0
+        git_commit("After preprocess")
+
+        register_result = roar_cli("register", "processed.csv", "--yes", "--public")
+        assert register_result.returncode == 0
+
+        session_hash = _parse_session_hash(register_result.stdout)
+        public_session = _request_live_json(glaas_url, f"/api/v1/public/sessions/{session_hash}")
+
+        assert public_session["data"]["createdBy"] == expected_user_id

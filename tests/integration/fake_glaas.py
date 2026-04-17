@@ -56,6 +56,23 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _resolve_authenticated_user(self, authorization: str | None) -> dict[str, str] | None:
+        if authorization and authorization.startswith("Bearer "):
+            return {
+                "id": "user-123",
+                "email": "trevor@example.com",
+                "username": "trevor",
+                "auth_mode": "bearer",
+            }
+        if authorization and authorization.startswith("Signature "):
+            return {
+                "id": "ssh-user-123",
+                "email": "ssh-user@example.com",
+                "username": "ssh-user",
+                "auth_mode": "ssh",
+            }
+        return None
+
     def do_GET(self) -> None:
         authorization = self.headers.get("Authorization")
         if self.path == "/api/v1/auth/access-context":
@@ -98,6 +115,30 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if self.path == "/api/v1/auth/me":
+            self.server.auth_headers.append({"path": self.path, "authorization": authorization})
+            user = self._resolve_authenticated_user(authorization)
+            if user is None:
+                self._write_json(401, {"error": "Missing or invalid auth"})
+                return
+            self._write_json(
+                200,
+                {
+                    "success": True,
+                    "data": {
+                        "user": {
+                            "id": user["id"],
+                            "email": user["email"],
+                            "githubUsername": user["username"],
+                            "treqsUserId": None,
+                        },
+                        "creatorIdentity": f"glaas:user:{user['id']}",
+                    },
+                    "meta": {"authMode": user["auth_mode"]},
+                },
+            )
+            return
+
         if self.path == "/api/v1/health":
             self.server.health_checks += 1
             self._write_json(200, {"success": True, "status": "healthy"})
@@ -129,12 +170,19 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         payload = self._read_json()
         authorization = self.headers.get("Authorization")
         self.server.auth_headers.append({"path": self.path, "authorization": authorization})
-        if not authorization or not authorization.startswith("Bearer "):
-            self._write_json(401, {"error": "Missing or invalid bearer auth"})
+        authenticated_user = self._resolve_authenticated_user(authorization)
+        if authenticated_user is None:
+            self._write_json(401, {"error": "Missing or invalid auth"})
             return
 
         if self.path == "/api/v1/sessions":
-            self.server.session_registrations.append(payload)
+            self.server.session_registrations.append(
+                {
+                    **payload,
+                    "_authenticated_user_id": authenticated_user["id"],
+                    "_auth_mode": authenticated_user["auth_mode"],
+                }
+            )
             session_hash = str(payload.get("hash", ""))
             self._write_json(
                 200,

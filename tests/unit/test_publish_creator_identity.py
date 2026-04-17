@@ -31,6 +31,19 @@ def test_glaas_user_id_is_used_when_no_treqs_subject_is_available() -> None:
     assert resolve_publish_creator_identity(context) == "glaas:user:glaas-user-123"
 
 
+def test_explicit_creator_identity_override_is_preferred() -> None:
+    context = PublishAuthContext(
+        access_token=None,
+        scope_request=None,
+        auth_provider=None,
+        user_sub=None,
+        db_user_id="glaas-user-123",
+        creator_identity="glaas:user:ssh-user-456",
+    )
+
+    assert resolve_publish_creator_identity(context) == "glaas:user:ssh-user-456"
+
+
 def test_missing_authenticated_identity_resolves_to_anonymous() -> None:
     context = PublishAuthContext(
         access_token=None,
