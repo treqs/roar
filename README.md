@@ -278,6 +278,10 @@ roar label show artifact ./outputs/model.pt
 # Show label history (all versions)
 roar label history dag current
 roar label history artifact <artifact-hash>
+
+# Push current local user-managed labels to GLaaS
+roar label push job @2
+roar label push artifact ./outputs/model.pt
 ```
 
 **Entity targets:**
@@ -286,7 +290,7 @@ roar label history artifact <artifact-hash>
 - `job`: step ref (`@N` or `@BN`) or job UID
 - `artifact`: file path or artifact hash
 
-Labels are stored locally and included in lineage registration/publish flows to GLaaS when supported by the configured server.
+Labels are stored locally by default. You can explicitly push the current local user-managed labels for one target to GLaaS with `roar label push ...`, and labels are also included in lineage registration/publish flows when supported by the configured server.
 
 ### `roar register`
 

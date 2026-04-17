@@ -21,6 +21,9 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.input_links: list[dict[str, Any]] = []
         self.output_links: list[dict[str, Any]] = []
         self.label_syncs: list[list[dict[str, Any]]] = []
+        self.label_mutation_attempts: list[dict[str, Any]] = []
+        self.label_mutations: list[dict[str, Any]] = []
+        self.current_labels_by_target: dict[str, dict[str, Any]] = {}
         self.composite_registrations: list[dict[str, Any]] = []
         self.artifacts_by_digest: dict[str, dict[str, Any]] = {}
         self.artifact_dags_by_digest: dict[str, dict[str, Any]] = {}
@@ -125,6 +128,38 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
 
         self._write_json(404, {"error": f"Unhandled GET path: {self.path}"})
 
+    def do_PATCH(self) -> None:
+        payload = self._read_json()
+        authorization = self.headers.get("Authorization")
+        self.server.auth_headers.append({"path": self.path, "authorization": authorization})
+        if not authorization or not authorization.startswith("Bearer "):
+            self._write_json(401, {"error": "Missing or invalid bearer auth"})
+            return
+
+        if self.path == "/api/v1/labels/current":
+            metadata = payload.get("metadata")
+            target_key = _label_target_key(payload)
+            self.server.label_mutation_attempts.append(payload)
+            current = self.server.current_labels_by_target.get(target_key)
+            if not current:
+                self._write_json(404, {"error": {"message": "Label not found"}})
+                return
+            self.server.label_mutations.append(payload)
+            merged_metadata = _deep_merge(
+                current["metadata"], metadata if isinstance(metadata, dict) else {}
+            )
+            version = int(current.get("version", 0)) + 1
+            updated = {
+                **current,
+                "version": version,
+                "metadata": merged_metadata,
+            }
+            self.server.current_labels_by_target[target_key] = updated
+            self._write_json(200, updated)
+            return
+
+        self._write_json(404, {"error": f"Unhandled PATCH path: {self.path}"})
+
     def do_POST(self) -> None:
         payload = self._read_json()
         authorization = self.headers.get("Authorization")
@@ -167,6 +202,29 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             labels = payload.get("labels", [])
             if isinstance(labels, list):
                 self.server.label_syncs.append(labels)
+                for label in labels:
+                    if not isinstance(label, dict):
+                        continue
+                    target_key = _label_target_key(label)
+                    current = self.server.current_labels_by_target.get(target_key)
+                    version = int(current.get("version", 0)) + 1 if isinstance(current, dict) else 1
+                    current_label = {
+                        "id": f"label-{len(self.server.current_labels_by_target) + 1}",
+                        "entityType": label.get("entity_type"),
+                        "version": version,
+                        "metadata": label.get("metadata")
+                        if isinstance(label.get("metadata"), dict)
+                        else {},
+                        "createdAt": "2026-01-01T00:00:00Z",
+                    }
+                    if label.get("entity_type") == "dag":
+                        current_label["sessionHash"] = label.get("session_hash")
+                    elif label.get("entity_type") == "job":
+                        current_label["sessionHash"] = label.get("session_hash")
+                        current_label["jobUid"] = label.get("job_uid")
+                    elif label.get("entity_type") == "artifact":
+                        current_label["artifactHash"] = label.get("artifact_hash")
+                    self.server.current_labels_by_target[target_key] = current_label
                 self._write_json(
                     200,
                     {"created": 0, "updated": 0, "unchanged": len(labels)},
@@ -235,6 +293,26 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         """Suppress default stderr logging for integration tests."""
 
 
+def _label_target_key(payload: dict[str, Any]) -> str:
+    entity_type = str(payload.get("entity_type") or "")
+    if entity_type == "dag":
+        return f"dag:{payload.get('session_hash', '')}"
+    if entity_type == "job":
+        return f"job:{payload.get('session_hash', '')}:{payload.get('job_uid', '')}"
+    return f"artifact:{payload.get('artifact_hash', '')}"
+
+
+def _deep_merge(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    merged = json.loads(json.dumps(current))
+    for key, value in patch.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(existing, value)
+        else:
+            merged[key] = value
+    return merged
+
+
 class FakeGlaasServer:
     """Context-managed fake GLaaS server."""
 
@@ -281,6 +359,14 @@ class FakeGlaasServer:
     @property
     def label_syncs(self) -> list[list[dict[str, Any]]]:
         return self._server.label_syncs
+
+    @property
+    def label_mutation_attempts(self) -> list[dict[str, Any]]:
+        return self._server.label_mutation_attempts
+
+    @property
+    def label_mutations(self) -> list[dict[str, Any]]:
+        return self._server.label_mutations
 
     def set_artifact_dag(self, digest: str, dag: dict[str, Any]) -> None:
         self._server.artifact_dags_by_digest[digest] = dag
