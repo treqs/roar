@@ -65,6 +65,10 @@ _ANSI = {
     "magenta": "\033[35m",
     "cyan": "\033[36m",
     "gray": "\033[90m",
+    # Named semantic tokens — 256-color palette entries that read well on
+    # both dark and light terminal backgrounds.
+    "status_green": "\033[38;5;35m",  # ANSI-256 #35 — muted green
+    "command_blue": "\033[38;5;74m",  # ANSI-256 #74 — steel blue
 }
 
 
