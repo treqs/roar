@@ -224,8 +224,8 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         payload = self._read_json()
         authorization = self.headers.get("Authorization")
         self.server.auth_headers.append({"path": self.path, "authorization": authorization})
-        if not authorization or not authorization.startswith("Bearer "):
-            self._write_json(401, {"error": "Missing or invalid bearer auth"})
+        if not authorization or not authorization.startswith(("Bearer ", "Signature ")):
+            self._write_json(401, {"error": "Missing or invalid authenticated auth"})
             return
 
         if self.path == "/api/v1/labels/current":
