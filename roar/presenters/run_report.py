@@ -34,16 +34,26 @@ from .terminal import TerminalCaps, detect, style
 # Layout constants
 # ---------------------------------------------------------------------------
 
-_PATH_W = 20  # artifact-name column width
 _HASH_W = 8  # fixed 8-char digest
 _COL_GAP = 4  # spaces between hash columns
 _INDENT = "  "  # section-header indent (2 spaces)
 _ROW_INDENT = "    "  # data-row indent (4 spaces)
 _MAX_ROWS = 5  # max visible rows per section before "… and N more"
+_MIN_PATH_W = 14  # minimum path column width
+_MAX_PATH_W = 30  # maximum path column width
+_DEFAULT_PATH_W = 20  # used when no paths to measure
 
 
 def _plural(n: int, singular: str, plural: str | None = None) -> str:
     return f"{n} {singular}" if n == 1 else f"{n} {plural or singular + 's'}"
+
+
+def _compute_path_w(files: list[dict]) -> int:
+    """Compute path column width from actual filenames."""
+    if not files:
+        return _DEFAULT_PATH_W
+    longest = max(len(_basename(f["path"])) for f in files)
+    return max(_MIN_PATH_W, min(longest + 2, _MAX_PATH_W))
 
 
 # ---------------------------------------------------------------------------
@@ -296,10 +306,16 @@ class RunReportPresenter:
         print(line, file=self._stream, flush=True)
 
     def _emit_status(self, label: str, value: str = "", *, emoji: str = "🦖") -> None:
-        """Emit a two-column status line: ``🦖 label          value``."""
+        """Emit a two-column status line: ``🦖 label          value``.
+
+        Values are padded to start at the same column as the Hash column
+        in the Inputs/Outputs sections (``_ROW_INDENT + path_w``).
+        """
         prefix = self._emoji(emoji)
-        # Pad label to a fixed width so values align in a column.
-        padded_label = _pad(f"{prefix} {label}", 28 + _visible_len(prefix))
+        # Target column = 4 (row indent) + default path width.  Status lines
+        # fire before we know the actual path widths, so we use the default.
+        target_col = len(_ROW_INDENT) + _DEFAULT_PATH_W
+        padded_label = _pad(f"{prefix} {label}", target_col)
         self._print(f"{padded_label}{value}")
 
     def _section_header(self, title: str, col_headers: str = "") -> None:
@@ -325,18 +341,26 @@ class RunReportPresenter:
         n_in = len(inputs)
         n_out = len(outputs)
 
+        # Compute variable path widths per section.
+        in_path_w = _compute_path_w(inputs) if inputs else _DEFAULT_PATH_W
+        out_path_w = _compute_path_w(outputs) if outputs else _DEFAULT_PATH_W
+
         self._print()
 
         # -- Inputs section --
         hash_hdr = _pad(style("Hash", "dim", enabled=c), _HASH_W + _COL_GAP)
         src_hdr = style("Source Job", "dim", enabled=c)
         count_dim = style(f" ({n_in})", "dim", enabled=c)
-        self._section_header(f"Inputs{count_dim}", f"{'':>{_PATH_W - 6}}{hash_hdr}{src_hdr}")
+        # Column headers aligned with data: data starts at _ROW_INDENT + path_w,
+        # section header starts at _INDENT. Offset = len(_ROW_INDENT) - len(_INDENT) + path_w - title_len.
+        title_text = f"Inputs ({n_in})"
+        col_offset = len(_ROW_INDENT) - len(_INDENT) + in_path_w - len(title_text)
+        self._section_header(f"Inputs{count_dim}", f"{'':>{max(1, col_offset)}}{hash_hdr}{src_hdr}")
 
         shown_in = min(n_in, _MAX_ROWS - 1) if n_in > _MAX_ROWS else n_in
         for i in range(shown_in):
             inp = inputs[i]
-            name = _pad(_truncate(_basename(inp["path"]), _PATH_W), _PATH_W)
+            name = _pad(_truncate(_basename(inp["path"]), in_path_w), in_path_w)
             digest = _pad(_digest8(inp), _HASH_W + _COL_GAP)
             parent_uid = inp.get("parent_job_uid")
             src = (
@@ -382,12 +406,14 @@ class RunReportPresenter:
         # -- Outputs section --
         out_hash_hdr = style("Hash", "dim", enabled=c)
         count_dim = style(f" ({n_out})", "dim", enabled=c)
-        self._section_header(f"Outputs{count_dim}", f"{'':>{_PATH_W - 7}}{out_hash_hdr}")
+        title_text = f"Outputs ({n_out})"
+        col_offset = len(_ROW_INDENT) - len(_INDENT) + out_path_w - len(title_text)
+        self._section_header(f"Outputs{count_dim}", f"{'':>{max(1, col_offset)}}{out_hash_hdr}")
 
         shown_out = min(n_out, _MAX_ROWS - 1) if n_out > _MAX_ROWS else n_out
         for i in range(shown_out):
             out = outputs[i]
-            name = _pad(_truncate(_basename(out["path"]), _PATH_W), _PATH_W)
+            name = _pad(_truncate(_basename(out["path"]), out_path_w), out_path_w)
             digest = _digest8(out)
             self._section_row(f"{name}{digest}")
         if n_out > shown_out:
