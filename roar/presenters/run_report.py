@@ -180,7 +180,7 @@ class RunReportPresenter:
             yield _NullProgress()
             return
         c = self._caps.can_color
-        prefix = self._emoji("🦖") + " "
+        prefix = "🦖 " if self._caps.can_emoji else "roar: "
         label = style("hashing", "bold", "status_green", enabled=c)
         if total:
             label += style(f" ({_plural(total, 'artifact')})", "dim", enabled=c)
@@ -203,14 +203,14 @@ class RunReportPresenter:
             tp = style(f"{mbps:.1f} MB/s", "dim", enabled=c)
         else:
             tp = ""
-        self._emit_status(label, tp, emoji="🫆")
+        self._emit_status(label, tp)
 
     def lineage_captured(self) -> None:
         if self._quiet or self._caps.pipe_mode:
             return
         c = self._caps.can_color
         label = style("lineage captured", "bold", "status_green", enabled=c)
-        self._emit_status(label, emoji="🧬")
+        self._emit_status(label)
 
     def summary(self, result: RunResult, command: list[str]) -> None:
         if self._quiet or self._caps.pipe_mode:
@@ -302,21 +302,24 @@ class RunReportPresenter:
 
     # ---- internal: output primitives -------------------------------------
 
-    def _emoji(self, char: str) -> str:
-        return char if self._caps.can_emoji else "roar:"
-
     def _print(self, line: str = "") -> None:
         print(line, file=self._stream, flush=True)
 
-    def _emit_status(self, label: str, value: str = "", *, emoji: str = "🦖") -> None:
+    def _emit_status(self, label: str, value: str = "") -> None:
         """Emit a two-column status line: ``🦖 label          value``.
 
         Values start at ``_VALUE_COL`` — the same column where Hash headers
         and data-row hashes begin in the summary sections.
         """
-        prefix = self._emoji(emoji)
-        padded_label = _pad(f"{prefix} {label}", _VALUE_COL)
-        self._print(f"{padded_label}{value}")
+        if self._caps.can_emoji:
+            # Emoji is 2 display cells; "🦖 " = 3 cells.  _pad sees the
+            # raw codepoint as 1 char, so we subtract 1 from the target to
+            # compensate for the extra display cell.
+            raw = f"🦖 {label}"
+            padded = _pad(raw, _VALUE_COL - 1)
+        else:
+            padded = _pad(f"roar: {label}", _VALUE_COL)
+        self._print(f"{padded}{value}")
 
     def _section_header(self, title: str, col_headers: str = "") -> None:
         c = self._caps.can_color
@@ -441,16 +444,20 @@ class RunReportPresenter:
 
         # -- Inspect section --
         self._section_header("Inspect")
-        show_cmd = style(f"roar show --job {result.job_uid}", "command_blue", enabled=c)
-        show_comment = style("    # details", "dim", enabled=c)
-        self._section_row(f"{show_cmd}{show_comment}")
+        # Align # comments at the same column.
+        show_text = f"roar show --job {result.job_uid}"
         if result.interrupted and result.outputs:
-            pop_cmd = style("roar pop", "command_blue", enabled=c)
-            pop_comment = style("    # undo interrupted run", "dim", enabled=c)
-            self._section_row(f"{pop_cmd}{pop_comment}")
+            alt_text = "roar pop"
+            alt_comment = "# undo interrupted run"
         else:
-            dag_cmd = style("roar dag", "command_blue", enabled=c)
-            dag_comment = style("    # full lineage", "dim", enabled=c)
-            self._section_row(f"{dag_cmd}{dag_comment}")
+            alt_text = "roar dag"
+            alt_comment = "# full lineage"
+        cmd_w = max(len(show_text), len(alt_text)) + 4  # 4-space gap before #
+        show_cmd = _pad(style(show_text, "command_blue", enabled=c), cmd_w)
+        show_comment = style("# details", "dim", enabled=c)
+        self._section_row(f"{show_cmd}{show_comment}")
+        alt_cmd = _pad(style(alt_text, "command_blue", enabled=c), cmd_w)
+        alt_cmt = style(alt_comment, "dim", enabled=c)
+        self._section_row(f"{alt_cmd}{alt_cmt}")
 
         self._print()

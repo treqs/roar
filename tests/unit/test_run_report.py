@@ -293,12 +293,12 @@ def test_done_shows_trace_and_post() -> None:
     assert "post 0.6s" in out
 
 
-def test_lineage_uses_dna_emoji() -> None:
+def test_lineage_uses_trex_emoji() -> None:
     buf = io.StringIO()
     caps = TerminalCaps(is_tty=True, can_color=False, can_emoji=True, width=80)
     report = RunReportPresenter(stream=buf, caps=caps)
     report.lineage_captured()
-    assert "🧬" in buf.getvalue()
+    assert "🦖" in buf.getvalue()
 
 
 # ---- legacy one-shot -------------------------------------------------------
