@@ -145,11 +145,14 @@ class RunReportPresenter:
         )
         self._emit_status(label, params)
 
-    def trace_ended(self, duration: float, exit_code: int) -> None:
+    def trace_ended(self, duration: float, exit_code: int, backend: str | None = None) -> None:
         if self._quiet or self._caps.pipe_mode:
             return
         c = self._caps.can_color
-        label = style("trace done", "bold", "status_green", enabled=c)
+        backend_suffix = ""
+        if backend:
+            backend_suffix = style(f" [{backend}]", "dim", enabled=c)
+        label = style("trace done", "bold", "status_green", enabled=c) + backend_suffix
         exit_s = f"exit {exit_code}"
         if exit_code != 0:
             exit_s = style(exit_s, "red", "bold", enabled=c)

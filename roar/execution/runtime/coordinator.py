@@ -175,7 +175,13 @@ class RunCoordinator:
                 tracer_mode_override=ctx.tracer_mode,
                 fallback_enabled_override=ctx.tracer_fallback,
             )
-            run_presenter.trace_ended(tracer_result.duration, tracer_result.exit_code)
+            run_presenter.trace_ended(
+                tracer_result.duration,
+                tracer_result.exit_code,
+                backend=getattr(tracer_result, "backend", None)
+                if isinstance(getattr(tracer_result, "backend", None), str)
+                else None,
+            )
             self.logger.debug(
                 "Tracer completed: exit_code=%d, duration=%.2fs, interrupted=%s",
                 tracer_result.exit_code,
