@@ -106,6 +106,28 @@ def test_omit_display_system_labels_removes_roar_root_only() -> None:
     }
 
 
+def test_build_job_system_labels_uses_job_row_parent_for_task_labels() -> None:
+    labels = build_job_system_labels(
+        {
+            "job_type": "ray_task",
+            "execution_backend": "ray",
+            "parent_job_uid": "driver-main",
+            "metadata": {
+                "task_identity": "identity-1",
+                "ray_task_id": "task-1",
+                "ray_worker_id": "worker-1",
+                "ray_node_id": "node-1",
+            },
+        }
+    )
+
+    roar = labels["roar"]
+    assert roar["operation"]["kind"] == "ray_task"
+    assert roar["task"]["backend"] == "ray"
+    assert roar["task"]["id"] == "task-1"
+    assert roar["task"]["parent_job_uid"] == "driver-main"
+
+
 def test_refresh_job_system_labels_preserves_user_labels_and_replaces_reserved_prefix(
     tmp_path: Path,
 ) -> None:

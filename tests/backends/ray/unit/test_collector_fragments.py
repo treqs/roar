@@ -6,6 +6,7 @@ from pathlib import Path
 from roar.backends.ray import collector as ray_collector
 from roar.backends.ray.collector import collect_fragments
 from roar.backends.ray.fragment import ArtifactRef, TaskFragment
+from roar.db.context import create_database_context
 from roar.db.schema import SCHEMA
 
 
@@ -279,6 +280,44 @@ def test_collect_fragments_persists_artifact_size_from_fragment_refs(tmp_path: P
     assert row is not None
     assert int(row["size"]) == 123
     conn.close()
+
+
+def test_collect_fragments_refreshes_ray_task_system_labels(tmp_path: Path) -> None:
+    project_dir = tmp_path / "project"
+    _init_db(project_dir)
+
+    fragment = TaskFragment(
+        job_uid="raylabels1",
+        parent_job_uid="driver-main",
+        ray_task_id="task-labels",
+        ray_worker_id="worker-7",
+        ray_node_id="node-2",
+        ray_actor_id=None,
+        function_name="process",
+        started_at=1.0,
+        ended_at=2.0,
+        exit_code=0,
+        writes=[_ref("a" * 64)],
+    )
+
+    collect_fragments(
+        fragments=[fragment.to_dict()],
+        project_dir=str(project_dir),
+        driver_job_uid="driver-main",
+    )
+
+    with create_database_context(project_dir / ".roar") as db_ctx:
+        job = db_ctx.jobs.get_by_uid(fragment.job_uid)
+        assert job is not None
+        current = db_ctx.labels.get_current("job", job_id=int(job["id"]))
+
+    assert current is not None
+    assert current["write_origin"] == "system"
+    metadata = current["metadata"]
+    assert metadata["roar"]["operation"]["kind"] == "ray_task"
+    assert metadata["roar"]["task"]["backend"] == "ray"
+    assert metadata["roar"]["task"]["id"] == "task-labels"
+    assert metadata["roar"]["task"]["parent_job_uid"] == "driver-main"
 
 
 def test_collect_fragments_shortens_command_to_task_family_and_keeps_full_script(

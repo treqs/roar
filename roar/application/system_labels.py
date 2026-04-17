@@ -354,7 +354,11 @@ def _populate_task_labels(
         ["task", "actor_id"],
         metadata.get("actor_id") or metadata.get("ray_actor_id") or metadata.get("osmo_actor_id"),
     )
-    _set_nested_value(roar, ["task", "parent_job_uid"], metadata.get("parent_job_uid"))
+    _set_nested_value(
+        roar,
+        ["task", "parent_job_uid"],
+        metadata.get("parent_job_uid") or job.get("parent_job_uid"),
+    )
 
     backend_metadata = metadata.get("backend_metadata")
     if isinstance(backend_metadata, dict):
