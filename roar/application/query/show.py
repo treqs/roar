@@ -22,6 +22,7 @@ from ..lookup import (
     remote_artifact_fallback_enabled,
     run_local_then_remote_lookup,
 )
+from ..system_labels import omit_display_system_labels
 from .requests import ShowQueryRequest
 from .results import (
     ShowArtifactComponentSummary,
@@ -450,4 +451,6 @@ def _current_label_metadata(
         return None
 
     metadata = current.get("metadata")
-    return metadata if isinstance(metadata, dict) else None
+    if not isinstance(metadata, dict):
+        return None
+    return cast(dict[str, Any] | None, omit_display_system_labels(metadata))

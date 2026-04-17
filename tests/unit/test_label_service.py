@@ -20,6 +20,19 @@ def test_reject_reserved_keys_blocks_system_managed_dataset_labels() -> None:
         )
 
 
+def test_reject_reserved_keys_blocks_system_managed_roar_labels() -> None:
+    with pytest.raises(ValueError, match="Reserved label keys cannot be set manually"):
+        LabelService._reject_reserved_keys(
+            {
+                "roar": {
+                    "git": {
+                        "commit": "deadbeef",
+                    }
+                }
+            }
+        )
+
+
 def test_build_current_key_origins_replays_user_and_system_versions() -> None:
     history = [
         {

@@ -15,10 +15,8 @@ from typing import Any, Protocol
 
 from ..core.label_origins import LABEL_ORIGIN_USER, build_current_key_origins
 from ..db.context import DatabaseContext
-from ..execution.recording.dataset_metadata import AUTO_DATASET_LABEL_KEYS
 from .label_rendering import flatten_label_metadata
-
-RESERVED_LABEL_KEYS = set(AUTO_DATASET_LABEL_KEYS)
+from .system_labels import is_reserved_system_label_path, strip_reserved_system_labels
 
 
 @dataclass(frozen=True)
@@ -195,7 +193,7 @@ class LabelService:
         destination: LabelTargetRef,
     ) -> LabelWriteResult:
         """Copy current source metadata into the destination as a patch."""
-        source_metadata = _remove_reserved_paths(self.current_metadata(source), RESERVED_LABEL_KEYS)
+        source_metadata = strip_reserved_system_labels(self.current_metadata(source))
         destination_metadata = self.current_metadata(destination)
         merged = _deep_merge(destination_metadata, source_metadata)
         if merged == destination_metadata:
@@ -229,7 +227,7 @@ class LabelService:
     @staticmethod
     def _reject_reserved_keys(metadata: dict[str, Any]) -> None:
         keys = {key for key, _value in flatten_label_metadata(metadata)}
-        reserved = sorted(keys.intersection(RESERVED_LABEL_KEYS))
+        reserved = sorted(key for key in keys if is_reserved_system_label_path(key))
         if reserved:
             joined = ", ".join(reserved)
             raise ValueError(f"Reserved label keys cannot be set manually: {joined}")
@@ -351,27 +349,3 @@ def _deep_merge(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any
         else:
             merged[key] = value
     return merged
-
-
-def _remove_reserved_paths(metadata: dict[str, Any], reserved_paths: set[str]) -> dict[str, Any]:
-    cleaned = json.loads(json.dumps(metadata))
-    for path in reserved_paths:
-        _remove_nested(cleaned, path.split("."))
-    return cleaned
-
-
-def _remove_nested(root: dict[str, Any], path: list[str]) -> None:
-    if not path:
-        return
-    key = path[0]
-    if key not in root:
-        return
-    if len(path) == 1:
-        root.pop(key, None)
-        return
-    child = root.get(key)
-    if not isinstance(child, dict):
-        return
-    _remove_nested(child, path[1:])
-    if not child:
-        root.pop(key, None)

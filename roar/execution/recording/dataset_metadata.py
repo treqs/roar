@@ -5,19 +5,15 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
+from ...core.label_constants import AUTO_DATASET_LABEL_KEYS
 from .dataset_profile import build_dataset_profile
 
-AUTO_DATASET_LABEL_KEYS = frozenset(
-    {
-        "dataset.type",
-        "dataset.id",
-        "dataset.fingerprint",
-        "dataset.fingerprint_algorithm",
-        "dataset.split",
-        "dataset.version_hint",
-        "dataset.modality",
-    }
-)
+__all__ = [
+    "AUTO_DATASET_LABEL_KEYS",
+    "build_dataset_label_metadata",
+    "build_dataset_metadata",
+    "find_matching_identifier",
+]
 
 
 def find_matching_identifier(
