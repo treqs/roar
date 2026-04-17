@@ -11,6 +11,10 @@ except ImportError:  # pragma: no cover
 from .auth_store import load_auth_state
 
 
+class PublishAuthError(RuntimeError):
+    """Raised when publish auth or repo binding requirements are not satisfied."""
+
+
 @dataclass(frozen=True)
 class PublishAuthContext:
     access_token: str | None
@@ -38,11 +42,11 @@ def load_publish_auth_context(
 
     binding = _load_repo_binding(start_dir)
     if binding and not access_token:
-        raise RuntimeError(
+        raise PublishAuthError(
             "Repo is linked to GLaaS but no global auth state is available. Run `roar login`."
         )
     if not binding and not allow_public_without_binding:
-        raise RuntimeError(
+        raise PublishAuthError(
             "No GLaaS repo binding found for this publish. Link the repo to a TReqs owner/project first, or rerun with --public to publish publicly."
         )
 

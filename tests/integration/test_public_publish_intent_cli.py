@@ -101,8 +101,10 @@ def test_register_requires_explicit_public_flag_when_repo_has_no_binding(
 
     assert result.returncode != 0
     combined = f"{result.stdout}\n{result.stderr}"
-    assert "No GLaaS repo binding found" in combined
+    assert "Error: No GLaaS repo binding found" in combined
     assert "--public" in combined
+    assert "Traceback (most recent call last)" not in combined
+    assert "RuntimeError:" not in combined
     assert fake_glaas_publish_server.session_registrations == []
 
 

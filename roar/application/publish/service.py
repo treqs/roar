@@ -365,112 +365,118 @@ def _run_git(path: Path, *args: str) -> str | None:
 
 def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageResponse:
     """Run the `roar register` application workflow."""
+    from ...publish_auth import PublishAuthError
+
     if not request.dry_run:
         bootstrap(request.roar_dir)
     logger = get_logger()
-    resolved_target = resolve_register_lineage_target(
-        request.target,
-        cwd=request.cwd,
-        roar_dir=request.roar_dir,
-    )
-    runtime = (
-        build_register_preview_runtime(
-            start_dir=str(request.cwd),
-            allow_public_without_binding=request.public,
-        )
-        if request.dry_run
-        else build_publish_runtime(
-            glaas_url=get_glaas_url(),
-            start_dir=str(request.cwd),
-            allow_public_without_binding=request.public,
-        )
-    )
-    collected_lineage, error = collect_register_lineage(
-        target=resolved_target,
-        roar_dir=request.roar_dir,
-        cwd=request.cwd,
-        lineage_collector=runtime.lineage_collector,
-        session_service=runtime.session_service,
-        logger=logger,
-        dry_run=request.dry_run,
-    )
-    if collected_lineage is None:
-        return RegisterLineageResponse(success=False, error=error)
 
     try:
-        if request.dry_run:
-            prepared = prepare_register_preview_execution(
-                runtime=runtime,
-                roar_dir=request.roar_dir,
-                cwd=request.cwd,
-                session_id=collected_lineage.session_id,
-                session_hash_override=collected_lineage.session_hash_override,
-                logger=logger,
-                lineage=collected_lineage.lineage,
-            )
-        else:
-            prepared = prepare_register_execution(
-                runtime=runtime,
-                roar_dir=request.roar_dir,
-                cwd=request.cwd,
-                session_id=collected_lineage.session_id,
-                dry_run=False,
-                session_hash_override=collected_lineage.session_hash_override,
-                logger=logger,
-                lineage=collected_lineage.lineage,
-            )
-    except ValueError as exc:
-        return RegisterLineageResponse(
-            success=False,
-            artifact_hash=collected_lineage.artifact_hash,
-            error=str(exc),
-        )
-
-    if request.dry_run:
-        return preview_register_lineage(
-            lineage=collected_lineage.lineage,
-            artifact_hash=collected_lineage.artifact_hash,
-            prepared=prepared,
+        resolved_target = resolve_register_lineage_target(
+            request.target,
             cwd=request.cwd,
+            roar_dir=request.roar_dir,
+        )
+        runtime = (
+            build_register_preview_runtime(
+                start_dir=str(request.cwd),
+                allow_public_without_binding=request.public,
+            )
+            if request.dry_run
+            else build_publish_runtime(
+                glaas_url=get_glaas_url(),
+                start_dir=str(request.cwd),
+                allow_public_without_binding=request.public,
+            )
+        )
+        collected_lineage, error = collect_register_lineage(
+            target=resolved_target,
+            roar_dir=request.roar_dir,
+            cwd=request.cwd,
+            lineage_collector=runtime.lineage_collector,
+            session_service=runtime.session_service,
+            logger=logger,
+            dry_run=request.dry_run,
+        )
+        if collected_lineage is None:
+            return RegisterLineageResponse(success=False, error=error)
+
+        try:
+            if request.dry_run:
+                prepared = prepare_register_preview_execution(
+                    runtime=runtime,
+                    roar_dir=request.roar_dir,
+                    cwd=request.cwd,
+                    session_id=collected_lineage.session_id,
+                    session_hash_override=collected_lineage.session_hash_override,
+                    logger=logger,
+                    lineage=collected_lineage.lineage,
+                )
+            else:
+                prepared = prepare_register_execution(
+                    runtime=runtime,
+                    roar_dir=request.roar_dir,
+                    cwd=request.cwd,
+                    session_id=collected_lineage.session_id,
+                    dry_run=False,
+                    session_hash_override=collected_lineage.session_hash_override,
+                    logger=logger,
+                    lineage=collected_lineage.lineage,
+                )
+        except ValueError as exc:
+            return RegisterLineageResponse(
+                success=False,
+                artifact_hash=collected_lineage.artifact_hash,
+                error=str(exc),
+            )
+
+        if request.dry_run:
+            return preview_register_lineage(
+                lineage=collected_lineage.lineage,
+                artifact_hash=collected_lineage.artifact_hash,
+                prepared=prepared,
+                cwd=request.cwd,
+                skip_confirmation=request.skip_confirmation,
+                confirm_callback=request.confirm_callback,
+            )
+
+        service = RegisterService(
+            glaas_client=runtime.glaas_client,
+            coordinator=runtime.registration_coordinator,
+        )
+        result = service.register_prepared_lineage(
+            lineage=collected_lineage.lineage,
+            roar_dir=request.roar_dir,
+            artifact_hash=collected_lineage.artifact_hash,
+            dry_run=request.dry_run,
+            as_blake3=request.as_blake3,
             skip_confirmation=request.skip_confirmation,
             confirm_callback=request.confirm_callback,
+            prepared=prepared,
         )
 
-    service = RegisterService(
-        glaas_client=runtime.glaas_client,
-        coordinator=runtime.registration_coordinator,
-    )
-    result = service.register_prepared_lineage(
-        lineage=collected_lineage.lineage,
-        roar_dir=request.roar_dir,
-        artifact_hash=collected_lineage.artifact_hash,
-        dry_run=request.dry_run,
-        as_blake3=request.as_blake3,
-        skip_confirmation=request.skip_confirmation,
-        confirm_callback=request.confirm_callback,
-        prepared=prepared,
-    )
+        finalize_register_git(
+            result_success=result.success,
+            dry_run=request.dry_run,
+            git_tag_name=prepared.git_tag_name,
+            git_tag_repo_root=prepared.git_tag_repo_root,
+            logger=logger,
+        )
 
-    finalize_register_git(
-        result_success=result.success,
-        dry_run=request.dry_run,
-        git_tag_name=prepared.git_tag_name,
-        git_tag_repo_root=prepared.git_tag_repo_root,
-        logger=logger,
-    )
-
-    return RegisterLineageResponse(
-        success=result.success,
-        session_hash=result.session_hash,
-        artifact_hash=result.artifact_hash,
-        jobs_registered=result.jobs_registered,
-        artifacts_registered=result.artifacts_registered,
-        links_created=result.links_created,
-        error=result.error,
-        secrets_detected=list(result.secrets_detected),
-        secrets_redacted=result.secrets_redacted,
-        aborted_by_user=result.aborted_by_user,
-    )
+        return RegisterLineageResponse(
+            success=result.success,
+            session_hash=result.session_hash,
+            artifact_hash=result.artifact_hash,
+            jobs_registered=result.jobs_registered,
+            artifacts_registered=result.artifacts_registered,
+            links_created=result.links_created,
+            error=result.error,
+            secrets_detected=list(result.secrets_detected),
+            secrets_redacted=result.secrets_redacted,
+            aborted_by_user=result.aborted_by_user,
+        )
+    except PublishAuthError as exc:
+        return RegisterLineageResponse(success=False, error=str(exc))
 
 
 def put_artifacts(request: PutRequest) -> PutResponse:
