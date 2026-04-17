@@ -65,6 +65,11 @@ LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
         "whoami",
         "Show current GLaaS/TReqs login and repo binding",
     ),
+    "workflow": (
+        "roar.cli.commands.workflow",
+        "workflow",
+        "Generate TReqs workflow YAML from local sessions",
+    ),
 }
 
 HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -75,11 +80,19 @@ HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     ("Share and Publish", ("put", "register", "get", "label")),
     ("Setup and Admin", ("auth", "config", "env", "tracer", "proxy", "reset")),
-    ("GLaaS / TReqs Account", ("login", "logout", "whoami", "projects")),
+    ("GLaaS / TReqs Account", ("login", "logout", "whoami", "projects", "workflow")),
 )
 
 EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG = "ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS"
-_EXPERIMENTAL_ACCOUNT_COMMANDS = frozenset({"login", "logout", "whoami", "projects"})
+_EXPERIMENTAL_ACCOUNT_COMMANDS = frozenset(
+    {
+        "login",
+        "logout",
+        "whoami",
+        "projects",
+        "workflow",
+    }
+)
 _TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes"})
 
 
