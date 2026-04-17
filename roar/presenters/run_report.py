@@ -13,7 +13,6 @@ Color tokens (all in terminal.py, no raw ANSI here):
 
 from __future__ import annotations
 
-import re
 import sys
 from contextlib import contextmanager
 from typing import IO
@@ -27,7 +26,6 @@ from .terminal import TerminalCaps, detect, style
 # Constants
 # ---------------------------------------------------------------------------
 
-_HASH_W = 8
 _SMALL_RUN = 5  # skip transient hashing progress below this count
 
 
@@ -38,28 +36,6 @@ def _plural(n: int, singular: str, plural: str | None = None) -> str:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-
-
-def _visible_len(s: str) -> int:
-    return len(_ANSI_RE.sub("", s))
-
-
-def _pad(text: str, width: int) -> str:
-    vis = _visible_len(text)
-    return text + " " * max(0, width - vis)
-
-
-def format_size(size_bytes: int | None) -> str:
-    if size_bytes is None:
-        return "?"
-    size: float = float(size_bytes)
-    for unit in ["B", "KB", "MB", "GB"]:
-        if abs(size) < 1024:
-            return f"{size:.1f}{unit}" if unit != "B" else f"{int(size)}{unit}"
-        size /= 1024
-    return f"{size:.1f}TB"
 
 
 class _NullProgress:

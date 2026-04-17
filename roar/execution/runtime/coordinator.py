@@ -303,12 +303,12 @@ class RunCoordinator:
             self._cleanup_logs(tracer_result.tracer_log_path, tracer_result.inject_log_path)
 
         # "hashed" throughput line.
-        total_hash_bytes_early = sum(f.get("size") or 0 for f in written_file_info)
-        hash_dur = t_record_end - t_record_start
+        total_hash_bytes = sum(f.get("size") or 0 for f in written_file_info)
+        hash_duration = t_record_end - t_record_start
         run_presenter.hashed(
             n_artifacts=len(read_file_info) + len(written_file_info),
-            total_bytes=total_hash_bytes_early,
-            duration=hash_dur,
+            total_bytes=total_hash_bytes,
+            duration=hash_duration,
         )
         run_presenter.lineage_captured()
 
@@ -344,10 +344,6 @@ class RunCoordinator:
         backend_name = getattr(tracer_result, "backend", None)
         if not isinstance(backend_name, str):
             backend_name = None
-
-        # Hash throughput: sum of all output sizes + record duration.
-        total_hash_bytes = sum(f.get("size") or 0 for f in written_file_info)
-        hash_duration = t_record_end - t_record_start
 
         # Git info (best-effort, never fail the run for this).
         git_branch, git_short_commit, git_clean = None, None, True
