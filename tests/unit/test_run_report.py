@@ -1,4 +1,4 @@
-"""Tests for RunReportPresenter — v7 section-based layout."""
+"""Tests for RunReportPresenter — minimalist narration-style output."""
 
 from __future__ import annotations
 
@@ -51,169 +51,175 @@ class _CapturePresenter:
         return default
 
 
-# ---- section layout -------------------------------------------------------
+def _make_result(**overrides: Any) -> RunResult:
+    defaults: dict[str, Any] = {
+        "exit_code": 0,
+        "job_id": 1,
+        "job_uid": "f3fba717",
+        "duration": 1.0,
+        "inputs": [],
+        "outputs": [],
+    }
+    defaults.update(overrides)
+    return RunResult(**defaults)
 
 
-def test_inputs_section_with_source_job() -> None:
+# ---- summary detail lines -------------------------------------------------
+
+
+def test_io_line_counts_inputs_outputs_and_prior_jobs() -> None:
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
     report.summary(
-        RunResult(
-            exit_code=0,
-            job_id=1,
-            job_uid="abc12345",
-            duration=1.0,
+        _make_result(
             inputs=[
-                {
-                    "path": "/a/in.txt",
-                    "size": 1,
-                    "hashes": [{"algorithm": "blake3", "digest": "d328d068abcd1234"}],
-                    "parent_job_uid": "8dc58ec2",
-                },
+                {"path": "/a/in1.txt", "hashes": [], "parent_job_uid": "aaa11111"},
+                {"path": "/a/in2.txt", "hashes": [], "parent_job_uid": "bbb22222"},
             ],
-            outputs=[{"path": "/a/out.txt", "size": 1, "hashes": []}],
+            outputs=[{"path": "/a/out.txt", "hashes": []}],
         ),
         [],
     )
     out = _strip(buf.getvalue())
-    assert "Inputs (1)" in out
-    assert "Hash" in out
-    assert "Source Job" in out
-    assert "d328d068" in out
-    assert "8dc58ec2" in out
+    assert "i/o" in out
+    assert "2 inputs" in out
+    assert "2 prior jobs" in out
+    assert "1 output" in out
 
 
-def test_outputs_section_no_source_job() -> None:
+def test_io_line_omits_prior_jobs_when_none() -> None:
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
     report.summary(
-        RunResult(
-            exit_code=0,
-            job_id=1,
-            job_uid="abc12345",
-            duration=1.0,
-            inputs=[],
-            outputs=[
-                {
-                    "path": "/a/out.bin",
-                    "size": 100,
-                    "hashes": [{"algorithm": "blake3", "digest": "b7ad9ea41234abcd"}],
-                },
-            ],
-        ),
+        _make_result(inputs=[{"path": "/a/in.txt", "hashes": []}], outputs=[]),
         [],
     )
     out = _strip(buf.getvalue())
-    assert "Outputs (1)" in out
-    assert "b7ad9ea4" in out
-    assert "Source Job" not in out.split("Outputs")[1]
+    assert "1 input" in out
+    assert "prior" not in out
 
 
-def test_job_section_with_git_and_env() -> None:
+def test_job_line_shows_bold_hash() -> None:
+    buf = io.StringIO()
+    caps = TerminalCaps(is_tty=True, can_color=True, can_emoji=False, width=80)
+    report = RunReportPresenter(stream=buf, caps=caps)
+    report.summary(_make_result(job_uid="f3fba717"), [])
+    raw = buf.getvalue()
+    assert "f3fba717" in _strip(raw)
+    # Bold ANSI code wraps the hash.
+    assert "\x1b[1m" in raw
+
+
+def test_git_line_clean() -> None:
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
     report.summary(
-        RunResult(
-            exit_code=0,
-            job_id=1,
-            job_uid="f3fba717",
-            duration=1.0,
-            inputs=[],
-            outputs=[],
-            git_branch="main",
-            git_short_commit="10c570b",
-            git_clean=True,
-            pip_count=9,
-            dpkg_count=10,
-            env_count=3,
-        ),
+        _make_result(git_branch="main", git_short_commit="10c570b", git_clean=True),
         [],
     )
     out = _strip(buf.getvalue())
-    assert "Job" in out
-    assert "id" in out
-    assert "f3fba717" in out
     assert "git" in out
     assert "main @ 10c570b" in out
     assert "clean" in out
+
+
+def test_git_line_dirty_uses_amber() -> None:
+    buf = io.StringIO()
+    caps = TerminalCaps(is_tty=True, can_color=True, can_emoji=False, width=80)
+    report = RunReportPresenter(stream=buf, caps=caps)
+    report.summary(
+        _make_result(git_branch="main", git_short_commit="abc", git_clean=False),
+        [],
+    )
+    raw = buf.getvalue()
+    assert "dirty" in _strip(raw)
+    # warn_amber = ANSI 256-color 172
+    assert "\x1b[38;5;172m" in raw
+
+
+def test_env_line() -> None:
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.summary(_make_result(pip_count=9, dpkg_count=10, env_count=3), [])
+    out = _strip(buf.getvalue())
     assert "env" in out
     assert "9 pip" in out
     assert "10 dpkg" in out
     assert "3 var" in out
 
 
-def test_dag_section() -> None:
+def test_dag_line_singular() -> None:
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
-    report.summary(
-        RunResult(
-            exit_code=0,
-            job_id=1,
-            job_uid="abc12345",
-            duration=1.0,
-            inputs=[],
-            outputs=[],
-            dag_jobs=4,
-            dag_artifacts=1,
-            dag_depth=2,
-        ),
-        [],
-    )
+    report.summary(_make_result(dag_jobs=1, dag_artifacts=1, dag_depth=1), [])
     out = _strip(buf.getvalue())
-    assert "DAG" in out
-    assert "4 jobs" in out
-    assert "1 artifact" in out  # singular
-    assert "depth 2" in out
+    assert "1 job" in out
+    assert "1 artifact" in out
+    assert "artifacts" not in out
 
 
-def test_inspect_section_suggests_show_and_dag() -> None:
+def test_suggested_command() -> None:
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
-    report.summary(
-        RunResult(exit_code=0, job_id=1, job_uid="abc12345", duration=1.0, inputs=[], outputs=[]),
-        [],
-    )
+    report.summary(_make_result(job_uid="f3fba717"), [])
     out = _strip(buf.getvalue())
-    assert "Inspect" in out
-    assert "roar show --job abc12345" in out
+    assert "$ roar show --job f3fba717" in out
     assert "# details" in out
-    assert "roar dag" in out
-    assert "# full lineage" in out
 
 
-def test_interrupted_run_suggests_pop() -> None:
+# ---- lifecycle lines -------------------------------------------------------
+
+
+def test_trace_starting() -> None:
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
-    report.summary(
-        RunResult(
-            exit_code=130,
-            job_id=1,
-            job_uid="job12345",
-            duration=0.5,
-            inputs=[],
-            outputs=[{"path": "/tmp/out.txt", "size": 1, "hashes": []}],
-            interrupted=True,
-        ),
-        [],
-    )
+    report.trace_starting(backend="preload", proxy_active=False)
     out = _strip(buf.getvalue())
-    assert "roar pop" in out
-    assert "roar dag" not in out
+    assert "tracing" in out
+    assert "tracer:preload" in out
+    assert "sync:off" in out
 
 
-def test_truncation_with_more_indicator() -> None:
+def test_trace_ended_success() -> None:
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
-    inputs = [{"path": f"/data/in_{i}.txt", "size": 1, "hashes": []} for i in range(10)]
-    report.summary(
-        RunResult(
-            exit_code=0, job_id=1, job_uid="abc12345", duration=1.0, inputs=inputs, outputs=[]
-        ),
-        [],
-    )
+    report.trace_ended(duration=11.2, exit_code=0, backend="preload")
     out = _strip(buf.getvalue())
-    assert "Inputs (10)" in out
-    assert "and 6 more" in out
+    assert "trace done" in out
+    assert "11.2s" in out
+    assert "exit 0" in out
+    assert "[preload]" in out
+
+
+def test_trace_ended_nonzero_exit() -> None:
+    buf = io.StringIO()
+    caps = TerminalCaps(is_tty=True, can_color=True, can_emoji=False, width=80)
+    report = RunReportPresenter(stream=buf, caps=caps)
+    report.trace_ended(duration=1.0, exit_code=1)
+    raw = buf.getvalue()
+    assert "exit 1" in _strip(raw)
+    # warn_amber for non-zero exit
+    assert "\x1b[38;5;172m" in raw
+
+
+def test_hashed_singular() -> None:
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.hashed(n_artifacts=1, total_bytes=1024 * 1024, duration=0.5)
+    out = _strip(buf.getvalue())
+    assert "1 artifact" in out
+    assert "artifacts" not in out
+    assert "MB/s" in out
+
+
+def test_done_shows_timing_breakdown() -> None:
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.done(exit_code=0, trace_duration=11.2, post_duration=0.6)
+    out = _strip(buf.getvalue())
+    assert "done" in out
+    assert "trace 11.2s" in out
+    assert "post 0.6s" in out
 
 
 # ---- quiet + pipe modes ---------------------------------------------------
@@ -225,10 +231,7 @@ def test_quiet_mode_emits_nothing() -> None:
     report.trace_starting(backend="preload", proxy_active=False)
     report.trace_ended(duration=0.5, exit_code=0)
     report.lineage_captured()
-    report.summary(
-        RunResult(exit_code=0, job_id=1, job_uid="abc12345", duration=0.5, inputs=[], outputs=[]),
-        [],
-    )
+    report.summary(_make_result(), [])
     report.done(exit_code=0, trace_duration=0.5, post_duration=0.1)
     assert buf.getvalue() == ""
 
@@ -239,66 +242,11 @@ def test_pipe_mode_emits_only_done_line() -> None:
     report.trace_starting(backend="preload", proxy_active=False)
     report.trace_ended(duration=0.5, exit_code=0)
     report.lineage_captured()
-    report.summary(
-        RunResult(exit_code=0, job_id=1, job_uid="abc12345", duration=0.5, inputs=[], outputs=[]),
-        [],
-    )
+    report.summary(_make_result(), [])
     report.done(exit_code=0, trace_duration=0.5, post_duration=0.1)
     out = buf.getvalue()
     assert out.count("\n") == 1
     assert out.startswith("roar: done")
-
-
-# ---- lifecycle lines -------------------------------------------------------
-
-
-def test_trace_starting_format() -> None:
-    buf = io.StringIO()
-    report = RunReportPresenter(stream=buf, caps=_tty_caps())
-    report.trace_starting(backend="preload", proxy_active=True)
-    out = _strip(buf.getvalue())
-    assert "tracing" in out
-    assert "tracer:preload" in out
-    assert "proxy:on" in out
-    assert "sync:off" in out
-
-
-def test_trace_ended_exit_before_duration() -> None:
-    buf = io.StringIO()
-    report = RunReportPresenter(stream=buf, caps=_tty_caps())
-    report.trace_ended(duration=11.2, exit_code=0)
-    out = _strip(buf.getvalue())
-    exit_pos = out.index("exit 0")
-    dur_pos = out.index("11.2s")
-    assert exit_pos < dur_pos  # exit code appears before duration
-
-
-def test_hashed_line_singular() -> None:
-    buf = io.StringIO()
-    report = RunReportPresenter(stream=buf, caps=_tty_caps())
-    report.hashed(n_artifacts=1, total_bytes=1024 * 1024, duration=0.5)
-    out = _strip(buf.getvalue())
-    assert "1 artifact" in out
-    assert "artifacts" not in out
-    assert "MB/s" in out
-
-
-def test_done_shows_trace_and_post() -> None:
-    buf = io.StringIO()
-    report = RunReportPresenter(stream=buf, caps=_tty_caps())
-    report.done(exit_code=0, trace_duration=11.2, post_duration=0.6)
-    out = _strip(buf.getvalue())
-    assert "done" in out
-    assert "trace 11.2s" in out
-    assert "post 0.6s" in out
-
-
-def test_lineage_uses_trex_emoji() -> None:
-    buf = io.StringIO()
-    caps = TerminalCaps(is_tty=True, can_color=False, can_emoji=True, width=80)
-    report = RunReportPresenter(stream=buf, caps=caps)
-    report.lineage_captured()
-    assert "🦖" in buf.getvalue()
 
 
 # ---- legacy one-shot -------------------------------------------------------
@@ -307,19 +255,8 @@ def test_lineage_uses_trex_emoji() -> None:
 def test_show_report_legacy() -> None:
     buf = io.StringIO()
     report = RunReportPresenter(_CapturePresenter(), stream=buf, caps=_tty_caps())
-    report.show_report(
-        RunResult(
-            exit_code=0,
-            job_id=1,
-            job_uid="job12345",
-            duration=1.0,
-            inputs=[],
-            outputs=[],
-            post_duration=0.2,
-        ),
-        [],
-    )
+    report.show_report(_make_result(post_duration=0.2), [])
     out = _strip(buf.getvalue())
-    assert "roar show --job job12345" in out
+    assert "roar show --job f3fba717" in out
     assert "trace done" in out
     assert "done" in out

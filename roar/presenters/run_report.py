@@ -1,25 +1,18 @@
-"""Run report presenter — v7 section-based layout.
+"""Run report presenter - minimalist narration-style output.
 
-Renders the lifecycle of ``roar run`` as status lines followed by five
-distinct sections (Inputs, Job, Outputs, DAG, Inspect).  All output
-goes to stderr so the user command's stdout remains clean for piping.
+Every status line is narrated by 🦖.  The lineage detail block uses
+``·`` (middle dot) as a line prefix with 3-char category labels.
 
-Color tokens (via ``terminal.style``):
-  status_green   -status lines, section headers (bold)
-  command_blue   -actionable commands in Inspect block
-  dim            -column headers, metadata labels, source-job hashes,
-                   counts in parentheses, comments, timing breakdown
-  bold           -current job hash (emphasis, no hue)
-
-Hashes carry NO hue.  Weight alone distinguishes them:
-  bold    -the current job hash (once, in the Job block)
-  regular -artifact hashes in Inputs / Outputs
-  dim     -source-job hashes (context)
+Color tokens (all in terminal.py, no raw ANSI here):
+  status_green  - 🦖 lines, ``exit 0``, ``clean``
+  warn_amber    - ``dirty`` git, non-zero exit
+  command_blue  - suggested command text
+  dim           - prefixes, labels, flags, comments, timing
+  bold          - current job hash (no hue)
 """
 
 from __future__ import annotations
 
-import os
 import re
 import sys
 from contextlib import contextmanager
@@ -31,32 +24,15 @@ from .spinner import BRAILLE_FRAMES, CLOCK_FRAMES, Spinner
 from .terminal import TerminalCaps, detect, style
 
 # ---------------------------------------------------------------------------
-# Layout constants
+# Constants
 # ---------------------------------------------------------------------------
 
-_HASH_W = 8  # fixed 8-char digest
-_COL_GAP = 4  # spaces between hash columns
-_INDENT = "  "  # section-header indent (2 spaces)
-_ROW_INDENT = "    "  # data-row indent (4 spaces)
-_MAX_ROWS = 5  # max visible rows per section before "… and N more"
-_MIN_PATH_W = 14  # minimum path column width
-_MAX_PATH_W = 30  # maximum path column width
-_DEFAULT_PATH_W = 20  # used when no paths to measure
-# The column where values/hashes start.  Status lines, section column headers,
-# and data-row hashes all align to this position from the left margin.
-_VALUE_COL = len(_ROW_INDENT) + _DEFAULT_PATH_W  # = 24
+_HASH_W = 8
+_SMALL_RUN = 5  # skip transient hashing progress below this count
 
 
 def _plural(n: int, singular: str, plural: str | None = None) -> str:
     return f"{n} {singular}" if n == 1 else f"{n} {plural or singular + 's'}"
-
-
-def _compute_path_w(files: list[dict]) -> int:
-    """Compute path column width from actual filenames."""
-    if not files:
-        return _DEFAULT_PATH_W
-    longest = max(len(_basename(f["path"])) for f in files)
-    return max(_MIN_PATH_W, min(longest + 2, _MAX_PATH_W))
 
 
 # ---------------------------------------------------------------------------
@@ -75,31 +51,7 @@ def _pad(text: str, width: int) -> str:
     return text + " " * max(0, width - vis)
 
 
-def _truncate(text: str, width: int) -> str:
-    if len(text) <= width:
-        return text
-    return text[: max(1, width - 1)] + "…"
-
-
-def _basename(path: str) -> str:
-    try:
-        rel = os.path.relpath(path)
-        if not rel.startswith(".."):
-            return rel
-    except ValueError:
-        pass
-    return os.path.basename(path) or path
-
-
-def _digest8(file_info: dict) -> str:
-    hashes = file_info.get("hashes", [])
-    if not hashes:
-        return ""
-    return hashes[0].get("digest", "")[:_HASH_W]
-
-
 def format_size(size_bytes: int | None) -> str:
-    """Format file size in human-readable format."""
     if size_bytes is None:
         return "?"
     size: float = float(size_bytes)
@@ -111,8 +63,6 @@ def format_size(size_bytes: int | None) -> str:
 
 
 class _NullProgress:
-    """No-op stand-in returned by ``hashing()`` when in pipe/quiet mode."""
-
     def advance(self, delta: int = 1) -> None:
         pass
 
@@ -129,7 +79,7 @@ class _NullProgress:
 
 
 class RunReportPresenter:
-    """Formats and displays the ``roar run`` lifecycle and summary."""
+    """Minimalist narration-style output for ``roar run``."""
 
     def __init__(
         self,
@@ -150,100 +100,81 @@ class RunReportPresenter:
         if self._quiet or self._caps.pipe_mode:
             return
         c = self._caps.can_color
-        label = style("tracing", "bold", "status_green", enabled=c)
-        params = style(
-            f"tracer:{backend or 'auto'}  proxy:{'on' if proxy_active else 'off'}  sync:off",
+        flags = style(
+            f"tracer:{backend or 'auto'} proxy:{'on' if proxy_active else 'off'} sync:off",
             "dim",
             enabled=c,
         )
-        self._emit_status(label, params)
+        self._trex(f"tracing {self._dim_sep()}{flags}")
 
     def trace_ended(self, duration: float, exit_code: int, backend: str | None = None) -> None:
         if self._quiet or self._caps.pipe_mode:
             return
         c = self._caps.can_color
-        backend_suffix = ""
+        parts = ["trace done"]
         if backend:
-            backend_suffix = style(f" [{backend}]", "dim", enabled=c)
-        label = style("trace done", "bold", "status_green", enabled=c) + backend_suffix
+            parts[0] += style(f" [{backend}]", "dim", enabled=c)
+        parts.append(self._fmt_dur(duration))
         exit_s = f"exit {exit_code}"
-        if exit_code != 0:
-            exit_s = style(exit_s, "red", "bold", enabled=c)
-        else:
+        if exit_code == 0:
             exit_s = style(exit_s, "status_green", enabled=c)
-        dur_s = style(f"· {self._fmt_dur(duration)}", "dim", enabled=c)
-        self._emit_status(label, f"{exit_s} {dur_s}")
+        else:
+            exit_s = style(exit_s, "warn_amber", "bold", enabled=c)
+        parts.append(exit_s)
+        self._trex(f" {self._dim_sep()}".join(parts))
 
     @contextmanager
     def hashing(self, total: int | None = None):
         if self._quiet or self._caps.pipe_mode:
             yield _NullProgress()
             return
-        c = self._caps.can_color
+        # Skip transient spinner for small runs.
+        if total is not None and total < _SMALL_RUN:
+            yield _NullProgress()
+            return
         prefix = "🦖 " if self._caps.can_emoji else "roar: "
-        label = style("hashing", "bold", "status_green", enabled=c)
-        if total:
-            label += style(f" ({_plural(total, 'artifact')})", "dim", enabled=c)
         frames = CLOCK_FRAMES if self._caps.can_emoji else BRAILLE_FRAMES
-        with Spinner(label, prefix=prefix, frames=frames, interval=0.1) as sp:
+        with Spinner("hashing", prefix=prefix, frames=frames, interval=0.1) as sp:
             yield sp
 
     def hashed(self, n_artifacts: int, total_bytes: int, duration: float) -> None:
         if self._quiet or self._caps.pipe_mode:
             return
         c = self._caps.can_color
-        label = style(
-            f"hashed {_plural(n_artifacts, 'artifact')}",
-            "bold",
-            "status_green",
-            enabled=c,
-        )
+        text = f"hashed {_plural(n_artifacts, 'artifact')}"
         if duration > 0 and total_bytes > 0:
             mbps = (total_bytes / 1024 / 1024) / duration
-            tp = style(f"{mbps:.1f} MB/s", "dim", enabled=c)
-        else:
-            tp = ""
-        self._emit_status(label, tp)
+            text += f" {self._dim_sep()}{style(f'{mbps:.1f} MB/s', 'dim', enabled=c)}"
+        self._trex(text)
 
     def lineage_captured(self) -> None:
         if self._quiet or self._caps.pipe_mode:
             return
-        c = self._caps.can_color
-        label = style("lineage captured", "bold", "status_green", enabled=c)
-        self._emit_status(label)
+        self._trex("lineage captured:")
 
     def summary(self, result: RunResult, command: list[str]) -> None:
         if self._quiet or self._caps.pipe_mode:
             return
         self._render_summary(result)
 
-    def done(
-        self,
-        *,
-        exit_code: int,
-        trace_duration: float,
-        post_duration: float,
-    ) -> None:
+    def done(self, *, exit_code: int, trace_duration: float, post_duration: float) -> None:
         if self._quiet:
             return
-        verb = "done" if exit_code == 0 else "failed"
         if self._caps.pipe_mode:
             total = trace_duration + post_duration
-            line = (
-                f"roar: {verb} · {self._fmt_dur(total)} "
+            self._print(
+                f"roar: done · {self._fmt_dur(total)} "
                 f"(trace {self._fmt_dur(trace_duration)} + "
                 f"post {self._fmt_dur(post_duration)}, exit {exit_code})"
             )
-            self._print(line)
             return
         c = self._caps.can_color
-        label = style(verb, "bold", "status_green" if exit_code == 0 else "red", enabled=c)
-        breakdown = style(
-            f"(trace {self._fmt_dur(trace_duration)} + post {self._fmt_dur(post_duration)})",
+        timing = style(
+            f"trace {self._fmt_dur(trace_duration)} + post {self._fmt_dur(post_duration)}",
             "dim",
             enabled=c,
         )
-        self._emit_status(label, breakdown)
+        self._trex(f"done {self._dim_sep()}{timing}")
 
     # ---- backward-compat one-shot ----------------------------------------
 
@@ -300,137 +231,88 @@ class RunReportPresenter:
         self._out.print("")
         return self._out.confirm("Run anyway?", default=False)
 
-    # ---- internal: output primitives -------------------------------------
+    # ---- internal --------------------------------------------------------
 
     def _print(self, line: str = "") -> None:
         print(line, file=self._stream, flush=True)
 
-    def _emit_status(self, label: str, value: str = "") -> None:
-        """Emit a two-column status line: ``🦖 label          value``.
-
-        Values start at ``_VALUE_COL`` — the same column where Hash headers
-        and data-row hashes begin in the summary sections.
-        """
-        if self._caps.can_emoji:
-            # Emoji is 2 display cells; "🦖 " = 3 cells.  _pad sees the
-            # raw codepoint as 1 char, so we subtract 1 from the target to
-            # compensate for the extra display cell.
-            raw = f"🦖 {label}"
-            padded = _pad(raw, _VALUE_COL - 1)
-        else:
-            padded = _pad(f"roar: {label}", _VALUE_COL)
-        self._print(f"{padded}{value}")
-
-    def _section_header(self, title: str, col_headers: str = "") -> None:
+    def _trex(self, text: str) -> None:
+        """Emit a 🦖-prefixed status line in STATUS_GREEN."""
         c = self._caps.can_color
-        styled = style(title, "bold", "status_green", enabled=c)
-        self._print(f"{_INDENT}{styled}{col_headers}")
+        prefix = "🦖" if self._caps.can_emoji else "roar:"
+        self._print(
+            f"{style(prefix, 'status_green', enabled=c)} {style(text, 'status_green', enabled=c)}"
+        )
 
-    def _section_row(self, text: str) -> None:
-        self._print(f"{_ROW_INDENT}{text}")
+    def _detail(self, label: str, content: str) -> None:
+        """Emit a ``·  label  content`` detail line."""
+        c = self._caps.can_color
+        prefix = style("·", "dim", enabled=c)
+        lbl = style(f"{label:<3}", "dim", enabled=c)
+        self._print(f"{prefix}  {lbl}  {content}")
+
+    def _detail_blank(self) -> None:
+        c = self._caps.can_color
+        self._print(style("·", "dim", enabled=c))
+
+    def _dim_sep(self) -> str:
+        return style("· ", "dim", enabled=self._caps.can_color)
 
     def _fmt_dur(self, seconds: float) -> str:
         if seconds < 0.1:
             return f"{max(1, round(seconds * 1000))}ms"
         return f"{seconds:.1f}s"
 
-    # ---- internal: summary block -----------------------------------------
+    # ---- summary block ---------------------------------------------------
 
     def _render_summary(self, result: RunResult) -> None:
         c = self._caps.can_color
 
-        inputs = result.inputs
-        outputs = result.outputs
-        n_in = len(inputs)
-        n_out = len(outputs)
+        # i/o line: "2 inputs ← 2 prior jobs · 1 output"
+        n_in = len(result.inputs)
+        n_out = len(result.outputs)
+        io_parts = []
+        if n_in:
+            in_text = _plural(n_in, "input")
+            # Count unique prior (source) jobs.
+            source_jobs = {
+                inp.get("parent_job_uid") for inp in result.inputs if inp.get("parent_job_uid")
+            }
+            if source_jobs:
+                in_text += f" ← {_plural(len(source_jobs), 'prior job')}"
+            io_parts.append(in_text)
+        if n_out:
+            io_parts.append(_plural(n_out, "output"))
+        if io_parts:
+            self._detail("i/o", f" {self._dim_sep()}".join(io_parts))
 
-        # Compute variable path widths per section.
-        in_path_w = _compute_path_w(inputs) if inputs else _DEFAULT_PATH_W
-        out_path_w = _compute_path_w(outputs) if outputs else _DEFAULT_PATH_W
+        # job line — bold hash, no hue.
+        job_hash = style(result.job_uid, "bold", enabled=c)
+        self._detail("job", job_hash)
 
-        self._print()
-
-        # -- Inputs section --
-        hash_hdr = _pad(style("Hash", "dim", enabled=c), _HASH_W + _COL_GAP)
-        src_hdr = style("Source Job", "dim", enabled=c)
-        count_dim = style(f" ({n_in})", "dim", enabled=c)
-        # Align "Hash" at _VALUE_COL.  Section header starts at _INDENT (2).
-        title_text = f"Inputs ({n_in})"
-        col_offset = _VALUE_COL - len(_INDENT) - len(title_text)
-        self._section_header(f"Inputs{count_dim}", f"{'':>{max(1, col_offset)}}{hash_hdr}{src_hdr}")
-
-        # Data-row path padding: at least enough to place hash at _VALUE_COL.
-        in_pad_w = max(in_path_w, _VALUE_COL - len(_ROW_INDENT))
-
-        shown_in = min(n_in, _MAX_ROWS - 1) if n_in > _MAX_ROWS else n_in
-        for i in range(shown_in):
-            inp = inputs[i]
-            name = _pad(_truncate(_basename(inp["path"]), in_path_w), in_pad_w)
-            digest = _pad(_digest8(inp), _HASH_W + _COL_GAP)
-            parent_uid = inp.get("parent_job_uid")
-            src = (
-                style(str(parent_uid)[:_HASH_W], "dim", enabled=c)
-                if parent_uid
-                else style("--", "dim", enabled=c)
-            )
-            self._section_row(f"{name}{digest}{src}")
-        if n_in > shown_in:
-            self._section_row(style(f"… and {n_in - shown_in} more", "dim", "italic", enabled=c))
-
-        self._print()
-
-        # -- Job section --
-        self._section_header("Job")
-        job_id = style(result.job_uid, "bold", enabled=c)
-        id_label = style("id ", "dim", enabled=c)
-        self._section_row(f"{id_label}  {job_id}")
+        # git line.
         if result.git_branch or result.git_short_commit:
             branch = result.git_branch or "?"
             commit = result.git_short_commit or "?"
-            clean_s = "clean" if result.git_clean else "dirty"
             if result.git_clean:
-                clean_s = style(clean_s, "status_green", enabled=c)
+                state = style("clean", "status_green", enabled=c)
             else:
-                clean_s = style(clean_s, "red", enabled=c)
-            git_label = style("git", "dim", enabled=c)
-            self._section_row(f"{git_label}  {branch} @ {commit} {clean_s}")
+                state = style("dirty", "warn_amber", enabled=c)
+            self._detail("git", f"{branch} @ {commit} {self._dim_sep()}{state}")
+
+        # env line — pip/dpkg/vars are category labels, not countable nouns.
         env_parts = []
         if result.pip_count:
-            env_parts.append(_plural(result.pip_count, "pip"))
+            env_parts.append(f"{result.pip_count} pip")
         if result.dpkg_count:
-            env_parts.append(_plural(result.dpkg_count, "dpkg"))
+            env_parts.append(f"{result.dpkg_count} dpkg")
         if result.env_count:
             env_parts.append(_plural(result.env_count, "var"))
         if env_parts:
-            env_label = style("env", "dim", enabled=c)
-            env_val = style(" · ".join(env_parts), "dim", enabled=c)
-            self._section_row(f"{env_label}  {env_val}")
+            self._detail("env", f" {self._dim_sep()}".join(env_parts))
 
-        self._print()
-
-        # -- Outputs section --
-        out_hash_hdr = style("Hash", "dim", enabled=c)
-        count_dim = style(f" ({n_out})", "dim", enabled=c)
-        title_text = f"Outputs ({n_out})"
-        col_offset = _VALUE_COL - len(_INDENT) - len(title_text)
-        self._section_header(f"Outputs{count_dim}", f"{'':>{max(1, col_offset)}}{out_hash_hdr}")
-
-        out_pad_w = max(out_path_w, _VALUE_COL - len(_ROW_INDENT))
-
-        shown_out = min(n_out, _MAX_ROWS - 1) if n_out > _MAX_ROWS else n_out
-        for i in range(shown_out):
-            out = outputs[i]
-            name = _pad(_truncate(_basename(out["path"]), out_path_w), out_pad_w)
-            digest = _digest8(out)
-            self._section_row(f"{name}{digest}")
-        if n_out > shown_out:
-            self._section_row(style(f"… and {n_out - shown_out} more", "dim", "italic", enabled=c))
-
-        self._print()
-
-        # -- DAG section --
+        # dag line.
         if result.dag_jobs or result.dag_artifacts:
-            self._section_header("DAG")
             dag_parts = []
             if result.dag_jobs:
                 dag_parts.append(_plural(result.dag_jobs, "job"))
@@ -438,26 +320,12 @@ class RunReportPresenter:
                 dag_parts.append(_plural(result.dag_artifacts, "artifact"))
             if result.dag_depth:
                 dag_parts.append(f"depth {result.dag_depth}")
-            dag_val = style(" · ".join(dag_parts), "dim", enabled=c)
-            self._section_row(dag_val)
-            self._print()
+            self._detail("dag", f" {self._dim_sep()}".join(dag_parts))
 
-        # -- Inspect section --
-        self._section_header("Inspect")
-        # Align # comments at the same column.
-        show_text = f"roar show --job {result.job_uid}"
-        if result.interrupted and result.outputs:
-            alt_text = "roar pop"
-            alt_comment = "# undo interrupted run"
-        else:
-            alt_text = "roar dag"
-            alt_comment = "# full lineage"
-        cmd_w = max(len(show_text), len(alt_text)) + 4  # 4-space gap before #
-        show_cmd = _pad(style(show_text, "command_blue", enabled=c), cmd_w)
-        show_comment = style("# details", "dim", enabled=c)
-        self._section_row(f"{show_cmd}{show_comment}")
-        alt_cmd = _pad(style(alt_text, "command_blue", enabled=c), cmd_w)
-        alt_cmt = style(alt_comment, "dim", enabled=c)
-        self._section_row(f"{alt_cmd}{alt_cmt}")
-
-        self._print()
+        # Blank separator + suggested command.
+        self._detail_blank()
+        cmd_text = style(f"roar show --job {result.job_uid}", "command_blue", enabled=c)
+        comment = style("# details", "dim", enabled=c)
+        self._print(
+            f"{style('·', 'dim', enabled=c)}  {style('$', 'dim', enabled=c)} {cmd_text}    {comment}"
+        )
