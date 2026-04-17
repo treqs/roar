@@ -58,15 +58,21 @@ def _basename(path: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _short_hash(file_info: dict, color: bool) -> str:
-    """Return a dim short hash string like 'blake3:a1b2c3d4…' for the first hash."""
+def _short_digest(file_info: dict, col_color: str, color_enabled: bool) -> str:
+    """Return a dim 8-char digest from the first hash, in the column's color."""
     hashes = file_info.get("hashes", [])
     if not hashes:
         return ""
-    h = hashes[0]
-    algo = h.get("algorithm", "?")
-    digest = h.get("digest", "")[:12]
-    return style(f"{algo}:{digest}…", "dim", enabled=color)
+    digest = hashes[0].get("digest", "")[:8]
+    return style(digest, "dim", col_color, enabled=color_enabled)
+
+
+def _pad_v(text: str, width: int) -> str:
+    """Pad *text* to *width* visible chars (ignoring ANSI sequences)."""
+    vis = _visible_len(text)
+    if vis >= width:
+        return text
+    return text + " " * (width - vis)
 
 
 def _truncate(text: str, width: int) -> str:
@@ -318,21 +324,28 @@ class RunReportPresenter:
         c = self._caps.can_color
         w = self._caps.width
 
-        # Layout widths.
-        HASH_W = 8
-        PARENT_OVERHEAD = 3  # " [" + "]"
-        ARROW_W = 4  # " -> " or " →  "
-        MARGIN = 4  # "· " + padding
-        fixed = MARGIN + PARENT_OVERHEAD + HASH_W + ARROW_W + HASH_W + ARROW_W
-        remaining = max(20, w - fixed - 2)
-        path_w = min(24, remaining // 2)
-        out_w = min(24, remaining - path_w)
+        # Column colors: inputs=cyan, job=yellow, outputs=green, parent=gray.
+        IN_COLOR = "cyan"
+        JOB_COLOR = "yellow"
+        OUT_COLOR = "green"
 
-        arrow = (
-            style("→ ", "dim", enabled=c) if self._caps.can_emoji else style("> ", "dim", enabled=c)
-        )
-        blank_arrow = "  "
-        job_color = "yellow"
+        # Layout widths — each "cell" is <path> <hash8>, so we split path_w
+        # and DIGEST_W.  Parent and Job are fixed at 8 visible chars.
+        DIGEST_W = 9  # space + 8-char digest
+        ID_W = 8
+        ARROW_W = 4  # " → " or " >  "
+        MARGIN = 4
+
+        # path_w is the filename portion; total input cell = path_w + DIGEST_W + 1 + ID_W (parent)
+        # total output cell = path_w + DIGEST_W
+        fixed = MARGIN + DIGEST_W + 1 + ID_W + ARROW_W + ID_W + ARROW_W + DIGEST_W
+        remaining = max(20, w - fixed - 2)
+        path_w = min(22, remaining // 2)
+        out_path_w = min(22, remaining - path_w)
+
+        arrow_char = "→" if self._caps.can_emoji else ">"
+        arrow = style(f" {arrow_char}  ", "dim", enabled=c)
+        blank_arrow = "    "
 
         inputs = result.inputs
         outputs = result.outputs
@@ -342,78 +355,77 @@ class RunReportPresenter:
 
         # -- header --
         self._emit_summary()
-        in_hdr = style(f"Inputs ({n_in})", "dim", enabled=c)
-        parent_hdr = style("[Parent  ]", "dim", enabled=c)
-        job_hdr = style("Job", "dim", enabled=c)
-        out_hdr = style(f"Outputs ({n_out})", "dim", enabled=c)
-        # Assemble header: Inputs (N)   [Parent  ]  ->  Job        ->  Outputs (M)
-        in_hdr_text = f"Inputs ({n_in})"
-        in_pad = max(0, path_w - len(in_hdr_text))
-        hdr = (
-            f"{in_hdr}{' ' * in_pad} {parent_hdr} {arrow}"
-            f"{job_hdr}{' ' * max(0, HASH_W - 3)} {arrow}"
-            f"{out_hdr}"
-        )
+
+        # Header: same color as column contents but dim.
+        in_hdr = _pad_v(style(f"Inputs ({n_in})", "dim", IN_COLOR, enabled=c), path_w)
+        in_hash_hdr = " " * DIGEST_W
+        parent_hdr = _pad_v(style("Parent", "dim", enabled=c), ID_W)
+        job_hdr = _pad_v(style("Job", "dim", JOB_COLOR, enabled=c), ID_W)
+        out_hdr = _pad_v(style(f"Outputs ({n_out})", "dim", OUT_COLOR, enabled=c), out_path_w)
+        out_hash_hdr = " " * DIGEST_W
+
+        hdr = f"{in_hdr}{in_hash_hdr} {parent_hdr}{arrow}{job_hdr}{arrow}{out_hdr}{out_hash_hdr}"
         self._emit_summary(hdr)
 
         # -- data rows --
         shown_in = min(n_in, per_col - 1) if n_in > per_col else min(n_in, per_col)
         shown_out = min(n_out, per_col - 1) if n_out > per_col else min(n_out, per_col)
         max_rows = max(
-            shown_in + (1 if n_in > shown_in else 0), shown_out + (1 if n_out > shown_out else 0), 1
+            shown_in + (1 if n_in > shown_in else 0),
+            shown_out + (1 if n_out > shown_out else 0),
+            1,
         )
 
         for i in range(max_rows):
-            # Input path + parent.
-            in_hash_line = ""
+            # --- left: input path + hash + parent ---
             if i < shown_in:
                 inp = inputs[i]
-                ipath = _truncate(_basename(inp["path"]), path_w)
-                # Parent job UID — not yet plumbed; show "--" placeholder.
-                parent = style("[--      ]", "dim", enabled=c)
-                in_hash_line = _short_hash(inp, c)
+                ipath = style(_truncate(_basename(inp["path"]), path_w), IN_COLOR, enabled=c)
+                ihash = _short_digest(inp, IN_COLOR, c)
+                parent_uid = inp.get("parent_job_uid")
+                if parent_uid:
+                    parent_val = style(str(parent_uid)[:ID_W], "dim", enabled=c)
+                else:
+                    parent_val = style("--", "dim", enabled=c)
             elif i == shown_in and n_in > shown_in:
                 ipath = style(f"… and {n_in - shown_in} more", "dim", "italic", enabled=c)
-                parent = " " * 10
+                ihash = ""
+                parent_val = ""
             else:
                 ipath = ""
-                parent = " " * 10
+                ihash = ""
+                parent_val = ""
 
-            # Job column (only on first data row).
+            # --- center: job ---
             if i == 0:
-                job_val = style(result.job_uid, "bold", job_color, enabled=c)
+                job_val = style(result.job_uid, "dim", JOB_COLOR, enabled=c)
                 a = arrow
             else:
-                job_val = " " * HASH_W
+                job_val = ""
                 a = blank_arrow
 
-            # Output path.
-            out_hash_line = ""
+            # --- right: output path + hash ---
             if i < shown_out:
-                opath = _truncate(_basename(outputs[i]["path"]), out_w)
-                out_hash_line = _short_hash(outputs[i], c)
+                out = outputs[i]
+                opath = style(_truncate(_basename(out["path"]), out_path_w), OUT_COLOR, enabled=c)
+                ohash = _short_digest(out, OUT_COLOR, c)
             elif i == shown_out and n_out > shown_out:
                 opath = style(f"… and {n_out - shown_out} more", "dim", "italic", enabled=c)
+                ohash = ""
             else:
                 opath = ""
+                ohash = ""
 
-            ipath_vis = _visible_len(ipath)
-            ipad = max(0, path_w - ipath_vis)
-            job_vis = _visible_len(job_val)
-            jpad = max(0, HASH_W - job_vis)
+            # Pad each cell to its width using visible length.
+            ipath_s = _pad_v(ipath, path_w)
+            ihash_s = _pad_v(ihash, DIGEST_W) if ihash else " " * DIGEST_W
+            parent_s = _pad_v(parent_val, ID_W) if parent_val else " " * ID_W
+            job_s = _pad_v(job_val, ID_W) if job_val else " " * ID_W
+            opath_s = _pad_v(opath, out_path_w)
+            ohash_s = _pad_v(ohash, DIGEST_W) if ohash else " " * DIGEST_W
 
-            line = f"{ipath}{' ' * ipad} {parent} {a}{job_val}{' ' * jpad} {a}{opath}"
+            line = f"{ipath_s}{ihash_s} {parent_s}{a}{job_s}{a}{opath_s}{ohash_s}"
             self._emit_summary(line)
-
-            # Sub-line with short hashes (dim, indented under path).
-            if in_hash_line or out_hash_line:
-                in_sub = in_hash_line if in_hash_line else ""
-                in_sub_vis = _visible_len(in_sub)
-                in_sub_pad = max(0, path_w - in_sub_vis)
-                # Blank parent + blank arrow + blank job + blank arrow = filler for middle cols.
-                mid_filler = " " * 10 + " " + blank_arrow + " " * HASH_W + " " + blank_arrow
-                out_sub = out_hash_line if out_hash_line else ""
-                self._emit_summary(f"{in_sub}{' ' * in_sub_pad} {mid_filler}{out_sub}")
 
         # -- metadata lines --
         self._emit_summary()

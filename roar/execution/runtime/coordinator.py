@@ -360,7 +360,7 @@ class RunCoordinator:
         except Exception:
             pass
 
-        # DAG stats (best-effort, never fail the run for this).
+        # DAG stats + parent job lookup (best-effort, never fail the run).
         dag_jobs, dag_artifacts, dag_depth = 0, 0, 0
         try:
             from ...db.context import create_database_context as _create_db_ctx
@@ -390,6 +390,15 @@ class RunCoordinator:
 
                         roots = [s for s in all_steps if not step_deps.get(s)]
                         dag_depth = max((_depth(r) for r in roots), default=1) if roots else 1
+
+                # Parent job UIDs for input artifacts.
+                for inp in read_file_info:
+                    aid = inp.get("artifact_id")
+                    if aid:
+                        jobs_info = db_ctx.artifacts.get_jobs(aid)
+                        producers = jobs_info.get("produced_by", [])
+                        if producers:
+                            inp["parent_job_uid"] = producers[0].get("job_uid")
         except Exception:
             pass
 
