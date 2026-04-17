@@ -58,6 +58,17 @@ def _basename(path: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _short_hash(file_info: dict, color: bool) -> str:
+    """Return a dim short hash string like 'blake3:a1b2c3d4…' for the first hash."""
+    hashes = file_info.get("hashes", [])
+    if not hashes:
+        return ""
+    h = hashes[0]
+    algo = h.get("algorithm", "?")
+    digest = h.get("digest", "")[:12]
+    return style(f"{algo}:{digest}…", "dim", enabled=color)
+
+
 def _truncate(text: str, width: int) -> str:
     if len(text) <= width:
         return text
@@ -354,11 +365,13 @@ class RunReportPresenter:
 
         for i in range(max_rows):
             # Input path + parent.
+            in_hash_line = ""
             if i < shown_in:
                 inp = inputs[i]
                 ipath = _truncate(_basename(inp["path"]), path_w)
                 # Parent job UID — not yet plumbed; show "--" placeholder.
                 parent = style("[--      ]", "dim", enabled=c)
+                in_hash_line = _short_hash(inp, c)
             elif i == shown_in and n_in > shown_in:
                 ipath = style(f"… and {n_in - shown_in} more", "dim", "italic", enabled=c)
                 parent = " " * 10
@@ -375,8 +388,10 @@ class RunReportPresenter:
                 a = blank_arrow
 
             # Output path.
+            out_hash_line = ""
             if i < shown_out:
                 opath = _truncate(_basename(outputs[i]["path"]), out_w)
+                out_hash_line = _short_hash(outputs[i], c)
             elif i == shown_out and n_out > shown_out:
                 opath = style(f"… and {n_out - shown_out} more", "dim", "italic", enabled=c)
             else:
@@ -389,6 +404,16 @@ class RunReportPresenter:
 
             line = f"{ipath}{' ' * ipad} {parent} {a}{job_val}{' ' * jpad} {a}{opath}"
             self._emit_summary(line)
+
+            # Sub-line with short hashes (dim, indented under path).
+            if in_hash_line or out_hash_line:
+                in_sub = in_hash_line if in_hash_line else ""
+                in_sub_vis = _visible_len(in_sub)
+                in_sub_pad = max(0, path_w - in_sub_vis)
+                # Blank parent + blank arrow + blank job + blank arrow = filler for middle cols.
+                mid_filler = " " * 10 + " " + blank_arrow + " " * HASH_W + " " + blank_arrow
+                out_sub = out_hash_line if out_hash_line else ""
+                self._emit_summary(f"{in_sub}{' ' * in_sub_pad} {mid_filler}{out_sub}")
 
         # -- metadata lines --
         self._emit_summary()
@@ -414,6 +439,19 @@ class RunReportPresenter:
             env_label = style("env:", "bold", enabled=c)
             env_val = style(f" {' • '.join(parts)}", "dim", enabled=c)
             self._emit_summary(f"{env_label}{env_val}")
+
+        # DAG summary.
+        if result.dag_jobs or result.dag_artifacts:
+            dag_parts = []
+            if result.dag_jobs:
+                dag_parts.append(f"{result.dag_jobs} jobs")
+            if result.dag_artifacts:
+                dag_parts.append(f"{result.dag_artifacts} artifacts")
+            if result.dag_depth:
+                dag_parts.append(f"depth {result.dag_depth}")
+            dag_label = style("DAG:", "bold", enabled=c)
+            dag_val = style(f" {' • '.join(dag_parts)}", "dim", enabled=c)
+            self._emit_summary(f"{dag_label}{dag_val}")
 
         # Inspect section.
         self._emit_summary()

@@ -360,6 +360,39 @@ class RunCoordinator:
         except Exception:
             pass
 
+        # DAG stats (best-effort, never fail the run for this).
+        dag_jobs, dag_artifacts, dag_depth = 0, 0, 0
+        try:
+            from ...db.context import create_database_context as _create_db_ctx
+            from ...presenters.dag_data_builder import DagDataBuilder
+
+            with _create_db_ctx(ctx.roar_dir) as db_ctx:
+                session = db_ctx.sessions.get_active()
+                if session:
+                    builder = DagDataBuilder(db_ctx, int(session["id"]))
+                    dag_data = builder.build(expanded=False)
+                    dag_jobs = len(dag_data.get("nodes", []))
+                    dag_artifacts = len(dag_data.get("artifacts", []))
+                    # Compute depth: longest dependency chain.
+                    nodes = dag_data.get("nodes", [])
+                    if nodes:
+                        step_deps = {n["step_number"]: n.get("dependencies", []) for n in nodes}
+                        all_steps = set(step_deps)
+                        memo: dict[int, int] = {}
+
+                        def _depth(s: int) -> int:
+                            if s in memo:
+                                return memo[s]
+                            children = [x for x in all_steps if s in step_deps.get(x, [])]
+                            d = 1 + max((_depth(ch) for ch in children), default=0)
+                            memo[s] = d
+                            return d
+
+                        roots = [s for s in all_steps if not step_deps.get(s)]
+                        dag_depth = max((_depth(r) for r in roots), default=1) if roots else 1
+        except Exception:
+            pass
+
         return RunResult(
             exit_code=tracer_result.exit_code,
             job_id=job_id,
@@ -382,6 +415,9 @@ class RunCoordinator:
             git_clean=git_clean,
             total_hash_bytes=total_hash_bytes,
             hash_duration=hash_duration,
+            dag_jobs=dag_jobs,
+            dag_artifacts=dag_artifacts,
+            dag_depth=dag_depth,
         )
 
     def _record_job(

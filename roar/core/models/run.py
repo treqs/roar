@@ -123,6 +123,9 @@ class RunResult(ImmutableModel):
     git_clean: bool = True
     total_hash_bytes: int = 0
     hash_duration: float = 0.0
+    dag_jobs: int = 0
+    dag_artifacts: int = 0
+    dag_depth: int = 0
 
     @computed_field  # type: ignore[prop-decorator]
     @property
