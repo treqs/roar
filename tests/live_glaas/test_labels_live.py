@@ -274,6 +274,20 @@ def _remote_session_label_rows(
     )
 
 
+def _assert_synced_run_job_label_metadata(
+    metadata: dict[str, object],
+    *,
+    phase: str,
+) -> None:
+    assert metadata.get("phase") == phase
+    roar = metadata.get("roar")
+    assert isinstance(roar, dict), metadata
+    assert roar.get("schema_version") == 1
+    operation = roar.get("operation")
+    assert isinstance(operation, dict), roar
+    assert operation.get("kind") == "run"
+
+
 def test_register_syncs_current_local_labels_only_when_register_called(
     glaas_configured: Path,
     glaas_db_queryable,
@@ -311,9 +325,11 @@ def test_register_syncs_current_local_labels_only_when_register_called(
     assert _remote_session_label_rows(glaas_url, session_hash) == [
         (1, {"experiment": "ablation-7", "project": "forecasting"})
     ]
-    assert _remote_job_label_rows(glaas_url, session_hash, job_uid) == [
-        (1, {"phase": "preprocess"})
-    ]
+    job_rows = _remote_job_label_rows(glaas_url, session_hash, job_uid)
+    assert len(job_rows) == 1
+    version, job_metadata = job_rows[0]
+    assert version == 1
+    _assert_synced_run_job_label_metadata(job_metadata, phase="preprocess")
     assert _remote_artifact_label_rows(glaas_url, artifact_hash) == [
         (1, {"owner": "ml", "stage": "gold"})
     ]
@@ -398,11 +414,13 @@ def test_register_exposes_current_labels_via_label_api(
         "id": job_label["id"],
         "entityType": "job",
         "version": 1,
-        "metadata": {"phase": "preprocess"},
+        "metadata": job_label["metadata"],
         "createdAt": job_label["createdAt"],
         "sessionHash": session_hash,
         "jobUid": job_uid,
     }
+    assert isinstance(job_label["metadata"], dict)
+    _assert_synced_run_job_label_metadata(job_label["metadata"], phase="preprocess")
 
     artifact_label = _label_api_get(
         glaas_url,
