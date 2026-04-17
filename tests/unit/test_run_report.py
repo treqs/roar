@@ -126,11 +126,12 @@ def test_summary_has_three_column_headers() -> None:
     )
     out = _strip(buf.getvalue())
     assert "Inputs (1)" in out
-    assert "Job  abc12345" in out
+    assert "abc12345" in out  # job UID in the data row
     assert "Outputs (1)" in out
-    assert "5 pip pkgs" in out
-    assert "10 dpkg pkgs" in out
-    assert "3 env vars" in out
+    assert "5 pip" in out
+    assert "10 dpkg" in out
+    assert "3 vars" in out
+    assert "Inspect:" in out
 
 
 def test_summary_truncates_and_shows_more_indicator() -> None:
@@ -217,7 +218,8 @@ def test_trace_starting_uses_plain_prefix_without_emoji() -> None:
     assert out.startswith("roar:")
     assert "tracing" in out
     assert "preload" in out
-    assert "proxy on" in out
+    assert "proxy:on" in out
+    assert "sync:off" in out
 
 
 def test_trace_ended_colors_nonzero_exit() -> None:
@@ -237,9 +239,9 @@ def test_done_shows_separate_trace_and_post_durations() -> None:
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
     report.done(exit_code=0, trace_duration=1.3, post_duration=0.3)
     out = _strip(buf.getvalue())
-    assert "1.6s" in out
     assert "trace 1.3s" in out
     assert "post 0.3s" in out
+    assert "done" in out
 
 
 # ---- legacy entry point ---------------------------------------------------

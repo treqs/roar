@@ -118,6 +118,11 @@ class RunResult(ImmutableModel):
     pip_count: int = 0
     dpkg_count: int = 0
     env_count: int = 0
+    git_branch: str | None = None
+    git_short_commit: str | None = None
+    git_clean: bool = True
+    total_hash_bytes: int = 0
+    hash_duration: float = 0.0
 
     @computed_field  # type: ignore[prop-decorator]
     @property

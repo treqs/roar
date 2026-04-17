@@ -22,7 +22,6 @@ import os
 import re
 import sys
 from contextlib import contextmanager
-from dataclasses import dataclass
 from typing import IO
 
 from ..core.interfaces.presenter import IPresenter
@@ -59,42 +58,12 @@ def _basename(path: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class _ColumnPlan:
-    col_width: int
-    gutter: int
-    indent: int
-
-    @property
-    def total(self) -> int:
-        return self.indent + 3 * self.col_width + 2 * self.gutter
-
-    @classmethod
-    def for_width(cls, width: int) -> _ColumnPlan:
-        indent = 4  # 2 (margin dot + space) + 2 more for breathing room
-        # Leave a few chars of right-hand slack.
-        available = max(48, width - indent - 2)
-        # Gutter holds " │ → " (or " | > ") = 5 chars; must stay in sync with
-        # _format_row below.
-        gutter = 5
-        col = (available - 2 * gutter) // 3
-        col = max(14, min(col, 24))
-        return cls(col_width=col, gutter=gutter, indent=indent)
-
-
 def _truncate(text: str, width: int) -> str:
     if len(text) <= width:
         return text
     if width <= 1:
         return text[:width]
     return text[: width - 1] + "…"
-
-
-def _pad(text: str, width: int) -> str:
-    visible = len(text)
-    if visible >= width:
-        return text
-    return text + " " * (width - visible)
 
 
 # ---------------------------------------------------------------------------
@@ -134,9 +103,13 @@ class RunReportPresenter:
         if self._quiet or self._caps.pipe_mode:
             return
         b = backend or "auto"
-        proxy = "proxy on" if proxy_active else "proxy off"
+        proxy = "on" if proxy_active else "off"
         verb = style("tracing", "bold", enabled=self._caps.can_color)
-        params = style(f"with {b} ({proxy})", "dim", enabled=self._caps.can_color)
+        params = style(
+            f"(tracer:{b} proxy:{proxy} sync:off)",
+            "dim",
+            enabled=self._caps.can_color,
+        )
         self._emit_lifecycle(f"{verb} {params}")
 
     def trace_ended(self, duration: float, exit_code: int) -> None:
@@ -173,10 +146,23 @@ class RunReportPresenter:
         with Spinner(label, prefix=prefix, frames=frames, interval=0.1) as sp:
             yield sp
 
+    def hashed(self, n_artifacts: int, total_bytes: int, duration: float) -> None:
+        """Announce that hashing is complete with throughput."""
+        if self._quiet or self._caps.pipe_mode:
+            return
+        verb = style("hashed", "bold", enabled=self._caps.can_color)
+        noun = "artifact" if n_artifacts == 1 else "artifacts"
+        if duration > 0 and total_bytes > 0:
+            mbps = (total_bytes / 1024 / 1024) / duration
+            throughput = style(f" · {mbps:.1f}MB/s", "dim", enabled=self._caps.can_color)
+        else:
+            throughput = ""
+        self._emit_lifecycle(f"{verb} {n_artifacts} {noun}{throughput}")
+
     def lineage_captured(self) -> None:
         if self._quiet or self._caps.pipe_mode:
             return
-        verb = style("lineage captured", "bold", enabled=self._caps.can_color)
+        verb = style("lineage captured:", "bold", enabled=self._caps.can_color)
         self._emit_lifecycle(verb)
 
     def summary(self, result: RunResult, command: list[str]) -> None:
@@ -208,14 +194,13 @@ class RunReportPresenter:
             return
         color = "green" if exit_code == 0 else "red"
         verb_styled = style(verb, "bold", color, enabled=self._caps.can_color)
-        total_s = style(self._fmt_duration(total), "bold", enabled=self._caps.can_color)
         breakdown = style(
             f"(trace {self._fmt_duration(trace_duration)} + "
             f"post {self._fmt_duration(post_duration)})",
             "dim",
             enabled=self._caps.can_color,
         )
-        self._emit_lifecycle(f"{verb_styled} · {total_s} {breakdown}")
+        self._emit_lifecycle(f"{verb_styled} {breakdown}")
 
     # ---- backward-compat one-shot ----------------------------------------
 
@@ -319,132 +304,132 @@ class RunReportPresenter:
         return f"{seconds:.1f}s"
 
     def _render_summary(self, result: RunResult, command: list[str]) -> None:
-        plan = _ColumnPlan.for_width(self._caps.width)
+        c = self._caps.can_color
+        w = self._caps.width
 
-        inputs = [_basename(f["path"]) for f in result.inputs]
-        outputs = [_basename(f["path"]) for f in result.outputs]
+        # Layout widths.
+        HASH_W = 8
+        PARENT_OVERHEAD = 3  # " [" + "]"
+        ARROW_W = 4  # " -> " or " →  "
+        MARGIN = 4  # "· " + padding
+        fixed = MARGIN + PARENT_OVERHEAD + HASH_W + ARROW_W + HASH_W + ARROW_W
+        remaining = max(20, w - fixed - 2)
+        path_w = min(24, remaining // 2)
+        out_w = min(24, remaining - path_w)
 
+        arrow = (
+            style("→ ", "dim", enabled=c) if self._caps.can_emoji else style("> ", "dim", enabled=c)
+        )
+        blank_arrow = "  "
+        job_color = "yellow"
+
+        inputs = result.inputs
+        outputs = result.outputs
         n_in = len(inputs)
         n_out = len(outputs)
-
-        in_header = f"Inputs ({n_in})"
-        job_header = f"Job  {result.job_uid}"
-        out_header = f"Outputs ({n_out})"
-
-        # Rows available per column after the header.
         per_col = 4
 
-        # Left column rows (inputs, with "... and N more" if needed).
-        in_rows: list[str] = []
+        # -- header --
+        self._emit_summary()
+        in_hdr = style(f"Inputs ({n_in})", "dim", enabled=c)
+        parent_hdr = style("[Parent  ]", "dim", enabled=c)
+        job_hdr = style("Job", "dim", enabled=c)
+        out_hdr = style(f"Outputs ({n_out})", "dim", enabled=c)
+        # Assemble header: Inputs (N)   [Parent  ]  ->  Job        ->  Outputs (M)
+        in_hdr_text = f"Inputs ({n_in})"
+        in_pad = max(0, path_w - len(in_hdr_text))
+        hdr = (
+            f"{in_hdr}{' ' * in_pad} {parent_hdr} {arrow}"
+            f"{job_hdr}{' ' * max(0, HASH_W - 3)} {arrow}"
+            f"{out_hdr}"
+        )
+        self._emit_summary(hdr)
+
+        # -- data rows --
         shown_in = min(n_in, per_col - 1) if n_in > per_col else min(n_in, per_col)
-        for path in inputs[:shown_in]:
-            in_rows.append(_truncate(path, plan.col_width))
-        if n_in > shown_in:
-            more = style(
-                f"… and {n_in - shown_in} more",
-                "dim",
-                "italic",
-                enabled=self._caps.can_color,
-            )
-            in_rows.append(more)
-
-        # Middle column rows: package & env counts.
-        job_rows = []
-        if result.pip_count:
-            job_rows.append(f"{result.pip_count} pip pkgs")
-        if result.dpkg_count:
-            job_rows.append(f"{result.dpkg_count} dpkg pkgs")
-        if result.env_count:
-            job_rows.append(f"{result.env_count} env vars")
-        if not job_rows:
-            job_rows.append(style("—", "dim", enabled=self._caps.can_color))
-
-        # Right column rows (outputs).
-        out_rows: list[str] = []
         shown_out = min(n_out, per_col - 1) if n_out > per_col else min(n_out, per_col)
-        for path in outputs[:shown_out]:
-            out_rows.append(_truncate(path, plan.col_width))
-        if n_out > shown_out:
-            more = style(
-                f"… and {n_out - shown_out} more",
-                "dim",
-                "italic",
-                enabled=self._caps.can_color,
-            )
-            out_rows.append(more)
-
-        # -- emit --
-        self._emit_summary()
-        header_line = self._format_row(
-            in_header, job_header, out_header, plan, arrow=False, dim_all=True
+        max_rows = max(
+            shown_in + (1 if n_in > shown_in else 0), shown_out + (1 if n_out > shown_out else 0), 1
         )
-        self._emit_summary(header_line)
 
-        max_rows = max(len(in_rows), len(job_rows), len(out_rows), 1)
         for i in range(max_rows):
-            left = in_rows[i] if i < len(in_rows) else ""
-            mid = job_rows[i] if i < len(job_rows) else ""
-            right = out_rows[i] if i < len(out_rows) else ""
-            self._emit_summary(self._format_row(left, mid, right, plan, arrow=(i == 0)))
+            # Input path + parent.
+            if i < shown_in:
+                inp = inputs[i]
+                ipath = _truncate(_basename(inp["path"]), path_w)
+                # Parent job UID — not yet plumbed; show "--" placeholder.
+                parent = style("[--      ]", "dim", enabled=c)
+            elif i == shown_in and n_in > shown_in:
+                ipath = style(f"… and {n_in - shown_in} more", "dim", "italic", enabled=c)
+                parent = " " * 10
+            else:
+                ipath = ""
+                parent = " " * 10
 
+            # Job column (only on first data row).
+            if i == 0:
+                job_val = style(result.job_uid, "bold", job_color, enabled=c)
+                a = arrow
+            else:
+                job_val = " " * HASH_W
+                a = blank_arrow
+
+            # Output path.
+            if i < shown_out:
+                opath = _truncate(_basename(outputs[i]["path"]), out_w)
+            elif i == shown_out and n_out > shown_out:
+                opath = style(f"… and {n_out - shown_out} more", "dim", "italic", enabled=c)
+            else:
+                opath = ""
+
+            ipath_vis = _visible_len(ipath)
+            ipad = max(0, path_w - ipath_vis)
+            job_vis = _visible_len(job_val)
+            jpad = max(0, HASH_W - job_vis)
+
+            line = f"{ipath}{' ' * ipad} {parent} {a}{job_val}{' ' * jpad} {a}{opath}"
+            self._emit_summary(line)
+
+        # -- metadata lines --
         self._emit_summary()
-        show_cmd = style(
-            f"roar show --job {result.job_uid}",
-            "cyan",
-            enabled=self._caps.can_color,
-        )
-        # Offer `roar pop` instead of `roar dag` when the run was interrupted
-        # and left partial outputs behind (pop removes the partial job).
+
+        # Git info.
+        if result.git_branch or result.git_short_commit:
+            branch = result.git_branch or "?"
+            commit = result.git_short_commit or "?"
+            clean = "clean" if result.git_clean else "dirty"
+            git_label = style("git:", "bold", enabled=c)
+            git_val = style(f" {branch} @ {commit} {clean}", "dim", enabled=c)
+            self._emit_summary(f"{git_label}{git_val}")
+
+        # Env summary.
+        parts = []
+        if result.pip_count:
+            parts.append(f"{result.pip_count} pip")
+        if result.dpkg_count:
+            parts.append(f"{result.dpkg_count} dpkg")
+        if result.env_count:
+            parts.append(f"{result.env_count} vars")
+        if parts:
+            env_label = style("env:", "bold", enabled=c)
+            env_val = style(f" {' • '.join(parts)}", "dim", enabled=c)
+            self._emit_summary(f"{env_label}{env_val}")
+
+        # Inspect section.
+        self._emit_summary()
+        self._emit_summary(style("Inspect:", "bold", enabled=c))
+        show_cmd = style(f"roar show --job {result.job_uid}", "blue", enabled=c)
+        show_comment = style("  # details", "dim", enabled=c)
+        self._emit_summary(f"  {show_cmd}{show_comment}")
         if result.interrupted and result.outputs:
-            next_cmd = style("roar pop", "cyan", enabled=self._caps.can_color)
+            pop_cmd = style("roar pop", "blue", enabled=c)
+            pop_comment = style("  # undo interrupted run", "dim", enabled=c)
+            self._emit_summary(f"  {pop_cmd}{pop_comment}")
         else:
-            next_cmd = style("roar dag", "cyan", enabled=self._caps.can_color)
-        self._emit_summary(show_cmd)
-        self._emit_summary(next_cmd)
+            dag_cmd = style("roar dag", "blue", enabled=c)
+            dag_comment = style("  # full lineage", "dim", enabled=c)
+            self._emit_summary(f"  {dag_cmd}{dag_comment}")
         self._emit_summary()
-
-    def _format_row(
-        self,
-        left: str,
-        mid: str,
-        right: str,
-        plan: _ColumnPlan,
-        *,
-        arrow: bool,
-        dim_all: bool = False,
-    ) -> str:
-        """Render a single row with the three columns padded to plan widths.
-
-        The gutter between columns is 5 chars: ``" │ → "`` on the first data
-        row (arrow pointing into the next column), ``" │   "`` elsewhere.
-        The vertical rule ``│`` (or ``|`` without UTF-8) runs the full height
-        of the block, giving the columns clear visual separation.
-        """
-        color = self._caps.can_color and dim_all
-
-        def styled(s: str) -> str:
-            return style(s, "dim", enabled=color) if color and s else s
-
-        left_visible = _visible_len(left)
-        mid_visible = _visible_len(mid)
-        right_visible = _visible_len(right)
-
-        left_pad = max(0, plan.col_width - left_visible)
-        mid_pad = max(0, plan.col_width - mid_visible)
-        right_pad = max(0, plan.col_width - right_visible)
-
-        # Gutter: space, rule, space, arrow-or-space, space  (5 chars visible).
-        rule_char = "│" if self._caps.can_emoji else "|"
-        arrow_char = "→" if self._caps.can_emoji else ">"
-        rule = style(rule_char, "dim", enabled=self._caps.can_color)
-        arrow_vis = arrow_char if arrow else " "
-        gutter = f" {rule} {arrow_vis} "
-
-        return (
-            f"{styled(left)}{' ' * left_pad}{gutter}"
-            f"{styled(mid)}{' ' * mid_pad}{gutter}"
-            f"{styled(right)}{' ' * right_pad}"
-        )
 
 
 # ---------------------------------------------------------------------------

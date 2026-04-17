@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import subprocess
 import sys
 import time
 from typing import TYPE_CHECKING, Any
@@ -288,6 +289,14 @@ class RunCoordinator:
             self.logger.debug("Cleaning up temporary log files")
             self._cleanup_logs(tracer_result.tracer_log_path, tracer_result.inject_log_path)
 
+        # "hashed" throughput line.
+        total_hash_bytes_early = sum(f.get("size") or 0 for f in written_file_info)
+        hash_dur = t_record_end - t_record_start
+        run_presenter.hashed(
+            n_artifacts=len(read_file_info) + len(written_file_info),
+            total_bytes=total_hash_bytes_early,
+            duration=hash_dur,
+        )
         run_presenter.lineage_captured()
 
         t_postrun_end = time.perf_counter()
@@ -323,6 +332,34 @@ class RunCoordinator:
         if not isinstance(backend_name, str):
             backend_name = None
 
+        # Hash throughput: sum of all output sizes + record duration.
+        total_hash_bytes = sum(f.get("size") or 0 for f in written_file_info)
+        hash_duration = t_record_end - t_record_start
+
+        # Git info (best-effort, never fail the run for this).
+        git_branch, git_short_commit, git_clean = None, None, True
+        try:
+            git_branch = (
+                subprocess.check_output(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    cwd=ctx.repo_root,
+                ).strip()
+                or None
+            )
+            git_short_commit = (
+                subprocess.check_output(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    cwd=ctx.repo_root,
+                ).strip()
+                or None
+            )
+        except Exception:
+            pass
+
         return RunResult(
             exit_code=tracer_result.exit_code,
             job_id=job_id,
@@ -340,6 +377,11 @@ class RunCoordinator:
             pip_count=pip_count,
             dpkg_count=dpkg_count,
             env_count=env_count,
+            git_branch=git_branch,
+            git_short_commit=git_short_commit,
+            git_clean=git_clean,
+            total_hash_bytes=total_hash_bytes,
+            hash_duration=hash_duration,
         )
 
     def _record_job(
