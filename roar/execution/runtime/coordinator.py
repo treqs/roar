@@ -158,11 +158,18 @@ class RunCoordinator:
         # Execute via tracer
         from ...core.exceptions import TracerNotFoundError
 
-        # Announce trace is starting. We don't yet know the backend (it's
-        # selected inside tracer.execute), so we just say "tracing"; the
-        # backend shows up in the "trace done" line below.
+        # Resolve the backend name before execution so the trace_starting
+        # line can show the actual tracer, not "auto".
         proxy_active = proxy_handle is not None
-        run_presenter.trace_starting(ctx.tracer_mode, proxy_active)
+        resolved_mode = ctx.tracer_mode or "auto"
+        try:
+            fallback = ctx.tracer_fallback if ctx.tracer_fallback is not None else True
+            candidates = self._tracer._get_tracer_candidates(resolved_mode, fallback)
+            if candidates:
+                resolved_mode = candidates[0][0]
+        except Exception:
+            pass
+        run_presenter.trace_starting(resolved_mode, proxy_active)
 
         self.logger.debug("Starting tracer execution")
         try:
@@ -175,13 +182,7 @@ class RunCoordinator:
                 tracer_mode_override=ctx.tracer_mode,
                 fallback_enabled_override=ctx.tracer_fallback,
             )
-            run_presenter.trace_ended(
-                tracer_result.duration,
-                tracer_result.exit_code,
-                backend=getattr(tracer_result, "backend", None)
-                if isinstance(getattr(tracer_result, "backend", None), str)
-                else None,
-            )
+            run_presenter.trace_ended(tracer_result.duration, tracer_result.exit_code)
             self.logger.debug(
                 "Tracer completed: exit_code=%d, duration=%.2fs, interrupted=%s",
                 tracer_result.exit_code,

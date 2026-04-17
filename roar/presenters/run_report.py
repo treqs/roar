@@ -107,13 +107,11 @@ class RunReportPresenter:
         )
         self._trex(f"tracing {self._dim_sep()}{flags}")
 
-    def trace_ended(self, duration: float, exit_code: int, backend: str | None = None) -> None:
+    def trace_ended(self, duration: float, exit_code: int) -> None:
         if self._quiet or self._caps.pipe_mode:
             return
         c = self._caps.can_color
         parts = ["trace done"]
-        if backend:
-            parts[0] += style(f" [{backend}]", "dim", enabled=c)
         parts.append(self._fmt_dur(duration))
         exit_s = f"exit {exit_code}"
         if exit_code == 0:
@@ -273,14 +271,7 @@ class RunReportPresenter:
         n_out = len(result.outputs)
         io_parts = []
         if n_in:
-            in_text = _plural(n_in, "input")
-            # Count unique prior (source) jobs.
-            source_jobs = {
-                inp.get("parent_job_uid") for inp in result.inputs if inp.get("parent_job_uid")
-            }
-            if source_jobs:
-                in_text += f" ← {_plural(len(source_jobs), 'prior job')}"
-            io_parts.append(in_text)
+            io_parts.append(_plural(n_in, "input"))
         if n_out:
             io_parts.append(_plural(n_out, "output"))
         if io_parts:

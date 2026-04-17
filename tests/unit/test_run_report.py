@@ -67,14 +67,14 @@ def _make_result(**overrides: Any) -> RunResult:
 # ---- summary detail lines -------------------------------------------------
 
 
-def test_io_line_counts_inputs_outputs_and_prior_jobs() -> None:
+def test_io_line_counts_inputs_and_outputs() -> None:
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
     report.summary(
         _make_result(
             inputs=[
-                {"path": "/a/in1.txt", "hashes": [], "parent_job_uid": "aaa11111"},
-                {"path": "/a/in2.txt", "hashes": [], "parent_job_uid": "bbb22222"},
+                {"path": "/a/in1.txt", "hashes": []},
+                {"path": "/a/in2.txt", "hashes": []},
             ],
             outputs=[{"path": "/a/out.txt", "hashes": []}],
         ),
@@ -83,20 +83,7 @@ def test_io_line_counts_inputs_outputs_and_prior_jobs() -> None:
     out = _strip(buf.getvalue())
     assert "i/o" in out
     assert "2 inputs" in out
-    assert "2 prior jobs" in out
     assert "1 output" in out
-
-
-def test_io_line_omits_prior_jobs_when_none() -> None:
-    buf = io.StringIO()
-    report = RunReportPresenter(stream=buf, caps=_tty_caps())
-    report.summary(
-        _make_result(inputs=[{"path": "/a/in.txt", "hashes": []}], outputs=[]),
-        [],
-    )
-    out = _strip(buf.getvalue())
-    assert "1 input" in out
-    assert "prior" not in out
 
 
 def test_job_line_shows_bold_hash() -> None:
@@ -183,12 +170,11 @@ def test_trace_starting() -> None:
 def test_trace_ended_success() -> None:
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
-    report.trace_ended(duration=11.2, exit_code=0, backend="preload")
+    report.trace_ended(duration=11.2, exit_code=0)
     out = _strip(buf.getvalue())
     assert "trace done" in out
     assert "11.2s" in out
     assert "exit 0" in out
-    assert "[preload]" in out
 
 
 def test_trace_ended_nonzero_exit() -> None:
