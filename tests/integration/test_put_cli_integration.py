@@ -141,7 +141,20 @@ def test_put_registers_lineage_with_fake_glaas_and_updates_local_dag(
 
     batch_jobs = fake_glaas_publish_server.job_batches[0]["jobs"]
     assert any(job.get("job_type") == "run" for job in batch_jobs)
-    assert fake_glaas_publish_server.job_creates[0]["job"]["job_type"] == "put"
+    put_job = fake_glaas_publish_server.job_creates[0]["job"]
+    assert put_job["job_type"] == "put"
+
+    synced_labels = [
+        label
+        for batch in fake_glaas_publish_server.label_syncs
+        for label in batch
+        if label.get("entity_type") == "job" and label.get("job_uid") == put_job["job_uid"]
+    ]
+    assert len(synced_labels) == 1
+    put_job_label = synced_labels[0]
+    assert put_job_label["metadata"]["roar"]["operation"]["kind"] == "put"
+    assert put_job_label["metadata"]["roar"]["put"]["destination_type"] == "s3"
+    assert put_job_label["key_origins"]["roar.operation.kind"] == "system"
 
 
 def test_put_dry_run_does_not_create_local_or_remote_publish_jobs(

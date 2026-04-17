@@ -161,6 +161,50 @@ class TestPutService:
         assert call_kwargs["job_type"] == "put"
         service._db.jobs.add_input.assert_called_once()
 
+    def test_put_prepared_refreshes_and_syncs_put_job_labels(self, tmp_path: Path) -> None:
+        model_file = tmp_path / "model.pt"
+        model_file.write_bytes(b"model data")
+
+        db = _create_mock_db()
+        client = _create_mock_glaas_client()
+        service = PutService(
+            db_context=db,
+            backend=MemoryBackend(bucket="test-bucket", prefix="models"),
+            destination="memory://test-bucket/models",
+            repo_root=tmp_path,
+            lineage_collector=MagicMock(return_value=LineageData()),
+            registration_coordinator=_create_mock_coordinator(),
+        )
+        service._lineage_collector.collect.return_value = LineageData(
+            jobs=[],
+            artifacts=[],
+            artifact_hashes=set(),
+            pipeline={"id": 1},
+        )
+
+        with (
+            patch(
+                "roar.application.publish.put_execution.refresh_job_system_labels"
+            ) as refresh_labels,
+            patch("roar.application.publish.put_execution.sync_publish_labels") as sync_labels,
+        ):
+            result = service.put_prepared(
+                prepared=_prepared_put(tmp_path, sources=[model_file], glaas_client=client),
+                sources=[str(model_file)],
+                message="publish model",
+            )
+
+        assert result.success is True
+        refresh_labels.assert_called_once_with(db, job_id=42)
+        sync_labels.assert_called_once()
+        sync_kwargs = sync_labels.call_args.kwargs
+        assert sync_kwargs["glaas_client"] is client
+        assert sync_kwargs["db_ctx"] is db
+        assert sync_kwargs["session_id"] is None
+        assert sync_kwargs["session_hash"] == "session_hash_abc123"
+        assert sync_kwargs["jobs"] == [{"id": 42, "job_uid": "job-uid-1"}]
+        assert sync_kwargs["artifacts"] == []
+
     def test_put_prepared_returns_registered_session_info(self, tmp_path: Path) -> None:
         model_file = tmp_path / "model.pt"
         model_file.write_bytes(b"model data")
