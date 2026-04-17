@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from ..application.system_labels import omit_display_system_labels
 from ..core.step_name import resolve_step_name
 from ..db.context import optional_repo
 from ..execution.framework.registry import (
@@ -422,4 +423,7 @@ class DagDataBuilder:
         if not isinstance(current, dict):
             return {}
         metadata = current.get("metadata")
-        return metadata if isinstance(metadata, dict) else {}
+        if not isinstance(metadata, dict):
+            return {}
+        filtered = omit_display_system_labels(metadata)
+        return filtered if isinstance(filtered, dict) else {}

@@ -8,6 +8,7 @@ import uuid
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from roar.execution.fragments.models import (
@@ -31,6 +32,12 @@ class FragmentLineageBackend:
     task_identity_from_metadata: Callable[[str, str, Mapping[str, Any]], str]
 
 
+def _get_logger():
+    from roar.core.logging import get_logger
+
+    return get_logger()
+
+
 def merge_execution_fragments(
     *,
     fragments: list[ExecutionFragment],
@@ -49,6 +56,8 @@ def merge_execution_fragments(
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
 
+    touched_job_ids: set[int] = set()
+    committed = False
     try:
         artifact_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(artifacts)").fetchall()
@@ -92,6 +101,7 @@ def merge_execution_fragments(
             if row is None:
                 continue
             job_id = int(row["id"])
+            touched_job_ids.add(job_id)
 
             written_artifact_ids: dict[str, str] = {}
 
@@ -131,8 +141,34 @@ def merge_execution_fragments(
                 )
 
         conn.commit()
+        committed = True
     finally:
         conn.close()
+
+    if committed:
+        _refresh_fragment_job_system_labels(project_dir=project_dir, job_ids=touched_job_ids)
+
+
+def _refresh_fragment_job_system_labels(*, project_dir: str, job_ids: set[int]) -> None:
+    if not job_ids:
+        return
+
+    try:
+        from roar.application.system_labels import refresh_job_system_labels
+        from roar.db.context import create_database_context
+    except Exception:
+        return
+
+    try:
+        with create_database_context(Path(project_dir) / ".roar") as db_ctx:
+            for job_id in sorted(job_ids):
+                refresh_job_system_labels(db_ctx, job_id=job_id)
+    except Exception as exc:
+        _get_logger().warning(
+            "Failed to refresh fragment job system labels in %s: %s",
+            project_dir,
+            exc,
+        )
 
 
 def assign_execution_fragment_step_numbers(

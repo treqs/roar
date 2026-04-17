@@ -415,13 +415,13 @@ def sync_publish_labels(
     *,
     glaas_client: GlaasClient,
     db_ctx: Any,
-    session_id: int,
+    session_id: int | None,
     session_hash: str,
     jobs: list[dict[str, Any]],
     artifacts: list[dict[str, Any]],
     errors: list[str] | None = None,
 ) -> None:
-    """Sync publish labels to GLaaS and record any error on the supplied list."""
+    """Sync current local labels for published entities to GLaaS."""
     payloads = collect_label_sync_payloads(
         db_ctx,
         session_id=session_id,

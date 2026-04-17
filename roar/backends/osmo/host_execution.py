@@ -14,6 +14,7 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from roar.application.system_labels import refresh_job_system_labels
 from roar.backends.osmo.config import load_osmo_backend_config
 from roar.backends.osmo.lineage import (
     OsmoLineageReconstitutionResult,
@@ -1425,6 +1426,11 @@ def _update_recorded_osmo_submit(
 ) -> None:
     if metadata is not None:
         db_ctx.jobs.update_metadata(job_id, metadata)
+        refresh_job_system_labels(
+            db_ctx,
+            job_id=job_id,
+            job=db_ctx.jobs.get(job_id),
+        )
 
     artifact_id, _created = db_ctx.artifacts.register(
         hashes=receipt_artifact.hashes,

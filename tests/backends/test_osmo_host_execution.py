@@ -551,11 +551,19 @@ default-values:
     with create_database_context(roar_dir) as db_ctx:
         child_outputs = db_ctx.jobs.get_outputs(int(child_job["id"]))
         child_inputs = db_ctx.jobs.get_inputs(int(child_job["id"]))
+        child_label = db_ctx.labels.get_current("job", job_id=int(child_job["id"]))
 
     assert [entry["path"] for entry in child_inputs] == [str(workflow_path)]
     assert [entry["path"] for entry in child_outputs] == [
         str(repo_root / "outputs" / "worker-output.txt")
     ]
+    assert child_label is not None
+    assert child_label["write_origin"] == "system"
+    child_label_metadata = child_label["metadata"]
+    assert child_label_metadata["roar"]["operation"]["kind"] == "osmo_task"
+    assert child_label_metadata["roar"]["task"]["backend"] == "osmo"
+    assert child_label_metadata["roar"]["task"]["id"] == "basic-task"
+    assert child_label_metadata["roar"]["task"]["parent_job_uid"] == result.job_uid
 
     output_paths = {Path(str(entry["path"])) for entry in result.outputs}
     assert any(path.name == "roar-fragments.json" for path in output_paths)

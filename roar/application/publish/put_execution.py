@@ -23,7 +23,9 @@ from ...application.publish.registration import (
     normalize_registration_source_type,
     prepare_batch_registration_artifacts,
     register_publish_lineage,
+    sync_publish_labels,
 )
+from ...application.system_labels import refresh_job_system_labels
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...db.context import DatabaseContext
@@ -398,6 +400,7 @@ class PutService:
             job_type="put",
             exit_code=0,
         )
+        refresh_job_system_labels(self._db, job_id=job_id)
         self._logger.debug(
             "Job created: id=%s, uid=%s, step=%d",
             job_id,
@@ -414,7 +417,7 @@ class PutService:
         )
         with Spinner("Finalizing lineage links...") as spin:
             spin.update("Registering put job...")
-            self._register_put_job_with_glaas(
+            put_job_registered = self._register_put_job_with_glaas(
                 coordinator=coordinator,
                 command=command,
                 session_hash=session_hash_value,
@@ -434,6 +437,15 @@ class PutService:
                 composite_registrations=composite_registrations,
                 registration_errors=registration_result.errors,
             )
+            if put_job_registered:
+                spin.update("Syncing put job labels...")
+                self._sync_put_job_labels_with_glaas(
+                    glaas_client=client,
+                    session_hash=session_hash_value,
+                    job_id=job_id,
+                    job_uid=job_uid,
+                    registration_errors=registration_result.errors,
+                )
 
         registration_error = (
             "; ".join(registration_result.errors) if registration_result.errors else None
@@ -552,7 +564,7 @@ class PutService:
         step_number: int,
         metadata_json: str,
         registration_errors: list[str],
-    ) -> None:
+    ) -> bool:
         """Create the put sink node in GLaaS."""
         self._logger.debug("Registering put job with GLaaS: job_uid=%s, job_type=put", job_uid)
         put_job_result = coordinator.job_service.create_job(
@@ -572,6 +584,28 @@ class PutService:
             self._logger.debug("Put job GLaaS registration failed: %s", put_job_result.error)
             if put_job_result.error:
                 registration_errors.append(f"Put job: {put_job_result.error}")
+            return False
+        return True
+
+    def _sync_put_job_labels_with_glaas(
+        self,
+        *,
+        glaas_client: Any,
+        session_hash: str,
+        job_id: int,
+        job_uid: str,
+        registration_errors: list[str],
+    ) -> None:
+        """Sync the local current label document for the publish-time put job."""
+        sync_publish_labels(
+            glaas_client=glaas_client,
+            db_ctx=self._db,
+            session_id=None,
+            session_hash=session_hash,
+            jobs=[{"id": job_id, "job_uid": job_uid}],
+            artifacts=[],
+            errors=registration_errors,
+        )
 
     def _link_put_job_artifacts_with_glaas(
         self,

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlparse
 
+from ...application.system_labels import refresh_job_system_labels
 from ...core.label_origins import LABEL_ORIGIN_SYSTEM
 from ...db.context import optional_repo
 from ...db.hashing import hash_files_blake3
@@ -249,6 +250,12 @@ class LocalJobRecorder:
             job_id=job_id,
             artifacts=output_artifacts,
             is_input=False,
+        )
+
+        refresh_job_system_labels(
+            db_ctx,
+            job_id=job_id,
+            job=cast(Any, db_ctx.jobs).get(job_id),
         )
 
         return job_id, recorded_job_uid
@@ -905,3 +912,8 @@ class ExecutionJobRecorder:
             return
         with suppress(Exception):
             jobs_repo.update_metadata(job_id, metadata_json)
+            refresh_job_system_labels(
+                db_ctx,
+                job_id=job_id,
+                job=cast(Any, jobs_repo).get(job_id),
+            )

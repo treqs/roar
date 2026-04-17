@@ -372,8 +372,17 @@ class TestLabelCommand:
         assert preprocess_node["step_name"] == "preprocess"
         assert preprocess_node["labels"] == {"name": "preprocess"}
 
-        assert _job_label_rows(temp_git_repo, 1) == [(1, {"name": "preprocess"})]
-        assert _job_label_write_origins(temp_git_repo, 1) == [(1, "user")]
+        rows = _job_label_rows(temp_git_repo, 1)
+        assert rows[0][0] == 1
+        assert rows[0][1]["roar"]["operation"]["kind"] == "run"
+        assert rows[1] == (
+            2,
+            {
+                **rows[0][1],
+                "name": "preprocess",
+            },
+        )
+        assert _job_label_write_origins(temp_git_repo, 1) == [(1, "system"), (2, "user")]
 
         db_path = temp_git_repo / ".roar" / "roar.db"
         with sqlite3.connect(db_path) as conn:

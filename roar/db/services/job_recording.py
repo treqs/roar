@@ -9,6 +9,7 @@ import os
 
 from sqlalchemy.orm import Session as SASession
 
+from ...application.system_labels import refresh_job_system_labels
 from ...core.label_origins import LABEL_ORIGIN_USER
 from ...core.step_name import STEP_NAME_LABEL_KEY, get_step_name_label
 from ..repositories import (
@@ -62,6 +63,16 @@ class JobRecordingService:
         self._session_repo = session_repo
         self._hashing_service = hashing_service
         self._session_service = session_service
+
+    @property
+    def labels(self) -> SQLAlchemyLabelRepository:
+        """Expose label repo for shared system-label refresh helpers."""
+        return self._label_repo
+
+    @property
+    def jobs(self) -> SQLAlchemyJobRepository:
+        """Expose job repo for shared system-label refresh helpers."""
+        return self._job_repo
 
     def record_job(
         self,
@@ -164,6 +175,12 @@ class JobRecordingService:
             execution_role=execution_role,
             job_type=job_type,
             telemetry=telemetry,
+        )
+
+        refresh_job_system_labels(
+            self,
+            job_id=job_id,
+            job=self._job_repo.get(job_id),
         )
 
         if step_name:
