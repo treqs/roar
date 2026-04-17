@@ -6,12 +6,14 @@ from unittest.mock import MagicMock, patch
 from roar.application.query import (
     LabelCopyRequest,
     LabelHistoryRequest,
+    LabelPushRequest,
     LabelSetRequest,
     LabelShowRequest,
 )
 from roar.application.query.label import (
     build_copy_labels_summary,
     build_label_history_summary,
+    build_push_labels_summary,
     build_set_labels_summary,
     build_show_labels_summary,
 )
@@ -52,6 +54,16 @@ def _show_request(tmp_path: Path, **overrides) -> LabelShowRequest:
 
 def _history_request(tmp_path: Path, **overrides) -> LabelHistoryRequest:
     return LabelHistoryRequest(
+        roar_dir=overrides.pop("roar_dir", tmp_path / ".roar"),
+        cwd=overrides.pop("cwd", tmp_path),
+        entity_type=overrides.pop("entity_type", "artifact"),
+        target=overrides.pop("target", "processed.csv"),
+        **overrides,
+    )
+
+
+def _push_request(tmp_path: Path, **overrides) -> LabelPushRequest:
+    return LabelPushRequest(
         roar_dir=overrides.pop("roar_dir", tmp_path / ".roar"),
         cwd=overrides.pop("cwd", tmp_path),
         entity_type=overrides.pop("entity_type", "artifact"),
@@ -125,6 +137,75 @@ def test_build_show_labels_summary_renders_no_labels_when_empty(tmp_path: Path) 
     assert summary.heading is None
     assert summary.entries == []
     assert summary.render() == "No labels."
+
+
+def test_build_push_labels_summary_returns_remote_versioned_summary(tmp_path: Path) -> None:
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    resolved_target = object()
+    service.resolve_target.return_value = resolved_target
+    service.current_metadata.return_value = {"owner": "ml", "stage": "gold"}
+    client = MagicMock()
+    client.patch_current_label.return_value = (
+        {
+            "version": 2,
+            "metadata": {"owner": "ml", "stage": "gold"},
+        },
+        None,
+    )
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_remote_label_mutation_payload",
+            return_value={
+                "entity_type": "artifact",
+                "artifact_hash": "a" * 64,
+                "metadata": {"owner": "ml", "stage": "gold"},
+            },
+        ) as build_payload,
+        patch("roar.application.query.label.GlaasClient", return_value=client),
+    ):
+        summary = build_push_labels_summary(_push_request(tmp_path))
+
+    build_payload.assert_called_once_with(
+        db_ctx,
+        roar_dir=tmp_path / ".roar",
+        target=resolved_target,
+        metadata={"owner": "ml", "stage": "gold"},
+    )
+    client.patch_current_label.assert_called_once_with(
+        {
+            "entity_type": "artifact",
+            "artifact_hash": "a" * 64,
+            "metadata": {"owner": "ml", "stage": "gold"},
+        }
+    )
+    assert summary.heading == "Pushed remote labels (version 2):"
+    assert summary.render() == "Pushed remote labels (version 2):\n  owner=ml\n  stage=gold"
+
+
+def test_build_push_labels_summary_rejects_missing_user_managed_labels(tmp_path: Path) -> None:
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.resolve_target.return_value = object()
+    service.current_metadata.return_value = {"roar": {"operation": {"kind": "run"}}}
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+    ):
+        try:
+            build_push_labels_summary(_push_request(tmp_path, target="@1", entity_type="job"))
+        except ValueError as exc:
+            assert str(exc) == "No local user-managed labels to push for @1."
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for missing user-managed labels")
 
 
 def test_build_label_history_summary_returns_versioned_entries(tmp_path: Path) -> None:

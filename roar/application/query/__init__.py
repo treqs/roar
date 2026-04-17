@@ -9,6 +9,7 @@ _EXPORTS = {
     "DagQueryRequest": ".requests",
     "LabelCopyRequest": ".requests",
     "LabelHistoryRequest": ".requests",
+    "LabelPushRequest": ".requests",
     "LabelSetRequest": ".requests",
     "LabelShowRequest": ".requests",
     "LineageQueryRequest": ".requests",
@@ -23,6 +24,7 @@ _EXPORTS = {
     "StatusSummary": ".results",
     "build_copy_labels_summary": ".label",
     "build_label_history_summary": ".label",
+    "build_push_labels_summary": ".label",
     "build_set_labels_summary": ".label",
     "build_show_labels_summary": ".label",
     "copy_labels": ".label",
@@ -32,6 +34,7 @@ _EXPORTS = {
     "render_log": ".log",
     "render_show": ".show",
     "render_status": ".status",
+    "push_labels": ".label",
     "set_labels": ".label",
     "show_labels": ".label",
 }

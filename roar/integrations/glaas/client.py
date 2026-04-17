@@ -458,6 +458,13 @@ class GlaasClient:
             return {"created": 0, "updated": 0, "unchanged": 0}, None
         return self._request("POST", "/api/v1/labels/sync", {"labels": labels})
 
+    def patch_current_label(
+        self,
+        label: dict[str, Any],
+    ) -> tuple[dict | None, str | None]:
+        """Patch the current remote label document for one lineage target."""
+        return self._request("PATCH", "/api/v1/labels/current", label)
+
     def register_job_inputs(
         self,
         session_hash: str,

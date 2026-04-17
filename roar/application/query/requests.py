@@ -84,6 +84,14 @@ class LabelHistoryRequest:
     target: str
 
 
+@dataclass(frozen=True)
+class LabelPushRequest:
+    roar_dir: Path
+    cwd: Path
+    entity_type: str
+    target: str
+
+
 DiffFormat = Literal["summary", "category", "dag"]
 
 

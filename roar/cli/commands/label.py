@@ -6,6 +6,7 @@ Usage:
     roar label cp <dag|job|artifact> <source> <dag|job|artifact> <dest>
     roar label show <dag|job|artifact> <target>
     roar label history <dag|job|artifact> <target>
+    roar label push <dag|job|artifact> <target>
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import click
 
 from ...application.query.label import (
     copy_labels,
+    push_labels,
     set_labels,
     show_labels,
 )
@@ -23,6 +25,7 @@ from ...application.query.label import (
 from ...application.query.requests import (
     LabelCopyRequest,
     LabelHistoryRequest,
+    LabelPushRequest,
     LabelSetRequest,
     LabelShowRequest,
 )
@@ -35,7 +38,7 @@ _ENTITY_TYPE = click.Choice(["dag", "job", "artifact"], case_sensitive=False)
 @click.group("label", invoke_without_command=True)
 @click.pass_context
 def label(ctx: click.Context) -> None:
-    """Manage local labels for DAGs, jobs, and artifacts."""
+    """Manage local labels and push user-managed label updates to GLaaS."""
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 
@@ -111,6 +114,27 @@ def label_show(ctx: RoarContext, entity_type: str, target: str) -> None:
             )
         )
     except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(rendered)
+
+
+@label.command("push")
+@click.argument("entity_type", type=_ENTITY_TYPE)
+@click.argument("target")
+@click.pass_obj
+@require_init
+def label_push(ctx: RoarContext, entity_type: str, target: str) -> None:
+    """Push the current local user-managed labels for a target to GLaaS."""
+    try:
+        rendered = push_labels(
+            LabelPushRequest(
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                entity_type=entity_type,
+                target=target,
+            )
+        )
+    except (ValueError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(rendered)
 

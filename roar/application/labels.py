@@ -16,6 +16,7 @@ from typing import Any, Protocol
 from ..core.label_origins import LABEL_ORIGIN_USER, build_current_key_origins
 from ..db.context import DatabaseContext
 from .label_rendering import flatten_label_metadata
+from .publish.lineage import LineageCollector
 from .system_labels import is_reserved_system_label_path, strip_reserved_system_labels
 
 
@@ -42,6 +43,17 @@ class LabelWriteResult:
 class _LabelSyncDatabaseContext(Protocol):
     @property
     def labels(self) -> Any: ...
+
+
+class _RemoteLabelMutationDatabaseContext(Protocol):
+    @property
+    def sessions(self) -> Any: ...
+
+    @property
+    def jobs(self) -> Any: ...
+
+    @property
+    def artifacts(self) -> Any: ...
 
 
 def parse_label_pairs(pairs: tuple[str, ...]) -> dict[str, Any]:
@@ -233,6 +245,92 @@ class LabelService:
             raise ValueError(f"Reserved label keys cannot be set manually: {joined}")
 
 
+def build_remote_label_mutation_payload(
+    db_ctx: _RemoteLabelMutationDatabaseContext,
+    *,
+    roar_dir: Path,
+    target: LabelTargetRef,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a GLaaS label-mutation payload for one local target."""
+    if target.entity_type == "dag":
+        if target.session_id is None:
+            raise ValueError("DAG target is missing a local session id.")
+        return {
+            "entity_type": "dag",
+            "session_hash": _canonical_remote_session_hash(
+                db_ctx,
+                roar_dir=roar_dir,
+                session_id=int(target.session_id),
+            ),
+            "metadata": metadata,
+        }
+
+    if target.entity_type == "job":
+        if target.job_id is None:
+            raise ValueError("Job target is missing a local job id.")
+        job = db_ctx.jobs.get(int(target.job_id))
+        if not isinstance(job, dict):
+            raise ValueError("Job not found.")
+        session_id = job.get("session_id")
+        job_uid = job.get("job_uid")
+        if not isinstance(session_id, int):
+            raise ValueError("Job target is missing a local session id.")
+        if not isinstance(job_uid, str) or not job_uid:
+            raise ValueError("Job target is missing a job UID.")
+        return {
+            "entity_type": "job",
+            "session_hash": _canonical_remote_session_hash(
+                db_ctx,
+                roar_dir=roar_dir,
+                session_id=session_id,
+            ),
+            "job_uid": job_uid,
+            "metadata": metadata,
+        }
+
+    if target.entity_type == "artifact":
+        if target.artifact_id is None:
+            raise ValueError("Artifact target is missing a local artifact id.")
+        artifact = db_ctx.artifacts.get(str(target.artifact_id))
+        if not isinstance(artifact, dict):
+            raise ValueError("Artifact not found.")
+        artifact_hash = artifact.get("hash")
+        if not isinstance(artifact_hash, str) or not artifact_hash:
+            hashes = db_ctx.artifacts.get_hashes(str(target.artifact_id))
+            artifact_hash = next(
+                (
+                    item.get("digest")
+                    for item in hashes
+                    if isinstance(item, dict)
+                    and item.get("algorithm") == "blake3"
+                    and isinstance(item.get("digest"), str)
+                    and item.get("digest")
+                ),
+                None,
+            )
+            if not isinstance(artifact_hash, str) or not artifact_hash:
+                artifact_hash = next(
+                    (
+                        item.get("digest")
+                        for item in hashes
+                        if isinstance(item, dict)
+                        and isinstance(item.get("digest"), str)
+                        and item.get("digest")
+                    ),
+                    None,
+                )
+        if not isinstance(artifact_hash, str) or not artifact_hash:
+            raise ValueError("Artifact target is missing a content hash.")
+        return {
+            "entity_type": "artifact",
+            "artifact_hash": artifact_hash,
+            "metadata": metadata,
+        }
+
+    raise ValueError(f"Unsupported label entity type: {target.entity_type}")
+
+
 def collect_label_sync_payloads(
     db_ctx: _LabelSyncDatabaseContext,
     *,
@@ -306,6 +404,42 @@ def collect_label_sync_payloads(
             )
 
     return payloads
+
+
+def _canonical_remote_session_hash(
+    db_ctx: _RemoteLabelMutationDatabaseContext,
+    *,
+    roar_dir: Path,
+    session_id: int,
+) -> str:
+    from ..core.logging import get_logger
+    from .publish.runtime import build_publish_runtime
+    from .publish.service import prepare_register_preview_execution
+
+    session = db_ctx.sessions.get(session_id)
+    if not isinstance(session, dict):
+        raise ValueError("Session not found.")
+
+    lineage = LineageCollector().collect_session(session_id, roar_dir)
+    if not getattr(lineage, "jobs", None):
+        raise ValueError(
+            "Selected session has no tracked steps. Run 'roar run' or 'roar build' first."
+        )
+
+    runtime = build_publish_runtime(
+        start_dir=str(roar_dir.parent),
+        allow_public_without_binding=True,
+    )
+    prepared = prepare_register_preview_execution(
+        runtime=runtime,
+        roar_dir=roar_dir,
+        cwd=roar_dir.parent,
+        session_id=session_id,
+        session_hash_override=None,
+        logger=get_logger(),
+        lineage=lineage,
+    )
+    return str(prepared.session_hash)
 
 
 def _assign_nested(root: dict[str, Any], path: list[str], value: Any) -> None:
