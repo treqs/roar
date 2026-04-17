@@ -42,6 +42,9 @@ _MAX_ROWS = 5  # max visible rows per section before "… and N more"
 _MIN_PATH_W = 14  # minimum path column width
 _MAX_PATH_W = 30  # maximum path column width
 _DEFAULT_PATH_W = 20  # used when no paths to measure
+# The column where values/hashes start.  Status lines, section column headers,
+# and data-row hashes all align to this position from the left margin.
+_VALUE_COL = len(_ROW_INDENT) + _DEFAULT_PATH_W  # = 24
 
 
 def _plural(n: int, singular: str, plural: str | None = None) -> str:
@@ -308,14 +311,11 @@ class RunReportPresenter:
     def _emit_status(self, label: str, value: str = "", *, emoji: str = "🦖") -> None:
         """Emit a two-column status line: ``🦖 label          value``.
 
-        Values are padded to start at the same column as the Hash column
-        in the Inputs/Outputs sections (``_ROW_INDENT + path_w``).
+        Values start at ``_VALUE_COL`` — the same column where Hash headers
+        and data-row hashes begin in the summary sections.
         """
         prefix = self._emoji(emoji)
-        # Target column = 4 (row indent) + default path width.  Status lines
-        # fire before we know the actual path widths, so we use the default.
-        target_col = len(_ROW_INDENT) + _DEFAULT_PATH_W
-        padded_label = _pad(f"{prefix} {label}", target_col)
+        padded_label = _pad(f"{prefix} {label}", _VALUE_COL)
         self._print(f"{padded_label}{value}")
 
     def _section_header(self, title: str, col_headers: str = "") -> None:
@@ -351,16 +351,18 @@ class RunReportPresenter:
         hash_hdr = _pad(style("Hash", "dim", enabled=c), _HASH_W + _COL_GAP)
         src_hdr = style("Source Job", "dim", enabled=c)
         count_dim = style(f" ({n_in})", "dim", enabled=c)
-        # Column headers aligned with data: data starts at _ROW_INDENT + path_w,
-        # section header starts at _INDENT. Offset = len(_ROW_INDENT) - len(_INDENT) + path_w - title_len.
+        # Align "Hash" at _VALUE_COL.  Section header starts at _INDENT (2).
         title_text = f"Inputs ({n_in})"
-        col_offset = len(_ROW_INDENT) - len(_INDENT) + in_path_w - len(title_text)
+        col_offset = _VALUE_COL - len(_INDENT) - len(title_text)
         self._section_header(f"Inputs{count_dim}", f"{'':>{max(1, col_offset)}}{hash_hdr}{src_hdr}")
+
+        # Data-row path padding: at least enough to place hash at _VALUE_COL.
+        in_pad_w = max(in_path_w, _VALUE_COL - len(_ROW_INDENT))
 
         shown_in = min(n_in, _MAX_ROWS - 1) if n_in > _MAX_ROWS else n_in
         for i in range(shown_in):
             inp = inputs[i]
-            name = _pad(_truncate(_basename(inp["path"]), in_path_w), in_path_w)
+            name = _pad(_truncate(_basename(inp["path"]), in_path_w), in_pad_w)
             digest = _pad(_digest8(inp), _HASH_W + _COL_GAP)
             parent_uid = inp.get("parent_job_uid")
             src = (
@@ -407,13 +409,15 @@ class RunReportPresenter:
         out_hash_hdr = style("Hash", "dim", enabled=c)
         count_dim = style(f" ({n_out})", "dim", enabled=c)
         title_text = f"Outputs ({n_out})"
-        col_offset = len(_ROW_INDENT) - len(_INDENT) + out_path_w - len(title_text)
+        col_offset = _VALUE_COL - len(_INDENT) - len(title_text)
         self._section_header(f"Outputs{count_dim}", f"{'':>{max(1, col_offset)}}{out_hash_hdr}")
+
+        out_pad_w = max(out_path_w, _VALUE_COL - len(_ROW_INDENT))
 
         shown_out = min(n_out, _MAX_ROWS - 1) if n_out > _MAX_ROWS else n_out
         for i in range(shown_out):
             out = outputs[i]
-            name = _pad(_truncate(_basename(out["path"]), out_path_w), out_path_w)
+            name = _pad(_truncate(_basename(out["path"]), out_path_w), out_pad_w)
             digest = _digest8(out)
             self._section_row(f"{name}{digest}")
         if n_out > shown_out:
