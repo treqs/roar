@@ -25,6 +25,7 @@ class PreparedRegisterExecution:
     session_url: str | None
     git_tag_name: str | None
     git_tag_repo_root: Path | None
+    registration_session_id: str | None = None
 
 
 def prepare_register_execution(
@@ -88,4 +89,5 @@ def prepare_register_execution(
         session_url=publish_session.session_url,
         git_tag_name=git_tag_name,
         git_tag_repo_root=git_tag_repo_root,
+        registration_session_id=publish_session.registration_session_id,
     )

@@ -14,12 +14,18 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), _FakeGlaasHandler)
         self.health_checks = 0
         self.session_registrations: list[dict[str, Any]] = []
+        self.registration_session_creations: list[dict[str, Any]] = []
+        self.registration_session_finalizations: list[dict[str, Any]] = []
         self.job_batches: list[dict[str, Any]] = []
         self.job_creates: list[dict[str, Any]] = []
+        self.registration_session_job_batches: list[dict[str, Any]] = []
+        self.registration_session_job_creates: list[dict[str, Any]] = []
         self.artifact_batches: list[list[dict[str, Any]]] = []
         self.auth_headers: list[dict[str, Any]] = []
         self.input_links: list[dict[str, Any]] = []
         self.output_links: list[dict[str, Any]] = []
+        self.registration_session_input_links: list[dict[str, Any]] = []
+        self.registration_session_output_links: list[dict[str, Any]] = []
         self.label_syncs: list[list[dict[str, Any]]] = []
         self.label_mutation_attempts: list[dict[str, Any]] = []
         self.label_mutations: list[dict[str, Any]] = []
@@ -28,7 +34,11 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.artifacts_by_digest: dict[str, dict[str, Any]] = {}
         self.artifact_dags_by_digest: dict[str, dict[str, Any]] = {}
         self.session_reproductions_by_hash: dict[str, dict[str, Any]] = {}
+        self.registration_sessions_by_id: dict[str, dict[str, Any]] = {}
+        self.registration_session_ids_by_client_session_id: dict[str, str] = {}
         self._next_job_id = 1
+        self._next_registration_session_id = 1
+        self._next_finalized_hash = 1
 
     @property
     def base_url(self) -> str:
@@ -38,6 +48,16 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         job_id = self._next_job_id
         self._next_job_id += 1
         return job_id
+
+    def allocate_registration_session_id(self) -> str:
+        registration_session_id = f"reg-session-{self._next_registration_session_id}"
+        self._next_registration_session_id += 1
+        return registration_session_id
+
+    def allocate_lineage_hash(self) -> str:
+        lineage_hash = f"{self._next_finalized_hash:064x}"
+        self._next_finalized_hash += 1
+        return lineage_hash
 
 
 class _FakeGlaasHandler(BaseHTTPRequestHandler):
@@ -76,6 +96,23 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 "auth_mode": "ssh",
             }
         return None
+
+    def _record_artifacts(self, artifacts: list[dict[str, Any]]) -> None:
+        for artifact in artifacts:
+            artifact_hash = artifact.get("hash")
+            if isinstance(artifact_hash, str) and artifact_hash:
+                self.server.artifacts_by_digest[artifact_hash] = artifact
+                continue
+
+            hashes = artifact.get("hashes", [])
+            if not isinstance(hashes, list):
+                continue
+            for entry in hashes:
+                if not isinstance(entry, dict):
+                    continue
+                digest = entry.get("digest")
+                if isinstance(digest, str) and digest:
+                    self.server.artifacts_by_digest[digest] = artifact
 
     def do_GET(self) -> None:
         authorization = self.headers.get("Authorization")
@@ -224,6 +261,40 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             self._write_json(401, {"error": "Missing or invalid auth"})
             return
 
+        if self.path == "/api/v1/registration-sessions":
+            self.server.registration_session_creations.append(payload)
+            client_session_id = payload.get("client_session_id")
+            if isinstance(client_session_id, str) and client_session_id:
+                registration_session_id = self.server.registration_session_ids_by_client_session_id.get(
+                    client_session_id
+                )
+            else:
+                registration_session_id = None
+
+            created = registration_session_id is None
+            if registration_session_id is None:
+                registration_session_id = self.server.allocate_registration_session_id()
+                self.server.registration_sessions_by_id[registration_session_id] = {
+                    "jobs": {},
+                    "hash": None,
+                    "status": "active",
+                }
+                if isinstance(client_session_id, str) and client_session_id:
+                    self.server.registration_session_ids_by_client_session_id[client_session_id] = (
+                        registration_session_id
+                    )
+
+            session_state = self.server.registration_sessions_by_id[registration_session_id]
+            self._write_json(
+                201,
+                {
+                    "registration_session_id": registration_session_id,
+                    "created": created,
+                    "status": session_state["status"],
+                },
+            )
+            return
+
         if self.path == "/api/v1/sessions":
             self.server.session_registrations.append(
                 {
@@ -247,16 +318,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             artifacts = payload.get("artifacts", [])
             if isinstance(artifacts, list):
                 self.server.artifact_batches.append(artifacts)
-                for artifact in artifacts:
-                    hashes = artifact.get("hashes", [])
-                    if not isinstance(hashes, list):
-                        continue
-                    for entry in hashes:
-                        if not isinstance(entry, dict):
-                            continue
-                        digest = entry.get("digest")
-                        if isinstance(digest, str) and digest:
-                            self.server.artifacts_by_digest[digest] = artifact
+                self._record_artifacts(artifacts)
             self._write_json(200, {"created": len(artifacts), "existing": 0})
             return
 
@@ -295,11 +357,147 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
 
         if self.path == "/api/v1/artifacts/composites":
             self.server.composite_registrations.append(payload)
+            self._record_artifacts([payload])
             self._write_json(
                 200,
                 {
                     "artifact_id": f"composite-{len(self.server.composite_registrations)}",
                     "created": True,
+                },
+            )
+            return
+
+        finalize_match = re.fullmatch(
+            r"/api/v1/registration-sessions/([^/]+)/finalize",
+            self.path,
+        )
+        if finalize_match:
+            registration_session_id = finalize_match.group(1)
+            self.server.registration_session_finalizations.append(payload)
+            session_state = self.server.registration_sessions_by_id.setdefault(
+                registration_session_id,
+                {"jobs": {}, "hash": None, "status": "active"},
+            )
+            lineage_hash = session_state.get("hash") or self.server.allocate_lineage_hash()
+            session_state["hash"] = lineage_hash
+            session_state["status"] = "closed"
+            self._write_json(
+                200,
+                {
+                    "hash": lineage_hash,
+                    "url": f"{self.server.base_url}/dag/{lineage_hash}",
+                    "created": True,
+                    "registration_session_id": registration_session_id,
+                    "status": "closed",
+                },
+            )
+            return
+
+        reg_batch_match = re.fullmatch(
+            r"/api/v1/registration-sessions/([^/]+)/jobs/batch",
+            self.path,
+        )
+        if reg_batch_match:
+            registration_session_id = reg_batch_match.group(1)
+            jobs = payload.get("jobs", [])
+            if not isinstance(jobs, list):
+                jobs = []
+            self.server.registration_session_job_batches.append(
+                {"registration_session_id": registration_session_id, "jobs": jobs}
+            )
+            session_state = self.server.registration_sessions_by_id.setdefault(
+                registration_session_id,
+                {"jobs": {}, "hash": None, "status": "active"},
+            )
+            job_ids = []
+            for job in jobs:
+                job_uid = job.get("job_uid")
+                if isinstance(job_uid, str) and job_uid:
+                    session_state["jobs"].setdefault(job_uid, {"inputs": [], "outputs": []})
+                job_ids.append(self.server.allocate_job_id())
+            self._write_json(200, {"job_ids": job_ids, "errors": []})
+            return
+
+        reg_job_match = re.fullmatch(r"/api/v1/registration-sessions/([^/]+)/jobs", self.path)
+        if reg_job_match:
+            registration_session_id = reg_job_match.group(1)
+            self.server.registration_session_job_creates.append(
+                {"registration_session_id": registration_session_id, "job": payload}
+            )
+            session_state = self.server.registration_sessions_by_id.setdefault(
+                registration_session_id,
+                {"jobs": {}, "hash": None, "status": "active"},
+            )
+            job_uid = payload.get("job_uid")
+            if isinstance(job_uid, str) and job_uid:
+                session_state["jobs"].setdefault(job_uid, {"inputs": [], "outputs": []})
+            self._write_json(200, {"id": self.server.allocate_job_id()})
+            return
+
+        reg_input_match = re.fullmatch(
+            r"/api/v1/registration-sessions/([^/]+)/jobs/([^/]+)/inputs",
+            self.path,
+        )
+        if reg_input_match:
+            registration_session_id, job_uid = reg_input_match.groups()
+            artifacts = payload.get("artifacts", [])
+            if not isinstance(artifacts, list):
+                artifacts = []
+            self.server.registration_session_input_links.append(
+                {
+                    "registration_session_id": registration_session_id,
+                    "job_uid": job_uid,
+                    "artifacts": artifacts,
+                }
+            )
+            self._record_artifacts(artifacts)
+            session_state = self.server.registration_sessions_by_id.setdefault(
+                registration_session_id,
+                {"jobs": {}, "hash": None, "status": "active"},
+            )
+            session_state["jobs"].setdefault(job_uid, {"inputs": [], "outputs": []})["inputs"].extend(
+                artifacts
+            )
+            self._write_json(
+                200,
+                {
+                    "job_uid": job_uid,
+                    "artifacts_registered": len(artifacts),
+                    "inputs_linked": len(artifacts),
+                },
+            )
+            return
+
+        reg_output_match = re.fullmatch(
+            r"/api/v1/registration-sessions/([^/]+)/jobs/([^/]+)/outputs",
+            self.path,
+        )
+        if reg_output_match:
+            registration_session_id, job_uid = reg_output_match.groups()
+            artifacts = payload.get("artifacts", [])
+            if not isinstance(artifacts, list):
+                artifacts = []
+            self.server.registration_session_output_links.append(
+                {
+                    "registration_session_id": registration_session_id,
+                    "job_uid": job_uid,
+                    "artifacts": artifacts,
+                }
+            )
+            self._record_artifacts(artifacts)
+            session_state = self.server.registration_sessions_by_id.setdefault(
+                registration_session_id,
+                {"jobs": {}, "hash": None, "status": "active"},
+            )
+            session_state["jobs"].setdefault(job_uid, {"inputs": [], "outputs": []})[
+                "outputs"
+            ].extend(artifacts)
+            self._write_json(
+                200,
+                {
+                    "job_uid": job_uid,
+                    "artifacts_registered": len(artifacts),
+                    "outputs_linked": len(artifacts),
                 },
             )
             return
@@ -331,6 +529,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             self.server.input_links.append(
                 {"session_hash": session_hash, "job_uid": job_uid, "artifacts": artifacts}
             )
+            self._record_artifacts(artifacts)
             self._write_json(200, {"job_uid": job_uid, "inputs_linked": len(artifacts)})
             return
 
@@ -346,6 +545,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             self.server.output_links.append(
                 {"session_hash": session_hash, "job_uid": job_uid, "artifacts": artifacts}
             )
+            self._record_artifacts(artifacts)
             self._write_json(200, {"job_uid": job_uid, "outputs_linked": len(artifacts)})
             return
 
@@ -395,12 +595,28 @@ class FakeGlaasServer:
         return self._server.session_registrations
 
     @property
+    def registration_session_creations(self) -> list[dict[str, Any]]:
+        return self._server.registration_session_creations
+
+    @property
+    def registration_session_finalizations(self) -> list[dict[str, Any]]:
+        return self._server.registration_session_finalizations
+
+    @property
     def job_batches(self) -> list[dict[str, Any]]:
         return self._server.job_batches
 
     @property
     def job_creates(self) -> list[dict[str, Any]]:
         return self._server.job_creates
+
+    @property
+    def registration_session_job_batches(self) -> list[dict[str, Any]]:
+        return self._server.registration_session_job_batches
+
+    @property
+    def registration_session_job_creates(self) -> list[dict[str, Any]]:
+        return self._server.registration_session_job_creates
 
     @property
     def artifact_batches(self) -> list[list[dict[str, Any]]]:
@@ -417,6 +633,14 @@ class FakeGlaasServer:
     @property
     def output_links(self) -> list[dict[str, Any]]:
         return self._server.output_links
+
+    @property
+    def registration_session_input_links(self) -> list[dict[str, Any]]:
+        return self._server.registration_session_input_links
+
+    @property
+    def registration_session_output_links(self) -> list[dict[str, Any]]:
+        return self._server.registration_session_output_links
 
     @property
     def label_syncs(self) -> list[list[dict[str, Any]]]:

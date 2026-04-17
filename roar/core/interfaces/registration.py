@@ -24,11 +24,14 @@ class GitContext:
 
 @dataclass
 class SessionRegistrationResult:
-    """Result of session registration."""
+    """Result of session registration or registration-session lifecycle operations."""
 
     success: bool
     session_hash: str
     session_url: str | None = None
+    registration_session_id: str | None = None
+    created: bool | None = None
+    status: str | None = None
     error: str | None = None
 
 
@@ -59,6 +62,7 @@ class JobLinkResult:
     job_uid: str
     inputs_linked: int = 0
     outputs_linked: int = 0
+    artifacts_registered: int = 0
     error: str | None = None
 
 
@@ -95,6 +99,21 @@ class ISessionRegistrar(Protocol):
         git_context: GitContext,
     ) -> SessionRegistrationResult:
         """Register session with GLaaS."""
+        ...
+
+    def create_registration_session(
+        self,
+        client_session_id: str | None = None,
+    ) -> SessionRegistrationResult:
+        """Create or resume a remote registration session."""
+        ...
+
+    def finalize_registration_session(
+        self,
+        registration_session_id: str,
+        git_context: GitContext,
+    ) -> SessionRegistrationResult:
+        """Finalize a remote registration session into an immutable lineage hash."""
         ...
 
 

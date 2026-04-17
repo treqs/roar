@@ -139,4 +139,83 @@ class SessionRegistrationService(ISessionRegistrar):
             success=True,
             session_hash=session_hash,
             session_url=session_url,
+            created=result.get("created") if result else None,
+        )
+
+    def create_registration_session(
+        self,
+        client_session_id: str | None = None,
+    ) -> SessionRegistrationResult:
+        """Create or resume a durable remote registration session."""
+        result, error = self.client.create_registration_session(client_session_id=client_session_id)
+        if error:
+            self._logger.warning("Registration session creation failed: %s", error)
+            return SessionRegistrationResult(success=False, session_hash="", error=error)
+
+        registration_session_id = result.get("registration_session_id") if result else None
+        if not isinstance(registration_session_id, str) or not registration_session_id:
+            error_msg = "registration session response did not include registration_session_id"
+            self._logger.warning("Registration session creation failed: %s", error_msg)
+            return SessionRegistrationResult(success=False, session_hash="", error=error_msg)
+
+        self._logger.debug(
+            "Registration session ready: %s (created=%s, status=%s)",
+            registration_session_id,
+            result.get("created") if result else None,
+            result.get("status") if result else None,
+        )
+        return SessionRegistrationResult(
+            success=True,
+            session_hash="",
+            registration_session_id=registration_session_id,
+            created=result.get("created") if result else None,
+            status=result.get("status") if result else None,
+        )
+
+    def finalize_registration_session(
+        self,
+        registration_session_id: str,
+        git_context: GitContext,
+    ) -> SessionRegistrationResult:
+        """Finalize a remote registration session into an immutable lineage hash."""
+        validation = validate_session_registration(
+            session_hash="pending-registration-session-finalize",
+            git_repo=git_context.repo,
+            git_commit=git_context.commit,
+            git_branch=git_context.branch,
+        )
+        if not validation:
+            error_msg = "; ".join(validation.errors)
+            self._logger.warning("Registration session finalize validation failed: %s", error_msg)
+            return SessionRegistrationResult(success=False, session_hash="", error=error_msg)
+
+        result, error = self.client.finalize_registration_session(
+            registration_session_id=registration_session_id,
+            git_repo=git_context.repo or "",
+            git_commit=git_context.commit or "",
+            git_branch=git_context.branch or "",
+        )
+        if error:
+            self._logger.warning("Registration session finalize failed: %s", error)
+            return SessionRegistrationResult(success=False, session_hash="", error=error)
+
+        session_hash = result.get("hash") if result else None
+        if not isinstance(session_hash, str) or not session_hash:
+            error_msg = "registration session finalize response did not include hash"
+            self._logger.warning("Registration session finalize failed: %s", error_msg)
+            return SessionRegistrationResult(success=False, session_hash="", error=error_msg)
+
+        session_url = result.get("url") if result else None
+        self._logger.debug(
+            "Registration session finalized successfully: %s -> %s",
+            registration_session_id,
+            session_hash[:12],
+        )
+        return SessionRegistrationResult(
+            success=True,
+            session_hash=session_hash,
+            session_url=session_url if isinstance(session_url, str) else None,
+            registration_session_id=registration_session_id,
+            created=result.get("created") if result else None,
+            status=result.get("status") if result else None,
         )

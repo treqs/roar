@@ -26,6 +26,12 @@ class PublishSessionService(Protocol):
     ) -> SessionRegistrationResult:
         """Register a session with GLaaS."""
 
+    def create_registration_session(
+        self,
+        client_session_id: str | None = None,
+    ) -> SessionRegistrationResult:
+        """Create or resume a remote registration session."""
+
 
 @dataclass(frozen=True)
 class PreparedPublishSession:
@@ -33,6 +39,7 @@ class PreparedPublishSession:
 
     session_hash: str
     session_url: str | None = None
+    registration_session_id: str | None = None
 
 
 def build_canonical_session_payload(
@@ -208,6 +215,29 @@ def prepare_publish_session(
     except Exception as exc:
         logger.debug("GLaaS health check failed: %s", exc)
         raise ValueError(f"GLaaS health check failed: {exc}") from exc
+
+    publish_auth = getattr(glaas_client, "publish_auth", None)
+    access_token = getattr(publish_auth, "access_token", None)
+    should_use_registration_sessions = isinstance(access_token, str) and bool(access_token.strip())
+
+    if should_use_registration_sessions:
+        logger.debug("Creating remote registration session with GLaaS")
+        session_result = session_service.create_registration_session(client_session_id=None)
+        if not session_result.success:
+            logger.debug("Registration session creation failed: %s", session_result.error)
+            raise ValueError(
+                f"Registration session creation failed: {session_result.error}"
+            )
+
+        logger.debug(
+            "Registration session ready: %s",
+            session_result.registration_session_id,
+        )
+        return PreparedPublishSession(
+            session_hash=session_hash,
+            session_url=None,
+            registration_session_id=session_result.registration_session_id,
+        )
 
     logger.debug("Registering session with GLaaS")
     session_result = resolved_session_service.register(session_hash, git_context)

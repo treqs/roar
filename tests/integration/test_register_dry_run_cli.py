@@ -155,8 +155,10 @@ def test_register_publishes_local_lineage_with_fake_glaas(
     assert "GLaaS:" in result.stdout
 
     assert fake_glaas_publish_server.health_checks >= 1
-    assert len(fake_glaas_publish_server.session_registrations) == 1
-    assert fake_glaas_publish_server.session_registrations[0]["scope_request"] == {
+    assert fake_glaas_publish_server.session_registrations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    assert fake_glaas_publish_server.registration_session_finalizations[0]["scope_request"] == {
         "owner_id": "owner-test",
         "owner_type": "organization",
         "project_id": "proj-test",
@@ -166,13 +168,14 @@ def test_register_publishes_local_lineage_with_fake_glaas(
         entry.get("authorization") == "Bearer test-access-token"
         for entry in fake_glaas_publish_server.auth_headers
     )
-    assert len(fake_glaas_publish_server.job_batches) == 1
+    assert len(fake_glaas_publish_server.job_batches) == 0
     assert len(fake_glaas_publish_server.job_creates) == 0
-    assert len(fake_glaas_publish_server.artifact_batches) >= 1
-    assert fake_glaas_publish_server.input_links
-    assert fake_glaas_publish_server.output_links
+    assert len(fake_glaas_publish_server.artifact_batches) == 0
+    assert len(fake_glaas_publish_server.registration_session_job_batches) == 1
+    assert fake_glaas_publish_server.registration_session_input_links
+    assert fake_glaas_publish_server.registration_session_output_links
 
-    registered_jobs = fake_glaas_publish_server.job_batches[0]["jobs"]
+    registered_jobs = fake_glaas_publish_server.registration_session_job_batches[0]["jobs"]
     assert len(registered_jobs) == 1
     assert registered_jobs[0]["job_type"] == "run"
 

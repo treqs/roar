@@ -89,6 +89,13 @@ def register_publish_lineage(*args: Any, **kwargs: Any) -> Any:
     return _register_publish_lineage(*args, **kwargs)
 
 
+def sync_publish_labels(*args: Any, **kwargs: Any) -> Any:
+    """Load label sync helpers only for real registration paths."""
+    from ...application.publish.registration import sync_publish_labels as _sync_publish_labels
+
+    return _sync_publish_labels(*args, **kwargs)
+
+
 def normalize_registration_hashes(*args: Any, **kwargs: Any) -> Any:
     """Load hash normalization only when extracting registration payloads."""
     from ...application.publish.registration import (
@@ -213,6 +220,7 @@ class RegisterService:
         git_context = prepared.git_context
         session_hash = prepared.session_hash
         session_id = prepared.session_id
+        registration_session_id = prepared.registration_session_id
 
         omit_filter = self.omit_filter
         detected_secrets: list[str] = []
@@ -273,36 +281,125 @@ class RegisterService:
             )
 
         composite_registrations: list[dict[str, Any]] = []
-        pre_registration_errors: list[str] = []
+        registration_errors: list[str] = []
+        finalized_session_hash = session_hash
+        finalize_failed = False
         with Spinner("Publishing lineage to GLaaS...") as spin:
-            if has_lineage_composites(lineage.artifacts):
-                spin.update("Registering composite artifacts...")
-                try:
-                    with create_database_context(roar_dir) as db_ctx:
-                        composite_registrations = preregister_lineage_composites_with_glaas(
-                            glaas_client=self.glaas_client,
-                            db_ctx=db_ctx,
-                            lineage_artifacts=lineage.artifacts,
-                            session_hash=session_hash,
-                            registration_errors=pre_registration_errors,
-                            composite_builder=self.composite_builder,
-                            logger=self._logger,
-                        )
-                except Exception as e:
-                    return RegisterResult(
-                        success=False,
-                        session_hash=session_hash,
-                        artifact_hash=artifact_hash,
-                        error=f"Composite artifact registration failed: {e}",
-                        secrets_detected=detected_secrets,
-                        secrets_redacted=bool(detected_secrets),
-                    )
-
             refresh_job_artifact_references(lineage.jobs, lineage.artifacts)
-            spin.update("Registering jobs, artifacts, and links...")
 
-            if session_id is not None:
-                with create_database_context(roar_dir) as db_ctx:
+            if registration_session_id:
+                spin.update("Staging jobs and artifacts...")
+                batch_result = self.coordinator.register_lineage_under_registration_session(
+                    registration_session_id=registration_session_id,
+                    git_context=git_context,
+                    jobs=registration_jobs,
+                )
+                registration_errors.extend(batch_result.errors)
+
+                if batch_result.jobs_failed == 0 and batch_result.links_failed == 0:
+                    spin.update("Finalizing lineage...")
+                    finalize_result = self.coordinator.session_service.finalize_registration_session(
+                        registration_session_id=registration_session_id,
+                        git_context=git_context,
+                    )
+                    if not finalize_result.success:
+                        finalize_failed = True
+                        registration_errors.append(
+                            f"Registration session finalize failed: {finalize_result.error}"
+                        )
+                    else:
+                        finalized_session_hash = finalize_result.session_hash
+
+                        if has_lineage_composites(lineage.artifacts):
+                            spin.update("Registering composite artifacts...")
+                            try:
+                                with create_database_context(roar_dir) as db_ctx:
+                                    composite_registrations = (
+                                        preregister_lineage_composites_with_glaas(
+                                            glaas_client=self.glaas_client,
+                                            db_ctx=db_ctx,
+                                            lineage_artifacts=lineage.artifacts,
+                                            session_hash=finalized_session_hash,
+                                            registration_errors=registration_errors,
+                                            composite_builder=self.composite_builder,
+                                            logger=self._logger,
+                                        )
+                                    )
+                                    if session_id is not None:
+                                        sync_publish_labels(
+                                            glaas_client=self.glaas_client,
+                                            db_ctx=db_ctx,
+                                            session_id=session_id,
+                                            session_hash=finalized_session_hash,
+                                            jobs=registration_jobs,
+                                            artifacts=lineage.artifacts,
+                                            errors=registration_errors,
+                                        )
+                            except Exception as e:
+                                return RegisterResult(
+                                    success=False,
+                                    session_hash=finalized_session_hash,
+                                    artifact_hash=artifact_hash,
+                                    error=f"Composite artifact registration failed: {e}",
+                                    secrets_detected=detected_secrets,
+                                    secrets_redacted=bool(detected_secrets),
+                                )
+                        elif session_id is not None:
+                            with create_database_context(roar_dir) as db_ctx:
+                                sync_publish_labels(
+                                    glaas_client=self.glaas_client,
+                                    db_ctx=db_ctx,
+                                    session_id=session_id,
+                                    session_hash=finalized_session_hash,
+                                    jobs=registration_jobs,
+                                    artifacts=lineage.artifacts,
+                                    errors=registration_errors,
+                                )
+            else:
+                if has_lineage_composites(lineage.artifacts):
+                    spin.update("Registering composite artifacts...")
+                    try:
+                        with create_database_context(roar_dir) as db_ctx:
+                            composite_registrations = preregister_lineage_composites_with_glaas(
+                                glaas_client=self.glaas_client,
+                                db_ctx=db_ctx,
+                                lineage_artifacts=lineage.artifacts,
+                                session_hash=session_hash,
+                                registration_errors=registration_errors,
+                                composite_builder=self.composite_builder,
+                                logger=self._logger,
+                            )
+                    except Exception as e:
+                        return RegisterResult(
+                            success=False,
+                            session_hash=session_hash,
+                            artifact_hash=artifact_hash,
+                            error=f"Composite artifact registration failed: {e}",
+                            secrets_detected=detected_secrets,
+                            secrets_redacted=bool(detected_secrets),
+                        )
+
+                spin.update("Registering jobs, artifacts, and links...")
+
+                if session_id is not None:
+                    with create_database_context(roar_dir) as db_ctx:
+                        batch_result = register_publish_lineage(
+                            coordinator=self.coordinator,
+                            glaas_client=self.glaas_client,
+                            session_hash=session_hash,
+                            git_context=git_context,
+                            jobs=registration_jobs,
+                            artifacts=prepare_batch_registration_artifacts(
+                                lineage.artifacts,
+                                session_hash,
+                                fallback_to_hash=True,
+                                prefer_blake3_first=True,
+                            ),
+                            db_ctx=db_ctx,
+                            session_id=session_id,
+                            label_artifacts=lineage.artifacts,
+                        )
+                else:
                     batch_result = register_publish_lineage(
                         coordinator=self.coordinator,
                         glaas_client=self.glaas_client,
@@ -315,45 +412,28 @@ class RegisterService:
                             fallback_to_hash=True,
                             prefer_blake3_first=True,
                         ),
-                        db_ctx=db_ctx,
-                        session_id=session_id,
+                        db_ctx=None,
+                        session_id=None,
                         label_artifacts=lineage.artifacts,
                     )
-            else:
-                batch_result = register_publish_lineage(
-                    coordinator=self.coordinator,
-                    glaas_client=self.glaas_client,
-                    session_hash=session_hash,
-                    git_context=git_context,
-                    jobs=registration_jobs,
-                    artifacts=prepare_batch_registration_artifacts(
-                        lineage.artifacts,
-                        session_hash,
-                        fallback_to_hash=True,
-                        prefer_blake3_first=True,
-                    ),
-                    db_ctx=None,
-                    session_id=None,
-                    label_artifacts=lineage.artifacts,
-                )
+                registration_errors.extend(batch_result.errors)
 
         composite_registered = sum(1 for item in composite_registrations if item.get("registered"))
         composite_failed = sum(1 for item in composite_registrations if not item.get("registered"))
         total_artifacts_registered = batch_result.artifacts_registered + composite_registered
         total_artifacts_failed = batch_result.artifacts_failed + composite_failed
-        all_errors = pre_registration_errors + batch_result.errors
 
-        if all_errors:
-            self._logger.warning("Registration completed with errors: %s", all_errors)
+        if registration_errors:
+            self._logger.warning("Registration completed with errors: %s", registration_errors)
 
         return RegisterResult(
-            success=batch_result.jobs_failed == 0 and total_artifacts_failed == 0,
-            session_hash=session_hash,
+            success=batch_result.jobs_failed == 0 and total_artifacts_failed == 0 and not finalize_failed,
+            session_hash=finalized_session_hash,
             artifact_hash=artifact_hash,
             jobs_registered=batch_result.jobs_created,
             artifacts_registered=total_artifacts_registered,
             links_created=batch_result.links_created,
-            error="; ".join(all_errors) if all_errors else None,
+            error="; ".join(registration_errors) if registration_errors else None,
             secrets_detected=detected_secrets,
             secrets_redacted=bool(detected_secrets),
         )
