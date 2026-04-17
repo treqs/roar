@@ -12,6 +12,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from roar.application.system_labels import refresh_job_system_labels
 from roar.db.context import create_database_context
 
 from .collector import _resolve_active_session_context, collect_fragments
@@ -507,6 +508,7 @@ class FragmentReconstituter:
                             materialized,
                         )
                         db_ctx.jobs.update_metadata(job_id, metadata_json)
+                        refresh_job_system_labels(db_ctx, job_id=job_id)
         except Exception as exc:
             _get_logger().warning(
                 "Failed to materialize composite artifacts during fragment reconstitution for session %s: %s",
