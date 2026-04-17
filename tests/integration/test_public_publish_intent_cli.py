@@ -71,7 +71,9 @@ def _configure_unbound_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[s
     return env
 
 
-def _configure_public_repo(repo: Path, roar_cli, fake_glaas_url: str, *, bind_repo: bool) -> dict[str, str]:
+def _configure_public_repo(
+    repo: Path, roar_cli, fake_glaas_url: str, *, bind_repo: bool
+) -> dict[str, str]:
     subprocess.run(
         ["git", "remote", "add", "origin", "https://github.com/test/repo.git"],
         cwd=repo,
@@ -228,7 +230,6 @@ def test_put_public_succeeds_without_repo_binding_when_public_flag_is_set(
     assert "scope_request" not in fake_glaas_publish_server.session_registrations[0]
 
 
-
 def test_register_public_with_valid_ssh_uses_authenticated_creator_identity_for_hash_and_registration(
     temp_git_repo: Path,
     roar_cli,
@@ -282,7 +283,6 @@ def test_register_public_with_valid_ssh_uses_authenticated_creator_identity_for_
         and str(entry.get("authorization") or "").startswith("Signature ")
         for entry in fake_glaas_publish_server.auth_headers
     )
-
 
 
 def test_register_public_with_valid_ssh_ignores_existing_repo_binding(
