@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 try:
     import tomllib
@@ -22,6 +26,7 @@ class PublishAuthContext:
     auth_provider: str | None = None
     user_sub: str | None = None
     db_user_id: str | None = None
+    creator_identity: str | None = None
 
 
 def load_publish_auth_context(
@@ -40,7 +45,7 @@ def load_publish_auth_context(
         user_sub = auth_state.user.sub or None
         db_user_id = auth_state.user.db_user_id
 
-    binding = _load_repo_binding(start_dir)
+    binding = None if allow_public_without_binding else _load_repo_binding(start_dir)
     if binding and not access_token:
         raise PublishAuthError(
             "Repo is linked to GLaaS but no global auth state is available. Run `roar login`."
@@ -49,6 +54,12 @@ def load_publish_auth_context(
         raise PublishAuthError(
             "No GLaaS repo binding found for this publish. Link the repo to a TReqs owner/project first, or rerun with --public to publish publicly."
         )
+
+    creator_identity = None
+    if not access_token and allow_public_without_binding:
+        creator_identity, resolved_db_user_id = _load_authenticated_creator_identity()
+        if resolved_db_user_id and not db_user_id:
+            db_user_id = resolved_db_user_id
 
     scope_request = None
     if binding:
@@ -67,16 +78,66 @@ def load_publish_auth_context(
         auth_provider=auth_provider,
         user_sub=user_sub,
         db_user_id=db_user_id,
+        creator_identity=creator_identity,
     )
 
 
 def resolve_publish_creator_identity(context: PublishAuthContext) -> str:
+    explicit_identity = _optional_string(context.creator_identity)
+    if explicit_identity is not None:
+        return explicit_identity
+
     provider = (context.auth_provider or "").strip().lower()
     if provider.startswith("treqs") and context.user_sub:
         return f"treqs:user:{context.user_sub}"
     if context.db_user_id:
         return f"glaas:user:{context.db_user_id}"
     return "anonymous"
+
+
+def _load_authenticated_creator_identity() -> tuple[str | None, str | None]:
+    from .integrations.glaas import get_glaas_url, make_auth_header
+
+    base_url = _optional_string(get_glaas_url())
+    if base_url is None:
+        return None, None
+
+    path = "/api/v1/auth/me"
+    auth_header = make_auth_header("GET", path, None)
+    if not auth_header:
+        return None, None
+
+    request = urllib.request.Request(f"{base_url.rstrip('/')}{path}")
+    request.add_header("Authorization", auth_header)
+    request.add_header("Accept", "application/json")
+
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8") or "{}")
+    except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError):
+        return None, None
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return None, None
+
+    creator_identity = _optional_string(
+        data.get("creatorIdentity") if isinstance(data, dict) else None
+    ) or _optional_string(data.get("creator_identity") if isinstance(data, dict) else None)
+
+    user = data.get("user")
+    db_user_id = _optional_string(user.get("id")) if isinstance(user, dict) else None
+    if creator_identity is None and db_user_id is not None:
+        creator_identity = f"glaas:user:{db_user_id}"
+
+    return creator_identity, db_user_id
+
+
+def _optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
 
 
 def _load_repo_binding(start_dir: str | Path | None = None) -> dict[str, str] | None:

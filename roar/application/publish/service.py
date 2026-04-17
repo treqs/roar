@@ -192,16 +192,20 @@ def build_register_preview_runtime(
     from ...publish_auth import PublishAuthContext
     from .lineage import LineageCollector
 
-    glaas_client = GlaasClient(
-        "",
-        start_dir=start_dir,
-        publish_auth=PublishAuthContext(
+    publish_auth = None
+    if not allow_public_without_binding:
+        publish_auth = PublishAuthContext(
             access_token=None,
             scope_request=None,
             auth_provider=None,
             user_sub=None,
             db_user_id=None,
-        ),
+        )
+
+    glaas_client = GlaasClient(
+        None,
+        start_dir=start_dir,
+        publish_auth=publish_auth,
         allow_public_without_binding=allow_public_without_binding,
     )
     return _RegisterPreviewRuntime(
