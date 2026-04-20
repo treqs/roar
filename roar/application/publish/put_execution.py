@@ -634,11 +634,13 @@ class PutService:
                     put_outputs = self._build_registration_session_put_job_outputs(
                         composite_results_for_linking
                     )
-                    link_result = coordinator.job_service.link_job_artifacts_under_registration_session(
-                        registration_session_id=registration_session_id,
-                        job_uid=job_uid,
-                        inputs=put_inputs,
-                        outputs=put_outputs,
+                    link_result = (
+                        coordinator.job_service.link_job_artifacts_under_registration_session(
+                            registration_session_id=registration_session_id,
+                            job_uid=job_uid,
+                            inputs=put_inputs,
+                            outputs=put_outputs,
+                        )
                     )
                     put_job_links_succeeded = link_result.success
                     if not link_result.success and link_result.error:

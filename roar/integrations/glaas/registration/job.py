@@ -680,9 +680,7 @@ class JobRegistrationService(IJobRegistrar):
                     )
                     errors.append(f"outputs: {error}")
                     break
-                outputs_linked += (
-                    result.get("outputs_linked", len(batch)) if result else len(batch)
-                )
+                outputs_linked += result.get("outputs_linked", len(batch)) if result else len(batch)
                 artifacts_registered += (
                     result.get("artifacts_registered", len(batch)) if result else len(batch)
                 )

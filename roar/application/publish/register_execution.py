@@ -298,9 +298,11 @@ class RegisterService:
 
                 if batch_result.jobs_failed == 0 and batch_result.links_failed == 0:
                     spin.update("Finalizing lineage...")
-                    finalize_result = self.coordinator.session_service.finalize_registration_session(
-                        registration_session_id=registration_session_id,
-                        git_context=git_context,
+                    finalize_result = (
+                        self.coordinator.session_service.finalize_registration_session(
+                            registration_session_id=registration_session_id,
+                            git_context=git_context,
+                        )
                     )
                     if not finalize_result.success:
                         finalize_failed = True
@@ -427,7 +429,9 @@ class RegisterService:
             self._logger.warning("Registration completed with errors: %s", registration_errors)
 
         return RegisterResult(
-            success=batch_result.jobs_failed == 0 and total_artifacts_failed == 0 and not finalize_failed,
+            success=batch_result.jobs_failed == 0
+            and total_artifacts_failed == 0
+            and not finalize_failed,
             session_hash=finalized_session_hash,
             artifact_hash=artifact_hash,
             jobs_registered=batch_result.jobs_created,

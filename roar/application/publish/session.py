@@ -230,9 +230,7 @@ def prepare_publish_session(
         session_result = session_service.create_registration_session(client_session_id=None)
         if not session_result.success:
             logger.debug("Registration session creation failed: %s", session_result.error)
-            raise ValueError(
-                f"Registration session creation failed: {session_result.error}"
-            )
+            raise ValueError(f"Registration session creation failed: {session_result.error}")
 
         logger.debug(
             "Registration session ready: %s",

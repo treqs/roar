@@ -180,7 +180,9 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                     "parent_step_number": parent_step_number,
                     "inputs": inputs,
                     "outputs": outputs,
-                    "metadata": dict(sorted(metadata.items())) if isinstance(metadata, dict) else {},
+                    "metadata": dict(sorted(metadata.items()))
+                    if isinstance(metadata, dict)
+                    else {},
                 }
             )
 
@@ -369,8 +371,8 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             self.server.registration_session_creations.append(payload)
             client_session_id = payload.get("client_session_id")
             if isinstance(client_session_id, str) and client_session_id:
-                registration_session_id = self.server.registration_session_ids_by_client_session_id.get(
-                    client_session_id
+                registration_session_id = (
+                    self.server.registration_session_ids_by_client_session_id.get(client_session_id)
                 )
             else:
                 registration_session_id = None
@@ -560,7 +562,9 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             )
             job_uid = payload.get("job_uid")
             if isinstance(job_uid, str) and job_uid:
-                stored_job = session_state["jobs"].setdefault(job_uid, {"inputs": [], "outputs": []})
+                stored_job = session_state["jobs"].setdefault(
+                    job_uid, {"inputs": [], "outputs": []}
+                )
                 stored_job.update(
                     {
                         "command": payload.get("command"),
@@ -594,9 +598,9 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 registration_session_id,
                 {"jobs": {}, "hash": None, "status": "active"},
             )
-            session_state["jobs"].setdefault(job_uid, {"inputs": [], "outputs": []})["inputs"].extend(
-                artifacts
-            )
+            session_state["jobs"].setdefault(job_uid, {"inputs": [], "outputs": []})[
+                "inputs"
+            ].extend(artifacts)
             self._write_json(
                 200,
                 {
