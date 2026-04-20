@@ -15,7 +15,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -456,9 +455,12 @@ def fetch_fragment_batches(
     *,
     glaas_url: str = HOST_GLAAS_URL,
 ) -> list[dict[str, object]]:
-    encoded_token = urllib.parse.quote(token, safe="")
-    url = f"{glaas_url.rstrip('/')}/api/v1/fragments/sessions/{session_id}/fragments?token={encoded_token}"
-    with urllib.request.urlopen(url, timeout=5) as response:
+    url = f"{glaas_url.rstrip('/')}/api/v1/fragments/sessions/{session_id}/fragments"
+    request = urllib.request.Request(
+        url,
+        headers={"x-roar-fragment-token": token},
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
         payload = json.loads(response.read().decode("utf-8"))
     fragments = payload.get("fragments")
     if fragments is None and isinstance(payload.get("data"), dict):
