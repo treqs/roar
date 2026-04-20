@@ -145,7 +145,9 @@ def test_prepare_publish_session_creates_registration_session_with_ssh_only_auth
     session_service.register.assert_not_called()
 
 
-def test_prepare_publish_session_rejects_scoped_ssh_only_publish(tmp_path: Path) -> None:
+def test_prepare_publish_session_creates_registration_session_with_scoped_ssh_only_auth(
+    tmp_path: Path,
+) -> None:
     glaas_client = MagicMock()
     glaas_client.publish_auth.access_token = None
     glaas_client.publish_auth.scope_request = {
@@ -157,17 +159,30 @@ def test_prepare_publish_session_rejects_scoped_ssh_only_publish(tmp_path: Path)
     glaas_client.publish_auth.ssh_auth_available = True
     session_service = MagicMock()
     session_service.compute_session_hash.return_value = "session-hash"
+    session_service.create_registration_session.return_value = SessionRegistrationResult(
+        success=True,
+        session_hash="session-hash",
+        session_url=None,
+        registration_session_id="reg-session-scoped-ssh-123",
+    )
 
-    with pytest.raises(ValueError, match="Scoped GLaaS publish currently requires bearer authentication"):
-        prepare_publish_session(
-            glaas_client=glaas_client,
-            session_service=session_service,
-            roar_dir=tmp_path / ".roar",
-            session_id=7,
-            git_context=_git_context(),
-            logger=MagicMock(),
-            register_with_glaas=True,
-        )
+    result = prepare_publish_session(
+        glaas_client=glaas_client,
+        session_service=session_service,
+        roar_dir=tmp_path / ".roar",
+        session_id=7,
+        git_context=_git_context(),
+        logger=MagicMock(),
+        register_with_glaas=True,
+    )
+
+    assert result == PreparedPublishSession(
+        session_hash="session-hash",
+        session_url=None,
+        registration_session_id="reg-session-scoped-ssh-123",
+    )
+    session_service.create_registration_session.assert_called_once_with(client_session_id=None)
+    session_service.register.assert_not_called()
 
 
 def test_prepare_publish_session_requires_configured_glaas(tmp_path: Path) -> None:

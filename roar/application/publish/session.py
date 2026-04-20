@@ -218,19 +218,12 @@ def prepare_publish_session(
 
     publish_auth = getattr(glaas_client, "publish_auth", None)
     access_token = getattr(publish_auth, "access_token", None)
-    scope_request = getattr(publish_auth, "scope_request", None)
     ssh_auth_available = getattr(publish_auth, "ssh_auth_available", False)
 
     has_access_token = isinstance(access_token, str) and bool(access_token.strip())
-    has_scope_request = isinstance(scope_request, dict) and bool(scope_request)
     has_ssh_auth = ssh_auth_available if isinstance(ssh_auth_available, bool) else False
 
-    should_use_registration_sessions = has_access_token or (has_ssh_auth and not has_scope_request)
-
-    if has_ssh_auth and has_scope_request and not has_access_token:
-        raise ValueError(
-            "Scoped GLaaS publish currently requires bearer authentication. Run `roar login` or publish with --public."
-        )
+    should_use_registration_sessions = has_access_token or has_ssh_auth
 
     if should_use_registration_sessions:
         logger.debug("Creating remote registration session with GLaaS")
