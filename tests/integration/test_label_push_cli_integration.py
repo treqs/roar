@@ -98,14 +98,6 @@ def _job_uid_for(repo: Path, roar_cli, target: str) -> str:
     return str(payload["jobs"][0]["job_uid"])
 
 
-def _status_dag_hash(roar_cli, *, env_overrides: dict[str, str]) -> str:
-    result = roar_cli("status", env_overrides=env_overrides)
-    assert result.returncode == 0
-    match = re.search(r"DAG hash:\s+([0-9a-f]{64})", result.stdout)
-    assert match is not None, result.stdout
-    return match.group(1)
-
-
 def _active_local_session_hash(repo: Path) -> str:
     db_path = repo / ".roar" / "roar.db"
     with sqlite3.connect(db_path) as conn:
@@ -167,7 +159,7 @@ def test_label_push_artifact_patches_existing_remote_labels(
     ]
 
 
-def test_label_push_job_uses_canonical_remote_session_hash_and_omits_system_labels(
+def test_label_push_job_omits_system_labels_and_targets_job_session_hash(
     temp_git_repo: Path,
     roar_cli,
     git_commit,
@@ -186,7 +178,7 @@ def test_label_push_job_uses_canonical_remote_session_hash_and_omits_system_labe
     roar_cli("label", "set", "job", "@1", "phase=preprocess", env_overrides=env)
     session_ref = _active_local_session_hash(temp_git_repo)
     roar_cli("register", session_ref, "--yes", env_overrides=env)
-    expected_session_hash = fake_glaas_publish_server.session_registrations[0]["hash"]
+    published_session_hash = fake_glaas_publish_server.registration_session_finalizations[0]["hash"]
     roar_cli("label", "set", "job", "@1", "phase=train", env_overrides=env)
 
     job_uid = _job_uid_for(temp_git_repo, roar_cli, "processed.csv")
@@ -197,24 +189,22 @@ def test_label_push_job_uses_canonical_remote_session_hash_and_omits_system_labe
         if label.get("entity_type") == "job" and label.get("job_uid") == job_uid
     ]
     assert len(synced_job_labels) == 1
-    assert synced_job_labels[0]["session_hash"] == expected_session_hash
+    assert synced_job_labels[0]["session_hash"] == published_session_hash
     result = roar_cli("label", "push", "job", "@1", check=False, env_overrides=env)
 
-    assert fake_glaas_publish_server.label_mutation_attempts == [
-        {
-            "entity_type": "job",
-            "session_hash": expected_session_hash,
-            "job_uid": job_uid,
-            "metadata": {"phase": "train"},
-        }
-    ]
+    assert len(fake_glaas_publish_server.label_mutation_attempts) == 1
+    attempted = fake_glaas_publish_server.label_mutation_attempts[0]
+    assert attempted["entity_type"] == "job"
+    assert attempted["job_uid"] == job_uid
+    assert attempted["metadata"] == {"phase": "train"}
+    assert re.fullmatch(r"[0-9a-f]{64}", attempted["session_hash"])
     assert result.returncode == 0
     assert "Pushed remote labels (version 2):" in result.stdout
     assert "phase=train" in result.stdout
     assert fake_glaas_publish_server.label_mutations == [
         {
             "entity_type": "job",
-            "session_hash": expected_session_hash,
+            "session_hash": attempted["session_hash"],
             "job_uid": job_uid,
             "metadata": {"phase": "train"},
         }

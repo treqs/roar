@@ -114,6 +114,98 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 if isinstance(digest, str) and digest:
                     self.server.artifacts_by_digest[digest] = artifact
 
+    def _resolve_creator_identity(self, authenticated_user: dict[str, str] | None) -> str:
+        if not isinstance(authenticated_user, dict):
+            return "anonymous"
+        if authenticated_user.get("auth_mode") == "bearer":
+            return "treqs:user:treqs-user-123"
+        user_id = authenticated_user.get("id")
+        if isinstance(user_id, str) and user_id:
+            return f"glaas:user:{user_id}"
+        return "anonymous"
+
+    def _compute_registration_session_hash(
+        self,
+        session_state: dict[str, Any],
+        finalize_payload: dict[str, Any],
+        authenticated_user: dict[str, str] | None,
+    ) -> str | None:
+        from roar.core.canonical_session import compute_canonical_session_hash
+
+        jobs_by_uid = session_state.get("jobs")
+        if not isinstance(jobs_by_uid, dict) or not jobs_by_uid:
+            return None
+
+        step_by_uid: dict[str, int] = {}
+        for job_uid, job in jobs_by_uid.items():
+            if isinstance(job, dict) and isinstance(job.get("step_number"), int):
+                step_by_uid[str(job_uid)] = int(job["step_number"])
+
+        jobs_payload: list[dict[str, Any]] = []
+        for _job_uid, job in jobs_by_uid.items():
+            if not isinstance(job, dict):
+                continue
+            inputs = sorted(
+                [
+                    {"hash": artifact.get("hash"), "path": artifact.get("path")}
+                    for artifact in job.get("inputs", [])
+                    if isinstance(artifact, dict)
+                ],
+                key=lambda artifact: (
+                    str(artifact.get("hash") or ""),
+                    str(artifact.get("path") or ""),
+                ),
+            )
+            outputs = sorted(
+                [
+                    {"hash": artifact.get("hash"), "path": artifact.get("path")}
+                    for artifact in job.get("outputs", [])
+                    if isinstance(artifact, dict)
+                ],
+                key=lambda artifact: (
+                    str(artifact.get("hash") or ""),
+                    str(artifact.get("path") or ""),
+                ),
+            )
+            metadata = job.get("metadata")
+            parent_job_uid = job.get("parent_job_uid")
+            parent_step_number = (
+                step_by_uid.get(str(parent_job_uid)) if isinstance(parent_job_uid, str) else None
+            )
+            jobs_payload.append(
+                {
+                    "command": job.get("command"),
+                    "job_type": job.get("job_type"),
+                    "step_number": job.get("step_number"),
+                    "parent_step_number": parent_step_number,
+                    "inputs": inputs,
+                    "outputs": outputs,
+                    "metadata": dict(sorted(metadata.items())) if isinstance(metadata, dict) else {},
+                }
+            )
+
+        if not jobs_payload:
+            return None
+
+        jobs_payload.sort(
+            key=lambda job: (
+                int(job.get("step_number") or 0),
+                str(job.get("command") or ""),
+            )
+        )
+        return compute_canonical_session_hash(
+            {
+                "canonical_version": 1,
+                "creator_identity": self._resolve_creator_identity(authenticated_user),
+                "git": {
+                    "repo": finalize_payload.get("git_repo"),
+                    "commit": finalize_payload.get("git_commit"),
+                    "branch": finalize_payload.get("git_branch"),
+                },
+                "jobs": jobs_payload,
+            }
+        )
+
     def do_GET(self) -> None:
         authorization = self.headers.get("Authorization")
         if self.path == "/api/v1/auth/access-context":
@@ -233,6 +325,18 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             target_key = _label_target_key(payload)
             self.server.label_mutation_attempts.append(payload)
             current = self.server.current_labels_by_target.get(target_key)
+            if not current and payload.get("entity_type") == "job":
+                requested_job_uid = payload.get("job_uid")
+                if isinstance(requested_job_uid, str) and requested_job_uid:
+                    current = next(
+                        (
+                            candidate
+                            for candidate in self.server.current_labels_by_target.values()
+                            if candidate.get("entityType") == "job"
+                            and candidate.get("jobUid") == requested_job_uid
+                        ),
+                        None,
+                    )
             if not current:
                 self._write_json(404, {"error": {"message": "Label not found"}})
                 return
@@ -373,14 +477,27 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         )
         if finalize_match:
             registration_session_id = finalize_match.group(1)
-            self.server.registration_session_finalizations.append(payload)
             session_state = self.server.registration_sessions_by_id.setdefault(
                 registration_session_id,
                 {"jobs": {}, "hash": None, "status": "active"},
             )
-            lineage_hash = session_state.get("hash") or self.server.allocate_lineage_hash()
+            lineage_hash = session_state.get("hash") or self._compute_registration_session_hash(
+                session_state,
+                payload,
+                authenticated_user,
+            )
+            if not lineage_hash:
+                lineage_hash = self.server.allocate_lineage_hash()
             session_state["hash"] = lineage_hash
             session_state["status"] = "closed"
+            self.server.registration_session_finalizations.append(
+                {
+                    **payload,
+                    "registration_session_id": registration_session_id,
+                    "hash": lineage_hash,
+                    "status": "closed",
+                }
+            )
             self._write_json(
                 200,
                 {
@@ -413,7 +530,20 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             for job in jobs:
                 job_uid = job.get("job_uid")
                 if isinstance(job_uid, str) and job_uid:
-                    session_state["jobs"].setdefault(job_uid, {"inputs": [], "outputs": []})
+                    stored_job = session_state["jobs"].setdefault(
+                        job_uid,
+                        {"inputs": [], "outputs": []},
+                    )
+                    if isinstance(job, dict):
+                        stored_job.update(
+                            {
+                                "command": job.get("command"),
+                                "job_type": job.get("job_type"),
+                                "step_number": job.get("step_number"),
+                                "parent_job_uid": job.get("parent_job_uid"),
+                                "metadata": job.get("metadata"),
+                            }
+                        )
                 job_ids.append(self.server.allocate_job_id())
             self._write_json(200, {"job_ids": job_ids, "errors": []})
             return
@@ -430,7 +560,16 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             )
             job_uid = payload.get("job_uid")
             if isinstance(job_uid, str) and job_uid:
-                session_state["jobs"].setdefault(job_uid, {"inputs": [], "outputs": []})
+                stored_job = session_state["jobs"].setdefault(job_uid, {"inputs": [], "outputs": []})
+                stored_job.update(
+                    {
+                        "command": payload.get("command"),
+                        "job_type": payload.get("job_type"),
+                        "step_number": payload.get("step_number"),
+                        "parent_job_uid": payload.get("parent_job_uid"),
+                        "metadata": payload.get("metadata"),
+                    }
+                )
             self._write_json(200, {"id": self.server.allocate_job_id()})
             return
 

@@ -84,7 +84,10 @@ def _configure_unbound_repo_for_ssh_only(
         check=True,
     )
     xdg_config_home = repo / ".xdg"
+    home_dir = repo / ".home"
+    home_dir.mkdir(exist_ok=True)
     env = {
+        "HOME": str(home_dir),
         "XDG_CONFIG_HOME": str(xdg_config_home),
         "GLAAS_API_URL": fake_glaas_url,
         "ROAR_SSH_KEY": str(ssh_keypair),
