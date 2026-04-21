@@ -36,6 +36,7 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.session_reproductions_by_hash: dict[str, dict[str, Any]] = {}
         self.registration_sessions_by_id: dict[str, dict[str, Any]] = {}
         self.registration_session_ids_by_client_session_id: dict[str, str] = {}
+        self.job_owners_by_uid: dict[str, dict[str, Any]] = {}
         self._next_job_id = 1
         self._next_registration_session_id = 1
         self._next_finalized_hash = 1
@@ -123,6 +124,28 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         if isinstance(user_id, str) and user_id:
             return f"glaas:user:{user_id}"
         return "anonymous"
+
+    def _claim_job_uid(
+        self,
+        job_uid: str,
+        *,
+        registration_session_id: str,
+        lineage_hash: str | None = None,
+    ) -> str | None:
+        owner = self.server.job_owners_by_uid.get(job_uid)
+        if owner is None:
+            self.server.job_owners_by_uid[job_uid] = {
+                "registration_session_id": registration_session_id,
+                "hash": lineage_hash,
+            }
+            return None
+
+        if owner.get("registration_session_id") == registration_session_id:
+            if lineage_hash and not owner.get("hash"):
+                owner["hash"] = lineage_hash
+            return None
+
+        return f"job_uid already belongs to a different lineage or registration session: {job_uid}"
 
     def _compute_registration_session_hash(
         self,
@@ -492,6 +515,15 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 lineage_hash = self.server.allocate_lineage_hash()
             session_state["hash"] = lineage_hash
             session_state["status"] = "closed"
+            jobs_by_uid = session_state.get("jobs")
+            if isinstance(jobs_by_uid, dict):
+                for job_uid in jobs_by_uid:
+                    if isinstance(job_uid, str) and job_uid:
+                        self._claim_job_uid(
+                            job_uid,
+                            registration_session_id=registration_session_id,
+                            lineage_hash=lineage_hash,
+                        )
             self.server.registration_session_finalizations.append(
                 {
                     **payload,
@@ -529,9 +561,19 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 {"jobs": {}, "hash": None, "status": "active"},
             )
             job_ids = []
+            errors: list[str] = []
             for job in jobs:
                 job_uid = job.get("job_uid")
                 if isinstance(job_uid, str) and job_uid:
+                    conflict = self._claim_job_uid(
+                        job_uid,
+                        registration_session_id=registration_session_id,
+                    )
+                    if conflict is not None:
+                        job_ids.append(None)
+                        errors.append(conflict)
+                        continue
+
                     stored_job = session_state["jobs"].setdefault(
                         job_uid,
                         {"inputs": [], "outputs": []},
@@ -546,8 +588,12 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                                 "metadata": job.get("metadata"),
                             }
                         )
-                job_ids.append(self.server.allocate_job_id())
-            self._write_json(200, {"job_ids": job_ids, "errors": []})
+                    job_ids.append(self.server.allocate_job_id())
+                    errors.append("")
+                else:
+                    job_ids.append(self.server.allocate_job_id())
+                    errors.append("")
+            self._write_json(200, {"job_ids": job_ids, "errors": errors})
             return
 
         reg_job_match = re.fullmatch(r"/api/v1/registration-sessions/([^/]+)/jobs", self.path)
@@ -562,6 +608,14 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             )
             job_uid = payload.get("job_uid")
             if isinstance(job_uid, str) and job_uid:
+                conflict = self._claim_job_uid(
+                    job_uid,
+                    registration_session_id=registration_session_id,
+                )
+                if conflict is not None:
+                    self._write_json(400, {"error": {"message": conflict}})
+                    return
+
                 stored_job = session_state["jobs"].setdefault(
                     job_uid, {"inputs": [], "outputs": []}
                 )

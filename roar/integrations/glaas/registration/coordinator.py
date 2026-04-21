@@ -277,6 +277,10 @@ class RegistrationCoordinator(IRegistrationCoordinator):
             if not job_uid or job_uid not in job_uids_created:
                 continue
 
+            remote_job_uid = job.get("remote_job_uid")
+            if not isinstance(remote_job_uid, str) or not remote_job_uid:
+                remote_job_uid = job_uid
+
             inputs = self._extract_staged_io_list(job, "_inputs", "_input_hashes")
             outputs = self._extract_staged_io_list(job, "_outputs", "_output_hashes")
             if not inputs and not outputs:
@@ -284,7 +288,7 @@ class RegistrationCoordinator(IRegistrationCoordinator):
 
             link_result = self.job_service.link_job_artifacts_under_registration_session(
                 registration_session_id=registration_session_id,
-                job_uid=job_uid,
+                job_uid=remote_job_uid,
                 inputs=inputs,
                 outputs=outputs,
             )

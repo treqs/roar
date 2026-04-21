@@ -26,6 +26,10 @@ from ...application.publish.registration import (
     register_publish_lineage,
     sync_publish_labels,
 )
+from ...application.publish.remote_job_uids import (
+    build_remote_publication_job_uid,
+    prepare_jobs_for_remote_publication,
+)
 from ...application.system_labels import refresh_job_system_labels
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
@@ -470,6 +474,7 @@ class PutService:
                     session_hash=session_hash_value,
                     job_id=job_id,
                     job_uid=job_uid,
+                    remote_job_uid=job_uid,
                     registration_errors=registration_result.errors,
                 )
 
@@ -582,6 +587,10 @@ class PutService:
             job_uid,
             step_number,
         )
+        remote_put_job_uid = build_remote_publication_job_uid(fallback_session_hash, job_uid)
+        remote_lineage_jobs = prepare_jobs_for_remote_publication(
+            lineage.jobs, fallback_session_hash
+        )
 
         composite_results_for_linking = build_publish_composite_results(
             resolved_sources=resolved,
@@ -599,7 +608,7 @@ class PutService:
             registration_result = coordinator.register_lineage_under_registration_session(
                 registration_session_id=registration_session_id,
                 git_context=git_context,
-                jobs=lineage.jobs,
+                jobs=remote_lineage_jobs,
             )
             registration_errors.extend(registration_result.errors)
 
@@ -609,7 +618,7 @@ class PutService:
                     command=command,
                     timestamp=time.time(),
                     registration_session_id=registration_session_id,
-                    job_uid=job_uid,
+                    job_uid=remote_put_job_uid,
                     git_commit=git_context.commit or "",
                     git_branch=git_context.branch or "",
                     duration_seconds=0.0,
@@ -637,7 +646,7 @@ class PutService:
                     link_result = (
                         coordinator.job_service.link_job_artifacts_under_registration_session(
                             registration_session_id=registration_session_id,
-                            job_uid=job_uid,
+                            job_uid=remote_put_job_uid,
                             inputs=put_inputs,
                             outputs=put_outputs,
                         )
@@ -719,6 +728,7 @@ class PutService:
                 session_hash=session_hash,
                 job_id=job_id,
                 job_uid=job_uid,
+                remote_job_uid=remote_put_job_uid,
                 registration_errors=registration_errors,
             )
 
@@ -945,6 +955,7 @@ class PutService:
         session_hash: str,
         job_id: int,
         job_uid: str,
+        remote_job_uid: str,
         registration_errors: list[str],
     ) -> None:
         """Sync the local current label document for the publish-time put job."""
@@ -953,7 +964,7 @@ class PutService:
             db_ctx=self._db,
             session_id=None,
             session_hash=session_hash,
-            jobs=[{"id": job_id, "job_uid": job_uid}],
+            jobs=[{"id": job_id, "job_uid": job_uid, "remote_job_uid": remote_job_uid}],
             artifacts=[],
             errors=registration_errors,
         )

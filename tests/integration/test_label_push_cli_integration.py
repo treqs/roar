@@ -181,12 +181,15 @@ def test_label_push_job_omits_system_labels_and_targets_job_session_hash(
     published_session_hash = fake_glaas_publish_server.registration_session_finalizations[0]["hash"]
     roar_cli("label", "set", "job", "@1", "phase=train", env_overrides=env)
 
-    job_uid = _job_uid_for(temp_git_repo, roar_cli, "processed.csv")
+    staged_jobs = fake_glaas_publish_server.registration_session_job_batches[0]["jobs"]
+    remote_job_uid = next(
+        str(job["job_uid"]) for job in staged_jobs if int(job.get("step_number") or 0) == 1
+    )
     synced_job_labels = [
         label
         for batch in fake_glaas_publish_server.label_syncs
         for label in batch
-        if label.get("entity_type") == "job" and label.get("job_uid") == job_uid
+        if label.get("entity_type") == "job" and label.get("job_uid") == remote_job_uid
     ]
     assert len(synced_job_labels) == 1
     assert synced_job_labels[0]["session_hash"] == published_session_hash
@@ -195,7 +198,7 @@ def test_label_push_job_omits_system_labels_and_targets_job_session_hash(
     assert len(fake_glaas_publish_server.label_mutation_attempts) == 1
     attempted = fake_glaas_publish_server.label_mutation_attempts[0]
     assert attempted["entity_type"] == "job"
-    assert attempted["job_uid"] == job_uid
+    assert attempted["job_uid"] == remote_job_uid
     assert attempted["metadata"] == {"phase": "train"}
     assert re.fullmatch(r"[0-9a-f]{64}", attempted["session_hash"])
     assert result.returncode == 0
@@ -205,7 +208,7 @@ def test_label_push_job_omits_system_labels_and_targets_job_session_hash(
         {
             "entity_type": "job",
             "session_hash": attempted["session_hash"],
-            "job_uid": job_uid,
+            "job_uid": remote_job_uid,
             "metadata": {"phase": "train"},
         }
     ]

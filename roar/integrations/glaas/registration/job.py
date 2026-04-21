@@ -400,13 +400,21 @@ class JobRegistrationService(IJobRegistrar):
         payload_indices: list[int] = []
 
         for i, job in enumerate(jobs):
-            job_uid = job.get("job_uid")
-            if not job_uid:
+            local_job_uid = job.get("job_uid")
+            if not local_job_uid:
                 self._logger.warning("Skipping job without job_uid")
                 results[i] = JobRegistrationResult(
                     success=False, job_uid="", error="Job missing job_uid"
                 )
                 continue
+
+            remote_job_uid = job.get("remote_job_uid")
+            if not isinstance(remote_job_uid, str) or not remote_job_uid:
+                remote_job_uid = local_job_uid
+
+            remote_parent_job_uid = job.get("remote_parent_job_uid")
+            if remote_parent_job_uid is None and job.get("parent_job_uid") is not None:
+                remote_parent_job_uid = job.get("parent_job_uid")
 
             command = job.get("command", "")
             git_commit = job.get("git_commit") or git_context.commit or ""
@@ -418,7 +426,7 @@ class JobRegistrationService(IJobRegistrar):
                 command=filtered_command,
                 timestamp=job.get("timestamp", 0.0),
                 session_hash="pending-registration-session",
-                job_uid=job_uid,
+                job_uid=remote_job_uid,
                 git_commit=git_commit,
                 git_branch=git_branch,
                 job_type=job.get("job_type"),
@@ -426,14 +434,16 @@ class JobRegistrationService(IJobRegistrar):
             )
             if not validation:
                 error_msg = "; ".join(validation.errors)
-                self._logger.warning("Job validation failed for %s: %s", job_uid, error_msg)
-                results[i] = JobRegistrationResult(success=False, job_uid=job_uid, error=error_msg)
+                self._logger.warning("Job validation failed for %s: %s", local_job_uid, error_msg)
+                results[i] = JobRegistrationResult(
+                    success=False, job_uid=local_job_uid, error=error_msg
+                )
                 continue
 
             payload: dict[str, Any] = {
                 "command": filtered_command,
                 "timestamp": job.get("timestamp", 0.0),
-                "job_uid": job_uid,
+                "job_uid": remote_job_uid,
                 "git_commit": git_commit,
                 "git_branch": git_branch,
                 "duration_seconds": job.get("duration_seconds", 0.0),
@@ -443,8 +453,8 @@ class JobRegistrationService(IJobRegistrar):
             }
             if filtered_metadata:
                 payload["metadata"] = filtered_metadata
-            if job.get("parent_job_uid") is not None:
-                payload["parent_job_uid"] = job.get("parent_job_uid")
+            if remote_parent_job_uid is not None:
+                payload["parent_job_uid"] = remote_parent_job_uid
 
             payloads.append(payload)
             payload_indices.append(i)
@@ -471,16 +481,16 @@ class JobRegistrationService(IJobRegistrar):
                 )
         else:
             for pos, idx in enumerate(payload_indices):
-                job_uid = payloads[pos]["job_uid"]
+                local_job_uid = jobs[idx].get("job_uid", "")
                 if pos < len(errors) and errors[pos]:
                     results[idx] = JobRegistrationResult(
-                        success=False, job_uid=job_uid, error=errors[pos]
+                        success=False, job_uid=local_job_uid, error=errors[pos]
                     )
                 else:
                     job_id = job_ids[pos] if pos < len(job_ids) else None
                     results[idx] = JobRegistrationResult(
                         success=True,
-                        job_uid=job_uid,
+                        job_uid=local_job_uid,
                         job_id=str(job_id) if job_id else None,
                     )
 

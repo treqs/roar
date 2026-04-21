@@ -21,6 +21,7 @@ from .job_preparation import (
     normalize_jobs_for_registration,
     order_jobs_for_registration,
 )
+from .remote_job_uids import prepare_jobs_for_remote_publication
 from .secrets import detect_lineage_secrets, filter_lineage_secrets
 
 if TYPE_CHECKING:
@@ -260,6 +261,11 @@ class RegisterService:
         registration_jobs = order_jobs_for_registration(
             normalize_jobs_for_registration(lineage.jobs)
         )
+        remote_registration_jobs = (
+            prepare_jobs_for_remote_publication(registration_jobs, session_hash)
+            if registration_session_id
+            else registration_jobs
+        )
 
         if dry_run:
             return RegisterResult(
@@ -292,7 +298,7 @@ class RegisterService:
                 batch_result = self.coordinator.register_lineage_under_registration_session(
                     registration_session_id=registration_session_id,
                     git_context=git_context,
-                    jobs=registration_jobs,
+                    jobs=remote_registration_jobs,
                 )
                 registration_errors.extend(batch_result.errors)
 
@@ -333,7 +339,7 @@ class RegisterService:
                                             db_ctx=db_ctx,
                                             session_id=session_id,
                                             session_hash=finalized_session_hash,
-                                            jobs=registration_jobs,
+                                            jobs=remote_registration_jobs,
                                             artifacts=lineage.artifacts,
                                             errors=registration_errors,
                                         )
@@ -353,7 +359,7 @@ class RegisterService:
                                     db_ctx=db_ctx,
                                     session_id=session_id,
                                     session_hash=finalized_session_hash,
-                                    jobs=registration_jobs,
+                                    jobs=remote_registration_jobs,
                                     artifacts=lineage.artifacts,
                                     errors=registration_errors,
                                 )

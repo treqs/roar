@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from roar.application.query import (
     LabelCopyRequest,
@@ -221,6 +221,83 @@ def test_build_push_labels_summary_returns_remote_versioned_summary(tmp_path: Pa
     )
     assert summary.heading == "Pushed remote labels (version 2):"
     assert summary.render() == "Pushed remote labels (version 2):\n  owner=ml\n  stage=gold"
+
+
+def test_build_push_labels_summary_retries_job_push_with_legacy_job_uid_on_not_found(
+    tmp_path: Path,
+) -> None:
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    resolved_target = MagicMock(entity_type="job")
+    service.resolve_target.return_value = resolved_target
+    service.current_metadata.return_value = {"phase": "gold"}
+    client = MagicMock()
+    client.patch_current_label.side_effect = [
+        (None, "HTTP 404: Label not found"),
+        ({"version": 3, "metadata": {"phase": "gold"}}, None),
+    ]
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_remote_label_mutation_payload",
+            side_effect=[
+                {
+                    "entity_type": "job",
+                    "session_hash": "s" * 64,
+                    "job_uid": "remote-job-1",
+                    "metadata": {"phase": "gold"},
+                },
+                {
+                    "entity_type": "job",
+                    "session_hash": "s" * 64,
+                    "job_uid": "local-job-1",
+                    "metadata": {"phase": "gold"},
+                },
+            ],
+        ) as build_payload,
+        patch("roar.application.query.label.GlaasClient", return_value=client),
+    ):
+        summary = build_push_labels_summary(_push_request(tmp_path, target="@1", entity_type="job"))
+
+    assert build_payload.call_args_list == [
+        call(
+            db_ctx,
+            roar_dir=tmp_path / ".roar",
+            target=resolved_target,
+            metadata={"phase": "gold"},
+        ),
+        call(
+            db_ctx,
+            roar_dir=tmp_path / ".roar",
+            target=resolved_target,
+            metadata={"phase": "gold"},
+            prefer_remote_publication_uid=False,
+        ),
+    ]
+    assert client.patch_current_label.call_args_list == [
+        call(
+            {
+                "entity_type": "job",
+                "session_hash": "s" * 64,
+                "job_uid": "remote-job-1",
+                "metadata": {"phase": "gold"},
+            }
+        ),
+        call(
+            {
+                "entity_type": "job",
+                "session_hash": "s" * 64,
+                "job_uid": "local-job-1",
+                "metadata": {"phase": "gold"},
+            }
+        ),
+    ]
+    assert summary.heading == "Pushed remote labels (version 3):"
+    assert summary.render() == "Pushed remote labels (version 3):\n  phase=gold"
 
 
 def test_build_push_labels_summary_rejects_missing_user_managed_labels(tmp_path: Path) -> None:
