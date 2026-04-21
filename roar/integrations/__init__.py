@@ -1,5 +1,6 @@
 """Integration adapters and provider registries for external systems."""
 
+from .bootstrap import bootstrap_integrations, register_builtin_integrations
 from .discovery import discover_optional_integrations
 from .registry import (
     get_all_telemetry_providers,
@@ -14,6 +15,7 @@ from .registry import (
 )
 
 __all__ = [
+    "bootstrap_integrations",
     "discover_optional_integrations",
     "get_all_telemetry_providers",
     "get_integration_registry",
@@ -21,6 +23,7 @@ __all__ = [
     "get_vcs_provider",
     "list_telemetry_providers",
     "list_vcs_providers",
+    "register_builtin_integrations",
     "register_telemetry_provider",
     "register_vcs_provider",
     "reset_integrations",
