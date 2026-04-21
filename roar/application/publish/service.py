@@ -164,9 +164,16 @@ class _PutPlanResult:
 class _RegisterPreviewRuntime:
     """Minimal runtime surface for local `roar register --dry-run` flows."""
 
-    glaas_client: Any
-    session_service: Any
+    remote_registry: Any
     lineage_collector: Any
+
+    @property
+    def glaas_client(self) -> Any:
+        return self.remote_registry.client
+
+    @property
+    def session_service(self) -> Any:
+        return self.remote_registry.session_service
 
 
 @dataclass(frozen=True)
@@ -191,6 +198,7 @@ def build_register_preview_runtime(
     from ...integrations.glaas.registration.session import SessionRegistrationService
     from ...publish_auth import PublishAuthContext
     from .lineage import LineageCollector
+    from .remote_registry import GlaasRemoteRegistryTransport
 
     publish_auth = None
     if not allow_public_without_binding:
@@ -208,9 +216,12 @@ def build_register_preview_runtime(
         publish_auth=publish_auth,
         allow_public_without_binding=allow_public_without_binding,
     )
+    session_service = SessionRegistrationService(glaas_client)
     return _RegisterPreviewRuntime(
-        glaas_client=glaas_client,
-        session_service=SessionRegistrationService(glaas_client),
+        remote_registry=GlaasRemoteRegistryTransport(
+            client=glaas_client,
+            session_service=session_service,
+        ),
         lineage_collector=LineageCollector(),
     )
 
@@ -234,7 +245,7 @@ def prepare_register_preview_execution(
     if session_hash_override:
         session_hash = session_hash_override
     elif lineage is not None:
-        creator_identity = resolve_publish_creator_identity(runtime.glaas_client.publish_auth)
+        creator_identity = resolve_publish_creator_identity(runtime.remote_registry.publish_auth)
         session_hash = compute_canonical_session_hash(
             build_canonical_session_payload(
                 lineage=lineage,

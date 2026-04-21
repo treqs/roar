@@ -7,8 +7,8 @@ from typing import Any
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
-from ...integrations.glaas import GlaasClient
 from ..labels import collect_label_sync_payloads
+from .remote_registry import RemoteRegistryTransport, coerce_remote_registry
 
 _VALID_REMOTE_SOURCE_TYPES = {"s3", "gs", "https"}
 
@@ -328,7 +328,8 @@ def prepare_batch_registration_artifacts(
 def register_publish_lineage(
     *,
     coordinator: Any,
-    glaas_client: GlaasClient,
+    remote_registry: RemoteRegistryTransport | None = None,
+    glaas_client: Any | None = None,
     session_hash: str,
     git_context: GitContext,
     jobs: list[dict[str, Any]],
@@ -349,11 +350,16 @@ def register_publish_lineage(
     if pre_registration_errors:
         batch_result.errors = [*pre_registration_errors, *batch_result.errors]
 
+    resolved_remote_registry = coerce_remote_registry(
+        remote_registry=remote_registry,
+        glaas_client=glaas_client,
+    )
+
     labels_are_safe_to_sync = batch_result.jobs_failed == 0 and batch_result.artifacts_failed == 0
 
     if session_id is not None and db_ctx is not None and labels_are_safe_to_sync:
         sync_publish_labels(
-            glaas_client=glaas_client,
+            remote_registry=resolved_remote_registry,
             db_ctx=db_ctx,
             session_id=session_id,
             session_hash=session_hash,
@@ -367,16 +373,21 @@ def register_publish_lineage(
 
 def preregister_lineage_composites(
     *,
-    glaas_client: GlaasClient,
+    remote_registry: RemoteRegistryTransport | None = None,
+    glaas_client: Any | None = None,
     payloads: list[CompositeRegistrationCandidate],
     registration_errors: list[str],
     logger: ILogger,
 ) -> list[dict[str, Any]]:
     """Register lineage composites before the main link phase."""
     registrations: list[dict[str, Any]] = []
+    resolved_remote_registry = coerce_remote_registry(
+        remote_registry=remote_registry,
+        glaas_client=glaas_client,
+    )
 
     for item in payloads:
-        response = glaas_client.register_composite_artifact(item.payload)
+        response = resolved_remote_registry.register_composite_artifact(item.payload)
         result, error = parse_composite_registration_response(response)
 
         registration: dict[str, Any] = {
@@ -413,7 +424,8 @@ def preregister_lineage_composites(
 
 def sync_publish_labels(
     *,
-    glaas_client: GlaasClient,
+    remote_registry: RemoteRegistryTransport | None = None,
+    glaas_client: Any | None = None,
     db_ctx: Any,
     session_id: int | None,
     session_hash: str,
@@ -432,7 +444,12 @@ def sync_publish_labels(
     if not payloads:
         return
 
-    _label_result, label_error = glaas_client.sync_labels(payloads)
+    resolved_remote_registry = coerce_remote_registry(
+        remote_registry=remote_registry,
+        glaas_client=glaas_client,
+    )
+
+    _label_result, label_error = resolved_remote_registry.sync_labels(payloads)
     if label_error and errors is not None:
         errors.append(f"Label sync failed: {label_error}")
 

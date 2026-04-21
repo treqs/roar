@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from roar.application.publish.lineage import LineageCollector
+from roar.application.publish.remote_registry import GlaasRemoteRegistryTransport
 from roar.application.publish.runtime import build_publish_runtime
 
 
@@ -34,6 +35,10 @@ def test_build_publish_runtime_builds_shared_dependency_stack() -> None:
     ):
         runtime = build_publish_runtime(glaas_url="http://localhost:3001")
 
+    assert isinstance(runtime.remote_registry, GlaasRemoteRegistryTransport)
+    assert runtime.remote_registry.client is client
+    assert runtime.remote_registry.session_service is session_service
+    assert runtime.remote_registry.registration_coordinator is coordinator
     assert runtime.glaas_client is client
     assert runtime.session_service is session_service
     assert runtime.registration_coordinator is coordinator
