@@ -15,6 +15,7 @@ from .datasets import (
     detect_additional_publish_composite_roots,
     infer_publish_dataset_identifiers,
 )
+from .remote_registry import coerce_remote_registry
 from .runtime import PublishRuntime
 from .session import prepare_publish_session
 
@@ -62,9 +63,15 @@ def prepare_put_execution(
         logger=logger,
         git_commit=git_commit,
     )
-    publish_session = prepare_publish_session(
+    runtime_dict = getattr(runtime, "__dict__", {})
+    remote_registry = coerce_remote_registry(
+        remote_registry=runtime_dict.get("remote_registry"),
         glaas_client=runtime.glaas_client,
         session_service=runtime.session_service,
+        registration_coordinator=runtime_dict.get("registration_coordinator"),
+    )
+    publish_session = prepare_publish_session(
+        remote_registry=remote_registry,
         roar_dir=roar_dir,
         session_id=session_id,
         git_context=git_context,

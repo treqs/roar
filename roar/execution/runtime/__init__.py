@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .backup import PreviousOutputBackupService
     from .coordinator import RunCoordinator
-    from .host_execution import ExecutionSetupError, execute_host_run
+    from .errors import ExecutionSetupError
+    from .host_execution import execute_host_run
     from .signal_handler import ProcessSignalHandler
     from .tracer import TracerService
 
@@ -29,13 +30,14 @@ def __getattr__(name: str):
         from .coordinator import RunCoordinator
 
         return RunCoordinator
-    if name in {"ExecutionSetupError", "execute_host_run"}:
-        from .host_execution import ExecutionSetupError, execute_host_run
+    if name == "ExecutionSetupError":
+        from .errors import ExecutionSetupError
 
-        return {
-            "ExecutionSetupError": ExecutionSetupError,
-            "execute_host_run": execute_host_run,
-        }[name]
+        return ExecutionSetupError
+    if name == "execute_host_run":
+        from .host_execution import execute_host_run
+
+        return execute_host_run
     if name == "ProcessSignalHandler":
         from .signal_handler import ProcessSignalHandler
 

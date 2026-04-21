@@ -2,34 +2,21 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .errors import ExecutionSetupError
+
 if TYPE_CHECKING:
     from roar.core.models.run import RunContext, RunResult
-
-
-class ExecutionSetupError(RuntimeError):
-    """Raised when a backend cannot start a host-side execution path."""
 
 
 def execute_host_run(ctx: RunContext) -> RunResult:
     from roar.core.bootstrap import bootstrap
     from roar.execution.runtime.coordinator import RunCoordinator
-    from roar.integrations.config import config_get
+    from roar.execution.runtime.resources import build_host_runtime_resources
 
     bootstrap(ctx.roar_dir)
 
-    proxy_service = None
-    if config_get("proxy.enabled", start_dir=ctx.repo_root):
-        from roar.execution.cluster.proxy import ProxyService
-
-        proxy_service = ProxyService()
-        if not proxy_service.find_proxy():
-            raise ExecutionSetupError(
-                "Error: S3 proxy is enabled but roar-proxy binary not found.\n"
-                "Build it with: cargo build --release --manifest-path rust/Cargo.toml -p roar-proxy\n"
-                "Or disable: roar proxy disable"
-            )
-
-    coordinator = RunCoordinator(proxy_service=proxy_service)
+    runtime_resources = build_host_runtime_resources(ctx)
+    coordinator = RunCoordinator(runtime_resources=runtime_resources)
     return coordinator.execute(ctx)
 
 

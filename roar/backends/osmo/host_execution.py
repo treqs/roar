@@ -31,7 +31,7 @@ from roar.core.operation_metadata import build_operation_metadata_json
 from roar.db.context import create_database_context
 from roar.db.hashing import hash_files_blake3
 from roar.execution.recording import LocalJobRecorder, LocalRecordedArtifact, StalenessAnalyzer
-from roar.execution.runtime.host_execution import ExecutionSetupError
+from roar.execution.runtime.errors import ExecutionSetupError
 
 _TERMINAL_WORKFLOW_STATUSES = {
     "CANCELLED",

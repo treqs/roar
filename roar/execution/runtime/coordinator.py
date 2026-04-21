@@ -12,19 +12,21 @@ import secrets
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV
 from roar.execution.recording import ExecutionJobRecorder
 
 from .backup import PreviousOutputBackupService
+from .resources import RuntimeObservationBundle, RuntimeResourceController
 from .tracer import TracerService
 
 if TYPE_CHECKING:
     from ...core.interfaces.logger import ILogger
     from ...core.interfaces.presenter import IPresenter
     from ...core.models.run import RunContext, RunResult
-    from ..cluster.proxy import ProxyService
+    from .resources import HostRuntimeResource
 
 
 class RunCoordinator:
@@ -39,7 +41,7 @@ class RunCoordinator:
     def __init__(
         self,
         tracer_service: TracerService | None = None,
-        proxy_service: ProxyService | None = None,
+        runtime_resources: Sequence[HostRuntimeResource] | None = None,
         presenter: IPresenter | None = None,
         logger: ILogger | None = None,
         job_recorder: ExecutionJobRecorder | None = None,
@@ -50,18 +52,21 @@ class RunCoordinator:
 
         Args:
             tracer_service: Service for process tracing
-            proxy_service: Optional S3 proxy service for lineage tracking
+            runtime_resources: Explicit runtime resources to start around host execution
             presenter: Presenter for output
             logger: Logger for internal diagnostics
             job_recorder: Persistence service for job recording and stale analysis
             backup_service: Service for reversible output backup behavior
         """
         self._tracer = tracer_service or TracerService()
-        self._proxy = proxy_service
         self._presenter = presenter
         self._logger = logger
         self._job_recorder = job_recorder or ExecutionJobRecorder()
         self._backup_service = backup_service or PreviousOutputBackupService()
+        self._runtime_resources = RuntimeResourceController(
+            resources=runtime_resources,
+            logger=logger,
+        )
 
     @property
     def presenter(self) -> IPresenter:
@@ -116,44 +121,18 @@ class RunCoordinator:
 
         run_presenter = RunReportPresenter(self.presenter, quiet=ctx.quiet)
 
-        # Start proxy if configured
-        proxy_handle = None
         extra_env: dict[str, str] = {
             ROAR_EXECUTION_BACKEND_ENV: str(ctx.execution_backend),
         }
-        s3_entries: list = []
-        proxy_stopped = False
-        if self._proxy:
-            try:
-                # Capture existing AWS_ENDPOINT_URL so the proxy can chain to it
-                existing_endpoint = os.environ.get("AWS_ENDPOINT_URL")
-                proxy_handle = self._proxy.start_for_run(
-                    upstream_url=existing_endpoint,
-                )
-                extra_env["AWS_ENDPOINT_URL"] = f"http://127.0.0.1:{proxy_handle.port}"
-                # Preserve the real upstream for cluster-backed submit paths.
-                if existing_endpoint:
-                    extra_env["ROAR_UPSTREAM_S3_ENDPOINT"] = existing_endpoint
-                self.logger.debug("Proxy started on port %d", proxy_handle.port)
-            except Exception as e:
-                self.logger.warning("Failed to start proxy: %s", e)
+        runtime_observations = RuntimeObservationBundle()
+        resource_env = self._runtime_resources.start_all(ctx, os.environ)
+        extra_env.update(resource_env)
 
-        def stop_proxy_if_running() -> list:
-            """Stop per-run proxy exactly once and return parsed entries."""
-            nonlocal proxy_stopped, s3_entries
-
-            if proxy_stopped:
-                return s3_entries
-            proxy_stopped = True
-
-            if proxy_handle and self._proxy:
-                try:
-                    s3_entries = self._proxy.stop_for_run(proxy_handle)
-                    self.logger.debug("Proxy stopped, collected %d S3 entries", len(s3_entries))
-                except Exception as e:
-                    self.logger.warning("Failed to stop proxy cleanly: %s", e)
-
-            return s3_entries
+        def stop_runtime_resources(exit_code: int | None) -> RuntimeObservationBundle:
+            """Stop runtime resources exactly once and return collected observations."""
+            nonlocal runtime_observations
+            runtime_observations = self._runtime_resources.stop_all(exit_code=exit_code)
+            return runtime_observations
 
         # Execute via tracer
         from ...core.exceptions import TracerNotFoundError
@@ -161,7 +140,7 @@ class RunCoordinator:
         # Resolve the backend name before execution so the trace_starting
         # line can show the actual tracer, not "auto". Mirror the same
         # resolution logic that execute() uses (config → override → auto).
-        proxy_active = proxy_handle is not None
+        proxy_active = "proxy" in self._runtime_resources.active_resource_names()
         resolved_mode: str | None = None
         try:
             mode = ctx.tracer_mode or self._tracer._get_tracer_mode()
@@ -198,7 +177,7 @@ class RunCoordinator:
         except TracerNotFoundError as e:
             from ...core.models.run import RunResult
 
-            stop_proxy_if_running()
+            stop_runtime_resources(e.exit_code)
             self.logger.debug("Tracer not found: %s", e)
             self.presenter.print_error(str(e))
             return RunResult(
@@ -211,10 +190,13 @@ class RunCoordinator:
                 interrupted=False,
                 is_build=is_build,
             )
+        except Exception:
+            stop_runtime_resources(None)
+            raise
 
         # Check if we should abort (double Ctrl-C)
         if signal_handler.should_abort():
-            stop_proxy_if_running()
+            stop_runtime_resources(tracer_result.exit_code)
             self._cleanup_logs(tracer_result.tracer_log_path, tracer_result.inject_log_path)
             sys.exit(130)
 
@@ -234,7 +216,7 @@ class RunCoordinator:
         if not os.path.exists(tracer_result.tracer_log_path):
             self.logger.warning("Tracer log not found at %s", tracer_result.tracer_log_path)
             self.logger.warning("The tracer may have failed to start. Run was not recorded.")
-            stop_proxy_if_running()
+            stop_runtime_resources(tracer_result.exit_code)
             self._cleanup_logs(tracer_result.tracer_log_path, tracer_result.inject_log_path)
             return RunResult(
                 exit_code=tracer_result.exit_code,
@@ -271,8 +253,8 @@ class RunCoordinator:
             n_written,
         )
 
-        # Stop proxy and collect S3 entries before DB recording.
-        s3_entries = stop_proxy_if_running()
+        # Stop runtime resources and collect observations before DB recording.
+        runtime_observations = stop_runtime_resources(tracer_result.exit_code)
 
         total_files = n_read + n_written
         with run_presenter.hashing(total=total_files or None):
@@ -285,7 +267,7 @@ class RunCoordinator:
                     tracer_result,
                     start_time,
                     is_build,
-                    s3_entries,
+                    list(runtime_observations.s3_entries),
                     run_job_uid=run_job_uid,
                 )
             )

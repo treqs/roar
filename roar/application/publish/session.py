@@ -10,7 +10,7 @@ from ...core.canonical_session import compute_canonical_session_hash
 from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext, SessionRegistrationResult
-from ...integrations.glaas import GlaasClient
+from .remote_registry import RemoteRegistryTransport, coerce_remote_registry
 
 
 class PublishSessionService(Protocol):
@@ -153,8 +153,9 @@ def _normalize_metadata(value: Any) -> dict[str, Any]:
 
 def prepare_publish_session(
     *,
-    glaas_client: GlaasClient,
-    session_service: PublishSessionService,
+    remote_registry: RemoteRegistryTransport | None = None,
+    glaas_client: Any | None = None,
+    session_service: PublishSessionService | None = None,
     roar_dir: Path,
     session_id: int | None,
     git_context: GitContext,
@@ -166,6 +167,15 @@ def prepare_publish_session(
     creator_identity: str | None = None,
 ) -> PreparedPublishSession:
     """Compute and optionally register the publish session."""
+    resolved_remote_registry = coerce_remote_registry(
+        remote_registry=remote_registry,
+        glaas_client=glaas_client,
+        session_service=session_service,
+    )
+    resolved_session_service = resolved_remote_registry.session_service
+    if resolved_session_service is None:
+        raise ValueError("publish session requires a remote registry session service")
+
     if session_hash_override:
         session_hash = session_hash_override
     elif lineage is not None and creator_identity is not None:
@@ -179,7 +189,7 @@ def prepare_publish_session(
     else:
         if session_id is None:
             raise ValueError("Cannot compute a session hash without a local session id.")
-        session_hash = session_service.compute_session_hash(
+        session_hash = resolved_session_service.compute_session_hash(
             roar_dir=str(roar_dir),
             session_id=session_id,
         )
@@ -189,18 +199,18 @@ def prepare_publish_session(
     if not register_with_glaas:
         return PreparedPublishSession(session_hash=session_hash)
 
-    if configured_error is not None and not glaas_client.is_configured():
+    if configured_error is not None and not resolved_remote_registry.is_configured():
         raise ValueError(configured_error)
 
     logger.debug("Running GLaaS health check")
     try:
-        glaas_client.health_check()
+        resolved_remote_registry.health_check()
     except Exception as exc:
         logger.debug("GLaaS health check failed: %s", exc)
         raise ValueError(f"GLaaS health check failed: {exc}") from exc
 
     logger.debug("Registering session with GLaaS")
-    session_result = session_service.register(session_hash, git_context)
+    session_result = resolved_session_service.register(session_hash, git_context)
     if not session_result.success:
         logger.debug("Session registration failed: %s", session_result.error)
         raise ValueError(f"Session registration failed: {session_result.error}")

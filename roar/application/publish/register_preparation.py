@@ -10,6 +10,7 @@ from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
 from ...publish_auth import resolve_publish_creator_identity
 from ..git import build_roar_git_tag_name, ensure_clean_git_repo, resolve_roar_git_context
+from .remote_registry import coerce_remote_registry
 from .runtime import PublishRuntime
 from .session import prepare_publish_session
 
@@ -59,10 +60,16 @@ def prepare_register_execution(
         git_tag_name = build_roar_git_tag_name(git_context.commit, short=True)
         git_tag_repo_root = git_state.repo_root
 
-    creator_identity = resolve_publish_creator_identity(runtime.glaas_client.publish_auth)
-    publish_session = prepare_publish_session(
+    runtime_dict = getattr(runtime, "__dict__", {})
+    remote_registry = coerce_remote_registry(
+        remote_registry=runtime_dict.get("remote_registry"),
         glaas_client=runtime.glaas_client,
         session_service=runtime.session_service,
+        registration_coordinator=runtime_dict.get("registration_coordinator"),
+    )
+    creator_identity = resolve_publish_creator_identity(remote_registry.publish_auth)
+    publish_session = prepare_publish_session(
+        remote_registry=remote_registry,
         roar_dir=roar_dir,
         session_id=session_id,
         git_context=git_context,

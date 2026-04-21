@@ -12,16 +12,30 @@ from ...integrations.glaas.registration import (
     SessionRegistrationService,
 )
 from .lineage import LineageCollector
+from .remote_registry import GlaasRemoteRegistryTransport, RemoteRegistryTransport
 
 
 @dataclass(frozen=True)
 class PublishRuntime:
     """Concrete dependency set for publish workflows."""
 
-    glaas_client: GlaasClient
-    session_service: SessionRegistrationService
-    registration_coordinator: RegistrationCoordinator
+    remote_registry: RemoteRegistryTransport
     lineage_collector: LineageCollector
+
+    @property
+    def glaas_client(self):
+        """Backward-compatible access to the underlying GLaaS client."""
+        return self.remote_registry.client
+
+    @property
+    def session_service(self):
+        """Backward-compatible access to the publish session service."""
+        return self.remote_registry.session_service
+
+    @property
+    def registration_coordinator(self):
+        """Backward-compatible access to the registration coordinator."""
+        return self.remote_registry.registration_coordinator
 
 
 def build_publish_runtime(
@@ -39,13 +53,16 @@ def build_publish_runtime(
     session_service = SessionRegistrationService(glaas_client)
     artifact_service = ArtifactRegistrationService(glaas_client)
     job_service = JobRegistrationService(glaas_client)
-    return PublishRuntime(
-        glaas_client=glaas_client,
+    registration_coordinator = RegistrationCoordinator(
         session_service=session_service,
-        registration_coordinator=RegistrationCoordinator(
+        artifact_service=artifact_service,
+        job_service=job_service,
+    )
+    return PublishRuntime(
+        remote_registry=GlaasRemoteRegistryTransport(
+            client=glaas_client,
             session_service=session_service,
-            artifact_service=artifact_service,
-            job_service=job_service,
+            registration_coordinator=registration_coordinator,
         ),
         lineage_collector=LineageCollector(),
     )

@@ -2,12 +2,7 @@
 
 from pathlib import Path
 
-from ..integrations import (
-    discover_optional_integrations,
-    register_telemetry_provider,
-    register_vcs_provider,
-    reset_integrations,
-)
+from ..integrations import bootstrap_integrations, reset_integrations
 from .logging import configure_logger, reset_logger
 
 _initialized = False
@@ -33,11 +28,7 @@ def bootstrap(roar_dir: Path | None = None) -> None:
 
     _configure_core_logging(roar_dir)
 
-    # Register built-in integrations that should not depend on plugin discovery.
-    _register_builtin_integrations()
-
-    # Discover and register optional integrations
-    discover_optional_integrations()
+    bootstrap_integrations()
 
     _initialized = True
     return
@@ -63,15 +54,6 @@ def _configure_core_logging(roar_dir: Path | None = None) -> None:
         console_enabled=console_enabled,
         file_enabled=file_enabled,
     )
-
-
-def _register_builtin_integrations() -> None:
-    """Register built-in integrations that are part of the core product path."""
-    from ..integrations.git import GitVCSProvider
-    from ..integrations.telemetry import WandBTelemetryProvider
-
-    register_vcs_provider("git", GitVCSProvider)
-    register_telemetry_provider("wandb", WandBTelemetryProvider)
 
 
 def reset() -> None:

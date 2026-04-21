@@ -10,7 +10,7 @@ import click
 
 from ...core.models.run import RunContext
 from ...execution.framework.registry import get_execution_backend
-from ...execution.runtime.host_execution import ExecutionSetupError
+from ...execution.runtime.errors import ExecutionSetupError
 from ...presenters.console import ConsolePresenter
 from ...presenters.run_report import RunReportPresenter
 

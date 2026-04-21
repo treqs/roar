@@ -75,19 +75,22 @@ def test_prepare_register_execution_builds_session_git_and_tag_plan(tmp_path: Pa
         tmp_path,
         error_message="Cannot register with uncommitted changes. Commit your changes first.",
     )
-    prepare_session.assert_called_once_with(
-        glaas_client=runtime.glaas_client,
-        session_service=runtime.session_service,
-        roar_dir=tmp_path / ".roar",
-        session_id=7,
-        git_context=git_context,
-        logger=logger,
-        register_with_glaas=True,
-        configured_error="GLaaS not configured. Run 'roar config set glaas.url <url>' first.",
-        session_hash_override=None,
-        lineage=None,
-        creator_identity="anonymous",
+    prepare_session.assert_called_once()
+    prepare_kwargs = prepare_session.call_args.kwargs
+    assert prepare_kwargs["remote_registry"].client is runtime.glaas_client
+    assert prepare_kwargs["remote_registry"].session_service is runtime.session_service
+    assert prepare_kwargs["roar_dir"] == tmp_path / ".roar"
+    assert prepare_kwargs["session_id"] == 7
+    assert prepare_kwargs["git_context"] == git_context
+    assert prepare_kwargs["logger"] is logger
+    assert prepare_kwargs["register_with_glaas"] is True
+    assert (
+        prepare_kwargs["configured_error"]
+        == "GLaaS not configured. Run 'roar config set glaas.url <url>' first."
     )
+    assert prepare_kwargs["session_hash_override"] is None
+    assert prepare_kwargs["lineage"] is None
+    assert prepare_kwargs["creator_identity"] == "anonymous"
 
 
 def test_prepare_register_execution_passes_lineage_and_creator_identity_to_session_preparation(

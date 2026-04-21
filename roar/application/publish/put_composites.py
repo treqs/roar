@@ -21,14 +21,15 @@ from ...application.publish.registration import (
 )
 from ...core.interfaces.logger import ILogger
 from ...db.context import optional_repo
-from ...integrations.glaas import GlaasClient
 from ...integrations.glaas.registration import _artifact_ref
+from .remote_registry import RemoteRegistryTransport, coerce_remote_registry
 
 
 def preregister_put_lineage_composites_with_glaas(
     *,
     db_ctx: Any,
-    glaas_client: GlaasClient,
+    remote_registry: RemoteRegistryTransport | None = None,
+    glaas_client: Any | None = None,
     lineage_artifacts: list[dict[str, Any]],
     session_hash: str,
     registration_errors: list[str],
@@ -46,6 +47,7 @@ def preregister_put_lineage_composites_with_glaas(
         logger=logger,
     )
     return preregister_lineage_composites(
+        remote_registry=remote_registry,
         glaas_client=glaas_client,
         payloads=payloads,
         registration_errors=registration_errors,
@@ -153,7 +155,8 @@ def resolve_put_lineage_component_for_registration(
 def register_put_composites_with_glaas(
     *,
     db_ctx: Any,
-    glaas_client: GlaasClient,
+    remote_registry: RemoteRegistryTransport | None = None,
+    glaas_client: Any | None = None,
     composite_results: list[CompositeBuildResult],
     registration_errors: list[str],
     dataset_identifiers: list[dict[str, Any]] | None,
@@ -161,6 +164,10 @@ def register_put_composites_with_glaas(
 ) -> list[dict[str, Any]]:
     """Register generated composite artifacts with GLaaS and persist local state."""
     composite_registrations: list[dict[str, Any]] = []
+    resolved_remote_registry = coerce_remote_registry(
+        remote_registry=remote_registry,
+        glaas_client=glaas_client,
+    )
 
     for composite in composite_results:
         payload = dict(composite.payload)
@@ -173,7 +180,7 @@ def register_put_composites_with_glaas(
         if metadata_json is not None:
             payload["metadata"] = metadata_json
 
-        response = glaas_client.register_composite_artifact(payload)
+        response = resolved_remote_registry.register_composite_artifact(payload)
         result, error = parse_composite_registration_response(response)
 
         composite_registration: dict[str, Any] = {

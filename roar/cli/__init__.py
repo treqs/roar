@@ -18,6 +18,8 @@ from importlib import import_module
 
 import click
 
+from .command_registry import COMMAND_SPECS, build_help_groups, build_lazy_commands
+
 # Version is loaded from package metadata
 try:
     from importlib.metadata import version
@@ -29,59 +31,9 @@ except Exception:
 
 # Lazy command registry: maps command name to (module_path, command_name, short_help)
 # Short help is stored here to avoid importing commands just for --help
-LAZY_COMMANDS: dict[str, tuple[str, str, str]] = {
-    "auth": ("roar.cli.commands.auth", "auth", "Manage GLaaS auth and SSH keys"),
-    "build": ("roar.cli.commands.build", "build", "Track a build step before the main pipeline"),
-    "config": ("roar.cli.commands.config", "config", "View or set configuration"),
-    "dag": ("roar.cli.commands.dag", "dag", "Inspect the local execution DAG"),
-    "diff": ("roar.cli.commands.diff", "diff", "Compare provenance of two artifacts or steps"),
-    "env": ("roar.cli.commands.env", "env", "Manage persistent environment variables"),
-    "get": ("roar.cli.commands.get", "get", "Download published artifacts"),
-    "init": ("roar.cli.commands.init", "init", "Set up roar in a project"),
-    "inputs": ("roar.cli.commands.inputs", "inputs", "Show root input artifacts for a target"),
-    "label": ("roar.cli.commands.label", "label", "Manage local labels"),
-    "lineage": ("roar.cli.commands.lineage", "lineage", "Inspect lineage for a tracked artifact"),
-    "log": ("roar.cli.commands.log", "log", "List jobs in the active session"),
-    "login": ("roar.cli.commands.login", "login", "Store global GLaaS/TReqs auth state"),
-    "logout": ("roar.cli.commands.logout", "logout", "Clear global GLaaS/TReqs auth state"),
-    "osmo": ("roar.cli.commands.osmo", "osmo", "Manage OSMO workflow attachment"),
-    "pop": ("roar.cli.commands.pop", "pop", "Remove the last local step"),
-    "proxy": ("roar.cli.commands.proxy", "proxy", "Manage S3 proxy for lineage tracking"),
-    "put": ("roar.cli.commands.put", "put", "Publish artifacts and register lineage"),
-    "projects": (
-        "roar.cli.commands.projects",
-        "projects",
-        "Manage GLaaS projects visible through your TReqs account",
-    ),
-    "register": ("roar.cli.commands.register", "register", "Register local lineage with GLaaS"),
-    "reproduce": ("roar.cli.commands.reproduce", "reproduce", "Generate a reproduction plan"),
-    "reset": ("roar.cli.commands.reset", "reset", "Reset roar state"),
-    "run": ("roar.cli.commands.run", "run", "Track a command with provenance"),
-    "show": ("roar.cli.commands.show", "show", "Inspect a session, job, or artifact"),
-    "status": ("roar.cli.commands.status", "status", "Show the active session summary"),
-    "tracer": ("roar.cli.commands.tracer", "tracer", "Configure tracer backend defaults"),
-    "whoami": (
-        "roar.cli.commands.whoami",
-        "whoami",
-        "Show current GLaaS/TReqs login and repo binding",
-    ),
-    "workflow": (
-        "roar.cli.commands.workflow",
-        "workflow",
-        "Generate TReqs workflow YAML from local sessions",
-    ),
-}
+LAZY_COMMANDS: dict[str, tuple[str, str, str]] = build_lazy_commands()
 
-HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Start Here", ("init", "run", "build", "dag")),
-    (
-        "Inspect Local Lineage",
-        ("status", "log", "show", "diff", "lineage", "inputs", "pop", "reproduce"),
-    ),
-    ("Share and Publish", ("put", "register", "get", "label")),
-    ("Setup and Admin", ("auth", "config", "env", "tracer", "proxy", "reset")),
-    ("GLaaS / TReqs Account", ("login", "logout", "whoami", "projects", "workflow")),
-)
+HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = build_help_groups()
 
 EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG = "ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS"
 _EXPERIMENTAL_ACCOUNT_COMMANDS = frozenset(
@@ -276,6 +228,7 @@ def cli(ctx: click.Context) -> None:
 
 # Export public API
 __all__ = [
+    "COMMAND_SPECS",
     "EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG",
     "LazyGroup",
     "__version__",
