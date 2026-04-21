@@ -89,13 +89,17 @@ class LabelEntrySummary:
 class LabelCurrentSummary:
     heading: str | None = None
     entries: list[LabelEntrySummary] = field(default_factory=list)
+    empty_message: str = "No labels."
 
     def render(self) -> str:
         lines: list[str] = []
         if self.heading:
             lines.append(self.heading)
         if not self.entries:
-            lines.append("No labels.")
+            message = self.empty_message
+            if self.heading:
+                message = f"  {message}"
+            lines.append(message)
             return "\n".join(lines)
         indent = "  " if self.heading else ""
         lines.extend(entry.render(indent=indent) for entry in self.entries)

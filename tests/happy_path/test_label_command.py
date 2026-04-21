@@ -259,6 +259,52 @@ class TestLabelCommand:
         rows = _artifact_label_rows(temp_git_repo, temp_git_repo / "processed.csv")
         assert rows == [(1, {"owner": "ml", "stage": "raw"})]
 
+    def test_job_label_set_output_shows_only_changed_labels_not_system_labels(
+        self,
+        temp_git_repo,
+        roar_cli,
+        git_commit,
+        sample_scripts,
+        sample_data,
+        python_exe,
+    ):
+        result = roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
+        assert result.returncode == 0
+        git_commit("After preprocess")
+
+        set_output = _assert_ok(
+            roar_cli(
+                "label",
+                "set",
+                "job",
+                "@1",
+                "phase=preprocess",
+                check=False,
+            )
+        )
+        assert "Updated labels (version 2):" in set_output
+        assert "phase=preprocess" in set_output
+        assert "roar.operation.kind=run" not in set_output
+        assert "roar.git.commit=" not in set_output
+
+        noop_output = _assert_ok(
+            roar_cli(
+                "label",
+                "set",
+                "job",
+                "@1",
+                "phase=preprocess",
+                check=False,
+            )
+        )
+        assert "Labels unchanged (version 2):" in noop_output
+        assert "No label changes." in noop_output
+        assert "phase=preprocess" not in noop_output
+
+        label_show = _assert_ok(roar_cli("label", "show", "job", "@1", check=False))
+        assert "phase=preprocess" in label_show
+        assert "roar.operation.kind=run" in label_show
+
     def test_dag_job_and_artifact_labels_are_visible_in_show_and_dag_json(
         self,
         temp_git_repo,
