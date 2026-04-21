@@ -9,10 +9,17 @@ from typing import Any, Protocol
 class RemoteRegistryTransport(Protocol):
     """Narrow transport contract for remote lineage registration workflows."""
 
-    name: str
-    client: Any
-    session_service: Any | None
-    registration_coordinator: Any | None
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def client(self) -> Any: ...
+
+    @property
+    def session_service(self) -> Any | None: ...
+
+    @property
+    def registration_coordinator(self) -> Any | None: ...
 
     @property
     def publish_auth(self) -> Any: ...
