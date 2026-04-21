@@ -1,108 +1,177 @@
-"""
-Run report presenter for displaying run completion reports.
+"""Run report presenter - minimalist narration-style output.
 
-Handles all output formatting for run/build results.
-Follows SRP: only handles report presentation.
+Every status line is narrated by 🦖.  The lineage detail block uses
+``·`` (middle dot) as a line prefix with 3-char category labels.
+
+Color tokens (all in terminal.py, no raw ANSI here):
+  status_green  - 🦖 lines, ``exit 0``, ``clean``
+  warn_amber    - ``dirty`` git, non-zero exit
+  command_blue  - suggested command text
+  dim           - prefixes, labels, flags, comments, timing
+  bold          - current job hash (no hue)
 """
 
-import os
-import shlex
-from typing import Any
+from __future__ import annotations
+
+import sys
+from contextlib import contextmanager
+from typing import IO
 
 from ..core.interfaces.presenter import IPresenter
 from ..core.models.run import RunResult
+from .spinner import BRAILLE_FRAMES, CLOCK_FRAMES, Spinner
+from .terminal import TerminalCaps, detect, style
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+_SMALL_RUN = 5  # skip transient hashing progress below this count
 
 
-def format_size(size_bytes: int | None) -> str:
-    """Format file size in human-readable format."""
-    if size_bytes is None:
-        return "?"
-    size: float = float(size_bytes)
-    for unit in ["B", "KB", "MB", "GB"]:
-        if abs(size) < 1024:
-            return f"{size:.1f}{unit}" if unit != "B" else f"{int(size)}{unit}"
-        size /= 1024
-    return f"{size:.1f}TB"
+def _plural(n: int, singular: str, plural: str | None = None) -> str:
+    return f"{n} {singular}" if n == 1 else f"{n} {plural or singular + 's'}"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+class _NullProgress:
+    def advance(self, delta: int = 1) -> None:
+        pass
+
+    def set_count(self, count: int) -> None:
+        pass
+
+    def update(self, message: str) -> None:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Presenter
+# ---------------------------------------------------------------------------
 
 
 class RunReportPresenter:
-    """
-    Formats and displays run completion reports.
+    """Minimalist narration-style output for ``roar run``."""
 
-    Follows SRP: only handles report presentation.
-    """
-
-    def __init__(self, presenter: IPresenter) -> None:
-        """
-        Initialize report presenter.
-
-        Args:
-            presenter: Base presenter for output
-        """
-        self._out = presenter
-
-    def show_report(
+    def __init__(
         self,
-        result: RunResult,
-        command: list[str],
+        presenter: IPresenter | None = None,
+        *,
+        stream: IO | None = None,
+        caps: TerminalCaps | None = None,
         quiet: bool = False,
     ) -> None:
-        """
-        Display run completion report.
+        self._out = presenter
+        self._stream = stream if stream is not None else sys.stderr
+        self._caps = caps if caps is not None else detect(self._stream)
+        self._quiet = quiet
 
-        Args:
-            result: Run result with execution details
-            command: Original command that was executed
-            quiet: If True, suppress output
-        """
-        if quiet:
+    # ---- lifecycle events -------------------------------------------------
+
+    def trace_starting(self, backend: str | None, proxy_active: bool) -> None:
+        if self._quiet or self._caps.pipe_mode:
             return
+        c = self._caps.can_color
+        flags = style(
+            f"tracer:{backend or 'auto'} proxy:{'on' if proxy_active else 'off'} sync:off",
+            "dim",
+            enabled=c,
+        )
+        self._trex(f"tracing {self._dim_sep()}{flags}")
 
-        self._out.print("")
-        self._out.print("=" * 60)
-
-        step_type = "Build" if result.is_build else "Run"
-        if result.interrupted:
-            self._out.print(f"ROAR {step_type} Interrupted")
+    def trace_ended(self, duration: float, exit_code: int) -> None:
+        if self._quiet or self._caps.pipe_mode:
+            return
+        c = self._caps.can_color
+        parts = ["trace done"]
+        parts.append(self._fmt_dur(duration))
+        exit_s = f"exit {exit_code}"
+        if exit_code == 0:
+            exit_s = style(exit_s, "status_green", enabled=c)
         else:
-            self._out.print(f"ROAR {step_type} Complete")
+            exit_s = style(exit_s, "warn_amber", "bold", enabled=c)
+        parts.append(exit_s)
+        self._trex(f" {self._dim_sep()}".join(parts))
 
-        self._out.print("=" * 60)
-        self._out.print(f"Command: {shlex.join(command)}")
-        self._out.print(f"Duration: {result.duration:.1f}s")
-        self._out.print(f"Exit code: {result.exit_code}")
+    @contextmanager
+    def hashing(self, total: int | None = None):
+        if self._quiet or self._caps.pipe_mode:
+            yield _NullProgress()
+            return
+        # Skip transient spinner for small runs.
+        if total is not None and total < _SMALL_RUN:
+            yield _NullProgress()
+            return
+        prefix = "🦖 " if self._caps.can_emoji else "roar: "
+        frames = CLOCK_FRAMES if self._caps.can_emoji else BRAILLE_FRAMES
+        with Spinner("hashing", prefix=prefix, frames=frames, interval=0.1) as sp:
+            yield sp
 
-        if result.interrupted:
-            self._out.print("Status: interrupted")
+    def hashed(self, n_artifacts: int, total_bytes: int, duration: float) -> None:
+        if self._quiet or self._caps.pipe_mode:
+            return
+        c = self._caps.can_color
+        text = f"hashed {_plural(n_artifacts, 'artifact')}"
+        if duration > 0 and total_bytes > 0:
+            mbps = (total_bytes / 1024 / 1024) / duration
+            text += f" {self._dim_sep()}{style(f'{mbps:.1f} MB/s', 'dim', enabled=c)}"
+        self._trex(text)
 
-        self._out.print("")
+    def lineage_captured(self) -> None:
+        if self._quiet or self._caps.pipe_mode:
+            return
+        self._trex("lineage captured:")
 
-        if result.inputs:
-            self._out.print("Read files:")
-            for f in result.inputs:
-                self._print_file(f)
-            self._out.print("")
+    def summary(self, result: RunResult, command: list[str]) -> None:
+        if self._quiet or self._caps.pipe_mode:
+            return
+        self._render_summary(result)
 
-        if result.outputs:
-            self._out.print("Written files:")
-            for f in result.outputs:
-                self._print_file(f)
-            self._out.print("")
+    def done(self, *, exit_code: int, trace_duration: float, post_duration: float) -> None:
+        if self._quiet:
+            return
+        if self._caps.pipe_mode:
+            total = trace_duration + post_duration
+            self._print(
+                f"roar: done · {self._fmt_dur(total)} "
+                f"(trace {self._fmt_dur(trace_duration)} + "
+                f"post {self._fmt_dur(post_duration)}, exit {exit_code})"
+            )
+            return
+        c = self._caps.can_color
+        timing = style(
+            f"trace {self._fmt_dur(trace_duration)} + post {self._fmt_dur(post_duration)}",
+            "dim",
+            enabled=c,
+        )
+        self._trex(f"done {self._dim_sep()}{timing}")
 
-        self._out.print(f"Job: {result.job_uid}")
+    # ---- backward-compat one-shot ----------------------------------------
 
-        if result.interrupted and result.outputs:
-            self._out.print("")
-            self._out.print("Note: Run was interrupted. Output files may be incomplete.")
-            self._out.print("Use 'roar pop' to remove this job and delete safe written files.")
+    def show_report(self, result: RunResult, command: list[str], quiet: bool = False) -> None:
+        if quiet or self._quiet:
+            return
+        if self._caps.pipe_mode:
+            self.done(
+                exit_code=result.exit_code,
+                trace_duration=result.duration,
+                post_duration=result.post_duration,
+            )
+            return
+        self.trace_ended(result.duration, result.exit_code)
+        self.lineage_captured()
+        self._render_summary(result)
+        self.done(
+            exit_code=result.exit_code,
+            trace_duration=result.duration,
+            post_duration=result.post_duration,
+        )
 
-        self._out.print("")
-        self._out.print("Next:")
-        self._out.print(f"  roar show --job {result.job_uid}")
-        if result.interrupted and result.outputs:
-            self._out.print("  roar pop")
-        else:
-            self._out.print("  roar dag")
+    # ---- stale warnings (unchanged) --------------------------------------
 
     def show_stale_warnings(
         self,
@@ -110,21 +179,14 @@ class RunReportPresenter:
         stale_downstream: list[int],
         is_build: bool = False,
     ) -> None:
-        """
-        Display stale step warnings.
-
-        Args:
-            stale_upstream: List of stale upstream step numbers
-            stale_downstream: List of stale downstream step numbers
-            is_build: Whether this is a build step
-        """
+        if not (stale_upstream or stale_downstream) or self._out is None:
+            return
         if stale_upstream:
             self._out.print("")
             step_refs = ", ".join(f"@{s}" for s in stale_upstream)
             self._out.print(f"Warning: This job consumed stale inputs from: {step_refs}")
             self._out.print("The upstream steps were re-run but this step used old outputs.")
             self._out.print("Consider re-running this step after updating upstream.")
-
         if stale_downstream:
             self._out.print("")
             step_prefix = "B" if is_build else ""
@@ -132,49 +194,105 @@ class RunReportPresenter:
             self._out.print(f"Warning: Downstream steps are stale: {step_refs}")
             self._out.print("Run these steps to update them, or use 'roar dag' to see full status.")
 
-    def show_upstream_stale_warning(
-        self,
-        step_num: int,
-        upstream_stale: list[int],
-    ) -> bool:
-        """
-        Show warning about stale upstream steps and ask for confirmation.
-
-        Args:
-            step_num: Current step number
-            upstream_stale: List of stale upstream step numbers
-
-        Returns:
-            True if user wants to proceed, False otherwise
-        """
+    def show_upstream_stale_warning(self, step_num: int, upstream_stale: list[int]) -> bool:
+        if self._out is None:
+            return True
         step_refs = ", ".join(f"@{s}" for s in upstream_stale)
         self._out.print(f"Warning: Step @{step_num} depends on stale upstream steps: {step_refs}")
         self._out.print(
             "The upstream steps have been re-run more recently than their outputs were consumed."
         )
         self._out.print("")
-
         return self._out.confirm("Run anyway?", default=False)
 
-    def _print_file(self, f: dict[str, Any]) -> None:
-        """Print file info with path, size, and hashes."""
-        path = f["path"]
-        size = format_size(f.get("size"))
+    # ---- internal --------------------------------------------------------
 
-        # Make path relative if possible
-        try:
-            rel_path = os.path.relpath(path)
-            if not rel_path.startswith(".."):
-                path = rel_path
-        except ValueError:
-            pass
+    def _print(self, line: str = "") -> None:
+        print(line, file=self._stream, flush=True)
 
-        self._out.print(f"  {path}")
+    def _trex(self, text: str) -> None:
+        """Emit a 🦖-prefixed status line in STATUS_GREEN."""
+        c = self._caps.can_color
+        prefix = "🦖" if self._caps.can_emoji else "roar:"
+        self._print(
+            f"{style(prefix, 'status_green', enabled=c)} {style(text, 'status_green', enabled=c)}"
+        )
 
-        # Show all hashes
-        hashes = f.get("hashes", [])
-        if hashes:
-            hash_strs = [f"{h['algorithm']}: {h['digest'][:12]}..." for h in hashes]
-            self._out.print(f"    size: {size}  {', '.join(hash_strs)}")
-        else:
-            self._out.print(f"    size: {size}")
+    def _detail(self, label: str, content: str) -> None:
+        """Emit a ``·  label  content`` detail line."""
+        c = self._caps.can_color
+        prefix = style("·", "dim", enabled=c)
+        lbl = style(f"{label:<3}", "dim", enabled=c)
+        self._print(f"{prefix}  {lbl}  {content}")
+
+    def _detail_blank(self) -> None:
+        c = self._caps.can_color
+        self._print(style("·", "dim", enabled=c))
+
+    def _dim_sep(self) -> str:
+        return style("· ", "dim", enabled=self._caps.can_color)
+
+    def _fmt_dur(self, seconds: float) -> str:
+        if seconds < 0.1:
+            return f"{max(1, round(seconds * 1000))}ms"
+        return f"{seconds:.1f}s"
+
+    # ---- summary block ---------------------------------------------------
+
+    def _render_summary(self, result: RunResult) -> None:
+        c = self._caps.can_color
+
+        # i/o line: "2 inputs ← 2 prior jobs · 1 output"
+        n_in = len(result.inputs)
+        n_out = len(result.outputs)
+        io_parts = []
+        if n_in:
+            io_parts.append(_plural(n_in, "input"))
+        if n_out:
+            io_parts.append(_plural(n_out, "output"))
+        if io_parts:
+            self._detail("i/o", f" {self._dim_sep()}".join(io_parts))
+
+        # job line — bold hash, no hue.
+        job_hash = style(result.job_uid, "bold", enabled=c)
+        self._detail("job", job_hash)
+
+        # git line.
+        if result.git_branch or result.git_short_commit:
+            branch = result.git_branch or "?"
+            commit = result.git_short_commit or "?"
+            if result.git_clean:
+                state = style("clean", "status_green", enabled=c)
+            else:
+                state = style("dirty", "warn_amber", enabled=c)
+            self._detail("git", f"{branch} @ {commit} {self._dim_sep()}{state}")
+
+        # env line — pip/dpkg/vars are category labels, not countable nouns.
+        env_parts = []
+        if result.pip_count:
+            env_parts.append(f"{result.pip_count} pip")
+        if result.dpkg_count:
+            env_parts.append(f"{result.dpkg_count} dpkg")
+        if result.env_count:
+            env_parts.append(_plural(result.env_count, "var"))
+        if env_parts:
+            self._detail("env", f" {self._dim_sep()}".join(env_parts))
+
+        # dag line.
+        if result.dag_jobs or result.dag_artifacts:
+            dag_parts = []
+            if result.dag_jobs:
+                dag_parts.append(_plural(result.dag_jobs, "job"))
+            if result.dag_artifacts:
+                dag_parts.append(_plural(result.dag_artifacts, "artifact"))
+            if result.dag_depth:
+                dag_parts.append(f"depth {result.dag_depth}")
+            self._detail("dag", f" {self._dim_sep()}".join(dag_parts))
+
+        # Blank separator + suggested command.
+        self._detail_blank()
+        cmd_text = style(f"roar show --job {result.job_uid}", "command_blue", enabled=c)
+        comment = style("# details", "dim", enabled=c)
+        self._print(
+            f"{style('·', 'dim', enabled=c)}  {style('$', 'dim', enabled=c)} {cmd_text}    {comment}"
+        )

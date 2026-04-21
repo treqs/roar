@@ -69,6 +69,7 @@ class TracerResult(ImmutableModel):
     tracer_log_path: Annotated[str, Field(min_length=1)]
     inject_log_path: str
     interrupted: bool = False
+    backend: str | None = None  # "ebpf" | "preload" | "ptrace"
 
 
 class RunContext(RoarBaseModel):
@@ -109,6 +110,22 @@ class RunResult(ImmutableModel):
     is_build: bool = False
     stale_upstream: list[int] = Field(default_factory=list)
     stale_downstream: list[int] = Field(default_factory=list)
+    # UX metadata for the new run presenter. Optional so callers that build
+    # RunResult without these fields (older code paths, error cases) still work.
+    backend: str | None = None
+    post_duration: float = 0.0
+    proxy_active: bool = False
+    pip_count: int = 0
+    dpkg_count: int = 0
+    env_count: int = 0
+    git_branch: str | None = None
+    git_short_commit: str | None = None
+    git_clean: bool = True
+    total_hash_bytes: int = 0
+    hash_duration: float = 0.0
+    dag_jobs: int = 0
+    dag_artifacts: int = 0
+    dag_depth: int = 0
 
     @computed_field  # type: ignore[prop-decorator]
     @property

@@ -135,8 +135,17 @@ def execute_and_report(
         return 1
 
     presenter = ConsolePresenter()
-    report = RunReportPresenter(presenter)
-    report.show_report(result, command, quiet)
+    report = RunReportPresenter(presenter, quiet=quiet)
+
+    # The coordinator already emitted the lifecycle lines (trace start/end,
+    # hashing spinner, lineage captured). Here we emit the summary block and
+    # the final "done" line.
+    report.summary(result, command)
+    report.done(
+        exit_code=result.exit_code,
+        trace_duration=result.duration,
+        post_duration=result.post_duration,
+    )
 
     if result.stale_upstream or result.stale_downstream:
         report.show_stale_warnings(
