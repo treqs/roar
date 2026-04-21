@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+from typing import Any
+
 from ...db.context import create_database_context
 from ...integrations.glaas import GlaasClient
 from ..label_rendering import flatten_label_metadata
@@ -33,6 +36,7 @@ def build_set_labels_summary(request: LabelSetRequest) -> LabelCurrentSummary:
         service = LabelService(db_ctx, request.cwd)
         resolved = service.resolve_target(request.entity_type, request.target)
         patch = parse_label_pairs(request.pairs)
+        current_metadata = service.current_metadata(resolved)
         result = service.set_metadata(resolved, patch)
 
     heading = (
@@ -40,7 +44,12 @@ def build_set_labels_summary(request: LabelSetRequest) -> LabelCurrentSummary:
         if result.changed
         else f"Labels unchanged (version {result.version}):"
     )
-    return _build_current_summary(result.metadata, heading=heading)
+    changed_metadata = _extract_changed_metadata(current_metadata, result.metadata)
+    return _build_current_summary(
+        changed_metadata,
+        heading=heading,
+        empty_message="No label changes.",
+    )
 
 
 def copy_labels(request: LabelCopyRequest) -> str:
@@ -150,11 +159,42 @@ def build_label_history_summary(request: LabelHistoryRequest) -> LabelHistorySum
     )
 
 
-def _build_current_summary(metadata: dict, *, heading: str | None = None) -> LabelCurrentSummary:
+def _build_current_summary(
+    metadata: dict,
+    *,
+    heading: str | None = None,
+    empty_message: str = "No labels.",
+) -> LabelCurrentSummary:
     return LabelCurrentSummary(
         heading=heading,
         entries=_build_label_entries(metadata),
+        empty_message=empty_message,
     )
+
+
+_UNCHANGED = object()
+
+
+def _extract_changed_metadata(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    changed = _diff_metadata(before, after)
+    return changed if isinstance(changed, dict) else {}
+
+
+def _diff_metadata(before: Any, after: Any) -> Any:
+    if isinstance(before, dict) and isinstance(after, dict):
+        changed: dict[str, Any] = {}
+        for key, after_value in after.items():
+            if key not in before:
+                changed[key] = deepcopy(after_value)
+                continue
+            diff = _diff_metadata(before[key], after_value)
+            if diff is not _UNCHANGED:
+                changed[key] = diff
+        return changed if changed else _UNCHANGED
+
+    if before == after:
+        return _UNCHANGED
+    return deepcopy(after)
 
 
 def _build_label_entries(metadata: dict) -> list[LabelEntrySummary]:
