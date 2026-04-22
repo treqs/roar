@@ -166,9 +166,13 @@ roar reproduce abc123de --run --package-sync
 
 # Show all required packages (no truncation)
 roar reproduce abc123de --list-requirements
+
+# Reproduce a full lineage/session by its 64-character DAG hash
+roar reproduce <lineage-hash> --lineage
+roar reproduce <lineage-hash> --lineage --run
 ```
 
-Full reproduction clones the git repository, creates a virtual environment, installs recorded packages, and runs the pipeline steps.
+Unflagged `roar reproduce <hash>` continues to default to artifact reproduction. Full reproduction clones the git repository, creates a virtual environment, installs recorded packages, and runs the pipeline steps.
 
 ### `roar build <command>`
 

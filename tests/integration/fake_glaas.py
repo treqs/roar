@@ -27,6 +27,7 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.composite_registrations: list[dict[str, Any]] = []
         self.artifacts_by_digest: dict[str, dict[str, Any]] = {}
         self.artifact_dags_by_digest: dict[str, dict[str, Any]] = {}
+        self.session_reproductions_by_hash: dict[str, dict[str, Any]] = {}
         self._next_job_id = 1
 
     @property
@@ -165,6 +166,19 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                     self._write_json(200, self.server.artifact_dags_by_digest[digest])
                     return
             self._write_json(404, {"error": f"Artifact DAG not found: {prefix}"})
+            return
+
+        session_reproduction_match = re.fullmatch(
+            r"/api/v1/public/sessions/([0-9a-f]{64})/reproduction",
+            self.path,
+        )
+        if session_reproduction_match:
+            session_hash = session_reproduction_match.group(1)
+            payload = self.server.session_reproductions_by_hash.get(session_hash)
+            if payload is not None:
+                self._write_json(200, payload)
+                return
+            self._write_json(404, {"error": f"Session reproduction not found: {session_hash}"})
             return
 
         self._write_json(404, {"error": f"Unhandled GET path: {self.path}"})
@@ -418,6 +432,9 @@ class FakeGlaasServer:
 
     def set_artifact_dag(self, digest: str, dag: dict[str, Any]) -> None:
         self._server.artifact_dags_by_digest[digest] = dag
+
+    def set_session_reproduction(self, session_hash: str, payload: dict[str, Any]) -> None:
+        self._server.session_reproductions_by_hash[session_hash] = payload
 
     def __enter__(self) -> FakeGlaasServer:
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)

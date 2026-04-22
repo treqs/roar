@@ -406,6 +406,11 @@ class GlaasClient:
         result, error = self._request("GET", f"/api/v1/artifacts/{hash_prefix}/dag")
         return result, error
 
+    def get_session_reproduction(self, session_hash: str) -> tuple[dict | None, str | None]:
+        """Fetch the replay-oriented payload for a full lineage/session reproduction."""
+        result, error = self._request("GET", f"/api/v1/public/sessions/{session_hash}/reproduction")
+        return result, error
+
     # -------------------------------------------------------------------------
     # Session Methods
     # -------------------------------------------------------------------------

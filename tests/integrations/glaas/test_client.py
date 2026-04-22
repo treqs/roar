@@ -526,6 +526,25 @@ class TestParentJobUidPayload:
             assert "parent_job_uid" not in body["jobs"][1]
 
 
+class TestSessionReproductionWrapper:
+    """Test thin client wrapper for lineage/session reproduction."""
+
+    def test_get_session_reproduction_calls_expected_endpoint(self):
+        client = _optional_auth_client()
+
+        with patch.object(client, "_request") as mock_request:
+            mock_request.return_value = ({"sessionHash": "a" * 64, "jobs": []}, None)
+
+            result, error = client.get_session_reproduction("a" * 64)
+
+            mock_request.assert_called_once_with(
+                "GET",
+                f"/api/v1/public/sessions/{'a' * 64}/reproduction",
+            )
+            assert error is None
+            assert result == {"sessionHash": "a" * 64, "jobs": []}
+
+
 class TestCompositeAndLabelWrappers:
     """Test thin client wrappers for composite artifact endpoints."""
 
