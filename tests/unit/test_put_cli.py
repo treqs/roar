@@ -117,6 +117,10 @@ def test_put_cli_uses_public_default_from_config(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
+    assert (
+        "Warning: defaulting to public visibility because registration.public_by_default=true"
+        in result.output
+    )
     request = mock_put.call_args.args[0]
     assert request.public is True
 
@@ -134,5 +138,9 @@ def test_put_cli_private_flag_overrides_public_default_from_config(tmp_path: Pat
         )
 
     assert result.exit_code == 0, result.output
+    assert (
+        "Warning: defaulting to public visibility because registration.public_by_default=true"
+        not in result.output
+    )
     request = mock_put.call_args.args[0]
     assert request.public is False

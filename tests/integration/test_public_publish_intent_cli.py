@@ -178,6 +178,11 @@ def test_register_public_succeeds_without_repo_binding_when_public_flag_is_set(
     result = roar_cli("register", "report.txt", "--yes", "--public", env_overrides=env)
 
     assert result.returncode == 0
+    combined = f"{result.stdout}\n{result.stderr}"
+    assert (
+        "Warning: defaulting to public visibility because registration.public_by_default=true"
+        not in combined
+    )
     assert fake_glaas_publish_server.session_registrations == []
     assert len(fake_glaas_publish_server.registration_session_creations) == 1
     assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
@@ -198,6 +203,11 @@ def test_register_uses_public_default_from_config_when_repo_has_no_binding(
     result = roar_cli("register", "report.txt", "--yes", env_overrides=env)
 
     assert result.returncode == 0
+    combined = f"{result.stdout}\n{result.stderr}"
+    assert (
+        "Warning: defaulting to public visibility because registration.public_by_default=true"
+        in combined
+    )
     assert fake_glaas_publish_server.session_registrations == []
     assert len(fake_glaas_publish_server.registration_session_creations) == 1
     assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
@@ -221,6 +231,10 @@ def test_register_private_flag_overrides_public_default_when_repo_has_no_binding
 
     assert result.returncode != 0
     combined = f"{result.stdout}\n{result.stderr}"
+    assert (
+        "Warning: defaulting to public visibility because registration.public_by_default=true"
+        not in combined
+    )
     assert "Error: No GLaaS repo binding found" in combined
     assert "--public" in combined
     assert fake_glaas_publish_server.session_registrations == []
@@ -436,6 +450,11 @@ def test_put_public_succeeds_without_repo_binding_when_public_flag_is_set(
     )
 
     assert result.returncode == 0
+    combined = f"{result.stdout}\n{result.stderr}"
+    assert (
+        "Warning: defaulting to public visibility because registration.public_by_default=true"
+        not in combined
+    )
     assert fake_glaas_publish_server.session_registrations == []
     assert len(fake_glaas_publish_server.registration_session_creations) == 1
     assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
@@ -465,6 +484,11 @@ def test_put_uses_public_default_from_config_when_repo_has_no_binding(
     )
 
     assert result.returncode == 0
+    combined = f"{result.stdout}\n{result.stderr}"
+    assert (
+        "Warning: defaulting to public visibility because registration.public_by_default=true"
+        in combined
+    )
     assert fake_glaas_publish_server.session_registrations == []
     assert len(fake_glaas_publish_server.registration_session_creations) == 1
     assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
@@ -497,6 +521,10 @@ def test_put_private_flag_overrides_public_default_when_repo_has_no_binding(
 
     assert result.returncode != 0
     combined = f"{result.stdout}\n{result.stderr}"
+    assert (
+        "Warning: defaulting to public visibility because registration.public_by_default=true"
+        not in combined
+    )
     assert "No GLaaS repo binding found" in combined
     assert "--public" in combined
     assert fake_glaas_publish_server.session_registrations == []

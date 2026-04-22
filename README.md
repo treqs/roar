@@ -329,7 +329,7 @@ To make public publication the default for `roar register` and `roar put`:
 roar config set registration.public_by_default true
 ```
 
-Override per command with `--public` or `--private`.
+Override per command with `--public` or `--private`. When public visibility comes from config rather than an explicit flag, `roar` prints a warning before publishing.
 
 ### `roar put`
 

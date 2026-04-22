@@ -31,14 +31,24 @@ def _resolve_glaas_web_url() -> str:
     return config_get("glaas.web_url") or "https://glaas.ai"
 
 
-def _resolve_public_flag(public: bool | None, *, start_dir: str | None = None) -> bool:
-    """Resolve publish visibility from CLI override or config default."""
+def _resolve_public_flag(public: bool | None, *, start_dir: str | None = None) -> tuple[bool, bool]:
+    """Resolve publish visibility and whether public came from config default."""
     if public is not None:
-        return public
+        return public, False
 
     from ...integrations.config import config_get
 
-    return bool(config_get("registration.public_by_default", start_dir=start_dir))
+    resolved_public = bool(config_get("registration.public_by_default", start_dir=start_dir))
+    return resolved_public, resolved_public
+
+
+def _warn_public_default() -> None:
+    """Tell the user when config caused public visibility."""
+    click.echo(
+        "Warning: defaulting to public visibility because "
+        "registration.public_by_default=true in roar config. Pass --private to override.",
+        err=True,
+    )
 
 
 @click.command("put")
@@ -129,6 +139,12 @@ def put(
     destination = args[-1]
     sources = list(args[:-1])
 
+    resolved_public, used_public_default = _resolve_public_flag(
+        public, start_dir=str(ctx.repo_root or ctx.cwd)
+    )
+    if used_public_default:
+        _warn_public_default()
+
     try:
         response = put_artifacts(
             PutRequest(
@@ -139,7 +155,7 @@ def put(
                 destination=destination,
                 message=message,
                 dry_run=dry_run,
-                public=_resolve_public_flag(public, start_dir=str(ctx.repo_root or ctx.cwd)),
+                public=resolved_public,
                 no_tag=no_tag,
             )
         )

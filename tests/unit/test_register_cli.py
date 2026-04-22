@@ -119,6 +119,10 @@ def test_register_cli_uses_public_default_from_config(tmp_path: Path) -> None:
         result = runner.invoke(register, ["model.pt", "--yes"], obj=_mock_context(tmp_path))
 
     assert result.exit_code == 0, result.output
+    assert (
+        "Warning: defaulting to public visibility because registration.public_by_default=true"
+        in result.output
+    )
     request = mock_register.call_args.args[0]
     assert request.public is True
 
@@ -134,5 +138,9 @@ def test_register_cli_private_flag_overrides_public_default_from_config(tmp_path
         )
 
     assert result.exit_code == 0, result.output
+    assert (
+        "Warning: defaulting to public visibility because registration.public_by_default=true"
+        not in result.output
+    )
     request = mock_register.call_args.args[0]
     assert request.public is False

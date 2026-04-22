@@ -26,14 +26,24 @@ def _resolve_glaas_web_url(*, start_dir: str | None = None) -> str:
     return get_raw_glaas_web_url(start_dir=start_dir) or "https://glaas.ai"
 
 
-def _resolve_public_flag(public: bool | None, *, start_dir: str | None = None) -> bool:
-    """Resolve publish visibility from CLI override or config default."""
+def _resolve_public_flag(public: bool | None, *, start_dir: str | None = None) -> tuple[bool, bool]:
+    """Resolve publish visibility and whether public came from config default."""
     if public is not None:
-        return public
+        return public, False
 
     from ...integrations.config import config_get
 
-    return bool(config_get("registration.public_by_default", start_dir=start_dir))
+    resolved_public = bool(config_get("registration.public_by_default", start_dir=start_dir))
+    return resolved_public, resolved_public
+
+
+def _warn_public_default() -> None:
+    """Tell the user when config caused public visibility."""
+    click.echo(
+        "Warning: defaulting to public visibility because "
+        "registration.public_by_default=true in roar config. Pass --private to override.",
+        err=True,
+    )
 
 
 def _confirm_secrets(detected_secrets: list[str]) -> bool:
@@ -127,6 +137,10 @@ def register(
 
         roar register outputs/metrics.json  # Register from subdirectory
     """
+    resolved_public, used_public_default = _resolve_public_flag(public, start_dir=str(ctx.cwd))
+    if used_public_default:
+        _warn_public_default()
+
     response = register_lineage_target(
         RegisterLineageRequest(
             target=target,
@@ -134,7 +148,7 @@ def register(
             cwd=ctx.cwd,
             dry_run=dry_run,
             as_blake3=as_blake3,
-            public=_resolve_public_flag(public, start_dir=str(ctx.cwd)),
+            public=resolved_public,
             skip_confirmation=yes,
             confirm_callback=_confirm_secrets if not yes else None,
         )
