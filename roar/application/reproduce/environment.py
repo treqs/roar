@@ -69,7 +69,7 @@ def try_reuse_current_repo(
     if not pipeline.git_repo or not urls_match(origin_url, pipeline.git_repo):
         return None
 
-    presenter.print("Current repository matches artifact remote, using existing environment")
+    presenter.print("Current repository matches recorded remote, using existing environment")
 
     repo_dir = Path(repo_root)
     if pipeline.git_commit:

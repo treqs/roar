@@ -67,7 +67,7 @@ def test_reproduce_run_reuses_matching_local_repo_and_recreates_artifact(
     reproduce_result = roar_cli("reproduce", artifact_hash[:12], "--run", "-y")
 
     assert reproduce_result.returncode == 0
-    assert "Current repository matches artifact remote, using existing environment" in (
+    assert "Current repository matches recorded remote, using existing environment" in (
         reproduce_result.stdout
     )
     assert "Reproduction Complete" in reproduce_result.stdout

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -11,6 +12,7 @@ class ReproduceRequest:
     hash_prefix: str
     roar_dir: Path
     cwd: Path
+    target_kind: Literal["artifact", "lineage"] = "artifact"
     run_pipeline: bool = False
     auto_confirm: bool = False
     dpkg_any_version: bool = False

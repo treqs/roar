@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 
 @dataclass
@@ -30,6 +30,8 @@ class PipelineInfo:
     artifact_hash: str
     git_repo: str | None
     git_commit: str | None
+    target_kind: Literal["artifact", "lineage"] = "artifact"
+    session_hash: str | None = None
     build_steps: list[dict] = field(default_factory=list)
     run_steps: list[dict] = field(default_factory=list)
     total_steps: int = 0

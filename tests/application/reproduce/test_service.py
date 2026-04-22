@@ -25,6 +25,7 @@ def _request(tmp_path: Path, **overrides) -> ReproduceRequest:
         hash_prefix=overrides.pop("hash_prefix", "abc123def456"),
         roar_dir=overrides.pop("roar_dir", tmp_path / ".roar"),
         cwd=overrides.pop("cwd", tmp_path),
+        target_kind=overrides.pop("target_kind", "artifact"),
         run_pipeline=overrides.pop("run_pipeline", False),
         auto_confirm=overrides.pop("auto_confirm", False),
         dpkg_any_version=overrides.pop("dpkg_any_version", False),
@@ -36,9 +37,11 @@ def _request(tmp_path: Path, **overrides) -> ReproduceRequest:
     )
 
 
-def _pipeline() -> MagicMock:
+def _pipeline(target_kind: str = "artifact") -> MagicMock:
     pipeline = MagicMock()
-    pipeline.artifact_hash = "abc123def456789"
+    pipeline.artifact_hash = "abc123def456789" if target_kind == "artifact" else ""
+    pipeline.session_hash = "b" * 64 if target_kind == "lineage" else None
+    pipeline.target_kind = target_kind
     pipeline.git_repo = "https://github.com/test/repo"
     pipeline.git_commit = "deadbeef"
     pipeline.build_steps = [
@@ -204,6 +207,14 @@ def test_reproduce_rejects_short_hash_prefix(tmp_path: Path) -> None:
         reproduce_artifact(_request(tmp_path, hash_prefix="short"), presenter=MagicMock())
 
 
+def test_reproduce_rejects_non_full_lineage_hash(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="full 64-character hexadecimal hash"):
+        reproduce_artifact(
+            _request(tmp_path, hash_prefix="abc123def456", target_kind="lineage"),
+            presenter=MagicMock(),
+        )
+
+
 def test_build_preview_summary_returns_typed_preview(tmp_path: Path) -> None:
     summary = build_preview_summary(
         _pipeline(),
@@ -220,6 +231,18 @@ def test_build_preview_summary_returns_typed_preview(tmp_path: Path) -> None:
         "System packages",
         "Pip packages",
     ]
+
+
+def test_build_preview_summary_for_lineage_adds_flag_to_run_hint(tmp_path: Path) -> None:
+    summary = build_preview_summary(
+        _pipeline(target_kind="lineage"),
+        hash_prefix="b" * 64,
+    )
+
+    assert isinstance(summary, ReproducePreviewSummary)
+    assert summary.target_kind == "lineage"
+    assert summary.session_hash == "b" * 64
+    assert summary.run_hint == f"roar reproduce --run {'b' * 64} --lineage"
 
 
 def test_build_run_summary_returns_typed_completion_summary() -> None:

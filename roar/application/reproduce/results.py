@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,8 @@ class ReproducePreviewSummary:
     git_repo: str | None
     git_commit: str | None
     run_hint: str
+    target_kind: Literal["artifact", "lineage"] = "artifact"
+    session_hash: str | None = None
     build_steps: list[ReproducePreviewStepSummary] = field(default_factory=list)
     run_steps: list[ReproducePreviewStepSummary] = field(default_factory=list)
     requirement_blocks: list[ReproduceRequirementBlock] = field(default_factory=list)
