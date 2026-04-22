@@ -31,6 +31,16 @@ def _resolve_glaas_web_url() -> str:
     return config_get("glaas.web_url") or "https://glaas.ai"
 
 
+def _resolve_public_flag(public: bool | None, *, start_dir: str | None = None) -> bool:
+    """Resolve publish visibility from CLI override or config default."""
+    if public is not None:
+        return public
+
+    from ...integrations.config import config_get
+
+    return bool(config_get("registration.public_by_default", start_dir=start_dir))
+
+
 @click.command("put")
 @click.argument("args", nargs=-1, required=True)
 @click.option(
@@ -50,11 +60,13 @@ def _resolve_glaas_web_url() -> str:
     help="Skip creating and pushing git tag.",
 )
 @click.option(
-    "--public",
-    is_flag=True,
+    "--public/--private",
+    "public",
+    default=None,
     help=(
-        "Submit as public lineage. --public allows public+anonymous or public+attributed "
-        "submission; without it, non-public submission must be private+attributed."
+        "Submit as public or private lineage. When omitted, roar uses "
+        "registration.public_by_default from config. Public allows anonymous or "
+        "attributed submission; private requires attributed submission."
     ),
 )
 @click.pass_obj
@@ -65,7 +77,7 @@ def put(
     message: str,
     dry_run: bool,
     no_tag: bool,
-    public: bool,
+    public: bool | None,
 ) -> None:
     """Publish artifacts to cloud storage and register with GLaaS.
 
@@ -80,9 +92,12 @@ def put(
     are uploaded.
 
     Visibility / attribution matrix:
-    - no --public -> private + attributed only
-    - --public -> public + anonymous OR public + attributed
+    - effective private -> private + attributed only
+    - effective public -> public + anonymous OR public + attributed
     - private + anonymous is not allowed
+
+    Effective visibility comes from `--public` / `--private` when provided,
+    otherwise from `registration.public_by_default` in roar config.
 
     \b
     Destination formats:
@@ -124,7 +139,7 @@ def put(
                 destination=destination,
                 message=message,
                 dry_run=dry_run,
-                public=public,
+                public=_resolve_public_flag(public, start_dir=str(ctx.repo_root or ctx.cwd)),
                 no_tag=no_tag,
             )
         )

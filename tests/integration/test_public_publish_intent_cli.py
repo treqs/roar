@@ -184,6 +184,50 @@ def test_register_public_succeeds_without_repo_binding_when_public_flag_is_set(
     assert "scope_request" not in fake_glaas_publish_server.registration_session_finalizations[0]
 
 
+def test_register_uses_public_default_from_config_when_repo_has_no_binding(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    env = _configure_unbound_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    roar_cli("config", "set", "registration.public_by_default", "true", env_overrides=env)
+    _create_register_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
+
+    result = roar_cli("register", "report.txt", "--yes", env_overrides=env)
+
+    assert result.returncode == 0
+    assert fake_glaas_publish_server.session_registrations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    assert "scope_request" not in fake_glaas_publish_server.registration_session_finalizations[0]
+
+
+def test_register_private_flag_overrides_public_default_when_repo_has_no_binding(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    env = _configure_unbound_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    roar_cli("config", "set", "registration.public_by_default", "true", env_overrides=env)
+    _create_register_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
+
+    result = roar_cli(
+        "register", "report.txt", "--yes", "--private", env_overrides=env, check=False
+    )
+
+    assert result.returncode != 0
+    combined = f"{result.stdout}\n{result.stderr}"
+    assert "Error: No GLaaS repo binding found" in combined
+    assert "--public" in combined
+    assert fake_glaas_publish_server.session_registrations == []
+    assert fake_glaas_publish_server.registration_session_creations == []
+    assert fake_glaas_publish_server.registration_session_finalizations == []
+
+
 def test_register_public_with_valid_ssh_uses_authenticated_creator_identity_for_hash_and_registration(
     temp_git_repo: Path,
     roar_cli,
@@ -396,6 +440,68 @@ def test_put_public_succeeds_without_repo_binding_when_public_flag_is_set(
     assert len(fake_glaas_publish_server.registration_session_creations) == 1
     assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
     assert "scope_request" not in fake_glaas_publish_server.registration_session_finalizations[0]
+
+
+def test_put_uses_public_default_from_config_when_repo_has_no_binding(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    monkeypatch,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    env = _configure_unbound_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    roar_cli("config", "set", "registration.public_by_default", "true", env_overrides=env)
+    _create_put_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
+    monkeypatch.setenv("ROAR_PUT_SKIP_UPLOAD", "1")
+
+    result = roar_cli(
+        "put",
+        "model.pt",
+        "s3://test-bucket/models",
+        "-m",
+        "publish model",
+        env_overrides=env,
+    )
+
+    assert result.returncode == 0
+    assert fake_glaas_publish_server.session_registrations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    assert "scope_request" not in fake_glaas_publish_server.registration_session_finalizations[0]
+
+
+def test_put_private_flag_overrides_public_default_when_repo_has_no_binding(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    monkeypatch,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    env = _configure_unbound_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    roar_cli("config", "set", "registration.public_by_default", "true", env_overrides=env)
+    _create_put_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
+    monkeypatch.setenv("ROAR_PUT_SKIP_UPLOAD", "1")
+
+    result = roar_cli(
+        "put",
+        "model.pt",
+        "s3://test-bucket/models",
+        "-m",
+        "publish model",
+        "--private",
+        env_overrides=env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    combined = f"{result.stdout}\n{result.stderr}"
+    assert "No GLaaS repo binding found" in combined
+    assert "--public" in combined
+    assert fake_glaas_publish_server.session_registrations == []
+    assert fake_glaas_publish_server.registration_session_creations == []
+    assert fake_glaas_publish_server.registration_session_finalizations == []
 
 
 def test_put_public_uses_registration_sessions_with_ssh_only_auth(

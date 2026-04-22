@@ -9,11 +9,12 @@ from click.testing import CliRunner
 
 from roar.application.publish.results import RegisterLineageResponse
 from roar.cli.commands.register import register
+from roar.integrations.config import config_set
 
 
 def _mock_context(tmp_path: Path) -> MagicMock:
     roar_dir = tmp_path / ".roar"
-    roar_dir.mkdir()
+    roar_dir.mkdir(exist_ok=True)
     ctx = MagicMock()
     ctx.roar_dir = roar_dir
     ctx.cwd = tmp_path
@@ -107,3 +108,31 @@ def test_register_cli_dry_run_mentions_target(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "Dry run: would register lineage for: model.pt" in result.output
     assert "Session: 0123456789ab..." in result.output
+
+
+def test_register_cli_uses_public_default_from_config(tmp_path: Path) -> None:
+    runner = CliRunner()
+    config_set("registration.public_by_default", "true", start_dir=str(tmp_path))
+
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        mock_register.return_value = _fake_result()
+        result = runner.invoke(register, ["model.pt", "--yes"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    request = mock_register.call_args.args[0]
+    assert request.public is True
+
+
+def test_register_cli_private_flag_overrides_public_default_from_config(tmp_path: Path) -> None:
+    runner = CliRunner()
+    config_set("registration.public_by_default", "true", start_dir=str(tmp_path))
+
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        mock_register.return_value = _fake_result()
+        result = runner.invoke(
+            register, ["model.pt", "--yes", "--private"], obj=_mock_context(tmp_path)
+        )
+
+    assert result.exit_code == 0, result.output
+    request = mock_register.call_args.args[0]
+    assert request.public is False

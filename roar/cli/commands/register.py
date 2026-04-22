@@ -26,6 +26,16 @@ def _resolve_glaas_web_url(*, start_dir: str | None = None) -> str:
     return get_raw_glaas_web_url(start_dir=start_dir) or "https://glaas.ai"
 
 
+def _resolve_public_flag(public: bool | None, *, start_dir: str | None = None) -> bool:
+    """Resolve publish visibility from CLI override or config default."""
+    if public is not None:
+        return public
+
+    from ...integrations.config import config_get
+
+    return bool(config_get("registration.public_by_default", start_dir=start_dir))
+
+
 def _confirm_secrets(detected_secrets: list[str]) -> bool:
     """Prompt user to confirm registration with secrets."""
     click.echo("")
@@ -55,11 +65,13 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     help="Upgrade tracked S3 artifacts from ETag-only hashes to BLAKE3 before registration",
 )
 @click.option(
-    "--public",
-    is_flag=True,
+    "--public/--private",
+    "public",
+    default=None,
     help=(
-        "Submit as public lineage. --public allows public+anonymous or public+attributed "
-        "submission; without it, non-public submission must be private+attributed."
+        "Submit as public or private lineage. When omitted, roar uses "
+        "registration.public_by_default from config. Public allows anonymous or "
+        "attributed submission; private requires attributed submission."
     ),
 )
 @click.pass_obj
@@ -70,7 +82,7 @@ def register(
     dry_run: bool,
     yes: bool,
     as_blake3: bool,
-    public: bool,
+    public: bool | None,
 ) -> None:
     """Register lineage with GLaaS.
 
@@ -83,9 +95,12 @@ def register(
     Artifact paths must refer to files tracked by roar.
 
     Visibility / attribution matrix:
-    - no --public -> private + attributed only
-    - --public -> public + anonymous OR public + attributed
+    - effective private -> private + attributed only
+    - effective public -> public + anonymous OR public + attributed
     - private + anonymous is not allowed
+
+    Effective visibility comes from `--public` / `--private` when provided,
+    otherwise from `registration.public_by_default` in roar config.
 
     If secrets are detected in the data (API keys, tokens, passwords, etc.),
     you will be prompted to confirm. Use --yes to skip the prompt and
@@ -119,7 +134,7 @@ def register(
             cwd=ctx.cwd,
             dry_run=dry_run,
             as_blake3=as_blake3,
-            public=public,
+            public=_resolve_public_flag(public, start_dir=str(ctx.cwd)),
             skip_confirmation=yes,
             confirm_callback=_confirm_secrets if not yes else None,
         )
