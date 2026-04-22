@@ -216,7 +216,7 @@ def prepare_publish_session(
         logger.debug("GLaaS health check failed: %s", exc)
         raise ValueError(f"GLaaS health check failed: {exc}") from exc
 
-    publish_auth = getattr(glaas_client, "publish_auth", None)
+    publish_auth = resolved_remote_registry.publish_auth
     access_token = getattr(publish_auth, "access_token", None)
     ssh_auth_available = getattr(publish_auth, "ssh_auth_available", False)
 
@@ -227,7 +227,9 @@ def prepare_publish_session(
 
     if should_use_registration_sessions:
         logger.debug("Creating remote registration session with GLaaS")
-        session_result = session_service.create_registration_session(client_session_id=None)
+        session_result = resolved_session_service.create_registration_session(
+            client_session_id=None
+        )
         if not session_result.success:
             logger.debug("Registration session creation failed: %s", session_result.error)
             raise ValueError(f"Registration session creation failed: {session_result.error}")

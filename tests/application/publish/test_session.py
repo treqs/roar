@@ -110,6 +110,45 @@ def test_prepare_publish_session_creates_registration_session_with_glaas(tmp_pat
     session_service.register.assert_not_called()
 
 
+def test_prepare_publish_session_uses_remote_registry_publish_auth_when_legacy_client_not_passed(
+    tmp_path: Path,
+) -> None:
+    remote_registry = MagicMock()
+    remote_registry.session_service = MagicMock()
+    remote_registry.session_service.compute_session_hash.return_value = "session-hash"
+    remote_registry.session_service.create_registration_session.return_value = (
+        SessionRegistrationResult(
+            success=True,
+            session_hash="session-hash",
+            session_url=None,
+            registration_session_id="reg-session-remote-123",
+        )
+    )
+    remote_registry.publish_auth.access_token = "token-123"
+    remote_registry.publish_auth.ssh_auth_available = False
+    remote_registry.is_configured.return_value = True
+
+    result = prepare_publish_session(
+        remote_registry=remote_registry,
+        roar_dir=tmp_path / ".roar",
+        session_id=7,
+        git_context=_git_context(),
+        logger=MagicMock(),
+        register_with_glaas=True,
+    )
+
+    assert result == PreparedPublishSession(
+        session_hash="session-hash",
+        session_url=None,
+        registration_session_id="reg-session-remote-123",
+    )
+    remote_registry.health_check.assert_called_once()
+    remote_registry.session_service.create_registration_session.assert_called_once_with(
+        client_session_id=None
+    )
+    remote_registry.session_service.register.assert_not_called()
+
+
 def test_prepare_publish_session_creates_registration_session_with_ssh_only_auth(
     tmp_path: Path,
 ) -> None:
