@@ -67,6 +67,9 @@ dev = [
     "boto3>=1.28.0",
     "google-cloud-storage>=2.10.0",
 ]
+tui = [
+    "textual>=0.80",
+]
 
 [project.scripts]
 # This registers `roar` on PATH after pip install

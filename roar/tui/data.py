@@ -1,0 +1,189 @@
+"""Data adapter: thin wrappers around roar.application.query for the TUI.
+
+The TUI is a pure view layer — every read routes through the same functions
+the CLI uses (`render_dag`, `build_show_summary`, `build_log_summary`) so there
+is no parallel data path to drift.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+from ..application.query.dag import build_dag_visualization
+from ..application.query.log import build_log_summary
+from ..application.query.requests import (
+    DagQueryRequest,
+    LogQueryRequest,
+    ShowQueryRequest,
+)
+from ..application.query.results import (
+    LogSummary,
+    ShowArtifactSummary,
+    ShowJobSummary,
+    ShowSessionSummary,
+)
+from ..application.query.show import ShowQueryError, build_show_summary
+from ..core.models.dag import DagVisualization
+from ..db.query_context import create_query_database_context
+
+
+def load_dag(
+    roar_dir: Path,
+    *,
+    expanded: bool = False,
+    show_artifacts: bool = True,
+    stale_only: bool = False,
+) -> DagVisualization:
+    """Fetch the structured DAG for the active session."""
+    return build_dag_visualization(
+        DagQueryRequest(
+            roar_dir=roar_dir,
+            expanded=expanded,
+            output_json=False,
+            use_color=False,
+            show_artifacts=show_artifacts,
+            stale_only=stale_only,
+        )
+    )
+
+
+def load_active_session(roar_dir: Path) -> ShowSessionSummary | None:
+    """Fetch the active session summary, or None if no session exists."""
+    try:
+        summary = build_show_summary(
+            ShowQueryRequest(roar_dir=roar_dir, cwd=roar_dir.parent, ref=None, selector="session")
+        )
+    except ShowQueryError:
+        return None
+    if isinstance(summary, ShowSessionSummary):
+        return summary
+    return None
+
+
+def load_job(roar_dir: Path, cwd: Path, ref: str) -> ShowJobSummary | None:
+    """Fetch a job summary by step ref (@N/@BN) or job UID."""
+    try:
+        summary = build_show_summary(
+            ShowQueryRequest(roar_dir=roar_dir, cwd=cwd, ref=ref, selector="job")
+        )
+    except ShowQueryError:
+        return None
+    if isinstance(summary, ShowJobSummary):
+        return summary
+    return None
+
+
+def load_artifact_by_path(roar_dir: Path, cwd: Path, path: str) -> ShowArtifactSummary | None:
+    try:
+        summary = build_show_summary(
+            ShowQueryRequest(roar_dir=roar_dir, cwd=cwd, ref=path, selector="path")
+        )
+    except ShowQueryError:
+        return None
+    if isinstance(summary, ShowArtifactSummary):
+        return summary
+    return None
+
+
+def load_artifact_by_hash(
+    roar_dir: Path, cwd: Path, artifact_hash: str
+) -> ShowArtifactSummary | None:
+    try:
+        summary = build_show_summary(
+            ShowQueryRequest(roar_dir=roar_dir, cwd=cwd, ref=artifact_hash, selector="artifact")
+        )
+    except ShowQueryError:
+        return None
+    if isinstance(summary, ShowArtifactSummary):
+        return summary
+    return None
+
+
+def load_log(roar_dir: Path) -> LogSummary:
+    """Fetch the active session's job history."""
+    return build_log_summary(LogQueryRequest(roar_dir=roar_dir, use_color=False))
+
+
+def load_command_history(roar_dir: Path, limit: int = 200) -> list[str]:
+    """Return distinct recent `command` strings across all sessions, newest first."""
+    commands: list[str] = []
+    seen: set[str] = set()
+    with create_query_database_context(roar_dir) as db_ctx:
+        session = db_ctx.sessions.get_active()
+        if session is not None:
+            jobs = db_ctx.jobs.get_by_session(int(session["id"]), limit=limit)
+            for job in reversed(jobs):  # newest first
+                cmd = job.get("command")
+                if cmd and cmd not in seen:
+                    seen.add(cmd)
+                    commands.append(cmd)
+    return commands
+
+
+SearchKind = Literal["job", "artifact"]
+
+
+@dataclass(frozen=True)
+class SearchHit:
+    kind: SearchKind
+    label: str  # human display
+    target_ref: str  # what to feed back to the detail view: "@N", path, or hash
+
+
+def search(roar_dir: Path, query: str, limit: int = 50) -> list[SearchHit]:
+    """Substring search over jobs (by command) and artifacts (by path) in the active session.
+
+    Simple and cheap — we scan the active session only for v1. Broadening to all
+    sessions is a v2 task once the session browser lands.
+    """
+    needle = query.strip().lower()
+    if not needle:
+        return []
+
+    hits: list[SearchHit] = []
+    with create_query_database_context(roar_dir) as db_ctx:
+        session = db_ctx.sessions.get_active()
+        if session is None:
+            return []
+        session_id = int(session["id"])
+
+        for job in db_ctx.jobs.get_by_session(session_id, limit=500):
+            command = (job.get("command") or "").lower()
+            uid = (job.get("job_uid") or "").lower()
+            if needle in command or needle in uid:
+                step_number = job.get("step_number")
+                job_type = job.get("job_type")
+                if step_number is not None:
+                    prefix = "@B" if job_type == "build" else "@"
+                    ref = f"{prefix}{step_number}"
+                else:
+                    ref = str(job.get("job_uid") or "")
+                display_cmd = job.get("command") or "(no command)"
+                hits.append(SearchHit(kind="job", label=f"{ref}  {display_cmd}", target_ref=ref))
+                if len(hits) >= limit:
+                    return hits
+
+        # Artifacts: iterate from the DAG view (already filtered by session).
+        dag = build_dag_visualization(
+            DagQueryRequest(
+                roar_dir=roar_dir,
+                expanded=False,
+                output_json=False,
+                use_color=False,
+                show_artifacts=True,
+                stale_only=False,
+            )
+        )
+        for artifact in dag.artifacts:
+            path = (artifact.path or "").lower()
+            ahash = (artifact.hash or "").lower()
+            if needle in path or needle in ahash:
+                display = artifact.path or artifact.hash or "(unknown)"
+                ref = artifact.path or artifact.hash or ""
+                hits.append(SearchHit(kind="artifact", label=display, target_ref=ref))
+                if len(hits) >= limit:
+                    break
+
+    return hits

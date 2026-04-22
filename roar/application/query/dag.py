@@ -4,22 +4,21 @@ from __future__ import annotations
 
 import json
 
+from ...core.models.dag import DagVisualization
 from ...db.context import create_database_context
 from ...presenters.dag_data_builder import DagDataBuilder
 from .requests import DagQueryRequest
 
 
-def render_dag(request: DagQueryRequest) -> str:
-    """Render the current session DAG."""
+def build_dag_visualization(request: DagQueryRequest) -> DagVisualization:
+    """Build a typed DAG visualization for the active session."""
     from ...core.models.dag import (
         DagArtifactInfo,
         DagArtifactState,
         DagNodeInfo,
         DagNodeMetrics,
         DagNodeState,
-        DagVisualization,
     )
-    from ...presenters.dag_renderer import DagRenderer
 
     with create_database_context(request.roar_dir) as db_ctx:
         session = db_ctx.sessions.get_active()
@@ -64,7 +63,7 @@ def render_dag(request: DagQueryRequest) -> str:
         )
         for artifact in dag_data["artifacts"]
     ]
-    dag_viz = DagVisualization(
+    return DagVisualization(
         nodes=nodes,
         artifacts=artifacts,
         stale_count=dag_data["stale_count"],
@@ -76,6 +75,12 @@ def render_dag(request: DagQueryRequest) -> str:
         labels=dag_data.get("labels", {}),
     )
 
+
+def render_dag(request: DagQueryRequest) -> str:
+    """Render the current session DAG."""
+    from ...presenters.dag_renderer import DagRenderer
+
+    dag_viz = build_dag_visualization(request)
     renderer = DagRenderer(use_color=request.use_color)
     if request.output_json:
         return json.dumps(renderer.render_json(dag_viz), indent=2)
