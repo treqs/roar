@@ -51,6 +51,10 @@ url = "https://api.glaas.ai"
 # Path to SSH private key for GLaaS authentication
 # key = ""
 
+[registration]
+# Default roar register/put to public visibility unless overridden by --private
+public_by_default = false
+
 [registration.omit]
 # Enable secret filtering for registration data
 enabled = true

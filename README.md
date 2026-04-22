@@ -227,6 +227,7 @@ Run `roar config list` to see all available options with descriptions. Common op
 | `filters.ignore_tmp_files`     | true                   | Ignore /tmp files                       |
 | `glaas.url`                    | <https://api.glaas.ai> | GLaaS server URL                        |
 | `glaas.web_url`                | <https://glaas.ai>     | GLaaS web UI URL                        |
+| `registration.public_by_default` | false                | Default `register`/`put` visibility     |
 | `registration.omit.enabled`    | true                   | Enable secret filtering                 |
 | `hash.primary`                 | blake3                 | Primary hash algorithm                  |
 | `logging.level`                | warning                | Log level (debug, info, warning, error) |
@@ -322,6 +323,14 @@ roar register s3://bucket/run/out   # Register a tracked remote S3 artifact
 
 For bare 8-character hex targets, `roar register` prefers a matching local job UID before falling back to session-hash-prefix resolution.
 
+To make public publication the default for `roar register` and `roar put`:
+
+```bash
+roar config set registration.public_by_default true
+```
+
+Override per command with `--public` or `--private`. When public visibility comes from config rather than an explicit flag, `roar` prints a warning before publishing.
+
 ### `roar put`
 
 Upload artifacts to cloud storage and register lineage with GLaaS.
@@ -337,6 +346,7 @@ roar put @2 s3://bucket/outputs/ -m "Step 2 outputs"
 - `-m, --message` — Description of the upload (required)
 - `--dry-run` — Preview without uploading
 - `--no-tag` — Skip git tagging
+- `--public` / `--private` — Override configured publish visibility
 
 **Source formats:**
 

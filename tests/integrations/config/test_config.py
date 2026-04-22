@@ -164,6 +164,7 @@ class TestDefaultConfigTemplate:
 
         config = load_config(config_path=config_path)
 
+        assert config["registration"]["public_by_default"] is False
         assert config["registration"]["omit"]["enabled"] is True
         assert config["registration"]["tagging"]["enabled"] is True
         assert "WANDB_API_KEY" in config["registration"]["omit"]["env_vars"]["names"]
@@ -268,6 +269,10 @@ class TestDefaultsMatchPydanticModels:
                 )
 
         # Compare registration section (including nested omit)
+        assert (
+            template_config["registration"]["public_by_default"]
+            == pydantic_defaults["registration"]["public_by_default"]
+        )
         assert (
             template_config["registration"]["omit"]["enabled"]
             == pydantic_defaults["registration"]["omit"]["enabled"]
@@ -453,6 +458,11 @@ class TestConfigSetValidation:
     def test_config_set_invalid_glaas_url_is_rejected(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match=r"glaas\.url"):
             config_set("glaas.url", "not-a-url", start_dir=str(tmp_path))
+
+    def test_config_set_registration_public_by_default(self, tmp_path: Path) -> None:
+        config_set("registration.public_by_default", "true", start_dir=str(tmp_path))
+
+        assert config_get("registration.public_by_default", start_dir=str(tmp_path)) is True
 
 
 class TestTracerConfig:

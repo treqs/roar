@@ -137,8 +137,9 @@ class TaggingConfig(ConfigBaseModel):
 
 
 class RegisterConfig(ConfigBaseModel):
-    """Register configuration section for secret filtering during registration."""
+    """Register/publish defaults and filtering configuration."""
 
+    public_by_default: bool = False
     omit: OmitConfig = Field(default_factory=OmitConfig)
     tagging: TaggingConfig = Field(default_factory=TaggingConfig)
 
