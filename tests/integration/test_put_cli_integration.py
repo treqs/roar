@@ -122,8 +122,10 @@ def test_put_registers_lineage_with_fake_glaas_and_updates_local_dag(
     assert 1 in put_node["dependencies"]
 
     assert fake_glaas_publish_server.health_checks >= 1
-    assert len(fake_glaas_publish_server.session_registrations) == 1
-    assert fake_glaas_publish_server.session_registrations[0]["scope_request"] == {
+    assert fake_glaas_publish_server.session_registrations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    assert fake_glaas_publish_server.registration_session_finalizations[0]["scope_request"] == {
         "owner_id": "owner-test",
         "owner_type": "organization",
         "project_id": "proj-test",
@@ -133,15 +135,17 @@ def test_put_registers_lineage_with_fake_glaas_and_updates_local_dag(
         entry.get("authorization") == "Bearer test-access-token"
         for entry in fake_glaas_publish_server.auth_headers
     )
-    assert len(fake_glaas_publish_server.job_batches) == 1
-    assert len(fake_glaas_publish_server.job_creates) == 1
-    assert len(fake_glaas_publish_server.artifact_batches) >= 1
-    assert fake_glaas_publish_server.input_links
-    assert fake_glaas_publish_server.output_links
+    assert len(fake_glaas_publish_server.job_batches) == 0
+    assert len(fake_glaas_publish_server.job_creates) == 0
+    assert len(fake_glaas_publish_server.artifact_batches) == 0
+    assert len(fake_glaas_publish_server.registration_session_job_batches) == 1
+    assert len(fake_glaas_publish_server.registration_session_job_creates) == 1
+    assert fake_glaas_publish_server.registration_session_input_links
+    assert fake_glaas_publish_server.registration_session_output_links
 
-    batch_jobs = fake_glaas_publish_server.job_batches[0]["jobs"]
+    batch_jobs = fake_glaas_publish_server.registration_session_job_batches[0]["jobs"]
     assert any(job.get("job_type") == "run" for job in batch_jobs)
-    put_job = fake_glaas_publish_server.job_creates[0]["job"]
+    put_job = fake_glaas_publish_server.registration_session_job_creates[0]["job"]
     assert put_job["job_type"] == "put"
 
     synced_labels = [
@@ -200,3 +204,9 @@ def test_put_dry_run_does_not_create_local_or_remote_publish_jobs(
     assert len(fake_glaas_publish_server.artifact_batches) == 0
     assert len(fake_glaas_publish_server.input_links) == 0
     assert len(fake_glaas_publish_server.output_links) == 0
+    assert len(fake_glaas_publish_server.registration_session_creations) == 0
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 0
+    assert len(fake_glaas_publish_server.registration_session_job_batches) == 0
+    assert len(fake_glaas_publish_server.registration_session_job_creates) == 0
+    assert len(fake_glaas_publish_server.registration_session_input_links) == 0
+    assert len(fake_glaas_publish_server.registration_session_output_links) == 0

@@ -155,8 +155,10 @@ def test_register_publishes_local_lineage_with_fake_glaas(
     assert "GLaaS:" in result.stdout
 
     assert fake_glaas_publish_server.health_checks >= 1
-    assert len(fake_glaas_publish_server.session_registrations) == 1
-    assert fake_glaas_publish_server.session_registrations[0]["scope_request"] == {
+    assert fake_glaas_publish_server.session_registrations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    assert fake_glaas_publish_server.registration_session_finalizations[0]["scope_request"] == {
         "owner_id": "owner-test",
         "owner_type": "organization",
         "project_id": "proj-test",
@@ -166,15 +168,78 @@ def test_register_publishes_local_lineage_with_fake_glaas(
         entry.get("authorization") == "Bearer test-access-token"
         for entry in fake_glaas_publish_server.auth_headers
     )
-    assert len(fake_glaas_publish_server.job_batches) == 1
+    assert len(fake_glaas_publish_server.job_batches) == 0
     assert len(fake_glaas_publish_server.job_creates) == 0
-    assert len(fake_glaas_publish_server.artifact_batches) >= 1
-    assert fake_glaas_publish_server.input_links
-    assert fake_glaas_publish_server.output_links
+    assert len(fake_glaas_publish_server.artifact_batches) == 0
+    assert len(fake_glaas_publish_server.registration_session_job_batches) == 1
+    assert fake_glaas_publish_server.registration_session_input_links
+    assert fake_glaas_publish_server.registration_session_output_links
 
-    registered_jobs = fake_glaas_publish_server.job_batches[0]["jobs"]
+    registered_jobs = fake_glaas_publish_server.registration_session_job_batches[0]["jobs"]
     assert len(registered_jobs) == 1
     assert registered_jobs[0]["job_type"] == "run"
+
+
+def test_register_can_republish_same_local_session_after_additional_run_with_fake_glaas(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    env = _configure_register_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+
+    input_path = temp_git_repo / "input.txt"
+    input_path.write_text("register me\n")
+    first_script = temp_git_repo / "generate_report.py"
+    first_script.write_text(
+        "from pathlib import Path\n"
+        "content = Path('input.txt').read_text()\n"
+        "Path('report.txt').write_text(content.upper())\n"
+    )
+    git_commit("Add first register fixture")
+
+    first_run = roar_cli("run", python_exe, "generate_report.py", env_overrides=env)
+    assert first_run.returncode == 0
+    git_commit("Commit first tracked report")
+
+    first_session_hash = _status_session_hash(temp_git_repo, roar_cli)
+    first_register = roar_cli("register", "report.txt", "--yes", env_overrides=env)
+    assert first_register.returncode == 0
+
+    second_script = temp_git_repo / "summarize_report.py"
+    second_script.write_text(
+        "from pathlib import Path\n"
+        "content = Path('report.txt').read_text().strip()\n"
+        "Path('summary.txt').write_text(f'chars={len(content)}\\n')\n"
+    )
+    git_commit("Add follow-up register fixture")
+
+    second_run = roar_cli("run", python_exe, "summarize_report.py", env_overrides=env)
+    assert second_run.returncode == 0
+    git_commit("Commit follow-up tracked summary")
+
+    second_session_hash = _status_session_hash(temp_git_repo, roar_cli)
+    assert second_session_hash != first_session_hash
+
+    second_register = roar_cli("register", "summary.txt", "--yes", env_overrides=env)
+
+    assert second_register.returncode == 0
+    assert "Jobs: 2" in second_register.stdout
+    assert len(fake_glaas_publish_server.registration_session_creations) == 2
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 2
+    assert len(fake_glaas_publish_server.registration_session_job_batches) == 2
+
+    first_publish_jobs = fake_glaas_publish_server.registration_session_job_batches[0]["jobs"]
+    second_publish_jobs = fake_glaas_publish_server.registration_session_job_batches[1]["jobs"]
+    assert len(first_publish_jobs) == 1
+    assert len(second_publish_jobs) == 2
+
+    first_publish_job_uid = str(first_publish_jobs[0]["job_uid"])
+    republished_first_step = next(
+        job for job in second_publish_jobs if int(job.get("step_number") or 0) == 1
+    )
+    assert str(republished_first_step["job_uid"]) != first_publish_job_uid
 
 
 def test_register_honors_logging_config_for_console_and_file(

@@ -198,6 +198,70 @@ class JobRegistrationService(IJobRegistrar):
             job_id=str(job_id) if job_id else None,
         )
 
+    def create_job_under_registration_session(
+        self,
+        command: str,
+        timestamp: float,
+        registration_session_id: str,
+        job_uid: str,
+        git_commit: str,
+        git_branch: str,
+        duration_seconds: float,
+        exit_code: int,
+        job_type: str | None,
+        step_number: int,
+        metadata: str | None = None,
+        parent_job_uid: str | None = None,
+    ) -> JobRegistrationResult:
+        """Create a staged job under a remote registration session."""
+        filtered_command, _, filtered_metadata = self._filter_job_data(command, None, metadata)
+
+        validation = validate_job_registration(
+            command=filtered_command,
+            timestamp=timestamp,
+            session_hash="pending-registration-session",
+            job_uid=job_uid,
+            git_commit=git_commit,
+            git_branch=git_branch,
+            job_type=job_type,
+            step_number=step_number,
+        )
+        if not validation:
+            error_msg = "; ".join(validation.errors)
+            self._logger.warning("Job validation failed for %s: %s", job_uid, error_msg)
+            return JobRegistrationResult(success=False, job_uid=job_uid, error=error_msg)
+
+        job_id, error = self.client.register_job_under_registration_session(
+            registration_session_id=registration_session_id,
+            command=filtered_command,
+            timestamp=timestamp,
+            job_uid=job_uid,
+            git_commit=git_commit,
+            git_branch=git_branch,
+            duration_seconds=duration_seconds,
+            exit_code=exit_code,
+            job_type=job_type,
+            step_number=step_number,
+            metadata=filtered_metadata,
+            parent_job_uid=parent_job_uid,
+        )
+        if error:
+            self._logger.debug(
+                "Registration-session job creation failed for %s: %s", job_uid, error
+            )
+            return JobRegistrationResult(success=False, job_uid=job_uid, error=error)
+
+        self._logger.debug(
+            "Registration-session job created: %s -> server_id=%s",
+            job_uid,
+            job_id,
+        )
+        return JobRegistrationResult(
+            success=True,
+            job_uid=job_uid,
+            job_id=str(job_id) if job_id else None,
+        )
+
     def create_jobs_batch(
         self,
         jobs: list[dict],
@@ -321,6 +385,123 @@ class JobRegistrationService(IJobRegistrar):
 
         return [r for r in results if r is not None]
 
+    def create_jobs_batch_under_registration_session(
+        self,
+        jobs: list[dict],
+        registration_session_id: str,
+        git_context: GitContext,
+    ) -> list[JobRegistrationResult]:
+        """Create multiple staged jobs under a remote registration session."""
+        if not jobs:
+            return []
+
+        results: list[JobRegistrationResult | None] = [None] * len(jobs)
+        payloads: list[dict] = []
+        payload_indices: list[int] = []
+
+        for i, job in enumerate(jobs):
+            local_job_uid = job.get("job_uid")
+            if not local_job_uid:
+                self._logger.warning("Skipping job without job_uid")
+                results[i] = JobRegistrationResult(
+                    success=False, job_uid="", error="Job missing job_uid"
+                )
+                continue
+
+            remote_job_uid = job.get("remote_job_uid")
+            if not isinstance(remote_job_uid, str) or not remote_job_uid:
+                remote_job_uid = local_job_uid
+
+            remote_parent_job_uid = job.get("remote_parent_job_uid")
+            if remote_parent_job_uid is None and job.get("parent_job_uid") is not None:
+                remote_parent_job_uid = job.get("parent_job_uid")
+
+            command = job.get("command", "")
+            git_commit = job.get("git_commit") or git_context.commit or ""
+            git_branch = job.get("git_branch") or git_context.branch or ""
+            metadata = job.get("metadata")
+            filtered_command, _, filtered_metadata = self._filter_job_data(command, None, metadata)
+
+            validation = validate_job_registration(
+                command=filtered_command,
+                timestamp=job.get("timestamp", 0.0),
+                session_hash="pending-registration-session",
+                job_uid=remote_job_uid,
+                git_commit=git_commit,
+                git_branch=git_branch,
+                job_type=job.get("job_type"),
+                step_number=job.get("step_number", 0),
+            )
+            if not validation:
+                error_msg = "; ".join(validation.errors)
+                self._logger.warning("Job validation failed for %s: %s", local_job_uid, error_msg)
+                results[i] = JobRegistrationResult(
+                    success=False, job_uid=local_job_uid, error=error_msg
+                )
+                continue
+
+            payload: dict[str, Any] = {
+                "command": filtered_command,
+                "timestamp": job.get("timestamp", 0.0),
+                "job_uid": remote_job_uid,
+                "git_commit": git_commit,
+                "git_branch": git_branch,
+                "duration_seconds": job.get("duration_seconds", 0.0),
+                "exit_code": job.get("exit_code", 0),
+                "job_type": job.get("job_type") or "run",
+                "step_number": job.get("step_number", 0),
+            }
+            if filtered_metadata:
+                payload["metadata"] = filtered_metadata
+            if remote_parent_job_uid is not None:
+                payload["parent_job_uid"] = remote_parent_job_uid
+
+            payloads.append(payload)
+            payload_indices.append(i)
+
+        if not payloads:
+            return [r for r in results if r is not None]
+
+        self._logger.debug(
+            "Batch registering %d jobs under registration session %s",
+            len(payloads),
+            registration_session_id,
+        )
+
+        job_ids, errors, overall_error = self.client.register_jobs_batch_under_registration_session(
+            registration_session_id=registration_session_id,
+            jobs=payloads,
+        )
+
+        if overall_error:
+            for idx in payload_indices:
+                job_uid = jobs[idx].get("job_uid", "")
+                results[idx] = JobRegistrationResult(
+                    success=False, job_uid=job_uid, error=overall_error
+                )
+        else:
+            for pos, idx in enumerate(payload_indices):
+                local_job_uid = jobs[idx].get("job_uid", "")
+                if pos < len(errors) and errors[pos]:
+                    results[idx] = JobRegistrationResult(
+                        success=False, job_uid=local_job_uid, error=errors[pos]
+                    )
+                else:
+                    job_id = job_ids[pos] if pos < len(job_ids) else None
+                    results[idx] = JobRegistrationResult(
+                        success=True,
+                        job_uid=local_job_uid,
+                        job_id=str(job_id) if job_id else None,
+                    )
+
+        self._logger.debug(
+            "Registration-session batch job registration complete: %d succeeded, %d failed",
+            sum(1 for r in results if r and r.success),
+            sum(1 for r in results if r and not r.success),
+        )
+
+        return [r for r in results if r is not None]
+
     def link_job_artifacts(
         self,
         session_hash: str,
@@ -432,6 +613,112 @@ class JobRegistrationService(IJobRegistrar):
             outputs_linked=outputs_linked,
         )
 
+    def link_job_artifacts_under_registration_session(
+        self,
+        registration_session_id: str,
+        job_uid: str,
+        inputs: list[dict[str, Any]] | None,
+        outputs: list[dict[str, Any]] | None,
+    ) -> JobLinkResult:
+        """Link artifacts to a staged job under a remote registration session."""
+        valid_inputs = self._normalize_link_artifacts(inputs or [], "input")
+        valid_outputs = self._normalize_link_artifacts(outputs or [], "output")
+
+        if not valid_inputs and not valid_outputs:
+            self._logger.debug(
+                "No staged artifacts to link for registration-session job %s",
+                job_uid,
+            )
+            return JobLinkResult(success=True, job_uid=job_uid)
+
+        self._logger.debug(
+            "Linking staged artifacts to registration-session job %s: %d inputs, %d outputs",
+            job_uid,
+            len(valid_inputs),
+            len(valid_outputs),
+        )
+
+        inputs_linked = 0
+        outputs_linked = 0
+        artifacts_registered = 0
+        errors = []
+
+        if valid_inputs:
+            input_batches = _batch_artifacts(valid_inputs, MAX_ARTIFACTS_PER_REQUEST)
+            for batch_idx, batch in enumerate(input_batches):
+                self._logger.debug(
+                    "Sending registration-session input batch %d/%d for job %s: %d artifacts",
+                    batch_idx + 1,
+                    len(input_batches),
+                    job_uid,
+                    len(batch),
+                )
+                result, error = self.client.register_job_inputs_under_registration_session(
+                    registration_session_id=registration_session_id,
+                    job_uid=job_uid,
+                    artifacts=batch,
+                )
+                if error:
+                    self._logger.debug(
+                        "Registration-session input linking failed for %s: %s", job_uid, error
+                    )
+                    errors.append(f"inputs: {error}")
+                    break
+                inputs_linked += result.get("inputs_linked", len(batch)) if result else len(batch)
+                artifacts_registered += (
+                    result.get("artifacts_registered", len(batch)) if result else len(batch)
+                )
+
+        if valid_outputs:
+            output_batches = _batch_artifacts(valid_outputs, MAX_ARTIFACTS_PER_REQUEST)
+            for batch_idx, batch in enumerate(output_batches):
+                self._logger.debug(
+                    "Sending registration-session output batch %d/%d for job %s: %d artifacts",
+                    batch_idx + 1,
+                    len(output_batches),
+                    job_uid,
+                    len(batch),
+                )
+                result, error = self.client.register_job_outputs_under_registration_session(
+                    registration_session_id=registration_session_id,
+                    job_uid=job_uid,
+                    artifacts=batch,
+                )
+                if error:
+                    self._logger.debug(
+                        "Registration-session output linking failed for %s: %s", job_uid, error
+                    )
+                    errors.append(f"outputs: {error}")
+                    break
+                outputs_linked += result.get("outputs_linked", len(batch)) if result else len(batch)
+                artifacts_registered += (
+                    result.get("artifacts_registered", len(batch)) if result else len(batch)
+                )
+
+        if errors:
+            return JobLinkResult(
+                success=False,
+                job_uid=job_uid,
+                inputs_linked=inputs_linked,
+                outputs_linked=outputs_linked,
+                artifacts_registered=artifacts_registered,
+                error="; ".join(errors),
+            )
+
+        self._logger.debug(
+            "Linked staged artifacts to registration-session job %s: %d inputs, %d outputs",
+            job_uid,
+            inputs_linked,
+            outputs_linked,
+        )
+        return JobLinkResult(
+            success=True,
+            job_uid=job_uid,
+            inputs_linked=inputs_linked,
+            outputs_linked=outputs_linked,
+            artifacts_registered=artifacts_registered,
+        )
+
     def _normalize_link_artifacts(
         self,
         items: list[dict[str, Any]],
@@ -467,6 +754,12 @@ class JobRegistrationService(IJobRegistrar):
                 "artifact_hash": artifact_hash,
                 "path": path,
             }
+            if item.get("size") is not None:
+                normalized["size"] = item["size"]
+            if item.get("source_type") is not None:
+                normalized["source_type"] = item["source_type"]
+            if item.get("metadata") is not None:
+                normalized["metadata"] = item["metadata"]
             if item.get("byte_ranges") is not None:
                 normalized["byte_ranges"] = item["byte_ranges"]
 

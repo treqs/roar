@@ -188,3 +188,34 @@ def test_collect_label_sync_payloads_includes_current_key_origins() -> None:
             "key_origins": {"generated.phase": "system", "stage": "user"},
         },
     ]
+
+
+def test_collect_label_sync_payloads_prefers_remote_job_uid_when_present() -> None:
+    class StubLabels:
+        def get_current(self, entity_type: str, **kwargs):
+            if entity_type == "job" and kwargs.get("job_id") == 11:
+                return {"metadata": {"phase": "prep"}, "write_origin": "user"}
+            return None
+
+        def get_history(self, entity_type: str, **kwargs):
+            if entity_type == "job" and kwargs.get("job_id") == 11:
+                return [{"metadata": {"phase": "prep"}, "write_origin": "user"}]
+            return []
+
+    payloads = collect_label_sync_payloads(
+        SimpleNamespace(labels=StubLabels()),
+        session_id=None,
+        session_hash="s" * 64,
+        jobs=[{"id": 11, "job_uid": "local-job-1", "remote_job_uid": "remote-job-1"}],
+        artifacts=[],
+    )
+
+    assert payloads == [
+        {
+            "entity_type": "job",
+            "session_hash": "s" * 64,
+            "job_uid": "remote-job-1",
+            "metadata": {"phase": "prep"},
+            "key_origins": {"phase": "user"},
+        }
+    ]

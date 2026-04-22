@@ -202,7 +202,9 @@ class TestPutService:
         assert sync_kwargs["db_ctx"] is db
         assert sync_kwargs["session_id"] is None
         assert sync_kwargs["session_hash"] == "session_hash_abc123"
-        assert sync_kwargs["jobs"] == [{"id": 42, "job_uid": "job-uid-1"}]
+        assert sync_kwargs["jobs"] == [
+            {"id": 42, "job_uid": "job-uid-1", "remote_job_uid": "job-uid-1"}
+        ]
         assert sync_kwargs["artifacts"] == []
 
     def test_put_prepared_returns_registered_session_info(self, tmp_path: Path) -> None:

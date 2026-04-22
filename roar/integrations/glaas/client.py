@@ -454,6 +454,37 @@ class GlaasClient:
         result, error = self._request("POST", "/api/v1/sessions", body)
         return result, error
 
+    def create_registration_session(
+        self,
+        client_session_id: str | None = None,
+    ) -> tuple[dict | None, str | None]:
+        """Create or resume a durable registration session."""
+        body: dict[str, Any] = {}
+        if client_session_id:
+            body["client_session_id"] = client_session_id
+        return self._request("POST", "/api/v1/registration-sessions", body)
+
+    def finalize_registration_session(
+        self,
+        registration_session_id: str,
+        git_repo: str,
+        git_commit: str,
+        git_branch: str,
+    ) -> tuple[dict | None, str | None]:
+        """Finalize a registration session into a lineage hash."""
+        body: dict[str, Any] = {
+            "git_repo": git_repo,
+            "git_commit": git_commit,
+            "git_branch": git_branch,
+        }
+        if self._publish_auth.scope_request:
+            body["scope_request"] = dict(self._publish_auth.scope_request)
+        return self._request(
+            "POST",
+            f"/api/v1/registration-sessions/{registration_session_id}/finalize",
+            body,
+        )
+
     def sync_labels(
         self,
         labels: list[dict[str, Any]],
@@ -469,6 +500,79 @@ class GlaasClient:
     ) -> tuple[dict | None, str | None]:
         """Patch the current remote label document for one lineage target."""
         return self._request("PATCH", "/api/v1/labels/current", label)
+
+    def register_job_under_registration_session(
+        self,
+        registration_session_id: str,
+        command: str,
+        timestamp: float,
+        job_uid: str,
+        git_commit: str,
+        git_branch: str,
+        duration_seconds: float,
+        exit_code: int,
+        job_type: str | None,
+        step_number: int,
+        metadata: str | None = None,
+        parent_job_uid: str | None = None,
+    ) -> tuple[int | None, str | None]:
+        """Register a staged job under a registration session."""
+        body = {
+            "command": command,
+            "timestamp": timestamp,
+            "job_uid": job_uid,
+            "git_commit": git_commit,
+            "git_branch": git_branch,
+            "duration_seconds": duration_seconds,
+            "exit_code": exit_code,
+            "job_type": job_type,
+            "step_number": step_number,
+        }
+        if metadata:
+            body["metadata"] = metadata
+        if parent_job_uid is not None:
+            body["parent_job_uid"] = parent_job_uid
+
+        result, error = self._request(
+            "POST",
+            f"/api/v1/registration-sessions/{registration_session_id}/jobs",
+            body,
+        )
+        if error:
+            return None, error
+        if result is None:
+            return None, None
+        return result.get("id"), None
+
+    def register_jobs_batch_under_registration_session(
+        self,
+        registration_session_id: str,
+        jobs: list,
+    ) -> tuple[list, list, str | None]:
+        """Register multiple staged jobs under a registration session."""
+        if not jobs:
+            return [], [], None
+
+        body_jobs: list[dict[str, Any]] = []
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            payload = dict(job)
+            if payload.get("parent_job_uid") is None:
+                payload.pop("parent_job_uid", None)
+            body_jobs.append(payload)
+
+        body = {"jobs": body_jobs}
+        result, error = self._request(
+            "POST",
+            f"/api/v1/registration-sessions/{registration_session_id}/jobs/batch",
+            body,
+        )
+        if error:
+            return [], [error] * len(jobs), error
+        if result is None:
+            return [], [], None
+        return result.get("job_ids", []), result.get("errors", []), None
 
     def register_job_inputs(
         self,
@@ -491,6 +595,21 @@ class GlaasClient:
         result, error = self._request(
             "POST",
             f"/api/v1/sessions/{session_hash}/jobs/{job_uid}/inputs",
+            body,
+        )
+        return result, error
+
+    def register_job_inputs_under_registration_session(
+        self,
+        registration_session_id: str,
+        job_uid: str,
+        artifacts: list[dict],
+    ) -> tuple[dict | None, str | None]:
+        """Register staged input artifacts for a registration-session job."""
+        body: dict[str, Any] = {"artifacts": self._map_artifacts_for_api(artifacts)}
+        result, error = self._request(
+            "POST",
+            f"/api/v1/registration-sessions/{registration_session_id}/jobs/{job_uid}/inputs",
             body,
         )
         return result, error
@@ -520,6 +639,21 @@ class GlaasClient:
         )
         return result, error
 
+    def register_job_outputs_under_registration_session(
+        self,
+        registration_session_id: str,
+        job_uid: str,
+        artifacts: list[dict],
+    ) -> tuple[dict | None, str | None]:
+        """Register staged output artifacts for a registration-session job."""
+        body: dict[str, Any] = {"artifacts": self._map_artifacts_for_api(artifacts)}
+        result, error = self._request(
+            "POST",
+            f"/api/v1/registration-sessions/{registration_session_id}/jobs/{job_uid}/outputs",
+            body,
+        )
+        return result, error
+
     @staticmethod
     def _map_artifacts_for_api(artifacts: list[dict]) -> list[dict]:
         """Map internal artifact dicts to the API schema.
@@ -535,6 +669,12 @@ class GlaasClient:
                 "hash": artifact_hash,
                 "path": a["path"],
             }
+            if "size" in a and a["size"] is not None:
+                entry["size"] = a["size"]
+            if "source_type" in a and a["source_type"] is not None:
+                entry["source_type"] = a["source_type"]
+            if "metadata" in a and a["metadata"] is not None:
+                entry["metadata"] = a["metadata"]
             if "byte_ranges" in a and a["byte_ranges"] is not None:
                 entry["byte_ranges"] = a["byte_ranges"]
             mapped.append(entry)

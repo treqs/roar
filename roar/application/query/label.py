@@ -98,6 +98,15 @@ def build_push_labels_summary(request: LabelPushRequest) -> LabelCurrentSummary:
 
     client = GlaasClient(start_dir=str(request.cwd), allow_public_without_binding=True)
     result, error = client.patch_current_label(payload)
+    if error and resolved.entity_type == "job" and error.startswith("HTTP 404:"):
+        fallback_payload = build_remote_label_mutation_payload(
+            db_ctx,
+            roar_dir=request.roar_dir,
+            target=resolved,
+            metadata=metadata,
+            prefer_remote_publication_uid=False,
+        )
+        result, error = client.patch_current_label(fallback_payload)
     if error:
         raise ValueError(f"Remote label push failed: {error}")
 
