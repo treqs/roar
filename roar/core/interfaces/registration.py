@@ -30,6 +30,8 @@ class SessionRegistrationResult:
     session_hash: str
     session_url: str | None = None
     registration_session_id: str | None = None
+    registration_session_mode: str | None = None
+    registration_session_token: str | None = None
     created: bool | None = None
     status: str | None = None
     error: str | None = None
@@ -104,6 +106,7 @@ class ISessionRegistrar(Protocol):
     def create_registration_session(
         self,
         client_session_id: str | None = None,
+        mode: str | None = None,
     ) -> SessionRegistrationResult:
         """Create or resume a remote registration session."""
         ...
@@ -112,6 +115,7 @@ class ISessionRegistrar(Protocol):
         self,
         registration_session_id: str,
         git_context: GitContext,
+        expected_counts: dict[str, int] | None = None,
     ) -> SessionRegistrationResult:
         """Finalize a remote registration session into an immutable lineage hash."""
         ...

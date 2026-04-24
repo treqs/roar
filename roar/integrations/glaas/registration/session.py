@@ -145,9 +145,13 @@ class SessionRegistrationService(ISessionRegistrar):
     def create_registration_session(
         self,
         client_session_id: str | None = None,
+        mode: str | None = None,
     ) -> SessionRegistrationResult:
         """Create or resume a durable remote registration session."""
-        result, error = self.client.create_registration_session(client_session_id=client_session_id)
+        result, error = self.client.create_registration_session(
+            client_session_id=client_session_id,
+            mode=mode,
+        )
         if error:
             self._logger.warning("Registration session creation failed: %s", error)
             return SessionRegistrationResult(success=False, session_hash="", error=error)
@@ -168,6 +172,8 @@ class SessionRegistrationService(ISessionRegistrar):
             success=True,
             session_hash="",
             registration_session_id=registration_session_id,
+            registration_session_mode=result.get("mode") if result else None,
+            registration_session_token=result.get("registration_session_token") if result else None,
             created=result.get("created") if result else None,
             status=result.get("status") if result else None,
         )
@@ -176,6 +182,7 @@ class SessionRegistrationService(ISessionRegistrar):
         self,
         registration_session_id: str,
         git_context: GitContext,
+        expected_counts: dict[str, int] | None = None,
     ) -> SessionRegistrationResult:
         """Finalize a remote registration session into an immutable lineage hash."""
         validation = validate_session_registration(
@@ -194,6 +201,7 @@ class SessionRegistrationService(ISessionRegistrar):
             git_repo=git_context.repo or "",
             git_commit=git_context.commit or "",
             git_branch=git_context.branch or "",
+            expected_counts=expected_counts,
         )
         if error:
             self._logger.warning("Registration session finalize failed: %s", error)
@@ -216,6 +224,7 @@ class SessionRegistrationService(ISessionRegistrar):
             session_hash=session_hash,
             session_url=session_url if isinstance(session_url, str) else None,
             registration_session_id=registration_session_id,
+            registration_session_mode=result.get("mode") if result else None,
             created=result.get("created") if result else None,
             status=result.get("status") if result else None,
         )

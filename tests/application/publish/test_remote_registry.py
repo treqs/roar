@@ -11,7 +11,7 @@ from roar.application.publish.remote_registry import (
 def test_glaas_remote_registry_transport_delegates_to_client() -> None:
     client = MagicMock()
     client.is_configured.return_value = True
-    client.health_check.return_value = None
+    client.health_check.return_value = {"status": "healthy"}
     client.register_composite_artifact.return_value = {"ok": True}
     client.sync_labels.return_value = ({"ok": True}, None)
     client.publish_auth = {"mode": "device"}
@@ -26,7 +26,7 @@ def test_glaas_remote_registry_transport_delegates_to_client() -> None:
 
     assert transport.publish_auth == {"mode": "device"}
     assert transport.is_configured() is True
-    assert transport.health_check() is None
+    assert transport.health_check() == {"status": "healthy"}
     assert transport.register_composite_artifact({"hash": "abc"}) == {"ok": True}
     assert transport.sync_labels([{"entity_type": "artifact"}]) == ({"ok": True}, None)
     assert transport.session_service is session_service

@@ -37,6 +37,8 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.registration_sessions_by_id: dict[str, dict[str, Any]] = {}
         self.registration_session_ids_by_client_session_id: dict[str, str] = {}
         self.job_owners_by_uid: dict[str, dict[str, Any]] = {}
+        self.supports_anonymous_public_registration_sessions = True
+        self.supports_finalize_expected_hash = True
         self._next_job_id = 1
         self._next_registration_session_id = 1
         self._next_finalized_hash = 1
@@ -98,6 +100,35 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             }
         return None
 
+    def _resolve_registration_session_token(self, authorization: str | None) -> str | None:
+        if not authorization or not authorization.startswith("RegistrationSession "):
+            return None
+        token = authorization.removeprefix("RegistrationSession ").strip()
+        return token or None
+
+    def _authorize_registration_session_write(
+        self,
+        registration_session_id: str,
+        authorization: str | None,
+    ) -> tuple[dict[str, str] | None, dict[str, Any] | None]:
+        session_state = self.server.registration_sessions_by_id.get(registration_session_id)
+        if session_state is None:
+            return None, None
+
+        token = self._resolve_registration_session_token(authorization)
+        if (
+            token is not None
+            and session_state.get("mode") == "anonymous_public"
+            and session_state.get("token") == token
+        ):
+            return None, session_state
+
+        authenticated_user = self._resolve_authenticated_user(authorization)
+        if authenticated_user is not None:
+            return authenticated_user, session_state
+
+        return None, None
+
     def _record_artifacts(self, artifacts: list[dict[str, Any]]) -> None:
         for artifact in artifacts:
             artifact_hash = artifact.get("hash")
@@ -146,6 +177,20 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             return None
 
         return f"job_uid already belongs to a different lineage or registration session: {job_uid}"
+
+    def _count_registration_session_staging(
+        self,
+        session_state: dict[str, Any],
+    ) -> dict[str, int]:
+        jobs_by_uid = session_state.get("jobs")
+        if not isinstance(jobs_by_uid, dict):
+            return {"jobs": 0, "inputs": 0, "outputs": 0}
+        jobs = [job for job in jobs_by_uid.values() if isinstance(job, dict)]
+        return {
+            "jobs": len(jobs),
+            "inputs": sum(len(job.get("inputs", [])) for job in jobs),
+            "outputs": sum(len(job.get("outputs", [])) for job in jobs),
+        }
 
     def _compute_registration_session_hash(
         self,
@@ -299,7 +344,22 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
 
         if self.path == "/api/v1/health":
             self.server.health_checks += 1
-            self._write_json(200, {"success": True, "status": "healthy"})
+            self._write_json(
+                200,
+                {
+                    "success": True,
+                    "status": "healthy",
+                    "features": {
+                        "registration_sessions": {
+                            "authenticated": True,
+                            "anonymous_public": self.server.supports_anonymous_public_registration_sessions,
+                            "finalize_expected_hash": self.server.supports_finalize_expected_hash,
+                            "finalize_server_authoritative_hash": self.server.supports_finalize_expected_hash,
+                            "finalize_expected_counts": self.server.supports_finalize_expected_hash,
+                        }
+                    },
+                },
+            )
             return
 
         artifact_match = re.fullmatch(r"/api/v1/artifacts/([0-9a-f]+)", self.path)
@@ -386,12 +446,27 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         authorization = self.headers.get("Authorization")
         self.server.auth_headers.append({"path": self.path, "authorization": authorization})
         authenticated_user = self._resolve_authenticated_user(authorization)
-        if authenticated_user is None:
-            self._write_json(401, {"error": "Missing or invalid auth"})
-            return
 
         if self.path == "/api/v1/registration-sessions":
             self.server.registration_session_creations.append(payload)
+            requested_mode = payload.get("mode")
+            mode = requested_mode if isinstance(requested_mode, str) and requested_mode else None
+
+            if mode == "anonymous_public":
+                if not self.server.supports_anonymous_public_registration_sessions:
+                    self._write_json(
+                        400,
+                        {
+                            "error": {
+                                "message": "Anonymous public registration sessions are not supported"
+                            }
+                        },
+                    )
+                    return
+            elif authenticated_user is None:
+                self._write_json(401, {"error": "Missing or invalid auth"})
+                return
+
             client_session_id = payload.get("client_session_id")
             if isinstance(client_session_id, str) and client_session_id:
                 registration_session_id = (
@@ -403,33 +478,54 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             created = registration_session_id is None
             if registration_session_id is None:
                 registration_session_id = self.server.allocate_registration_session_id()
-                self.server.registration_sessions_by_id[registration_session_id] = {
+                session_state: dict[str, Any] = {
                     "jobs": {},
                     "hash": None,
                     "status": "active",
+                    "mode": mode,
                 }
+                if mode == "anonymous_public":
+                    session_state["token"] = f"reg-token-{registration_session_id}"
+                self.server.registration_sessions_by_id[registration_session_id] = session_state
                 if isinstance(client_session_id, str) and client_session_id:
                     self.server.registration_session_ids_by_client_session_id[client_session_id] = (
                         registration_session_id
                     )
 
             session_state = self.server.registration_sessions_by_id[registration_session_id]
-            self._write_json(
-                201,
-                {
-                    "registration_session_id": registration_session_id,
-                    "created": created,
-                    "status": session_state["status"],
-                },
-            )
+            response = {
+                "registration_session_id": registration_session_id,
+                "created": created,
+                "status": session_state["status"],
+                "mode": session_state.get("mode"),
+            }
+            token = session_state.get("token")
+            if isinstance(token, str) and token:
+                response["registration_session_token"] = token
+            self._write_json(201, response)
             return
 
         if self.path == "/api/v1/sessions":
+            if authenticated_user is None and payload.get("scope_request"):
+                self._write_json(
+                    403,
+                    {
+                        "error": {
+                            "message": "Anonymous session registration cannot request scoped visibility"
+                        }
+                    },
+                )
+                return
+
             self.server.session_registrations.append(
                 {
                     **payload,
-                    "_authenticated_user_id": authenticated_user["id"],
-                    "_auth_mode": authenticated_user["auth_mode"],
+                    "_authenticated_user_id": authenticated_user["id"]
+                    if authenticated_user
+                    else None,
+                    "_auth_mode": authenticated_user["auth_mode"]
+                    if authenticated_user
+                    else "anonymous",
                 }
             )
             session_hash = str(payload.get("hash", ""))
@@ -502,17 +598,72 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         )
         if finalize_match:
             registration_session_id = finalize_match.group(1)
-            session_state = self.server.registration_sessions_by_id.setdefault(
-                registration_session_id,
-                {"jobs": {}, "hash": None, "status": "active"},
-            )
+            token = self._resolve_registration_session_token(authorization)
+            session_state = self.server.registration_sessions_by_id.get(registration_session_id)
+            if token is not None:
+                if (
+                    session_state is None
+                    or session_state.get("mode") != "anonymous_public"
+                    or session_state.get("token") != token
+                ):
+                    self._write_json(
+                        401, {"error": {"message": "Invalid registration session token"}}
+                    )
+                    return
+                auth_for_finalize = None
+            else:
+                if authenticated_user is None:
+                    self._write_json(401, {"error": "Missing or invalid auth"})
+                    return
+                auth_for_finalize = authenticated_user
+                session_state = self.server.registration_sessions_by_id.setdefault(
+                    registration_session_id,
+                    {"jobs": {}, "hash": None, "status": "active", "mode": None},
+                )
+
+            if session_state is None:
+                self._write_json(404, {"error": {"message": "Registration session not found"}})
+                return
+
+            if token is not None and payload.get("scope_request"):
+                self._write_json(
+                    400,
+                    {
+                        "error": {
+                            "message": "Anonymous public finalize does not accept scope_request"
+                        }
+                    },
+                )
+                return
+
             lineage_hash = session_state.get("hash") or self._compute_registration_session_hash(
                 session_state,
                 payload,
-                authenticated_user,
+                auth_for_finalize,
             )
             if not lineage_hash:
                 lineage_hash = self.server.allocate_lineage_hash()
+
+            staged_counts = self._count_registration_session_staging(session_state)
+            expected_counts = payload.get("expected")
+            if token is not None and isinstance(expected_counts, dict):
+                mismatches = [
+                    key
+                    for key in ("jobs", "inputs", "outputs")
+                    if isinstance(expected_counts.get(key), int)
+                    and expected_counts.get(key) != staged_counts[key]
+                ]
+                if mismatches:
+                    self._write_json(
+                        400,
+                        {
+                            "error": {
+                                "message": "Staged lineage counts did not match finalize expectations"
+                            }
+                        },
+                    )
+                    return
+
             session_state["hash"] = lineage_hash
             session_state["status"] = "closed"
             jobs_by_uid = session_state.get("jobs")
@@ -530,6 +681,8 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                     "registration_session_id": registration_session_id,
                     "hash": lineage_hash,
                     "status": "closed",
+                    "canonical_version": 1,
+                    "staged_counts": staged_counts,
                 }
             )
             self._write_json(
@@ -540,6 +693,9 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                     "created": True,
                     "registration_session_id": registration_session_id,
                     "status": "closed",
+                    "mode": session_state.get("mode"),
+                    "canonical_version": 1,
+                    "staged_counts": staged_counts,
                 },
             )
             return
@@ -550,15 +706,32 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         )
         if reg_batch_match:
             registration_session_id = reg_batch_match.group(1)
+            token = self._resolve_registration_session_token(authorization)
+            session_state = self.server.registration_sessions_by_id.get(registration_session_id)
+            if token is not None:
+                if (
+                    session_state is None
+                    or session_state.get("mode") != "anonymous_public"
+                    or session_state.get("token") != token
+                ):
+                    self._write_json(
+                        401, {"error": {"message": "Invalid registration session token"}}
+                    )
+                    return
+            elif authenticated_user is None:
+                self._write_json(401, {"error": "Missing or invalid auth"})
+                return
+            else:
+                session_state = self.server.registration_sessions_by_id.setdefault(
+                    registration_session_id,
+                    {"jobs": {}, "hash": None, "status": "active", "mode": None},
+                )
+
             jobs = payload.get("jobs", [])
             if not isinstance(jobs, list):
                 jobs = []
             self.server.registration_session_job_batches.append(
                 {"registration_session_id": registration_session_id, "jobs": jobs}
-            )
-            session_state = self.server.registration_sessions_by_id.setdefault(
-                registration_session_id,
-                {"jobs": {}, "hash": None, "status": "active"},
             )
             job_ids = []
             errors: list[str] = []
@@ -585,7 +758,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                                 "job_type": job.get("job_type"),
                                 "step_number": job.get("step_number"),
                                 "parent_job_uid": job.get("parent_job_uid"),
-                                "metadata": job.get("metadata"),
+                                "metadata": _parse_metadata_object(job.get("metadata")),
                             }
                         )
                     job_ids.append(self.server.allocate_job_id())
@@ -599,12 +772,29 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         reg_job_match = re.fullmatch(r"/api/v1/registration-sessions/([^/]+)/jobs", self.path)
         if reg_job_match:
             registration_session_id = reg_job_match.group(1)
+            token = self._resolve_registration_session_token(authorization)
+            session_state = self.server.registration_sessions_by_id.get(registration_session_id)
+            if token is not None:
+                if (
+                    session_state is None
+                    or session_state.get("mode") != "anonymous_public"
+                    or session_state.get("token") != token
+                ):
+                    self._write_json(
+                        401, {"error": {"message": "Invalid registration session token"}}
+                    )
+                    return
+            elif authenticated_user is None:
+                self._write_json(401, {"error": "Missing or invalid auth"})
+                return
+            else:
+                session_state = self.server.registration_sessions_by_id.setdefault(
+                    registration_session_id,
+                    {"jobs": {}, "hash": None, "status": "active", "mode": None},
+                )
+
             self.server.registration_session_job_creates.append(
                 {"registration_session_id": registration_session_id, "job": payload}
-            )
-            session_state = self.server.registration_sessions_by_id.setdefault(
-                registration_session_id,
-                {"jobs": {}, "hash": None, "status": "active"},
             )
             job_uid = payload.get("job_uid")
             if isinstance(job_uid, str) and job_uid:
@@ -625,7 +815,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                         "job_type": payload.get("job_type"),
                         "step_number": payload.get("step_number"),
                         "parent_job_uid": payload.get("parent_job_uid"),
-                        "metadata": payload.get("metadata"),
+                        "metadata": _parse_metadata_object(payload.get("metadata")),
                     }
                 )
             self._write_json(200, {"id": self.server.allocate_job_id()})
@@ -637,6 +827,27 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         )
         if reg_input_match:
             registration_session_id, job_uid = reg_input_match.groups()
+            token = self._resolve_registration_session_token(authorization)
+            session_state = self.server.registration_sessions_by_id.get(registration_session_id)
+            if token is not None:
+                if (
+                    session_state is None
+                    or session_state.get("mode") != "anonymous_public"
+                    or session_state.get("token") != token
+                ):
+                    self._write_json(
+                        401, {"error": {"message": "Invalid registration session token"}}
+                    )
+                    return
+            elif authenticated_user is None:
+                self._write_json(401, {"error": "Missing or invalid auth"})
+                return
+            else:
+                session_state = self.server.registration_sessions_by_id.setdefault(
+                    registration_session_id,
+                    {"jobs": {}, "hash": None, "status": "active", "mode": None},
+                )
+
             artifacts = payload.get("artifacts", [])
             if not isinstance(artifacts, list):
                 artifacts = []
@@ -648,10 +859,6 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 }
             )
             self._record_artifacts(artifacts)
-            session_state = self.server.registration_sessions_by_id.setdefault(
-                registration_session_id,
-                {"jobs": {}, "hash": None, "status": "active"},
-            )
             session_state["jobs"].setdefault(job_uid, {"inputs": [], "outputs": []})[
                 "inputs"
             ].extend(artifacts)
@@ -671,6 +878,27 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         )
         if reg_output_match:
             registration_session_id, job_uid = reg_output_match.groups()
+            token = self._resolve_registration_session_token(authorization)
+            session_state = self.server.registration_sessions_by_id.get(registration_session_id)
+            if token is not None:
+                if (
+                    session_state is None
+                    or session_state.get("mode") != "anonymous_public"
+                    or session_state.get("token") != token
+                ):
+                    self._write_json(
+                        401, {"error": {"message": "Invalid registration session token"}}
+                    )
+                    return
+            elif authenticated_user is None:
+                self._write_json(401, {"error": "Missing or invalid auth"})
+                return
+            else:
+                session_state = self.server.registration_sessions_by_id.setdefault(
+                    registration_session_id,
+                    {"jobs": {}, "hash": None, "status": "active", "mode": None},
+                )
+
             artifacts = payload.get("artifacts", [])
             if not isinstance(artifacts, list):
                 artifacts = []
@@ -682,10 +910,6 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 }
             )
             self._record_artifacts(artifacts)
-            session_state = self.server.registration_sessions_by_id.setdefault(
-                registration_session_id,
-                {"jobs": {}, "hash": None, "status": "active"},
-            )
             session_state["jobs"].setdefault(job_uid, {"inputs": [], "outputs": []})[
                 "outputs"
             ].extend(artifacts)
@@ -750,6 +974,18 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         """Suppress default stderr logging for integration tests."""
+
+
+def _parse_metadata_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _label_target_key(payload: dict[str, Any]) -> str:
@@ -850,6 +1086,16 @@ class FakeGlaasServer:
     @property
     def label_mutations(self) -> list[dict[str, Any]]:
         return self._server.label_mutations
+
+    def set_anonymous_public_registration_session_support(
+        self,
+        *,
+        enabled: bool,
+        finalize_expected_hash: bool | None = None,
+    ) -> None:
+        self._server.supports_anonymous_public_registration_sessions = enabled
+        if finalize_expected_hash is not None:
+            self._server.supports_finalize_expected_hash = finalize_expected_hash
 
     def set_artifact_dag(self, digest: str, dag: dict[str, Any]) -> None:
         self._server.artifact_dags_by_digest[digest] = dag

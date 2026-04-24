@@ -38,6 +38,7 @@ def test_prepare_register_execution_builds_session_git_and_tag_plan(tmp_path: Pa
         session_hash="session-hash",
         session_url="https://glaas/session",
         registration_session_id=None,
+        registration_session_mode=None,
     )
     git_context = _git_context()
     git_state = MagicMock(repo_root=tmp_path)
@@ -112,6 +113,7 @@ def test_prepare_register_execution_passes_lineage_and_creator_identity_to_sessi
         session_hash="session-hash",
         session_url=None,
         registration_session_id=None,
+        registration_session_mode=None,
     )
 
     with (
@@ -146,6 +148,7 @@ def test_prepare_register_execution_skips_git_tagging_and_glaas_on_dry_run(tmp_p
         session_hash="session-hash",
         session_url=None,
         registration_session_id=None,
+        registration_session_mode=None,
     )
     git_context = _git_context()
 

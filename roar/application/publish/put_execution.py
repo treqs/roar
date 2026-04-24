@@ -30,6 +30,7 @@ from ...application.publish.remote_job_uids import (
     build_remote_publication_job_uid,
     prepare_jobs_for_remote_publication,
 )
+from ...application.publish.session import build_staged_lineage_counts
 from ...application.system_labels import refresh_job_system_labels
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
@@ -170,6 +171,7 @@ class PutService:
         session_id = prepared.session_id
         session_hash = prepared.session_hash
         registration_session_id = prepared.registration_session_id
+        registration_session_mode = prepared.registration_session_mode
         git_context = prepared.git_context
         resolved = prepared.resolved_sources
         destination_type = prepared.destination_type
@@ -274,6 +276,7 @@ class PutService:
                 client=client,
                 coordinator=coordinator,
                 registration_session_id=registration_session_id,
+                registration_session_mode=registration_session_mode,
                 session_id=session_id,
                 fallback_session_hash=session_hash or "",
                 git_context=git_context,
@@ -528,6 +531,7 @@ class PutService:
         client: Any,
         coordinator: RegistrationCoordinator,
         registration_session_id: str,
+        registration_session_mode: str | None,
         session_id: int,
         fallback_session_hash: str,
         git_context: GitContext,
@@ -657,9 +661,22 @@ class PutService:
 
                 if put_job_registered and put_job_links_succeeded:
                     spin.update("Finalizing lineage...")
+                    expected_counts = None
+                    if registration_session_mode == "anonymous_public":
+                        expected_counts = build_staged_lineage_counts(
+                            [
+                                *remote_lineage_jobs,
+                                {
+                                    "job_uid": remote_put_job_uid,
+                                    "_inputs": put_inputs,
+                                    "_outputs": put_outputs,
+                                },
+                            ]
+                        )
                     finalize_result = coordinator.session_service.finalize_registration_session(
                         registration_session_id=registration_session_id,
                         git_context=git_context,
+                        expected_counts=expected_counts,
                     )
                     if not finalize_result.success:
                         registration_errors.append(

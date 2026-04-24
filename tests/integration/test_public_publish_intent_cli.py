@@ -71,6 +71,26 @@ def _configure_unbound_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[s
     return env
 
 
+def _configure_public_only_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[str, str]:
+    subprocess.run(
+        ["git", "remote", "add", "origin", "https://github.com/test/repo.git"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+    )
+    xdg_config_home = repo / ".xdg"
+    home_dir = repo / ".home"
+    home_dir.mkdir(exist_ok=True)
+    env = {
+        "HOME": str(home_dir),
+        "XDG_CONFIG_HOME": str(xdg_config_home),
+        "GLAAS_API_URL": fake_glaas_url,
+    }
+    roar_cli("config", "set", "glaas.url", fake_glaas_url, env_overrides=env)
+    roar_cli("config", "set", "glaas.web_url", fake_glaas_url, env_overrides=env)
+    return env
+
+
 def _configure_unbound_repo_for_ssh_only(
     repo: Path,
     roar_cli,
@@ -293,6 +313,61 @@ def test_register_public_with_valid_ssh_uses_authenticated_creator_identity_for_
         and str(entry.get("authorization") or "").startswith("Signature ")
         for entry in fake_glaas_publish_server.auth_headers
     )
+
+
+def test_register_public_without_auth_uses_anonymous_registration_sessions_when_supported(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    env = _configure_public_only_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    _create_register_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
+
+    result = roar_cli("register", "report.txt", "--yes", "--public", env_overrides=env)
+
+    assert result.returncode == 0
+    assert fake_glaas_publish_server.session_registrations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert fake_glaas_publish_server.registration_session_creations[0]["mode"] == "anonymous_public"
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    finalization = fake_glaas_publish_server.registration_session_finalizations[0]
+    assert "expected_hash" not in finalization
+    assert finalization["expected"] == {"jobs": 1, "inputs": 1, "outputs": 1}
+    assert _parse_session_hash(f"{result.stdout}\n{result.stderr}") == finalization["hash"]
+    assert any(
+        entry["path"] == "/api/v1/registration-sessions" and entry.get("authorization") is None
+        for entry in fake_glaas_publish_server.auth_headers
+    )
+    assert any(
+        "/api/v1/registration-sessions/" in entry["path"]
+        and isinstance(entry.get("authorization"), str)
+        and entry["authorization"].startswith("RegistrationSession ")
+        for entry in fake_glaas_publish_server.auth_headers
+    )
+
+
+def test_register_public_without_auth_falls_back_to_legacy_session_registration_when_server_lacks_support(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    fake_glaas_publish_server.set_anonymous_public_registration_session_support(
+        enabled=False,
+        finalize_expected_hash=False,
+    )
+    env = _configure_public_only_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    _create_register_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
+
+    result = roar_cli("register", "report.txt", "--yes", "--public", env_overrides=env)
+
+    assert result.returncode == 0
+    assert len(fake_glaas_publish_server.session_registrations) == 1
+    assert fake_glaas_publish_server.registration_session_creations == []
+    assert fake_glaas_publish_server.registration_session_finalizations == []
 
 
 def test_register_public_with_valid_ssh_ignores_existing_repo_binding(
@@ -528,6 +603,78 @@ def test_put_private_flag_overrides_public_default_when_repo_has_no_binding(
     assert "No GLaaS repo binding found" in combined
     assert "--public" in combined
     assert fake_glaas_publish_server.session_registrations == []
+    assert fake_glaas_publish_server.registration_session_creations == []
+    assert fake_glaas_publish_server.registration_session_finalizations == []
+
+
+def test_put_public_without_auth_uses_anonymous_registration_sessions_when_supported(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    monkeypatch,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    env = _configure_public_only_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    _create_put_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
+    monkeypatch.setenv("ROAR_PUT_SKIP_UPLOAD", "1")
+
+    result = roar_cli(
+        "put",
+        "model.pt",
+        "s3://test-bucket/models",
+        "-m",
+        "publish model",
+        "--public",
+        env_overrides=env,
+    )
+
+    assert result.returncode == 0
+    assert fake_glaas_publish_server.session_registrations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert fake_glaas_publish_server.registration_session_creations[0]["mode"] == "anonymous_public"
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    finalization = fake_glaas_publish_server.registration_session_finalizations[0]
+    assert "expected_hash" not in finalization
+    assert finalization["expected"]["jobs"] >= 2
+    assert finalization["expected"]["inputs"] >= 1
+    assert _parse_session_hash(f"{result.stdout}\n{result.stderr}") == finalization["hash"]
+    assert any(
+        "/api/v1/registration-sessions/" in entry["path"]
+        and isinstance(entry.get("authorization"), str)
+        and entry["authorization"].startswith("RegistrationSession ")
+        for entry in fake_glaas_publish_server.auth_headers
+    )
+
+
+def test_put_public_without_auth_falls_back_to_legacy_session_registration_when_server_lacks_support(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    monkeypatch,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    fake_glaas_publish_server.set_anonymous_public_registration_session_support(
+        enabled=False,
+        finalize_expected_hash=False,
+    )
+    env = _configure_public_only_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    _create_put_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
+    monkeypatch.setenv("ROAR_PUT_SKIP_UPLOAD", "1")
+
+    result = roar_cli(
+        "put",
+        "model.pt",
+        "s3://test-bucket/models",
+        "-m",
+        "publish model",
+        "--public",
+        env_overrides=env,
+    )
+
+    assert result.returncode == 0
+    assert len(fake_glaas_publish_server.session_registrations) == 1
     assert fake_glaas_publish_server.registration_session_creations == []
     assert fake_glaas_publish_server.registration_session_finalizations == []
 
