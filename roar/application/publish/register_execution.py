@@ -16,7 +16,6 @@ from ...core.logging import get_logger
 from ...filters.omit import OmitFilter
 from ...integrations.config import config_get
 from ...presenters.spinner import Spinner
-from ...publish_auth import resolve_publish_creator_identity
 from .job_preparation import (
     estimate_links,
     normalize_jobs_for_registration,
@@ -24,7 +23,7 @@ from .job_preparation import (
 )
 from .remote_job_uids import prepare_jobs_for_remote_publication
 from .secrets import detect_lineage_secrets, filter_lineage_secrets
-from .session import compute_canonical_jobs_session_hash
+from .session import build_staged_lineage_counts
 
 if TYPE_CHECKING:
     from ...application.publish.composite_builder import CompositeArtifactBuilder
@@ -311,14 +310,8 @@ class RegisterService:
                         self.coordinator.session_service.finalize_registration_session(
                             registration_session_id=registration_session_id,
                             git_context=git_context,
-                            expected_hash=(
-                                compute_canonical_jobs_session_hash(
-                                    jobs=remote_registration_jobs,
-                                    git_context=git_context,
-                                    creator_identity=resolve_publish_creator_identity(
-                                        self.glaas_client.publish_auth
-                                    ),
-                                )
+                            expected_counts=(
+                                build_staged_lineage_counts(remote_registration_jobs)
                                 if registration_session_mode == "anonymous_public"
                                 else None
                             ),

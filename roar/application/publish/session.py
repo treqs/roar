@@ -109,6 +109,15 @@ def build_git_context_from_lineage(lineage: LineageData) -> GitContext:
     )
 
 
+def build_staged_lineage_counts(jobs: list[dict[str, Any]]) -> dict[str, int]:
+    """Build lightweight finalize expectations for staged registration-session lineage."""
+    return {
+        "jobs": len(jobs),
+        "inputs": sum(len(job.get("_inputs", [])) for job in jobs),
+        "outputs": sum(len(job.get("_outputs", [])) for job in jobs),
+    }
+
+
 def compute_canonical_lineage_session_hash(
     *,
     lineage: LineageData,
@@ -275,8 +284,10 @@ def _registration_session_feature_flags(health_payload: Any) -> tuple[bool, bool
         return False, False
 
     anonymous_public = bool(registration_sessions.get("anonymous_public"))
-    finalize_expected_hash = bool(registration_sessions.get("finalize_expected_hash"))
-    return anonymous_public, finalize_expected_hash
+    server_authoritative_hash = bool(
+        registration_sessions.get("finalize_server_authoritative_hash")
+    )
+    return anonymous_public, server_authoritative_hash
 
 
 def prepare_publish_session(
@@ -337,7 +348,7 @@ def prepare_publish_session(
         logger.debug("GLaaS health check failed: %s", exc)
         raise ValueError(f"GLaaS health check failed: {exc}") from exc
 
-    supports_anonymous_public_reg_sessions, supports_finalize_expected_hash = (
+    supports_anonymous_public_reg_sessions, supports_server_authoritative_finalize = (
         _registration_session_feature_flags(health_payload)
     )
 
@@ -352,7 +363,7 @@ def prepare_publish_session(
     anonymous_public_capable = (
         scope_request is None
         and supports_anonymous_public_reg_sessions
-        and supports_finalize_expected_hash
+        and supports_server_authoritative_finalize
     )
     if has_ssh_auth and not has_access_token and anonymous_public_capable:
         probe_publish_auth = getattr(resolved_remote_registry.client, "probe_publish_auth", None)

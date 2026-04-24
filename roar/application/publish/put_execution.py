@@ -9,7 +9,6 @@ roar put ALWAYS registers lineage with GLaaS. This is not optional.
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,7 +30,7 @@ from ...application.publish.remote_job_uids import (
     build_remote_publication_job_uid,
     prepare_jobs_for_remote_publication,
 )
-from ...application.publish.session import compute_canonical_jobs_session_hash
+from ...application.publish.session import build_staged_lineage_counts
 from ...application.system_labels import refresh_job_system_labels
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
@@ -40,7 +39,6 @@ from ...db.hashing import hash_files_blake3
 from ...integrations.glaas.registration import RegistrationCoordinator
 from ...integrations.storage.base import StorageBackend
 from ...presenters.spinner import Spinner
-from ...publish_auth import resolve_publish_creator_identity
 from .job_links import (
     build_put_job_link_inputs,
     build_put_job_link_outputs,
@@ -663,23 +661,22 @@ class PutService:
 
                 if put_job_registered and put_job_links_succeeded:
                     spin.update("Finalizing lineage...")
-                    expected_hash = None
+                    expected_counts = None
                     if registration_session_mode == "anonymous_public":
-                        expected_hash = self._compute_anonymous_registration_session_expected_hash(
-                            remote_lineage_jobs=remote_lineage_jobs,
-                            remote_put_job_uid=remote_put_job_uid,
-                            command=command,
-                            step_number=step_number,
-                            metadata_json=provisional_metadata_json,
-                            put_inputs=put_inputs,
-                            put_outputs=put_outputs,
-                            git_context=git_context,
-                            creator_identity=resolve_publish_creator_identity(client.publish_auth),
+                        expected_counts = build_staged_lineage_counts(
+                            [
+                                *remote_lineage_jobs,
+                                {
+                                    "job_uid": remote_put_job_uid,
+                                    "_inputs": put_inputs,
+                                    "_outputs": put_outputs,
+                                },
+                            ]
                         )
                     finalize_result = coordinator.session_service.finalize_registration_session(
                         registration_session_id=registration_session_id,
                         git_context=git_context,
-                        expected_hash=expected_hash,
+                        expected_counts=expected_counts,
                     )
                     if not finalize_result.success:
                         registration_errors.append(
@@ -804,40 +801,6 @@ class PutService:
             session_url=session_url,
             uploaded_files=uploaded_files,
             composites_registered=composite_result_items,
-        )
-
-    @staticmethod
-    def _compute_anonymous_registration_session_expected_hash(
-        *,
-        remote_lineage_jobs: list[dict[str, Any]],
-        remote_put_job_uid: str,
-        command: str,
-        step_number: int,
-        metadata_json: str,
-        put_inputs: list[dict[str, Any]],
-        put_outputs: list[dict[str, Any]],
-        git_context: GitContext,
-        creator_identity: str,
-    ) -> str:
-        """Compute the canonical hash expected from anonymous-public finalize."""
-        try:
-            parsed_metadata = json.loads(metadata_json) if metadata_json else {}
-        except json.JSONDecodeError:
-            parsed_metadata = {}
-
-        put_job = {
-            "job_uid": remote_put_job_uid,
-            "command": command,
-            "job_type": "put",
-            "step_number": step_number,
-            "_inputs": [dict(item) for item in put_inputs],
-            "_outputs": [dict(item) for item in put_outputs],
-            "metadata": parsed_metadata if isinstance(parsed_metadata, dict) else {},
-        }
-        return compute_canonical_jobs_session_hash(
-            jobs=[*remote_lineage_jobs, put_job],
-            git_context=git_context,
-            creator_identity=creator_identity,
         )
 
     @staticmethod

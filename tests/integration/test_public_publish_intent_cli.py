@@ -325,16 +325,6 @@ def test_register_public_without_auth_uses_anonymous_registration_sessions_when_
     env = _configure_public_only_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
     _create_register_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
 
-    preview = roar_cli(
-        "register",
-        "report.txt",
-        "--dry-run",
-        "--yes",
-        "--public",
-        env_overrides=env,
-    )
-    expected_hash = _parse_session_hash(f"{preview.stdout}\n{preview.stderr}")
-
     result = roar_cli("register", "report.txt", "--yes", "--public", env_overrides=env)
 
     assert result.returncode == 0
@@ -342,10 +332,10 @@ def test_register_public_without_auth_uses_anonymous_registration_sessions_when_
     assert len(fake_glaas_publish_server.registration_session_creations) == 1
     assert fake_glaas_publish_server.registration_session_creations[0]["mode"] == "anonymous_public"
     assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
-    assert fake_glaas_publish_server.registration_session_finalizations[0]["expected_hash"] == (
-        expected_hash
-    )
-    assert fake_glaas_publish_server.registration_session_finalizations[0]["hash"] == expected_hash
+    finalization = fake_glaas_publish_server.registration_session_finalizations[0]
+    assert "expected_hash" not in finalization
+    assert finalization["expected"] == {"jobs": 1, "inputs": 1, "outputs": 1}
+    assert _parse_session_hash(f"{result.stdout}\n{result.stderr}") == finalization["hash"]
     assert any(
         entry["path"] == "/api/v1/registration-sessions" and entry.get("authorization") is None
         for entry in fake_glaas_publish_server.auth_headers
@@ -638,17 +628,17 @@ def test_put_public_without_auth_uses_anonymous_registration_sessions_when_suppo
         "--public",
         env_overrides=env,
     )
-    expected_hash = _parse_session_hash(f"{result.stdout}\n{result.stderr}")
 
     assert result.returncode == 0
     assert fake_glaas_publish_server.session_registrations == []
     assert len(fake_glaas_publish_server.registration_session_creations) == 1
     assert fake_glaas_publish_server.registration_session_creations[0]["mode"] == "anonymous_public"
     assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
-    assert fake_glaas_publish_server.registration_session_finalizations[0]["expected_hash"] == (
-        expected_hash
-    )
-    assert fake_glaas_publish_server.registration_session_finalizations[0]["hash"] == expected_hash
+    finalization = fake_glaas_publish_server.registration_session_finalizations[0]
+    assert "expected_hash" not in finalization
+    assert finalization["expected"]["jobs"] >= 2
+    assert finalization["expected"]["inputs"] >= 1
+    assert _parse_session_hash(f"{result.stdout}\n{result.stderr}") == finalization["hash"]
     assert any(
         "/api/v1/registration-sessions/" in entry["path"]
         and isinstance(entry.get("authorization"), str)

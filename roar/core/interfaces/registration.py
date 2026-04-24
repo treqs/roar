@@ -115,7 +115,7 @@ class ISessionRegistrar(Protocol):
         self,
         registration_session_id: str,
         git_context: GitContext,
-        expected_hash: str | None = None,
+        expected_counts: dict[str, int] | None = None,
     ) -> SessionRegistrationResult:
         """Finalize a remote registration session into an immutable lineage hash."""
         ...

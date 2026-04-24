@@ -178,6 +178,20 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
 
         return f"job_uid already belongs to a different lineage or registration session: {job_uid}"
 
+    def _count_registration_session_staging(
+        self,
+        session_state: dict[str, Any],
+    ) -> dict[str, int]:
+        jobs_by_uid = session_state.get("jobs")
+        if not isinstance(jobs_by_uid, dict):
+            return {"jobs": 0, "inputs": 0, "outputs": 0}
+        jobs = [job for job in jobs_by_uid.values() if isinstance(job, dict)]
+        return {
+            "jobs": len(jobs),
+            "inputs": sum(len(job.get("inputs", [])) for job in jobs),
+            "outputs": sum(len(job.get("outputs", [])) for job in jobs),
+        }
+
     def _compute_registration_session_hash(
         self,
         session_state: dict[str, Any],
@@ -340,6 +354,8 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                             "authenticated": True,
                             "anonymous_public": self.server.supports_anonymous_public_registration_sessions,
                             "finalize_expected_hash": self.server.supports_finalize_expected_hash,
+                            "finalize_server_authoritative_hash": self.server.supports_finalize_expected_hash,
+                            "finalize_expected_counts": self.server.supports_finalize_expected_hash,
                         }
                     },
                 },
@@ -628,22 +644,25 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             if not lineage_hash:
                 lineage_hash = self.server.allocate_lineage_hash()
 
-            if token is not None and self.server.supports_finalize_expected_hash:
-                expected_hash = payload.get("expected_hash")
-                if not isinstance(expected_hash, str) or not expected_hash:
-                    self._write_json(400, {"error": {"message": "expected_hash is required"}})
-                    return
-                if lineage_hash != expected_hash:
+            staged_counts = self._count_registration_session_staging(session_state)
+            expected_counts = payload.get("expected")
+            if token is not None and isinstance(expected_counts, dict):
+                mismatches = [
+                    key
+                    for key in ("jobs", "inputs", "outputs")
+                    if isinstance(expected_counts.get(key), int)
+                    and expected_counts.get(key) != staged_counts[key]
+                ]
+                if mismatches:
                     self._write_json(
                         400,
                         {
                             "error": {
-                                "message": f"expected_hash did not match staged lineage: expected {expected_hash}, got {lineage_hash}"
+                                "message": "Staged lineage counts did not match finalize expectations"
                             }
                         },
                     )
                     return
-                lineage_hash = expected_hash
 
             session_state["hash"] = lineage_hash
             session_state["status"] = "closed"
@@ -662,6 +681,8 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                     "registration_session_id": registration_session_id,
                     "hash": lineage_hash,
                     "status": "closed",
+                    "canonical_version": 1,
+                    "staged_counts": staged_counts,
                 }
             )
             self._write_json(
@@ -673,6 +694,8 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                     "registration_session_id": registration_session_id,
                     "status": "closed",
                     "mode": session_state.get("mode"),
+                    "canonical_version": 1,
+                    "staged_counts": staged_counts,
                 },
             )
             return

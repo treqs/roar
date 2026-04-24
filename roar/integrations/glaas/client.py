@@ -532,7 +532,7 @@ class GlaasClient:
         git_repo: str,
         git_commit: str,
         git_branch: str,
-        expected_hash: str | None = None,
+        expected_counts: dict[str, int] | None = None,
     ) -> tuple[dict | None, str | None]:
         """Finalize a registration session into a lineage hash."""
         body: dict[str, Any] = {
@@ -542,8 +542,8 @@ class GlaasClient:
         }
         if self._publish_auth.scope_request:
             body["scope_request"] = dict(self._publish_auth.scope_request)
-        if expected_hash:
-            body["expected_hash"] = expected_hash
+        if expected_counts:
+            body["expected"] = dict(expected_counts)
         result, error = self._request(
             "POST",
             f"/api/v1/registration-sessions/{registration_session_id}/finalize",

@@ -182,7 +182,7 @@ class SessionRegistrationService(ISessionRegistrar):
         self,
         registration_session_id: str,
         git_context: GitContext,
-        expected_hash: str | None = None,
+        expected_counts: dict[str, int] | None = None,
     ) -> SessionRegistrationResult:
         """Finalize a remote registration session into an immutable lineage hash."""
         validation = validate_session_registration(
@@ -201,7 +201,7 @@ class SessionRegistrationService(ISessionRegistrar):
             git_repo=git_context.repo or "",
             git_commit=git_context.commit or "",
             git_branch=git_context.branch or "",
-            expected_hash=expected_hash,
+            expected_counts=expected_counts,
         )
         if error:
             self._logger.warning("Registration session finalize failed: %s", error)

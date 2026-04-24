@@ -248,6 +248,7 @@ def test_prepare_publish_session_uses_anonymous_public_registration_sessions_whe
                 "authenticated": True,
                 "anonymous_public": True,
                 "finalize_expected_hash": True,
+                "finalize_server_authoritative_hash": True,
             }
         },
     }
@@ -299,6 +300,7 @@ def test_prepare_publish_session_uses_anonymous_public_registration_sessions_whe
                 "authenticated": True,
                 "anonymous_public": True,
                 "finalize_expected_hash": True,
+                "finalize_server_authoritative_hash": True,
             }
         },
     }
@@ -351,6 +353,7 @@ def test_prepare_publish_session_keeps_registration_session_when_ssh_auth_is_acc
                 "authenticated": True,
                 "anonymous_public": True,
                 "finalize_expected_hash": True,
+                "finalize_server_authoritative_hash": True,
             }
         },
     }
@@ -399,6 +402,7 @@ def test_prepare_publish_session_falls_back_to_legacy_anonymous_registration_whe
                 "authenticated": True,
                 "anonymous_public": True,
                 "finalize_expected_hash": False,
+                "finalize_server_authoritative_hash": False,
             }
         },
     }
