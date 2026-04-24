@@ -85,19 +85,20 @@ class TestGlaasClientExceptions:
 
             assert exc_info.value.status_code == 503
 
-    def test_health_check_returns_true_on_success(self):
-        """health_check should return True on success."""
+    def test_health_check_returns_health_payload_on_success(self):
+        """health_check should return the parsed health payload on success."""
         client = _optional_auth_client()
 
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_response = MagicMock()
             mock_response.status = 200
+            mock_response.read.return_value = b'{"status": "healthy"}'
             mock_response.__enter__ = MagicMock(return_value=mock_response)
             mock_response.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_response
 
             result = client.health_check()
-            assert result is True
+            assert result == {"status": "healthy"}
 
     def test_get_artifact_raises_on_not_found(self):
         """get_artifact should raise GlaasApiError on 404."""

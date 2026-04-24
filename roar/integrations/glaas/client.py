@@ -78,6 +78,8 @@ class GlaasClient:
             start_dir,
             allow_public_without_binding=allow_public_without_binding,
         )
+        self._registration_session_mode: str | None = None
+        self._registration_session_token: str | None = None
 
     @property
     def publish_auth(self) -> PublishAuthContext:
@@ -93,12 +95,12 @@ class GlaasClient:
         """Parse JSON response with descriptive error messages."""
         return parse_json_response(response_body, http_status)
 
-    def health_check(self) -> bool:
+    def health_check(self) -> dict[str, Any]:
         """
         Check server health.
 
         Returns:
-            True if server is healthy
+            Parsed health payload when available, otherwise a minimal healthy payload.
 
         Raises:
             GlaasNotConfiguredError: If GLaaS URL is not configured
@@ -118,12 +120,17 @@ class GlaasClient:
             url = f"{self.base_url}/api/v1/health"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=10) as resp:
-                if resp.status == 200:
-                    return True
-                raise GlaasApiError(
-                    f"Server returned status {resp.status}",
-                    status_code=resp.status,
-                )
+                if resp.status != 200:
+                    raise GlaasApiError(
+                        f"Server returned status {resp.status}",
+                        status_code=resp.status,
+                    )
+
+                response_body = resp.read().decode() if hasattr(resp, "read") else ""
+                result, error = self._parse_json_response(response_body, resp.status)
+                if error or not isinstance(result, dict):
+                    return {"status": "healthy"}
+                return result
         except urllib.error.URLError as e:
             _get_logger().debug("GLaaS health check connection error: %s", e)
             raise GlaasConnectionError(f"Connection error: {e}") from e
@@ -133,6 +140,9 @@ class GlaasClient:
         method: str,
         path: str,
         body: dict | None = None,
+        *,
+        auth_header_value: str | None = None,
+        allow_auth_fallback: bool = True,
     ) -> tuple[Any | None, str | None]:
         """Make authenticated request. Returns (response_dict, error_message)."""
         if not self.base_url:
@@ -143,12 +153,27 @@ class GlaasClient:
             path=path,
             body=body,
             auth_header_factory=self._make_auth_header,
+            auth_header_value=auth_header_value,
+            allow_auth_fallback=allow_auth_fallback,
         )
 
     def _make_auth_header(self, method: str, path: str, body: bytes | None = None) -> str | None:
         if self._publish_auth.access_token:
             return f"Bearer {self._publish_auth.access_token}"
         return make_auth_header(method, path, body)
+
+    def _registration_session_auth_header(self) -> str | None:
+        if (
+            self._registration_session_mode == "anonymous_public"
+            and isinstance(self._registration_session_token, str)
+            and self._registration_session_token.strip()
+        ):
+            return f"RegistrationSession {self._registration_session_token.strip()}"
+        return None
+
+    def _clear_registration_session_auth(self) -> None:
+        self._registration_session_mode = None
+        self._registration_session_token = None
 
     def register_artifact(
         self,
@@ -457,12 +482,31 @@ class GlaasClient:
     def create_registration_session(
         self,
         client_session_id: str | None = None,
+        mode: str | None = None,
     ) -> tuple[dict | None, str | None]:
         """Create or resume a durable registration session."""
+        self._clear_registration_session_auth()
+
         body: dict[str, Any] = {}
         if client_session_id:
             body["client_session_id"] = client_session_id
-        return self._request("POST", "/api/v1/registration-sessions", body)
+        if mode:
+            body["mode"] = mode
+
+        result, error = self._request("POST", "/api/v1/registration-sessions", body)
+        if error:
+            return result, error
+
+        if mode == "anonymous_public" and isinstance(result, dict):
+            token = result.get("registration_session_token")
+            result_mode = result.get("mode")
+            if isinstance(token, str) and token.strip():
+                self._registration_session_token = token.strip()
+                self._registration_session_mode = (
+                    str(result_mode).strip() if isinstance(result_mode, str) else mode
+                )
+
+        return result, None
 
     def finalize_registration_session(
         self,
@@ -470,6 +514,7 @@ class GlaasClient:
         git_repo: str,
         git_commit: str,
         git_branch: str,
+        expected_hash: str | None = None,
     ) -> tuple[dict | None, str | None]:
         """Finalize a registration session into a lineage hash."""
         body: dict[str, Any] = {
@@ -479,11 +524,18 @@ class GlaasClient:
         }
         if self._publish_auth.scope_request:
             body["scope_request"] = dict(self._publish_auth.scope_request)
-        return self._request(
+        if expected_hash:
+            body["expected_hash"] = expected_hash
+        result, error = self._request(
             "POST",
             f"/api/v1/registration-sessions/{registration_session_id}/finalize",
             body,
+            auth_header_value=self._registration_session_auth_header(),
+            allow_auth_fallback=False,
         )
+        if error is None and self._registration_session_mode == "anonymous_public":
+            self._clear_registration_session_auth()
+        return result, error
 
     def sync_labels(
         self,
@@ -537,6 +589,8 @@ class GlaasClient:
             "POST",
             f"/api/v1/registration-sessions/{registration_session_id}/jobs",
             body,
+            auth_header_value=self._registration_session_auth_header(),
+            allow_auth_fallback=False,
         )
         if error:
             return None, error
@@ -567,6 +621,8 @@ class GlaasClient:
             "POST",
             f"/api/v1/registration-sessions/{registration_session_id}/jobs/batch",
             body,
+            auth_header_value=self._registration_session_auth_header(),
+            allow_auth_fallback=False,
         )
         if error:
             return [], [error] * len(jobs), error
@@ -611,6 +667,8 @@ class GlaasClient:
             "POST",
             f"/api/v1/registration-sessions/{registration_session_id}/jobs/{job_uid}/inputs",
             body,
+            auth_header_value=self._registration_session_auth_header(),
+            allow_auth_fallback=False,
         )
         return result, error
 
@@ -651,6 +709,8 @@ class GlaasClient:
             "POST",
             f"/api/v1/registration-sessions/{registration_session_id}/jobs/{job_uid}/outputs",
             body,
+            auth_header_value=self._registration_session_auth_header(),
+            allow_auth_fallback=False,
         )
         return result, error
 

@@ -106,7 +106,10 @@ def test_prepare_publish_session_creates_registration_session_with_glaas(tmp_pat
         registration_session_id="reg-session-123",
     )
     glaas_client.health_check.assert_called_once()
-    session_service.create_registration_session.assert_called_once_with(client_session_id=None)
+    session_service.create_registration_session.assert_called_once_with(
+        client_session_id=None,
+        mode=None,
+    )
     session_service.register.assert_not_called()
 
 
@@ -144,7 +147,8 @@ def test_prepare_publish_session_uses_remote_registry_publish_auth_when_legacy_c
     )
     remote_registry.health_check.assert_called_once()
     remote_registry.session_service.create_registration_session.assert_called_once_with(
-        client_session_id=None
+        client_session_id=None,
+        mode=None,
     )
     remote_registry.session_service.register.assert_not_called()
 
@@ -180,7 +184,10 @@ def test_prepare_publish_session_creates_registration_session_with_ssh_only_auth
         session_url=None,
         registration_session_id="reg-session-ssh-123",
     )
-    session_service.create_registration_session.assert_called_once_with(client_session_id=None)
+    session_service.create_registration_session.assert_called_once_with(
+        client_session_id=None,
+        mode=None,
+    )
     session_service.register.assert_not_called()
 
 
@@ -220,8 +227,105 @@ def test_prepare_publish_session_creates_registration_session_with_scoped_ssh_on
         session_url=None,
         registration_session_id="reg-session-scoped-ssh-123",
     )
-    session_service.create_registration_session.assert_called_once_with(client_session_id=None)
+    session_service.create_registration_session.assert_called_once_with(
+        client_session_id=None,
+        mode=None,
+    )
     session_service.register.assert_not_called()
+
+
+def test_prepare_publish_session_uses_anonymous_public_registration_sessions_when_supported(
+    tmp_path: Path,
+) -> None:
+    glaas_client = MagicMock()
+    glaas_client.publish_auth.access_token = None
+    glaas_client.publish_auth.scope_request = None
+    glaas_client.publish_auth.ssh_auth_available = False
+    glaas_client.health_check.return_value = {
+        "status": "healthy",
+        "features": {
+            "registration_sessions": {
+                "authenticated": True,
+                "anonymous_public": True,
+                "finalize_expected_hash": True,
+            }
+        },
+    }
+    session_service = MagicMock()
+    session_service.compute_session_hash.return_value = "session-hash"
+    session_service.create_registration_session.return_value = SessionRegistrationResult(
+        success=True,
+        session_hash="session-hash",
+        registration_session_id="reg-session-anon-123",
+        registration_session_mode="anonymous_public",
+        registration_session_token="reg-token-123",
+    )
+
+    result = prepare_publish_session(
+        glaas_client=glaas_client,
+        session_service=session_service,
+        roar_dir=tmp_path / ".roar",
+        session_id=7,
+        git_context=_git_context(),
+        logger=MagicMock(),
+        register_with_glaas=True,
+    )
+
+    assert result == PreparedPublishSession(
+        session_hash="session-hash",
+        session_url=None,
+        registration_session_id="reg-session-anon-123",
+        registration_session_mode="anonymous_public",
+    )
+    session_service.create_registration_session.assert_called_once_with(
+        client_session_id=None,
+        mode="anonymous_public",
+    )
+    session_service.register.assert_not_called()
+
+
+def test_prepare_publish_session_falls_back_to_legacy_anonymous_registration_when_server_lacks_support(
+    tmp_path: Path,
+) -> None:
+    glaas_client = MagicMock()
+    glaas_client.publish_auth.access_token = None
+    glaas_client.publish_auth.scope_request = None
+    glaas_client.publish_auth.ssh_auth_available = False
+    glaas_client.health_check.return_value = {
+        "status": "healthy",
+        "features": {
+            "registration_sessions": {
+                "authenticated": True,
+                "anonymous_public": True,
+                "finalize_expected_hash": False,
+            }
+        },
+    }
+    session_service = MagicMock()
+    session_service.compute_session_hash.return_value = "session-hash"
+    session_service.register.return_value = SessionRegistrationResult(
+        success=True,
+        session_hash="session-hash",
+        session_url="https://glaas.example/dag/session-hash",
+    )
+
+    result = prepare_publish_session(
+        glaas_client=glaas_client,
+        session_service=session_service,
+        roar_dir=tmp_path / ".roar",
+        session_id=7,
+        git_context=_git_context(),
+        logger=MagicMock(),
+        register_with_glaas=True,
+    )
+
+    assert result == PreparedPublishSession(
+        session_hash="session-hash",
+        session_url="https://glaas.example/dag/session-hash",
+        registration_session_id=None,
+    )
+    session_service.create_registration_session.assert_not_called()
+    session_service.register.assert_called_once_with("session-hash", _git_context())
 
 
 def test_prepare_publish_session_requires_configured_glaas(tmp_path: Path) -> None:

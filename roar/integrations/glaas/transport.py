@@ -99,6 +99,8 @@ def request_json(
     path: str,
     body: dict | None,
     auth_header_factory: Callable[[str, str, bytes | None], str | None],
+    auth_header_value: str | None = None,
+    allow_auth_fallback: bool = True,
 ) -> tuple[Any | None, str | None]:
     """
     Make an authenticated JSON request.
@@ -196,12 +198,14 @@ def request_json(
             return None, str(e), None
 
     auth_mode = _get_cached_auth_mode(base_url)
-    auth_header = (
-        None if auth_mode == "anonymous" else auth_header_factory(method, path, body_bytes)
-    )
+    auth_header = auth_header_value
+    if auth_header is None:
+        auth_header = (
+            None if auth_mode == "anonymous" else auth_header_factory(method, path, body_bytes)
+        )
     bearer_auth = bool(auth_header and auth_header.startswith("Bearer "))
 
-    if auth_mode == "unknown" and auth_header and not bearer_auth:
+    if allow_auth_fallback and auth_mode == "unknown" and auth_header and not bearer_auth:
         probe_auth_header = auth_header_factory("GET", _AUTH_PROBE_PATH, None)
         if probe_auth_header:
             _probe_result, probe_error, probe_status = _perform_request(
@@ -233,7 +237,7 @@ def request_json(
     if error is None:
         return result, None
 
-    if auth_header and status_code == 401 and not bearer_auth:
+    if allow_auth_fallback and auth_header and status_code == 401 and not bearer_auth:
         _mark_anonymous(base_url, f"The server returned HTTP 401 for {method} {path}.")
         _get_logger().debug(
             "GLaaS optional-auth fallback: retrying %s %s without Authorization after 401",
