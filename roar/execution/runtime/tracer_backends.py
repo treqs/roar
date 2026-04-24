@@ -7,11 +7,13 @@ use the same source of truth.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -27,6 +29,7 @@ EXPECTED_EBPF_CAP_NAMES = {
 }
 
 AUTO_BACKEND_ORDER = TRACER_BACKEND_ORDER
+_PREFLIGHT_TIMEOUT_SECONDS = 15
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,67 @@ class BackendReadiness:
 
     def as_tuple(self) -> tuple[bool, str]:
         return self.ok, self.detail
+
+
+@dataclass(frozen=True)
+class PreflightCheck:
+    """One backend preflight sub-check."""
+
+    name: str
+    ok: bool
+    detail: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        data: dict[str, object] = {"name": self.name, "ok": self.ok}
+        if self.detail is not None:
+            data["detail"] = self.detail
+        return data
+
+
+@dataclass(frozen=True)
+class TracerPreflightResult:
+    """Strict preflight result for one concrete backend."""
+
+    backend: str
+    ok: bool
+    summary: str
+    command_checked: str | None = None
+    warnings: tuple[str, ...] = ()
+    checks: tuple[PreflightCheck, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "backend": self.backend,
+            "ok": self.ok,
+            "summary": self.summary,
+            "command_checked": self.command_checked,
+            "warnings": list(self.warnings),
+            "checks": [check.to_dict() for check in self.checks],
+        }
+
+
+@dataclass(frozen=True)
+class AutoPreflightResult:
+    """Strict preflight result for auto backend selection."""
+
+    ok: bool
+    selected_backend: str | None
+    summary: str
+    command_checked: str | None = None
+    results: tuple[TracerPreflightResult, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "backend": "auto",
+            "ok": self.ok,
+            "selected_backend": self.selected_backend,
+            "summary": self.summary,
+            "command_checked": self.command_checked,
+            "results": [result.to_dict() for result in self.results],
+        }
+
+
+PreflightResult = TracerPreflightResult | AutoPreflightResult
 
 
 def find_ptrace_tracer(package_path: Path) -> str | None:
@@ -288,6 +352,218 @@ def backend_ready(package_path: Path, backend: str) -> tuple[bool, str]:
     return backend_readiness(package_path, backend).as_tuple()
 
 
+def suggestions_for_preflight_result(result: PreflightResult) -> tuple[str, ...]:
+    """Return concise, user-facing suggestions for a failed preflight result."""
+    if result.ok:
+        return ()
+
+    if isinstance(result, AutoPreflightResult):
+        suggestions: list[str] = [
+            "Run `roar tracer status` to see detected tracer binaries and system readiness.",
+        ]
+        for backend_result in result.results:
+            suggestions.extend(suggestions_for_preflight_result(backend_result))
+        suggestions.append(
+            "If one backend is expected to work, try `roar tracer check --backend <backend> --command <cmd>` for details."
+        )
+        return _dedupe_suggestions(suggestions, limit=5)
+
+    summary = result.summary.lower()
+    failed_checks = {check.name: (check.detail or "") for check in result.checks if not check.ok}
+    detail_text = " ".join([summary, *failed_checks.values()]).lower()
+    suggestions = [
+        f"Run `roar tracer check --backend {result.backend}` to reproduce this preflight failure.",
+    ]
+
+    if result.backend == "ebpf":
+        if "not found" in detail_text:
+            suggestions.append(
+                "Build the eBPF tracer with `cd rust && cargo build --release -p roar-tracer-ebpf`."
+            )
+        if "cap" in detail_text or "perf_event_paranoid" in detail_text:
+            suggestions.append(
+                "Run `roar tracer setup ebpf` to configure eBPF tracer capabilities and sysctls."
+            )
+        if "tracepoint" in detail_text or "attach" in detail_text:
+            suggestions.append(
+                "Try `roar tracer check --backend preload` or `--backend ptrace` on this host."
+            )
+        suggestions.append(
+            "Use `roar run --tracer preload ...` or `roar run --tracer ptrace ...` if eBPF is not available here."
+        )
+    elif result.backend == "preload":
+        if "not found" in detail_text or "library" in detail_text:
+            suggestions.append(
+                "Build the preload tracer with `cd rust && cargo build --release -p roar-tracer-preload`."
+            )
+        if "protected" in detail_text or "sip" in detail_text:
+            suggestions.append(
+                "Use a virtualenv/homebrew Python or another non-protected executable for preload tracing."
+            )
+        suggestions.append(
+            "Use `roar run --tracer ptrace ...` on Linux if preload is blocked for this command."
+        )
+    elif result.backend == "ptrace":
+        if "not found" in detail_text:
+            suggestions.append(
+                "Build the ptrace tracer with `cd rust && cargo build --release -p roar-tracer`."
+            )
+        if "x86_64" in detail_text or "architecture" in detail_text or "linux" in detail_text:
+            suggestions.append(
+                "Use `roar run --tracer preload ...` or `--tracer ebpf` on hosts unsupported by ptrace."
+            )
+        suggestions.append("Check kernel ptrace policy if this host restricts tracing.")
+
+    return _dedupe_suggestions(suggestions, limit=4)
+
+
+def _dedupe_suggestions(suggestions: Sequence[str], *, limit: int) -> tuple[str, ...]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for suggestion in suggestions:
+        if suggestion in seen:
+            continue
+        seen.add(suggestion)
+        unique.append(suggestion)
+        if len(unique) >= limit:
+            break
+    return tuple(unique)
+
+
+def preflight_backend(
+    package_path: Path,
+    backend: str,
+    command: Sequence[str] | None = None,
+) -> TracerPreflightResult:
+    """Run strict preflight for one concrete backend."""
+    if backend == "auto":
+        raise ValueError("use preflight_auto_backend() for auto policy")
+    if backend == "ebpf":
+        return _preflight_ebpf(package_path, command)
+    if backend == "preload":
+        return _preflight_preload(package_path, command)
+    if backend == "ptrace":
+        return _preflight_ptrace(package_path, command)
+    raise ValueError(f"unknown backend: {backend}")
+
+
+def preflight_auto_backend(
+    package_path: Path,
+    command: Sequence[str] | None = None,
+) -> AutoPreflightResult:
+    """Run strict preflight using normal auto backend preference order."""
+    results: list[TracerPreflightResult] = []
+    command_checked = _resolved_command_str(command[0]) if command else None
+
+    for backend in AUTO_BACKEND_ORDER:
+        result = preflight_backend(package_path, backend, command=command)
+        results.append(result)
+        command_checked = command_checked or result.command_checked
+        if result.ok:
+            return AutoPreflightResult(
+                ok=True,
+                selected_backend=backend,
+                summary=f"selected backend '{backend}'",
+                command_checked=command_checked,
+                results=tuple(results),
+            )
+
+    return AutoPreflightResult(
+        ok=False,
+        selected_backend=None,
+        summary="no usable tracer found",
+        command_checked=command_checked,
+        results=tuple(results),
+    )
+
+
+def _preflight_ebpf(
+    package_path: Path,
+    command: Sequence[str] | None = None,
+) -> TracerPreflightResult:
+    checks: list[PreflightCheck] = []
+    ebpf = find_ebpf_tracer(package_path)
+    if not ebpf:
+        return TracerPreflightResult(
+            backend="ebpf",
+            ok=False,
+            summary="eBPF tracer not found",
+            command_checked=_resolved_command_str(command[0]) if command else None,
+            checks=(PreflightCheck("binary", False, "roar-tracer-ebpf not found"),),
+        )
+
+    checks.append(PreflightCheck("binary", True, ebpf))
+    readiness = ebpf_readiness(ebpf)
+    checks.append(PreflightCheck("static_readiness", readiness.ok, readiness.reason or "ready"))
+    if not readiness.ok:
+        return TracerPreflightResult(
+            backend="ebpf",
+            ok=False,
+            summary=readiness.reason or "eBPF preflight failed",
+            command_checked=_resolved_command_str(command[0]) if command else None,
+            checks=tuple(checks),
+        )
+
+    result = _run_json_binary_preflight((ebpf, "--preflight", "--json"), backend="ebpf")
+    return _merge_preflight_checks(result, checks)
+
+
+def _preflight_preload(
+    package_path: Path,
+    command: Sequence[str] | None = None,
+) -> TracerPreflightResult:
+    checks: list[PreflightCheck] = []
+    launcher = find_preload_tracer(package_path)
+    if not launcher:
+        return TracerPreflightResult(
+            backend="preload",
+            ok=False,
+            summary="preload tracer not found",
+            checks=(PreflightCheck("launcher", False, "roar-tracer-preload not found"),),
+        )
+    checks.append(PreflightCheck("launcher", True, launcher))
+
+    preflight_command: list[str] = [launcher, "--preflight", "--json"]
+    if command:
+        preflight_command.extend(["--command", command[0]])
+
+    env_overrides: dict[str, str] | None = None
+    library = find_preload_library(package_path)
+    if library:
+        env_overrides = {"ROAR_PRELOAD_LIB": library}
+
+    result = _run_json_binary_preflight(
+        preflight_command,
+        backend="preload",
+        env_overrides=env_overrides,
+    )
+    return _merge_preflight_checks(result, checks)
+
+
+def _preflight_ptrace(
+    package_path: Path,
+    command: Sequence[str] | None = None,
+) -> TracerPreflightResult:
+    checks: list[PreflightCheck] = []
+    ptrace = find_ptrace_tracer(package_path)
+    if not ptrace:
+        return TracerPreflightResult(
+            backend="ptrace",
+            ok=False,
+            summary="ptrace tracer not found",
+            command_checked=_resolved_command_str(command[0]) if command else None,
+            checks=(PreflightCheck("binary", False, "roar-tracer not found"),),
+        )
+    checks.append(PreflightCheck("binary", True, ptrace))
+
+    preflight_command: list[str] = [ptrace, "--preflight", "--json"]
+    if command:
+        preflight_command.extend(["--command", command[0]])
+
+    result = _run_json_binary_preflight(preflight_command, backend="ptrace")
+    return _merge_preflight_checks(result, checks)
+
+
 def _backend_ready_non_auto(package_path: Path, backend: str) -> BackendReadiness:
     if backend == "ptrace":
         ptrace = find_ptrace_tracer(package_path)
@@ -325,21 +601,112 @@ def _find_binary(package_path: Path, binary_name: str) -> str | None:
     return resolved if resolved else None
 
 
+def _merge_preflight_checks(
+    result: TracerPreflightResult,
+    checks: Sequence[PreflightCheck],
+) -> TracerPreflightResult:
+    return TracerPreflightResult(
+        backend=result.backend,
+        ok=result.ok,
+        summary=result.summary,
+        command_checked=result.command_checked,
+        warnings=result.warnings,
+        checks=(*checks, *result.checks),
+    )
+
+
+def _run_json_binary_preflight(
+    command: Sequence[str],
+    *,
+    backend: str,
+    env_overrides: dict[str, str] | None = None,
+) -> TracerPreflightResult:
+    try:
+        env = dict(os.environ)
+        if env_overrides:
+            env.update(env_overrides)
+        result = subprocess.run(
+            list(command),
+            capture_output=True,
+            text=True,
+            timeout=_PREFLIGHT_TIMEOUT_SECONDS,
+            check=False,
+            env=env,
+        )
+    except OSError as exc:
+        return TracerPreflightResult(
+            backend=backend,
+            ok=False,
+            summary=f"failed to exec preflight: {exc}",
+            checks=(PreflightCheck("binary_preflight", False, str(exc)),),
+        )
+    except subprocess.TimeoutExpired:
+        return TracerPreflightResult(
+            backend=backend,
+            ok=False,
+            summary="preflight timed out",
+            checks=(PreflightCheck("binary_preflight", False, "timed out"),),
+        )
+
+    payload = _parse_json_payload(result.stdout)
+    if payload is not None:
+        preflight = _preflight_result_from_payload(backend, payload)
+        if not preflight.ok and result.returncode == 0 and not preflight.summary:
+            return TracerPreflightResult(
+                backend=backend,
+                ok=False,
+                summary="preflight failed",
+                checks=preflight.checks,
+                warnings=preflight.warnings,
+                command_checked=preflight.command_checked,
+            )
+        return preflight
+
+    detail = _first_nonempty_line(result.stderr) or _first_nonempty_line(result.stdout)
+    if result.returncode != 0:
+        return TracerPreflightResult(
+            backend=backend,
+            ok=False,
+            summary=detail or f"preflight failed with exit code {result.returncode}",
+            checks=(
+                PreflightCheck(
+                    "binary_preflight",
+                    False,
+                    detail or f"exit code {result.returncode}",
+                ),
+            ),
+        )
+
+    return TracerPreflightResult(
+        backend=backend,
+        ok=False,
+        summary="preflight produced no JSON output",
+        checks=(PreflightCheck("binary_preflight", False, "no JSON output"),),
+    )
+
+
 @cache
-def _probe_preload_launcher(launcher_path: str, library_path: str) -> TracerReadiness:
+def _probe_preload_launcher(
+    launcher_path: str,
+    library_path: str,
+    probe_command: tuple[str, ...] | None = None,
+) -> TracerReadiness:
     env = dict(os.environ)
     env["ROAR_PRELOAD_LIB"] = library_path
 
+    if probe_command is None:
+        probe_command = (sys.executable, "-c", "pass")
+
     with tempfile.TemporaryDirectory(prefix="roar-preload-check-") as tmp_dir:
         report_path = Path(tmp_dir) / "probe.json"
-        command = [launcher_path, str(report_path), sys.executable, "-c", "pass"]
+        command = [launcher_path, str(report_path), *probe_command]
 
         try:
             result = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=_PREFLIGHT_TIMEOUT_SECONDS,
                 check=False,
                 env=env,
             )
@@ -361,6 +728,81 @@ def _probe_preload_launcher(launcher_path: str, library_path: str) -> TracerRead
             return TracerReadiness(ok=False, reason="preload launcher probe produced no report")
 
     return TracerReadiness(ok=True, reason=None)
+
+
+def _resolved_command_str(command: str) -> str | None:
+    resolved = _resolve_command_path(command)
+    if resolved is not None:
+        return str(resolved)
+    return command
+
+
+def _resolve_command_path(command: str) -> Path | None:
+    command_path = Path(command)
+    if command_path.is_absolute() or "/" in command:
+        return command_path.resolve() if command_path.exists() else None
+
+    resolved = shutil.which(command)
+    if not resolved:
+        return None
+    return Path(resolved).resolve()
+
+
+def _parse_json_payload(text: str) -> dict[str, object] | None:
+    stripped = text.strip()
+    if not stripped:
+        return None
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _preflight_result_from_payload(
+    backend: str,
+    payload: dict[str, object],
+) -> TracerPreflightResult:
+    parsed_backend = payload.get("backend")
+    parsed_ok = payload.get("ok")
+    parsed_summary = payload.get("summary")
+    parsed_command_checked = payload.get("command_checked")
+    parsed_warnings = payload.get("warnings")
+    parsed_checks = payload.get("checks")
+
+    warnings: list[str] = []
+    if isinstance(parsed_warnings, list):
+        for warning in parsed_warnings:
+            if isinstance(warning, str):
+                warnings.append(warning)
+
+    checks: list[PreflightCheck] = []
+    if isinstance(parsed_checks, list):
+        for item in parsed_checks:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            ok = item.get("ok")
+            detail = item.get("detail")
+            if isinstance(name, str) and isinstance(ok, bool):
+                checks.append(
+                    PreflightCheck(
+                        name=name,
+                        ok=ok,
+                        detail=detail if isinstance(detail, str) else None,
+                    )
+                )
+
+    return TracerPreflightResult(
+        backend=parsed_backend if isinstance(parsed_backend, str) else backend,
+        ok=parsed_ok if isinstance(parsed_ok, bool) else False,
+        summary=parsed_summary if isinstance(parsed_summary, str) else "preflight failed",
+        command_checked=(
+            parsed_command_checked if isinstance(parsed_command_checked, str) else None
+        ),
+        warnings=tuple(warnings),
+        checks=tuple(checks),
+    )
 
 
 def _first_nonempty_line(text: str) -> str | None:

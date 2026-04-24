@@ -6,9 +6,152 @@ use anyhow::{Context, Result};
 use aya::maps::{HashMap as BpfHashMap, MapData, RingBuf};
 use log::{error, info};
 use roar_tracer_ebpf::{client, ipc, state};
+use serde::Serialize;
 use tracer_runtime::timestamp_now;
 
 use state::TracerState;
+
+#[derive(Serialize)]
+struct PreflightCheck {
+    name: String,
+    ok: bool,
+    detail: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PreflightResult {
+    backend: &'static str,
+    ok: bool,
+    summary: String,
+    command_checked: Option<String>,
+    warnings: Vec<String>,
+    checks: Vec<PreflightCheck>,
+}
+
+fn preflight_check(name: &str, ok: bool, detail: impl Into<Option<String>>) -> PreflightCheck {
+    PreflightCheck {
+        name: name.to_string(),
+        ok,
+        detail: detail.into(),
+    }
+}
+
+fn tracefs_path() -> Option<&'static str> {
+    if std::path::Path::new("/sys/kernel/tracing").exists() {
+        return Some("/sys/kernel/tracing");
+    }
+    if std::path::Path::new("/sys/kernel/debug/tracing").exists() {
+        return Some("/sys/kernel/debug/tracing");
+    }
+    None
+}
+
+fn perf_event_paranoid_detail() -> Option<(bool, String)> {
+    let value = std::fs::read_to_string("/proc/sys/kernel/perf_event_paranoid")
+        .ok()?
+        .trim()
+        .to_string();
+    let parsed = value.parse::<i32>().ok()?;
+    Some((parsed <= 1, value))
+}
+
+fn emit_preflight(result: &PreflightResult, json_output: bool) {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(result).expect("failed to serialize preflight JSON")
+        );
+        return;
+    }
+
+    println!(
+        "eBPF preflight {}: {}",
+        if result.ok { "passed" } else { "failed" },
+        result.summary
+    );
+    for check in &result.checks {
+        let detail = check
+            .detail
+            .as_ref()
+            .map(|value| format!(" ({value})"))
+            .unwrap_or_default();
+        println!(
+            "  - {}: {}{}",
+            check.name,
+            if check.ok { "ok" } else { "fail" },
+            detail
+        );
+    }
+}
+
+fn run_preflight(json_output: bool) -> i32 {
+    let mut checks = vec![
+        preflight_check(
+            "platform",
+            cfg!(target_os = "linux"),
+            Some(std::env::consts::OS.to_string()),
+        ),
+        preflight_check(
+            "architecture",
+            true,
+            Some(std::env::consts::ARCH.to_string()),
+        ),
+    ];
+
+    match tracefs_path() {
+        Some(path) => checks.push(preflight_check("tracefs", true, Some(path.to_string()))),
+        None => checks.push(preflight_check(
+            "tracefs",
+            false,
+            Some("not found".to_string()),
+        )),
+    }
+
+    if let Some((ok, value)) = perf_event_paranoid_detail() {
+        checks.push(preflight_check("perf_event_paranoid", ok, Some(value)));
+    }
+
+    let result = match roar_tracer_ebpf::attach::load_and_attach_bpf() {
+        Ok(_bpf) => {
+            checks.push(preflight_check(
+                "load_and_attach",
+                true,
+                Some("ok".to_string()),
+            ));
+            PreflightResult {
+                backend: "ebpf",
+                ok: true,
+                summary: "eBPF preflight succeeded".to_string(),
+                command_checked: None,
+                warnings: Vec::new(),
+                checks,
+            }
+        }
+        Err(e) => {
+            let detail = format!("{e:#}");
+            checks.push(preflight_check(
+                "load_and_attach",
+                false,
+                Some(detail.clone()),
+            ));
+            PreflightResult {
+                backend: "ebpf",
+                ok: false,
+                summary: detail,
+                command_checked: None,
+                warnings: Vec::new(),
+                checks,
+            }
+        }
+    };
+
+    emit_preflight(&result, json_output);
+    if result.ok {
+        0
+    } else {
+        1
+    }
+}
 
 /// Try to use the daemon for tracing instead of inline BPF.
 ///
@@ -41,8 +184,13 @@ fn try_daemon_mode(output_file: &str, command: &[String]) -> Result<i32> {
                 .map(|a| CString::new(a.as_str()).expect("arg contains null byte"))
                 .collect();
             let args_ref: Vec<&std::ffi::CStr> = args.iter().map(|a| a.as_c_str()).collect();
-            nix::unistd::execvp(&cmd, &args_ref).expect("execvp failed");
-            unreachable!();
+            match nix::unistd::execvp(&cmd, &args_ref) {
+                Err(err) => {
+                    eprintln!("execvp failed: {err}");
+                    std::process::exit(127);
+                }
+                Ok(_) => std::process::exit(127),
+            }
         }
         nix::unistd::ForkResult::Parent { child } => child.as_raw() as u32,
     };
@@ -164,8 +312,13 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
                 .map(|a| CString::new(a.as_str()).expect("arg contains null byte"))
                 .collect();
             let args_ref: Vec<&std::ffi::CStr> = args.iter().map(|a| a.as_c_str()).collect();
-            nix::unistd::execvp(&cmd, &args_ref).expect("execvp failed");
-            unreachable!();
+            match nix::unistd::execvp(&cmd, &args_ref) {
+                Err(err) => {
+                    eprintln!("execvp failed: {err}");
+                    std::process::exit(127);
+                }
+                Ok(_) => std::process::exit(127),
+            }
         }
         nix::unistd::ForkResult::Parent { child } => child.as_raw() as u32,
     };
@@ -328,8 +481,14 @@ fn drain_events(
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
+    if args.get(1).map(String::as_str) == Some("--preflight") {
+        let json_output = args.iter().any(|arg| arg == "--json");
+        std::process::exit(run_preflight(json_output));
+    }
+
     if args.len() < 3 {
         eprintln!("usage: roar-tracer-ebpf <output-file> <command> [args...]");
+        eprintln!("       roar-tracer-ebpf --preflight [--json]");
         std::process::exit(2);
     }
 

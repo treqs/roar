@@ -1,5 +1,6 @@
 """Tests for shared tracer backend discovery/readiness helpers."""
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import mock_open, patch
@@ -177,3 +178,144 @@ def test_find_preload_library_ignores_dylib_on_linux(tmp_path: Path) -> None:
         resolved = tracer_backends.find_preload_library(package_path)
 
     assert resolved is None
+
+
+def test_preflight_backend_ebpf_parses_json_result(tmp_path: Path) -> None:
+    package_path = tmp_path / "roar"
+    package_path.mkdir()
+    payload = {
+        "backend": "ebpf",
+        "ok": True,
+        "summary": "eBPF preflight succeeded",
+        "command_checked": None,
+        "warnings": [],
+        "checks": [{"name": "load_and_attach", "ok": True, "detail": "ok"}],
+    }
+
+    with (
+        patch.object(tracer_backends, "find_ebpf_tracer", return_value="/bin/roar-tracer-ebpf"),
+        patch.object(
+            tracer_backends,
+            "ebpf_readiness",
+            return_value=tracer_backends.TracerReadiness(True, None),
+        ),
+        patch.object(
+            tracer_backends.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                ["/bin/roar-tracer-ebpf", "--preflight", "--json"],
+                0,
+                json.dumps(payload),
+                "",
+            ),
+        ),
+    ):
+        result = tracer_backends.preflight_backend(package_path, "ebpf")
+
+    assert result.ok is True
+    assert result.summary == "eBPF preflight succeeded"
+    assert any(
+        check.name == "binary" and check.detail == "/bin/roar-tracer-ebpf"
+        for check in result.checks
+    )
+    assert any(check.name == "load_and_attach" and check.ok for check in result.checks)
+
+
+def test_preflight_backend_preload_uses_native_binary_preflight(tmp_path: Path) -> None:
+    package_path = tmp_path / "roar"
+    package_path.mkdir()
+    payload = {
+        "backend": "preload",
+        "ok": False,
+        "summary": "macOS protected binary blocks preload injection",
+        "command_checked": "/usr/bin/python3",
+        "warnings": [],
+        "checks": [
+            {
+                "name": "command_compatibility",
+                "ok": False,
+                "detail": "macOS protected binary blocks preload injection",
+            }
+        ],
+    }
+
+    with (
+        patch.object(
+            tracer_backends, "find_preload_tracer", return_value="/bin/roar-tracer-preload"
+        ),
+        patch.object(
+            tracer_backends.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                ["/bin/roar-tracer-preload", "--preflight", "--json", "--command", "python"],
+                1,
+                json.dumps(payload),
+                "",
+            ),
+        ) as mock_run,
+    ):
+        result = tracer_backends.preflight_backend(package_path, "preload", command=["python"])
+
+    assert result.ok is False
+    assert result.command_checked == "/usr/bin/python3"
+    assert "protected binary" in result.summary
+    assert mock_run.call_args.args[0] == [
+        "/bin/roar-tracer-preload",
+        "--preflight",
+        "--json",
+        "--command",
+        "python",
+    ]
+
+
+def test_preflight_backend_ptrace_uses_native_binary_preflight(tmp_path: Path) -> None:
+    package_path = tmp_path / "roar"
+    package_path.mkdir()
+    payload = {
+        "backend": "ptrace",
+        "ok": False,
+        "summary": "ptrace tracer only supports x86_64 today (got aarch64)",
+        "command_checked": None,
+        "warnings": [],
+        "checks": [
+            {
+                "name": "architecture",
+                "ok": False,
+                "detail": "aarch64",
+            }
+        ],
+    }
+
+    with (
+        patch.object(tracer_backends, "find_ptrace_tracer", return_value="/bin/roar-tracer"),
+        patch.object(
+            tracer_backends.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                ["/bin/roar-tracer", "--preflight", "--json"],
+                1,
+                json.dumps(payload),
+                "",
+            ),
+        ) as mock_run,
+    ):
+        result = tracer_backends.preflight_backend(package_path, "ptrace")
+
+    assert result.ok is False
+    assert "x86_64" in result.summary
+    assert mock_run.call_args.args[0] == ["/bin/roar-tracer", "--preflight", "--json"]
+
+
+def test_preflight_auto_backend_returns_first_passing_backend(tmp_path: Path) -> None:
+    package_path = tmp_path / "roar"
+    package_path.mkdir()
+
+    ebpf = tracer_backends.TracerPreflightResult("ebpf", False, "attach failed")
+    preload = tracer_backends.TracerPreflightResult("preload", True, "preload preflight succeeded")
+
+    with patch.object(tracer_backends, "preflight_backend", side_effect=[ebpf, preload, preload]):
+        result = tracer_backends.preflight_auto_backend(package_path)
+
+    assert result.ok is True
+    assert result.selected_backend == "preload"
+    assert [item.backend for item in result.results] == ["ebpf", "preload"]

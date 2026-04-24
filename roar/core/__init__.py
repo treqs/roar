@@ -18,6 +18,7 @@ __all__ = [
     "RoarPluginError",
     "RoarValidationError",
     "TracerNotFoundError",
+    "TracerPreflightError",
     "bootstrap",
     "is_initialized",
     "reset",
@@ -46,6 +47,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "RoarPluginError": (".exceptions", "RoarPluginError"),
     "RoarValidationError": (".exceptions", "RoarValidationError"),
     "TracerNotFoundError": (".exceptions", "TracerNotFoundError"),
+    "TracerPreflightError": (".exceptions", "TracerPreflightError"),
 }
 
 
