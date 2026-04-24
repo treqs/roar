@@ -61,6 +61,13 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "Inspect Local Lineage",
     ),
     CommandSpec(
+        "tui",
+        "roar.cli.commands.tui",
+        "tui",
+        "Browse local lineage in a read-only terminal UI",
+        "Inspect Local Lineage",
+    ),
+    CommandSpec(
         "diff",
         "roar.cli.commands.diff",
         "diff",

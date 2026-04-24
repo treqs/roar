@@ -1,0 +1,20 @@
+[package]
+name = "roar-tui"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "roar-tui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+ratatui = "0.29"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

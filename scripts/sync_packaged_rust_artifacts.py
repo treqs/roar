@@ -59,6 +59,15 @@ def _default_layout() -> SyncLayout:
 
     artifacts = [
         ArtifactSpec(
+            package_name="roar-tui",
+            source_paths=(
+                root_dir / "rust" / "Cargo.toml",
+                root_dir / "rust" / "Cargo.lock",
+                root_dir / "rust" / "crates" / "roar-tui",
+            ),
+            binary_names=("roar-tui",),
+        ),
+        ArtifactSpec(
             package_name="roar-proxy",
             source_paths=(
                 root_dir / "rust" / "Cargo.toml",

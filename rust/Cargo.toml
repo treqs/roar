@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/artifact-hash-core",
     "crates/artifact-hash-py",
+    "crates/roar-tui",
     "crates/tracer-schema",
     "crates/tracer-runtime",
     "crates/tracer-fd",
@@ -14,6 +15,7 @@ members = [
     "services/proxy",
 ]
 default-members = [
+    "crates/roar-tui",
     "tracers/ptrace",
     "tracers/preload",
     "tracers/ebpf/userspace",

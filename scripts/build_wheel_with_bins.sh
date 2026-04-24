@@ -175,6 +175,7 @@ build_python_wheel() {
   exit 1
 }
 
+ensure_binary "roar-tui" "roar-tui"
 ensure_binary "roar-proxy" "roar-proxy"
 ensure_binary "roar-tracer" "roar-tracer"
 ensure_binary "roar-tracer-ebpf" "roar-tracer-ebpf"
@@ -205,7 +206,7 @@ else
 fi
 
 echo "▶ Syncing packaged binaries into roar/bin..."
-for binary in roar-proxy roar-tracer roar-tracer-ebpf roar-tracer-preload roard; do
+for binary in roar-tui roar-proxy roar-tracer roar-tracer-ebpf roar-tracer-preload roard; do
   if [[ -z "${binaries_to_sync[$binary]:-}" ]]; then
     continue
   fi

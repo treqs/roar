@@ -26,6 +26,7 @@ def main() -> None:
 
     if platform == "macos":
         required_bins = {
+            "roar/bin/roar-tui",
             "roar/bin/roar-proxy",
             "roar/bin/roar-tracer-preload",
         }
@@ -39,6 +40,7 @@ def main() -> None:
             raise SystemExit(f"Linux-only binaries found in macOS wheel: {unexpected}")
     else:
         required_bins = {
+            "roar/bin/roar-tui",
             "roar/bin/roar-tracer",
             "roar/bin/roar-proxy",
             "roar/bin/roar-tracer-ebpf",
