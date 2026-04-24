@@ -80,3 +80,23 @@ def test_canonical_hash_does_not_depend_on_local_path_or_session_id_fields() -> 
     right["local_context"] = {"roar_dir": "/tmp/two/.roar", "session_id": 999}
 
     assert compute_canonical_session_hash(left) == compute_canonical_session_hash(right)
+
+
+def test_metadata_numbers_follow_json_stringify_canonical_form() -> None:
+    payload = _payload()
+    payload["jobs"][0]["metadata"] = {
+        "confidence": 1.0,
+        "negative_zero": -0.0,
+        "nested": [{"ratio": 0.5, "whole": 2.0}],
+        "high_precision": 20.374401807785034,
+    }
+
+    serialized = serialize_canonical_session_payload(payload)
+    decoded = json.loads(serialized)
+
+    assert decoded["jobs"][0]["metadata"] == {
+        "confidence": 1,
+        "negative_zero": 0,
+        "nested": [{"ratio": 0.5, "whole": 2}],
+        "high_precision": 20.37440180778503,
+    }

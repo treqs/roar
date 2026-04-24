@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from typing import Any
 
 _ALLOWED_TOP_LEVEL_KEYS = {"canonical_version", "creator_identity", "git", "jobs"}
@@ -84,6 +85,12 @@ def _normalize_json_value(value: Any) -> Any:
         return {key: _normalize_json_value(value[key]) for key in sorted(value)}
     if isinstance(value, list):
         return [_normalize_json_value(item) for item in value]
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        if value.is_integer():
+            return int(value)
+        return float(format(value, ".16g"))
     return value
 
 
