@@ -79,6 +79,28 @@ class TestTracerCli:
         assert payload["backend"] == "ebpf"
         assert payload["ok"] is False
         assert payload["summary"] == "attach failed"
+        assert "Next steps" not in result.output
+
+    def test_check_failure_prints_actionable_next_steps_without_traceback(self):
+        runner = CliRunner()
+        preflight = tracer_cli_module.tracer_backends.TracerPreflightResult(
+            backend="ebpf",
+            ok=False,
+            summary="failed to attach sys_enter_open tracepoint",
+            checks=(
+                tracer_cli_module.tracer_backends.PreflightCheck(
+                    "load_and_attach", False, "missing tracepoint"
+                ),
+            ),
+        )
+        with patch.object(tracer_cli_module, "_backend_preflight", return_value=preflight):
+            result = runner.invoke(tracer_cli_module.tracer, ["check", "--backend", "ebpf"])
+
+        assert result.exit_code == 1
+        assert "Tracer check failed for 'ebpf'" in result.output
+        assert "Next steps:" in result.output
+        assert "roar tracer check --backend preload" in result.output
+        assert "Traceback" not in result.output
 
     def test_check_uses_auto_preflight_when_backend_unspecified(self):
         runner = CliRunner()

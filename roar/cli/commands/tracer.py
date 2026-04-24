@@ -165,6 +165,7 @@ def _print_single_preflight_result(
         click.echo(f"  - {check.name}: {check_status}{detail}", err=err)
     for warning in result.warnings:
         click.echo(f"  ! {warning}", err=err)
+    _print_preflight_suggestions(result, err=err)
 
 
 def _print_auto_preflight_result(target: str, result: tracer_backends.AutoPreflightResult) -> None:
@@ -176,6 +177,21 @@ def _print_auto_preflight_result(target: str, result: tracer_backends.AutoPrefli
     for backend_result in result.results:
         backend_status = "ok" if backend_result.ok else backend_result.summary
         click.echo(f"  {backend_result.backend}: {backend_status}", err=err)
+    _print_preflight_suggestions(result, err=err)
+
+
+def _print_preflight_suggestions(
+    result: tracer_backends.PreflightResult,
+    *,
+    err: bool,
+) -> None:
+    suggestions = tracer_backends.suggestions_for_preflight_result(result)
+    if not suggestions:
+        return
+    click.echo("", err=err)
+    click.echo("Next steps:", err=err)
+    for suggestion in suggestions:
+        click.echo(f"  - {suggestion}", err=err)
 
 
 @click.group("tracer", invoke_without_command=True)

@@ -248,17 +248,53 @@ class TracerService:
         if mode == "auto":
             detail = "; ".join(f"{result.backend}: {result.summary}" for result in failures)
             raise TracerPreflightError(
-                f"No usable tracer passed preflight: {detail or 'no usable tracer found'}",
+                self._format_preflight_failure_message(
+                    "auto",
+                    failures,
+                    summary=f"No usable tracer passed preflight: {detail or 'no usable tracer found'}",
+                ),
                 backend="auto",
                 context=failure_context,
             )
 
         summary = failures[0].summary if failures else "preflight failed"
         raise TracerPreflightError(
-            f"Tracer preflight failed for '{mode}': {summary}",
+            self._format_preflight_failure_message(
+                mode,
+                failures,
+                summary=f"Tracer preflight failed for '{mode}': {summary}",
+            ),
             backend=mode,
             context=failure_context,
         )
+
+    def _format_preflight_failure_message(
+        self,
+        mode: str,
+        failures: list[tracer_backends.TracerPreflightResult],
+        *,
+        summary: str,
+    ) -> str:
+        """Build a concise user-facing preflight error with next steps."""
+        if mode == "auto":
+            result: tracer_backends.PreflightResult = tracer_backends.AutoPreflightResult(
+                ok=False,
+                selected_backend=None,
+                summary=summary,
+                results=tuple(failures),
+            )
+        elif failures:
+            result = failures[0]
+        else:
+            return summary
+
+        suggestions = tracer_backends.suggestions_for_preflight_result(result)
+        if not suggestions:
+            return summary
+
+        lines = [summary, "", "Next steps:"]
+        lines.extend(f"  - {suggestion}" for suggestion in suggestions)
+        return "\n".join(lines)
 
     def find_tracer(self) -> str | None:
         """

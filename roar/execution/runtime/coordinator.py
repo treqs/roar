@@ -149,7 +149,7 @@ class RunCoordinator:
 
             stop_runtime_resources(e.exit_code)
             self.logger.debug("Tracer unavailable before execution: %s", e)
-            self.presenter.print_error(str(e))
+            self.presenter.print_error(e.message)
             return RunResult(
                 exit_code=e.exit_code,
                 job_id=0,
@@ -188,7 +188,7 @@ class RunCoordinator:
 
             stop_runtime_resources(e.exit_code)
             self.logger.debug("Tracer execution aborted before tracing: %s", e)
-            self.presenter.print_error(str(e))
+            self.presenter.print_error(e.message)
             return RunResult(
                 exit_code=e.exit_code,
                 job_id=0,

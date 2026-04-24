@@ -196,6 +196,30 @@ class TestRuntimeResourceLifecycle:
         assert result.exit_code == 1
         assert resource.stop_calls == [1]
 
+    def test_tracer_preflight_error_prints_human_message_without_context_dump(self):
+        mock_tracer = _make_mock_tracer()
+        mock_tracer.resolve_execution_candidates.side_effect = TracerPreflightError(
+            "preflight failed\n\nNext steps:\n  - try another backend",
+            context={"failures": [{"backend": "ebpf", "summary": "debug-only detail"}]},
+        )
+        presenter = MagicMock()
+
+        coord = RunCoordinator(
+            tracer_service=mock_tracer,
+            runtime_resources=[],
+            presenter=presenter,
+        )
+        with patch.object(coord, "_backup_previous_outputs"):
+            result = coord.execute(_make_ctx())
+
+        assert result.exit_code == 1
+        presenter.print_error.assert_called_once()
+        printed = presenter.print_error.call_args.args[0]
+        assert "preflight failed" in printed
+        assert "Next steps:" in printed
+        assert "failures=" not in printed
+        assert "debug-only detail" not in printed
+
     def test_runtime_resource_is_stopped_when_tracer_log_missing(self):
         resource = _FakeRuntimeResource(start_env={"AWS_ENDPOINT_URL": "http://127.0.0.1:9090"})
         mock_tracer = _make_mock_tracer()

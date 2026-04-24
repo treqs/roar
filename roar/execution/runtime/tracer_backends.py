@@ -112,6 +112,9 @@ class AutoPreflightResult:
         }
 
 
+PreflightResult = TracerPreflightResult | AutoPreflightResult
+
+
 def find_ptrace_tracer(package_path: Path) -> str | None:
     """Find the ptrace tracer binary."""
     return _find_binary(
@@ -347,6 +350,84 @@ def backend_readiness(package_path: Path, backend: str) -> BackendReadiness:
 def backend_ready(package_path: Path, backend: str) -> tuple[bool, str]:
     """Backward-compatible tuple wrapper for backend readiness."""
     return backend_readiness(package_path, backend).as_tuple()
+
+
+def suggestions_for_preflight_result(result: PreflightResult) -> tuple[str, ...]:
+    """Return concise, user-facing suggestions for a failed preflight result."""
+    if result.ok:
+        return ()
+
+    if isinstance(result, AutoPreflightResult):
+        suggestions: list[str] = [
+            "Run `roar tracer status` to see detected tracer binaries and system readiness.",
+        ]
+        for backend_result in result.results:
+            suggestions.extend(suggestions_for_preflight_result(backend_result))
+        suggestions.append(
+            "If one backend is expected to work, try `roar tracer check --backend <backend> --command <cmd>` for details."
+        )
+        return _dedupe_suggestions(suggestions, limit=5)
+
+    summary = result.summary.lower()
+    failed_checks = {check.name: (check.detail or "") for check in result.checks if not check.ok}
+    detail_text = " ".join([summary, *failed_checks.values()]).lower()
+    suggestions = [
+        f"Run `roar tracer check --backend {result.backend}` to reproduce this preflight failure.",
+    ]
+
+    if result.backend == "ebpf":
+        if "not found" in detail_text:
+            suggestions.append(
+                "Build the eBPF tracer with `cd rust && cargo build --release -p roar-tracer-ebpf`."
+            )
+        if "cap" in detail_text or "perf_event_paranoid" in detail_text:
+            suggestions.append(
+                "Run `roar tracer setup ebpf` to configure eBPF tracer capabilities and sysctls."
+            )
+        if "tracepoint" in detail_text or "attach" in detail_text:
+            suggestions.append(
+                "Try `roar tracer check --backend preload` or `--backend ptrace` on this host."
+            )
+        suggestions.append(
+            "Use `roar run --tracer preload ...` or `roar run --tracer ptrace ...` if eBPF is not available here."
+        )
+    elif result.backend == "preload":
+        if "not found" in detail_text or "library" in detail_text:
+            suggestions.append(
+                "Build the preload tracer with `cd rust && cargo build --release -p roar-tracer-preload`."
+            )
+        if "protected" in detail_text or "sip" in detail_text:
+            suggestions.append(
+                "Use a virtualenv/homebrew Python or another non-protected executable for preload tracing."
+            )
+        suggestions.append(
+            "Use `roar run --tracer ptrace ...` on Linux if preload is blocked for this command."
+        )
+    elif result.backend == "ptrace":
+        if "not found" in detail_text:
+            suggestions.append(
+                "Build the ptrace tracer with `cd rust && cargo build --release -p roar-tracer`."
+            )
+        if "x86_64" in detail_text or "architecture" in detail_text or "linux" in detail_text:
+            suggestions.append(
+                "Use `roar run --tracer preload ...` or `--tracer ebpf` on hosts unsupported by ptrace."
+            )
+        suggestions.append("Check kernel ptrace policy if this host restricts tracing.")
+
+    return _dedupe_suggestions(suggestions, limit=4)
+
+
+def _dedupe_suggestions(suggestions: Sequence[str], *, limit: int) -> tuple[str, ...]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for suggestion in suggestions:
+        if suggestion in seen:
+            continue
+        seen.add(suggestion)
+        unique.append(suggestion)
+        if len(unique) >= limit:
+            break
+    return tuple(unique)
 
 
 def preflight_backend(

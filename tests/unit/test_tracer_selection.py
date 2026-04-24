@@ -110,13 +110,25 @@ class TestTracerSelection:
             patch.object(
                 svc,
                 "_preflight_candidate",
-                return_value=_preflight_result("ebpf", False, "attach failed"),
+                return_value=tracer_backends.TracerPreflightResult(
+                    "ebpf",
+                    False,
+                    "attach failed",
+                    checks=(
+                        tracer_backends.PreflightCheck(
+                            "load_and_attach", False, "missing tracepoint"
+                        ),
+                    ),
+                ),
             ),
         ):
             try:
                 svc.resolve_execution_candidates(["python", "train.py"])
             except TracerPreflightError as exc:
-                assert "attach failed" in str(exc)
+                assert "attach failed" in exc.message
+                assert "Next steps:" in exc.message
+                assert "roar tracer check --backend preload" in exc.message
+                assert "failures=" not in exc.message
             else:
                 raise AssertionError("expected TracerPreflightError")
 
