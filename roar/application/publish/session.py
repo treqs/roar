@@ -348,12 +348,32 @@ def prepare_publish_session(
 
     has_access_token = isinstance(access_token, str) and bool(access_token.strip())
     has_ssh_auth = ssh_auth_available if isinstance(ssh_auth_available, bool) else False
-    supports_anonymous_public_path = (
-        not has_access_token
-        and not has_ssh_auth
-        and scope_request is None
+
+    anonymous_public_capable = (
+        scope_request is None
         and supports_anonymous_public_reg_sessions
         and supports_finalize_expected_hash
+    )
+    if has_ssh_auth and not has_access_token and anonymous_public_capable:
+        probe_publish_auth = getattr(resolved_remote_registry.client, "probe_publish_auth", None)
+        if callable(probe_publish_auth):
+            try:
+                publish_auth_accepted = probe_publish_auth()
+            except Exception as exc:
+                logger.debug(
+                    "GLaaS publish auth probe was inconclusive; preserving SSH publish path: %s",
+                    exc,
+                )
+            else:
+                if publish_auth_accepted is not None:
+                    has_ssh_auth = bool(publish_auth_accepted)
+                if publish_auth_accepted is False:
+                    logger.debug(
+                        "Configured SSH publish auth is unavailable remotely; using anonymous public registration session"
+                    )
+
+    supports_anonymous_public_path = (
+        not has_access_token and not has_ssh_auth and anonymous_public_capable
     )
 
     should_use_registration_sessions = (

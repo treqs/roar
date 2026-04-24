@@ -380,6 +380,52 @@ class TestOptionalAuth:
             assert mock_urlopen.call_args_list[2][0][0].get_header("Authorization") is None
             mock_get_logger.return_value.warning.assert_called_once()
 
+    def test_probe_publish_auth_rejection_allows_anonymous_registration_session_create(self):
+        """Rejected SSH auth should not poison anonymous-public registration-session creation."""
+        client = _optional_auth_client()
+
+        unauthorized = urllib.error.HTTPError(
+            url="http://localhost:9999/api/v1/sessions?limit=1",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=None,
+        )
+        unauthorized.read = MagicMock(return_value=b'{"detail":"Unknown key"}')
+
+        with (
+            patch(
+                "roar.integrations.glaas.client.make_auth_header",
+                return_value="SSH-SIG test-signature",
+            ),
+            patch("roar.integrations.glaas.transport._get_logger"),
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_urlopen.side_effect = [
+                unauthorized,
+                self._json_response(
+                    b'{"success": true, "data": {'
+                    b'"registration_session_id": "reg-123", '
+                    b'"registration_session_token": "token-123", '
+                    b'"mode": "anonymous_public"}}'
+                ),
+            ]
+
+            assert client.probe_publish_auth() is False
+            result, error = client.create_registration_session(mode="anonymous_public")
+
+            assert error is None
+            assert result == {
+                "registration_session_id": "reg-123",
+                "registration_session_token": "token-123",
+                "mode": "anonymous_public",
+            }
+            assert mock_urlopen.call_count == 2
+            create_request = mock_urlopen.call_args_list[1][0][0]
+            assert create_request.full_url == "http://localhost:9999/api/v1/registration-sessions"
+            assert create_request.get_header("Authorization") is None
+            assert create_request.data == b'{"mode": "anonymous_public"}'
+
 
 class TestRegisterJobsBatch:
     """Test register_jobs_batch client method."""

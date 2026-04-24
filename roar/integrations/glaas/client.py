@@ -8,7 +8,7 @@ from typing import Any
 
 from ...publish_auth import PublishAuthContext, load_publish_auth_context
 from . import auth as _auth
-from .transport import parse_json_response, request_json
+from .transport import parse_json_response, probe_auth_header, request_json
 
 
 def _get_logger():
@@ -161,6 +161,24 @@ class GlaasClient:
         if self._publish_auth.access_token:
             return f"Bearer {self._publish_auth.access_token}"
         return make_auth_header(method, path, body)
+
+    def probe_publish_auth(self) -> bool | None:
+        """Return whether configured non-bearer publish auth is accepted by GLaaS.
+
+        ``None`` means the probe was inconclusive, in which case callers should
+        preserve the existing authenticated publish path.
+        """
+        if self._publish_auth.access_token:
+            return True
+        if not self.base_url:
+            return False
+        auth_mode = probe_auth_header(
+            base_url=self.base_url,
+            auth_header_factory=self._make_auth_header,
+        )
+        if auth_mode == "unknown":
+            return None
+        return auth_mode == "authenticated"
 
     def _registration_session_auth_header(self) -> str | None:
         if (
