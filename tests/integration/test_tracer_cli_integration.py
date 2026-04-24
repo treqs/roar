@@ -88,23 +88,21 @@ def test_tracer_status_reports_configured_default_and_repo_local_ptrace_binary(
 def test_tracer_check_uses_configured_default_backend_and_repo_local_binary(
     temp_git_repo: Path,
     roar_cli,
-    tmp_path: Path,
 ) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _write_executable(bin_dir / "roar-tracer")
-    expected_ptrace = _expected_ptrace_binary(bin_dir)
+    expected_ptrace = _repo_local_ptrace_binary()
+    if expected_ptrace is None:
+        pytest.skip("strict ptrace preflight requires a built repo-local ptrace tracer")
 
     roar_cli("tracer", "ptrace")
 
     result = _run_roar_tracer(
         "check",
         cwd=temp_git_repo,
-        env_overrides={"PATH": str(bin_dir)},
     )
 
     assert result.returncode == 0, result.stderr
-    assert f"Tracer check passed for 'ptrace': {expected_ptrace}" in result.stdout
+    assert "Tracer check passed for 'ptrace': ptrace preflight succeeded" in result.stdout
+    assert f"binary: ok ({expected_ptrace})" in result.stdout
 
 
 def test_tracer_check_prefers_repo_local_binary_over_path_override(
@@ -112,10 +110,13 @@ def test_tracer_check_prefers_repo_local_binary_over_path_override(
     roar_cli,
     tmp_path: Path,
 ) -> None:
+    expected_ptrace = _repo_local_ptrace_binary()
+    if expected_ptrace is None:
+        pytest.skip("strict ptrace preflight requires a built repo-local ptrace tracer")
+
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    _write_executable(bin_dir / "roar-tracer")
-    expected_ptrace = _expected_ptrace_binary(bin_dir)
+    fake_path_ptrace = _write_executable(bin_dir / "roar-tracer")
 
     roar_cli("tracer", "ptrace")
 
@@ -128,7 +129,9 @@ def test_tracer_check_prefers_repo_local_binary_over_path_override(
     )
 
     assert result.returncode == 0, result.stderr
-    assert f"Tracer check passed for 'ptrace': {expected_ptrace}" in result.stdout
+    assert "Tracer check passed for 'ptrace': ptrace preflight succeeded" in result.stdout
+    assert f"binary: ok ({expected_ptrace})" in result.stdout
+    assert str(fake_path_ptrace) not in result.stdout
 
 
 def test_tracer_setup_without_subcommand_shows_help(temp_git_repo: Path) -> None:

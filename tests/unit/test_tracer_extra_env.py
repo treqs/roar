@@ -14,7 +14,7 @@ def _make_signal_handler():
 class TestTracerExtraEnv:
     def test_extra_env_vars_appear_in_popen_env(self, tmp_path):
         svc = TracerService(package_path=tmp_path / "roar")
-        svc._get_tracer_candidates = MagicMock(return_value=[("ptrace", "/fake/roar-tracer")])
+        svc.resolve_execution_candidates = MagicMock(return_value=[("ptrace", "/fake/roar-tracer")])
 
         mock_proc = MagicMock()
         mock_proc.wait.return_value = 0
@@ -41,7 +41,7 @@ class TestTracerExtraEnv:
         monkeypatch.setenv("AWS_ENDPOINT_URL", "http://localhost:4566")
 
         svc = TracerService(package_path=tmp_path / "roar")
-        svc._get_tracer_candidates = MagicMock(return_value=[("ptrace", "/fake/roar-tracer")])
+        svc.resolve_execution_candidates = MagicMock(return_value=[("ptrace", "/fake/roar-tracer")])
 
         mock_proc = MagicMock()
         mock_proc.wait.return_value = 0
@@ -69,7 +69,7 @@ class TestTracerExtraEnv:
         monkeypatch.setenv("MY_VAR", "original")
 
         svc = TracerService(package_path=tmp_path / "roar")
-        svc._get_tracer_candidates = MagicMock(return_value=[("ptrace", "/fake/roar-tracer")])
+        svc.resolve_execution_candidates = MagicMock(return_value=[("ptrace", "/fake/roar-tracer")])
 
         mock_proc = MagicMock()
         mock_proc.wait.return_value = 0
@@ -96,7 +96,7 @@ class TestTracerExtraEnv:
         monkeypatch.setenv("UNRELATED_VAR", "should_remain")
 
         svc = TracerService(package_path=tmp_path / "roar")
-        svc._get_tracer_candidates = MagicMock(return_value=[("ptrace", "/fake/roar-tracer")])
+        svc.resolve_execution_candidates = MagicMock(return_value=[("ptrace", "/fake/roar-tracer")])
 
         mock_proc = MagicMock()
         mock_proc.wait.return_value = 0
@@ -122,7 +122,7 @@ class TestTracerExtraEnv:
 
     def test_ray_env_vars_are_injected_for_child_process(self, tmp_path):
         svc = TracerService(package_path=tmp_path / "roar")
-        svc._get_tracer_candidates = MagicMock(return_value=[("ptrace", "/fake/roar-tracer")])
+        svc.resolve_execution_candidates = MagicMock(return_value=[("ptrace", "/fake/roar-tracer")])
 
         mock_proc = MagicMock()
         mock_proc.wait.return_value = 0

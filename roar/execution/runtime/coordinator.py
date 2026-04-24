@@ -135,26 +135,34 @@ class RunCoordinator:
             return runtime_observations
 
         # Execute via tracer
-        from ...core.exceptions import TracerNotFoundError
+        from ...core.exceptions import TracerNotFoundError, TracerPreflightError
 
-        # Resolve the backend name before execution so the trace_starting
-        # line can show the actual tracer, not "auto". Mirror the same
-        # resolution logic that execute() uses (config → override → auto).
         proxy_active = "proxy" in self._runtime_resources.active_resource_names()
-        resolved_mode: str | None = None
         try:
-            mode = ctx.tracer_mode or self._tracer._get_tracer_mode()
-            fallback = (
-                ctx.tracer_fallback
-                if ctx.tracer_fallback is not None
-                else self._tracer._get_fallback_enabled()
+            resolved_candidates = self._tracer.resolve_execution_candidates(
+                ctx.command,
+                tracer_mode_override=ctx.tracer_mode,
+                fallback_enabled_override=ctx.tracer_fallback,
             )
-            candidates = self._tracer._get_tracer_candidates(mode, fallback)
-            if candidates:
-                resolved_mode = candidates[0][0]
-        except Exception:
-            pass
-        run_presenter.trace_starting(resolved_mode or ctx.tracer_mode, proxy_active)
+        except (TracerNotFoundError, TracerPreflightError) as e:
+            from ...core.models.run import RunResult
+
+            stop_runtime_resources(e.exit_code)
+            self.logger.debug("Tracer unavailable before execution: %s", e)
+            self.presenter.print_error(str(e))
+            return RunResult(
+                exit_code=e.exit_code,
+                job_id=0,
+                job_uid="000000",
+                duration=0,
+                inputs=[],
+                outputs=[],
+                interrupted=False,
+                is_build=is_build,
+            )
+
+        resolved_mode = resolved_candidates[0][0] if resolved_candidates else ctx.tracer_mode
+        run_presenter.trace_starting(resolved_mode, proxy_active)
 
         self.logger.debug("Starting tracer execution")
         try:
@@ -166,6 +174,7 @@ class RunCoordinator:
                 job_id=run_job_uid,
                 tracer_mode_override=ctx.tracer_mode,
                 fallback_enabled_override=ctx.tracer_fallback,
+                candidates_override=resolved_candidates,
             )
             run_presenter.trace_ended(tracer_result.duration, tracer_result.exit_code)
             self.logger.debug(
@@ -174,11 +183,11 @@ class RunCoordinator:
                 tracer_result.duration,
                 tracer_result.interrupted,
             )
-        except TracerNotFoundError as e:
+        except (TracerNotFoundError, TracerPreflightError) as e:
             from ...core.models.run import RunResult
 
             stop_runtime_resources(e.exit_code)
-            self.logger.debug("Tracer not found: %s", e)
+            self.logger.debug("Tracer execution aborted before tracing: %s", e)
             self.presenter.print_error(str(e))
             return RunResult(
                 exit_code=e.exit_code,

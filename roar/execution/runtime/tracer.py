@@ -9,7 +9,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from ...core.exceptions import TracerNotFoundError
+from ...core.exceptions import TracerNotFoundError, TracerPreflightError
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.run import ISignalHandler
 from ...core.models.run import TracerResult
@@ -170,6 +170,96 @@ class TracerService:
                 return "ptrace", ptrace
         return None
 
+    def _build_tracer_not_found_hint(self, mode: str) -> str:
+        """Build the user-facing tracer-not-found hint for a mode."""
+        if mode == "ebpf":
+            return (
+                "roar-tracer-ebpf binary not found. Build it with:\n"
+                "  cd rust && cargo build --release -p roar-tracer-ebpf"
+            )
+        if mode == "preload":
+            return (
+                "roar-tracer-preload or preload library not found. Build it with:\n"
+                "  cd rust && cargo build --release -p roar-tracer-preload"
+            )
+        if mode == "ptrace":
+            return (
+                "roar-tracer binary not found. Build it with:\n"
+                "  cd rust && cargo build --release -p roar-tracer"
+            )
+        return (
+            "No tracer binary found. Build one with:\n"
+            "  cd rust && cargo build --release -p roar-tracer-ebpf\n"
+            "  cd rust && cargo build --release -p roar-tracer-preload\n"
+            "  cd rust && cargo build --release -p roar-tracer"
+        )
+
+    def _preflight_candidate(
+        self,
+        backend: str,
+        command: list[str],
+    ) -> tracer_backends.TracerPreflightResult:
+        """Run strict preflight for one concrete backend."""
+        return tracer_backends.preflight_backend(self._package_path, backend, command=command)
+
+    def resolve_execution_candidates(
+        self,
+        command: list[str],
+        tracer_mode_override: str | None = None,
+        fallback_enabled_override: bool | None = None,
+    ) -> list[tuple[str, str]]:
+        """Resolve concrete tracer candidates that passed strict preflight."""
+        mode = tracer_mode_override or self._get_tracer_mode()
+        fallback_enabled = (
+            fallback_enabled_override
+            if fallback_enabled_override is not None
+            else self._get_fallback_enabled()
+        )
+        self.logger.debug(
+            "Resolving execution candidates: mode=%s fallback_enabled=%s command=%s",
+            mode,
+            fallback_enabled,
+            command,
+        )
+
+        candidates = self._get_tracer_candidates(mode, fallback_enabled)
+        if not candidates:
+            raise TracerNotFoundError(self._build_tracer_not_found_hint(mode))
+
+        approved: list[tuple[str, str]] = []
+        failures: list[tracer_backends.TracerPreflightResult] = []
+        for backend, tracer_path in candidates:
+            result = self._preflight_candidate(backend, command)
+            if result.ok:
+                approved.append((backend, tracer_path))
+                continue
+
+            failures.append(result)
+            self.logger.debug(
+                "Skipping %s tracer after failed preflight: %s", backend, result.summary
+            )
+
+        if approved:
+            if not fallback_enabled:
+                return [approved[0]]
+            return approved
+
+        failure_context = {"failures": [result.to_dict() for result in failures]}
+        if mode == "auto":
+            detail = "; ".join(f"{result.backend}: {result.summary}" for result in failures)
+            raise TracerPreflightError(
+                f"No usable tracer passed preflight: {detail or 'no usable tracer found'}",
+                backend="auto",
+                context=failure_context,
+            )
+
+        summary = failures[0].summary if failures else "preflight failed"
+        raise TracerPreflightError(
+            f"Tracer preflight failed for '{mode}': {summary}",
+            backend=mode,
+            context=failure_context,
+        )
+
     def find_tracer(self) -> str | None:
         """
         Find the tracer binary based on configured mode.
@@ -203,6 +293,7 @@ class TracerService:
         job_id: str | None = None,
         tracer_mode_override: str | None = None,
         fallback_enabled_override: bool | None = None,
+        candidates_override: list[tuple[str, str]] | None = None,
     ) -> TracerResult:
         """
         Execute command with tracing.
@@ -226,32 +317,11 @@ class TracerService:
             if fallback_enabled_override is not None
             else self._get_fallback_enabled()
         )
-        candidates = self._get_tracer_candidates(mode, fallback_enabled)
-        if not candidates:
-            self.logger.debug("Tracer binary not found, raising error")
-            if mode == "ebpf":
-                hint = (
-                    "roar-tracer-ebpf binary not found. Build it with:\n"
-                    "  cd rust && cargo build --release -p roar-tracer-ebpf"
-                )
-            elif mode == "preload":
-                hint = (
-                    "roar-tracer-preload or preload library not found. Build it with:\n"
-                    "  cd rust && cargo build --release -p roar-tracer-preload"
-                )
-            elif mode == "ptrace":
-                hint = (
-                    "roar-tracer binary not found. Build it with:\n"
-                    "  cd rust && cargo build --release -p roar-tracer"
-                )
-            else:
-                hint = (
-                    "No tracer binary found. Build one with:\n"
-                    "  cd rust && cargo build --release -p roar-tracer-ebpf\n"
-                    "  cd rust && cargo build --release -p roar-tracer-preload\n"
-                    "  cd rust && cargo build --release -p roar-tracer"
-                )
-            raise TracerNotFoundError(hint)
+        candidates = candidates_override or self.resolve_execution_candidates(
+            command,
+            tracer_mode_override=mode,
+            fallback_enabled_override=fallback_enabled,
+        )
 
         # Generate log file paths
         pid = os.getpid()

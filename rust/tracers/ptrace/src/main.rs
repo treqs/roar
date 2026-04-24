@@ -1,13 +1,16 @@
 mod seccomp;
 
+use anyhow::{Context, Result};
 use nix::sys::ptrace;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{fork, ForkResult, Pid};
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracer_fd::FdTracker;
 use tracer_runtime::{
@@ -63,6 +66,63 @@ const TRACKED_SYSCALLS: &[u64] = &[
     SYS_PREADV2,
     SYS_PWRITEV2,
 ];
+
+#[derive(Serialize)]
+struct PreflightCheck {
+    name: String,
+    ok: bool,
+    detail: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PreflightResult {
+    backend: &'static str,
+    ok: bool,
+    summary: String,
+    command_checked: Option<String>,
+    warnings: Vec<String>,
+    checks: Vec<PreflightCheck>,
+}
+
+fn preflight_check(name: &str, ok: bool, detail: impl Into<Option<String>>) -> PreflightCheck {
+    PreflightCheck {
+        name: name.to_string(),
+        ok,
+        detail: detail.into(),
+    }
+}
+
+fn emit_preflight(result: &PreflightResult, json_output: bool) {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(result).expect("failed to serialize preflight JSON")
+        );
+        return;
+    }
+
+    println!(
+        "ptrace preflight {}: {}",
+        if result.ok { "passed" } else { "failed" },
+        result.summary
+    );
+    if let Some(command_checked) = &result.command_checked {
+        println!("  command: {command_checked}");
+    }
+    for check in &result.checks {
+        let detail = check
+            .detail
+            .as_ref()
+            .map(|value| format!(" ({value})"))
+            .unwrap_or_default();
+        println!(
+            "  - {}: {}{}",
+            check.name,
+            if check.ok { "ok" } else { "fail" },
+            detail
+        );
+    }
+}
 
 #[derive(Debug)]
 struct TracerState {
@@ -235,7 +295,9 @@ fn handle_syscall_entry(
             let out_fd = regs.rdi as i32;
             let in_fd = regs.rsi as i32;
             if let Some(pid_u32) = pid_u32 {
-                state.fd_tracker.mark_read_with_thread(pid_u32, in_fd, pid_u32);
+                state
+                    .fd_tracker
+                    .mark_read_with_thread(pid_u32, in_fd, pid_u32);
                 // Track write as pending - confirm at exit if bytes > 0
                 if let Some(path) = state.fd_tracker.path_for_fd(pid_u32, out_fd).cloned() {
                     state.pending_writes.insert(pid_raw, (path, pid_u32));
@@ -247,7 +309,9 @@ fn handle_syscall_entry(
             let in_fd = regs.rdi as i32;
             let out_fd = regs.r8 as i32;
             if let Some(pid_u32) = pid_u32 {
-                state.fd_tracker.mark_read_with_thread(pid_u32, in_fd, pid_u32);
+                state
+                    .fd_tracker
+                    .mark_read_with_thread(pid_u32, in_fd, pid_u32);
                 // Track write as pending - confirm at exit if bytes > 0
                 if let Some(path) = state.fd_tracker.path_for_fd(pid_u32, out_fd).cloned() {
                     state.pending_writes.insert(pid_raw, (path, pid_u32));
@@ -272,12 +336,16 @@ fn handle_syscall_entry(
 
                         // Any file-backed mmap is a read
                         if prot & 1 != 0 {
-                            state.fd_tracker.mark_path_read_with_thread(path.clone(), pid_u32);
+                            state
+                                .fd_tracker
+                                .mark_path_read_with_thread(path.clone(), pid_u32);
                         }
                         // Only MAP_SHARED + PROT_WRITE is a real write (changes go to disk)
                         // MAP_PRIVATE writes are copy-on-write and don't modify the file
                         if is_shared && (prot & 2 != 0) {
-                            state.fd_tracker.mark_path_written_with_thread(path, pid_u32);
+                            state
+                                .fd_tracker
+                                .mark_path_written_with_thread(path, pid_u32);
                         }
                     }
                 }
@@ -289,7 +357,9 @@ fn handle_syscall_entry(
             if let Some(newpath) = read_string_from_tracee(pid, regs.rsi) {
                 let abs_path = resolve_path(&newpath, pid_raw, &mut state.cwd_cache);
                 if let Some(pid_u32) = pid_u32 {
-                    state.fd_tracker.mark_path_written_with_thread(abs_path, pid_u32);
+                    state
+                        .fd_tracker
+                        .mark_path_written_with_thread(abs_path, pid_u32);
                 } else {
                     state.fd_tracker.mark_path_written(abs_path);
                 }
@@ -301,7 +371,9 @@ fn handle_syscall_entry(
             if let Some(newpath) = read_string_from_tracee(pid, regs.r10) {
                 let abs_path = resolve_path(&newpath, pid_raw, &mut state.cwd_cache);
                 if let Some(pid_u32) = pid_u32 {
-                    state.fd_tracker.mark_path_written_with_thread(abs_path, pid_u32);
+                    state
+                        .fd_tracker
+                        .mark_path_written_with_thread(abs_path, pid_u32);
                 } else {
                     state.fd_tracker.mark_path_written(abs_path);
                 }
@@ -354,7 +426,9 @@ fn handle_syscall_exit(
             // Only count as written if bytes were actually written (ret_val > 0)
             if let Some((path, thread_id)) = state.pending_writes.remove(&pid_raw) {
                 if ret_val > 0 {
-                    state.fd_tracker.mark_path_written_with_thread(path, thread_id);
+                    state
+                        .fd_tracker
+                        .mark_path_written_with_thread(path, thread_id);
                 }
             }
         }
@@ -426,6 +500,203 @@ fn handle_ptrace_event(pid: Pid, event: i32, state: &mut TracerState) {
             capture_process_info(pid, state, parent);
         }
         _ => {}
+    }
+}
+
+fn resolve_command_path(command: &str) -> Option<PathBuf> {
+    let command_path = PathBuf::from(command);
+    if command_path.is_absolute() || command.contains('/') {
+        if command_path.exists() {
+            return Some(command_path);
+        }
+        return None;
+    }
+
+    let path_var = env::var_os("PATH")?;
+    for segment in env::split_paths(&path_var) {
+        let candidate = segment.join(command);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn make_preflight_temp_path(label: &str, suffix: &str) -> PathBuf {
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    env::temp_dir().join(format!("roar-{label}-{pid}-{nanos}{suffix}"))
+}
+
+fn run_preflight_probe(path: &Path) -> Result<()> {
+    let payload = b"roar-ptrace-preflight";
+    fs::write(path, payload).with_context(|| format!("failed to write {}", path.display()))?;
+    let got = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    if got != payload {
+        anyhow::bail!("probe payload mismatch");
+    }
+
+    let renamed = path.with_extension("renamed");
+    fs::rename(path, &renamed).with_context(|| {
+        format!(
+            "failed to rename {} -> {}",
+            path.display(),
+            renamed.display()
+        )
+    })?;
+    fs::rename(&renamed, path).with_context(|| {
+        format!(
+            "failed to rename {} -> {}",
+            renamed.display(),
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn run_preflight(json_output: bool, command: Option<&str>) -> i32 {
+    let mut checks = vec![
+        preflight_check(
+            "platform",
+            cfg!(target_os = "linux"),
+            Some(env::consts::OS.to_string()),
+        ),
+        preflight_check(
+            "architecture",
+            env::consts::ARCH == "x86_64",
+            Some(env::consts::ARCH.to_string()),
+        ),
+    ];
+
+    let mut command_checked = None;
+    if let Some(command_name) = command {
+        match resolve_command_path(command_name) {
+            Some(path) => {
+                let rendered = path.display().to_string();
+                command_checked = Some(rendered.clone());
+                checks.push(preflight_check("command", true, Some(rendered)));
+            }
+            None => {
+                command_checked = Some(command_name.to_string());
+                checks.push(preflight_check(
+                    "command",
+                    false,
+                    Some(format!("command not found: {command_name}")),
+                ));
+                let result = PreflightResult {
+                    backend: "ptrace",
+                    ok: false,
+                    summary: format!("command not found: {command_name}"),
+                    command_checked,
+                    warnings: Vec::new(),
+                    checks,
+                };
+                emit_preflight(&result, json_output);
+                return 1;
+            }
+        }
+    }
+
+    if !cfg!(target_os = "linux") {
+        let result = PreflightResult {
+            backend: "ptrace",
+            ok: false,
+            summary: "ptrace tracer only supports Linux hosts".to_string(),
+            command_checked,
+            warnings: Vec::new(),
+            checks,
+        };
+        emit_preflight(&result, json_output);
+        return 1;
+    }
+
+    if env::consts::ARCH != "x86_64" {
+        let result = PreflightResult {
+            backend: "ptrace",
+            ok: false,
+            summary: format!(
+                "ptrace tracer only supports x86_64 today (got {})",
+                env::consts::ARCH
+            ),
+            command_checked,
+            warnings: Vec::new(),
+            checks,
+        };
+        emit_preflight(&result, json_output);
+        return 1;
+    }
+
+    match env::current_exe() {
+        Ok(path) => {
+            checks.push(preflight_check(
+                "launcher",
+                true,
+                Some(path.display().to_string()),
+            ));
+        }
+        Err(err) => {
+            checks.push(preflight_check("launcher", false, Some(err.to_string())));
+            let result = PreflightResult {
+                backend: "ptrace",
+                ok: false,
+                summary: format!("failed to resolve current executable: {err}"),
+                command_checked,
+                warnings: Vec::new(),
+                checks,
+            };
+            emit_preflight(&result, json_output);
+            return 1;
+        }
+    };
+
+    let report_path = make_preflight_temp_path("ptrace-report", ".msgpack");
+    let probe_path = make_preflight_temp_path("ptrace-probe", ".txt");
+    let shell_snippet = format!(
+        "printf 'roar-ptrace-preflight' > '{}' && test -s '{}'",
+        probe_path.display(),
+        probe_path.display(),
+    );
+    let exit_code = run_tracer(
+        vec!["/bin/sh".to_string(), "-c".to_string(), shell_snippet],
+        report_path
+            .to_str()
+            .expect("temporary report path contains invalid UTF-8"),
+    );
+
+    let ok = exit_code == 0 && report_path.exists();
+    checks.push(preflight_check(
+        "probe_run",
+        ok,
+        Some(if ok {
+            "report produced".to_string()
+        } else {
+            format!("probe exit code {exit_code}")
+        }),
+    ));
+
+    let _ = fs::remove_file(&probe_path);
+    let _ = fs::remove_file(&report_path);
+
+    let result = PreflightResult {
+        backend: "ptrace",
+        ok,
+        summary: if ok {
+            "ptrace preflight succeeded".to_string()
+        } else {
+            format!("ptrace probe failed with exit code {exit_code}")
+        },
+        command_checked,
+        warnings: Vec::new(),
+        checks,
+    };
+    emit_preflight(&result, json_output);
+    if result.ok {
+        0
+    } else {
+        1
     }
 }
 
@@ -638,8 +909,50 @@ fn trace_loop(state: &mut TracerState) -> i32 {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
+    if args.get(1).map(String::as_str) == Some("--preflight-probe") {
+        let Some(path) = args.get(2) else {
+            eprintln!("usage: roar-tracer --preflight-probe <path>");
+            std::process::exit(2);
+        };
+        match run_preflight_probe(Path::new(path)) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("roar-tracer probe: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if args.get(1).map(String::as_str) == Some("--preflight") {
+        let mut json_output = false;
+        let mut command = None;
+        let mut idx = 2;
+        while idx < args.len() {
+            match args[idx].as_str() {
+                "--json" => {
+                    json_output = true;
+                    idx += 1;
+                }
+                "--command" => {
+                    let Some(value) = args.get(idx + 1) else {
+                        eprintln!("usage: roar-tracer --preflight [--json] [--command <cmd>]");
+                        std::process::exit(2);
+                    };
+                    command = Some(value.as_str());
+                    idx += 2;
+                }
+                _ => {
+                    eprintln!("usage: roar-tracer --preflight [--json] [--command <cmd>]");
+                    std::process::exit(2);
+                }
+            }
+        }
+        std::process::exit(run_preflight(json_output, command));
+    }
+
     if args.len() < 3 {
         eprintln!("Usage: roar-tracer <output-file> <command> [args...]");
+        eprintln!("       roar-tracer --preflight [--json] [--command <cmd>]");
         eprintln!("  Traces <command> and writes syscall data to <output-file>");
         std::process::exit(1);
     }
