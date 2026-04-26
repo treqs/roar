@@ -140,12 +140,63 @@ def test_reproduce_run_executes_full_reproduction_and_renders_completion(tmp_pat
         )
 
     mock_prepare.assert_called_once()
+    assert mock_prepare.call_args.kwargs["reuse_current_repo"] is True
     mock_executor.execute.assert_called_once()
     printed = "\n".join(call.args[0] for call in presenter.print.call_args_list)
     assert "Found artifact: abc123def456789" in printed
     assert "Environment ready:" in printed
     assert "Reproduction Complete" in printed
     assert "Steps run: 2/2" in printed
+
+
+def test_reproduce_run_can_force_fresh_environment(tmp_path: Path) -> None:
+    presenter = MagicMock()
+    service = MagicMock()
+    service.lookup_pipeline_result.return_value = PipelineLookupResult(
+        pipeline=_pipeline(),
+        error=None,
+        source="remote",
+    )
+    service.prepare_environment.return_value = EnvironmentInfo(
+        repo_dir=tmp_path / "reproduce" / "repo",
+        venv_dir=None,
+        python_version=None,
+        packages=[],
+    )
+
+    with (
+        patch("roar.application.reproduce.service.bootstrap"),
+        patch(
+            "roar.application.reproduce.service.load_config",
+            return_value={"glaas": {"url": "http://localhost:3001"}},
+        ),
+        patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
+        patch(
+            "roar.application.reproduce.service.lookup_pipeline_result",
+            return_value=service.lookup_pipeline_result.return_value,
+        ),
+        patch(
+            "roar.application.reproduce.service.prepare_reproduction_environment",
+            return_value=service.prepare_environment.return_value,
+        ) as mock_prepare,
+        patch("roar.application.reproduce.service.PipelineExecutor") as mock_executor_cls,
+    ):
+        mock_glaas = MagicMock()
+        mock_glaas.is_configured.return_value = True
+        mock_glaas_cls.return_value = mock_glaas
+        mock_executor_cls.return_value.execute.return_value = (2, 2)
+
+        reproduce_artifact(
+            _request(
+                tmp_path,
+                run_pipeline=True,
+                auto_confirm=True,
+                reuse_current_repo=False,
+            ),
+            presenter=presenter,
+        )
+
+    assert mock_prepare.call_args.kwargs["reuse_current_repo"] is False
 
 
 def test_reproduce_out_writes_dag_response(tmp_path: Path) -> None:

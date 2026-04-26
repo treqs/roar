@@ -5,7 +5,7 @@ Tests the roar executable handling for command wrapping.
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -133,3 +133,46 @@ class TestPipelineExecutorDetectRoarExecutable:
             # Should fall back to python -m roar
             expected = f"{sys.executable} -m roar"
             assert executor._roar_executable == expected
+
+
+class TestPipelineExecutorStepCwd:
+    @pytest.fixture
+    def mock_environment(self, tmp_path):
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        (repo_dir / "scripts").mkdir()
+        env = MagicMock()
+        env.venv_dir = None
+        env.repo_dir = repo_dir
+        return env
+
+    @patch("roar.execution.reproduction.pipeline_executor.subprocess.run")
+    def test_run_step_uses_recorded_relative_cwd(self, mock_run, mock_environment):
+        mock_run.return_value.returncode = 0
+        executor = PipelineExecutor(roar_executable="roar")
+
+        success = executor._run_step(
+            {
+                "command": "python train.py",
+                "metadata": '{"cwd": "scripts"}',
+            },
+            mock_environment,
+        )
+
+        assert success is True
+        assert mock_run.call_args.kwargs["cwd"] == mock_environment.repo_dir / "scripts"
+
+    @patch("roar.execution.reproduction.pipeline_executor.subprocess.run")
+    def test_run_step_rejects_cwd_that_escapes_repo(self, mock_run, mock_environment):
+        executor = PipelineExecutor(roar_executable="roar")
+
+        success = executor._run_step(
+            {
+                "command": "python train.py",
+                "metadata": '{"cwd": "../outside"}',
+            },
+            mock_environment,
+        )
+
+        assert success is False
+        mock_run.assert_not_called()

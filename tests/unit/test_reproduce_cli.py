@@ -41,6 +41,21 @@ def test_reproduce_cli_passes_environment_setup_flags(tmp_path: Path) -> None:
     assert request.target_kind == "artifact"
 
 
+def test_reproduce_cli_passes_fresh_environment_flag(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    with patch("roar.cli.commands.reproduce.reproduce_artifact", return_value=None) as mock_service:
+        result = runner.invoke(
+            reproduce,
+            ["abc123def456", "--run", "--fresh"],
+            obj=_ctx(tmp_path),
+        )
+
+    assert result.exit_code == 0
+    request = mock_service.call_args.args[0]
+    assert request.reuse_current_repo is False
+
+
 def test_reproduce_cli_passes_lineage_target_kind(tmp_path: Path) -> None:
     runner = CliRunner()
 

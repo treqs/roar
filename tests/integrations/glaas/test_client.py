@@ -218,6 +218,27 @@ class TestOptionalAuth:
             assert probe_request.get_header("Authorization") == "SSH-SIG test-signature"
             assert request.get_header("Authorization") == "SSH-SIG test-signature"
 
+    def test_delegated_glaas_token_env_takes_precedence(self, monkeypatch):
+        """ROAR_GLAAS_TOKEN should be sent as bearer auth before ambient auth."""
+        monkeypatch.setenv("ROAR_GLAAS_TOKEN", "delegated-token")
+        client = _optional_auth_client()
+
+        with (
+            patch(
+                "roar.integrations.glaas.client.make_auth_header",
+                return_value="SSH-SIG test-signature",
+            ),
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_urlopen.return_value = self._json_response(b'{"success": true, "data": {"id": 1}}')
+
+            result, error = client._request("GET", "/api/v1/test", None)
+
+            assert error is None
+            assert result == {"id": 1}
+            request = mock_urlopen.call_args_list[0][0][0]
+            assert request.get_header("Authorization") == "Bearer delegated-token"
+
     def test_authenticated_probe_is_cached_after_first_success(self):
         """Once a protected probe succeeds, later requests should not re-probe."""
         client = _optional_auth_client()

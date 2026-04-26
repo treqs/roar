@@ -5,10 +5,12 @@ Extracted from reproduce.py to follow Single Responsibility Principle.
 This service handles executing pipeline steps during reproduction.
 """
 
+import json
 import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...presenters import NullPresenter
@@ -131,19 +133,11 @@ class PipelineExecutor:
 
         self._print(f"  Command: roar {roar_cmd} {command}")
 
-        # Extract env vars from step metadata
-        step_env_vars: dict[str, str] = {}
-        metadata = step.get("metadata")
-        if metadata:
-            import json as _json
-
-            if isinstance(metadata, str):
-                try:
-                    metadata = _json.loads(metadata)
-                except (ValueError, TypeError):
-                    metadata = {}
-            if isinstance(metadata, dict):
-                step_env_vars = metadata.get("env_vars", {})
+        metadata = self._parse_metadata(step.get("metadata"))
+        step_env_vars = self._extract_step_env_vars(metadata)
+        step_cwd = self._resolve_step_cwd(metadata, environment)
+        if step_cwd is None:
+            return False
 
         # Set up environment
         env = self._prepare_environment(environment, env_vars=step_env_vars)
@@ -154,7 +148,7 @@ class PipelineExecutor:
             result = subprocess.run(
                 wrapped_command,
                 shell=True,
-                cwd=environment.repo_dir,
+                cwd=step_cwd,
                 env=env,
                 timeout=3600,  # 1 hour timeout
             )
@@ -172,6 +166,56 @@ class PipelineExecutor:
         except Exception as e:
             self._print(f"  Error: {e}")
             return False
+
+    def _parse_metadata(self, metadata: object) -> dict:
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except (ValueError, TypeError):
+                return {}
+        return metadata if isinstance(metadata, dict) else {}
+
+    def _extract_step_env_vars(self, metadata: dict) -> dict[str, str]:
+        env_vars = metadata.get("env_vars")
+        if not isinstance(env_vars, dict):
+            return {}
+        return {str(key): str(value) for key, value in env_vars.items()}
+
+    def _resolve_step_cwd(
+        self,
+        metadata: dict,
+        environment: "EnvironmentInfo",
+    ) -> Path | None:
+        cwd_value = (
+            metadata.get("cwd")
+            or metadata.get("workingDirectory")
+            or metadata.get("working_directory")
+        )
+        repo_dir = Path(environment.repo_dir)
+        if not isinstance(cwd_value, str) or not cwd_value.strip():
+            return repo_dir
+
+        candidate = Path(cwd_value)
+        if candidate.is_absolute():
+            step_cwd = candidate
+        else:
+            step_cwd = repo_dir / candidate
+
+        try:
+            resolved_repo = repo_dir.resolve()
+            resolved_cwd = step_cwd.resolve()
+            resolved_cwd.relative_to(resolved_repo)
+        except ValueError:
+            self._print(f"  Working directory escapes repo: {cwd_value}")
+            return None
+
+        if not resolved_cwd.is_dir():
+            self._print(f"  Working directory not found: {resolved_cwd}")
+            return None
+
+        if resolved_cwd != repo_dir.resolve():
+            self._print(f"  Working directory: {resolved_cwd}")
+        return resolved_cwd
 
     def _wrap_with_roar(
         self,
