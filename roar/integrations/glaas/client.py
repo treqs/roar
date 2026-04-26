@@ -1,6 +1,7 @@
 """GLaaS client for communicating with the Graph Lineage-as-a-Service server."""
 
 import contextlib
+import os
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -20,6 +21,13 @@ def _get_logger():
 def get_glaas_url() -> str | None:
     """Get GLaaS server URL from config or environment."""
     return _auth.get_glaas_url()
+
+
+def _read_delegated_access_token() -> str | None:
+    token = os.environ.get("ROAR_GLAAS_TOKEN")
+    if token and token.strip():
+        return token.strip()
+    return None
 
 
 def find_ssh_private_key():
@@ -74,6 +82,7 @@ class GlaasClient:
     ):
         resolved_base_url = get_glaas_url() if base_url is None else base_url
         self.base_url = resolved_base_url.rstrip("/") if resolved_base_url else None
+        self._delegated_access_token = _read_delegated_access_token()
         self._publish_auth = publish_auth or load_publish_auth_context(
             start_dir,
             allow_public_without_binding=allow_public_without_binding,
@@ -158,6 +167,8 @@ class GlaasClient:
         )
 
     def _make_auth_header(self, method: str, path: str, body: bytes | None = None) -> str | None:
+        if self._delegated_access_token:
+            return f"Bearer {self._delegated_access_token}"
         if self._publish_auth.access_token:
             return f"Bearer {self._publish_auth.access_token}"
         return make_auth_header(method, path, body)

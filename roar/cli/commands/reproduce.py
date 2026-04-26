@@ -47,6 +47,13 @@ from ..context import RoarContext
     default=None,
     help="Dump DAG lineage response to a JSON file",
 )
+@click.option(
+    "--fresh",
+    "--no-reuse",
+    "fresh_environment",
+    is_flag=True,
+    help="Create a fresh reproduction environment instead of reusing the current git checkout",
+)
 @click.pass_obj
 def reproduce(
     ctx: RoarContext,
@@ -59,6 +66,7 @@ def reproduce(
     package_sync: bool,
     list_requirements: bool,
     out_path: str | None,
+    fresh_environment: bool,
 ) -> None:
     """Reproduce an artifact or lineage from a recorded hash.
 
@@ -86,6 +94,7 @@ def reproduce(
         roar reproduce <lineage-hash> --lineage        # Preview lineage reproduction
         roar reproduce <lineage-hash> --lineage --run  # Run lineage reproduction
         roar reproduce abc123 --run --package-sync     # Include system packages
+        roar reproduce abc123 --run --fresh            # Always set up a fresh environment
     """
     try:
         reproduce_artifact(
@@ -101,6 +110,7 @@ def reproduce(
                 package_sync=package_sync,
                 list_requirements=list_requirements,
                 out_path=out_path,
+                reuse_current_repo=not fresh_environment,
             )
         )
     except ValueError as exc:

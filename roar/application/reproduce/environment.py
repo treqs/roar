@@ -19,11 +19,13 @@ def prepare_reproduction_environment(
     dpkg_any_version: bool = False,
     pip_any_version: bool = False,
     package_sync: bool = False,
+    reuse_current_repo: bool = True,
 ) -> EnvironmentInfo:
     """Reuse the current repo when possible, otherwise create a fresh environment."""
-    reused = try_reuse_current_repo(cwd, pipeline, presenter=presenter)
-    if reused is not None:
-        return reused
+    if reuse_current_repo:
+        reused = try_reuse_current_repo(cwd, pipeline, presenter=presenter)
+        if reused is not None:
+            return reused
 
     target_dir = cwd / "reproduce"
     presenter.print(f"\nSetting up environment in {target_dir}...")

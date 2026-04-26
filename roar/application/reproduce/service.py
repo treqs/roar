@@ -108,6 +108,7 @@ def reproduce_artifact(
             dpkg_any_version=request.dpkg_any_version,
             pip_any_version=request.pip_any_version,
             package_sync=request.package_sync,
+            reuse_current_repo=request.reuse_current_repo,
         )
     except RuntimeError as exc:
         raise ValueError(f"Environment setup failed: {exc}") from exc

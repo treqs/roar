@@ -2,7 +2,10 @@
 
 from unittest.mock import MagicMock, patch
 
-from roar.application.reproduce.environment import try_reuse_current_repo
+from roar.application.reproduce.environment import (
+    prepare_reproduction_environment,
+    try_reuse_current_repo,
+)
 from roar.core.interfaces.reproduction import PipelineInfo
 
 
@@ -42,3 +45,22 @@ class TestTryReuseCurrentRepo:
 
         result = try_reuse_current_repo(tmp_path, _make_pipeline(), presenter=MagicMock())
         assert result is None
+
+
+class TestPrepareReproductionEnvironment:
+    @patch("roar.application.reproduce.environment.EnvironmentSetupService")
+    @patch("roar.application.reproduce.environment.try_reuse_current_repo")
+    def test_can_skip_current_repo_reuse(self, mock_reuse, mock_setup_cls, tmp_path):
+        setup = mock_setup_cls.return_value
+        setup.setup.return_value = MagicMock()
+
+        prepare_reproduction_environment(
+            pipeline=_make_pipeline(),
+            cwd=tmp_path,
+            presenter=MagicMock(),
+            auto_confirm=True,
+            reuse_current_repo=False,
+        )
+
+        mock_reuse.assert_not_called()
+        setup.setup.assert_called_once()

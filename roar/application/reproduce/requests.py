@@ -20,3 +20,4 @@ class ReproduceRequest:
     package_sync: bool = False
     list_requirements: bool = False
     out_path: str | None = None
+    reuse_current_repo: bool = True
