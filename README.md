@@ -329,7 +329,7 @@ To make public publication the default for `roar register` and `roar put`:
 roar config set registration.public_by_default true
 ```
 
-Override per command with `--public` or `--private`. When public visibility comes from config rather than an explicit flag, `roar` prints a warning before publishing.
+Override per command with `--public` or `--private`. Use `--anonymous` on `roar register` or `roar put` to force public anonymous publication even when local GLaaS auth is configured. When public visibility comes from config rather than an explicit flag, `roar` prints a warning before publishing.
 
 ### `roar put`
 
@@ -347,6 +347,7 @@ roar put @2 s3://bucket/outputs/ -m "Step 2 outputs"
 - `--dry-run` — Preview without uploading
 - `--no-tag` — Skip git tagging
 - `--public` / `--private` — Override configured publish visibility
+- `--anonymous` — Force public anonymous registration even when local GLaaS auth is configured
 
 **Source formats:**
 
