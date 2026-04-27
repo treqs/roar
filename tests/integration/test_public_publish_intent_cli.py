@@ -315,6 +315,39 @@ def test_register_public_with_valid_ssh_uses_authenticated_creator_identity_for_
     )
 
 
+def test_register_anonymous_with_valid_ssh_forces_anonymous_public_registration_session(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    fake_glaas_publish_server: FakeGlaasServer,
+    ssh_keypair: Path,
+) -> None:
+    ssh_env = _configure_unbound_repo_for_ssh_only(
+        temp_git_repo,
+        roar_cli,
+        fake_glaas_publish_server.base_url,
+        ssh_keypair,
+    )
+    _create_register_fixture(temp_git_repo, roar_cli, git_commit, python_exe, ssh_env)
+
+    result = roar_cli("register", "report.txt", "--yes", "--anonymous", env_overrides=ssh_env)
+
+    assert result.returncode == 0
+    assert fake_glaas_publish_server.session_registrations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert fake_glaas_publish_server.registration_session_creations[0]["mode"] == "anonymous_public"
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    finalization = fake_glaas_publish_server.registration_session_finalizations[0]
+    assert "scope_request" not in finalization
+    assert finalization["expected"] == {"jobs": 1, "inputs": 1, "outputs": 1}
+    assert not any(
+        isinstance(entry.get("authorization"), str)
+        and entry["authorization"].startswith("Signature ")
+        for entry in fake_glaas_publish_server.auth_headers
+    )
+
+
 def test_register_public_without_auth_uses_anonymous_registration_sessions_when_supported(
     temp_git_repo: Path,
     roar_cli,
@@ -713,6 +746,47 @@ def test_put_public_uses_registration_sessions_with_ssh_only_auth(
     assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
     assert "scope_request" not in fake_glaas_publish_server.registration_session_finalizations[0]
     assert any(
+        isinstance(entry.get("authorization"), str)
+        and entry["authorization"].startswith("Signature ")
+        for entry in fake_glaas_publish_server.auth_headers
+    )
+
+
+def test_put_anonymous_with_valid_ssh_forces_anonymous_public_registration_session(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    monkeypatch,
+    ssh_keypair: Path,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    env = _configure_unbound_repo_for_ssh_only(
+        temp_git_repo,
+        roar_cli,
+        fake_glaas_publish_server.base_url,
+        ssh_keypair,
+    )
+    _create_put_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
+    monkeypatch.setenv("ROAR_PUT_SKIP_UPLOAD", "1")
+
+    result = roar_cli(
+        "put",
+        "model.pt",
+        "s3://test-bucket/models",
+        "-m",
+        "publish model",
+        "--anonymous",
+        env_overrides=env,
+    )
+
+    assert result.returncode == 0
+    assert fake_glaas_publish_server.session_registrations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert fake_glaas_publish_server.registration_session_creations[0]["mode"] == "anonymous_public"
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    assert "scope_request" not in fake_glaas_publish_server.registration_session_finalizations[0]
+    assert not any(
         isinstance(entry.get("authorization"), str)
         and entry["authorization"].startswith("Signature ")
         for entry in fake_glaas_publish_server.auth_headers

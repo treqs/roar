@@ -144,3 +144,44 @@ def test_put_cli_private_flag_overrides_public_default_from_config(tmp_path: Pat
     )
     request = mock_put.call_args.args[0]
     assert request.public is False
+
+
+def test_put_cli_anonymous_forces_public_without_default_warning(tmp_path: Path) -> None:
+    runner = CliRunner()
+    config_set("registration.public_by_default", "false", start_dir=str(tmp_path))
+    response = PutResponse(success=True, destination="s3://bucket/release")
+
+    with patch("roar.cli.commands.put.put_artifacts", return_value=response) as mock_put:
+        result = runner.invoke(
+            put,
+            ["model.pt", "s3://bucket/release", "-m", "publish release", "--anonymous"],
+            obj=_mock_context(tmp_path),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Warning: defaulting to public visibility" not in result.output
+    request = mock_put.call_args.args[0]
+    assert request.public is True
+    assert request.anonymous is True
+
+
+def test_put_cli_rejects_anonymous_private(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    with patch("roar.cli.commands.put.put_artifacts") as mock_put:
+        result = runner.invoke(
+            put,
+            [
+                "model.pt",
+                "s3://bucket/release",
+                "-m",
+                "publish release",
+                "--anonymous",
+                "--private",
+            ],
+            obj=_mock_context(tmp_path),
+        )
+
+    assert result.exit_code != 0
+    assert "--anonymous requires public visibility" in result.output
+    mock_put.assert_not_called()

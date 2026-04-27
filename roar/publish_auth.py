@@ -34,7 +34,19 @@ def load_publish_auth_context(
     start_dir: str | Path | None = None,
     *,
     allow_public_without_binding: bool = False,
+    force_anonymous: bool = False,
 ) -> PublishAuthContext:
+    if force_anonymous:
+        return PublishAuthContext(
+            access_token=None,
+            scope_request=None,
+            auth_provider=None,
+            user_sub=None,
+            db_user_id=None,
+            creator_identity=None,
+            ssh_auth_available=False,
+        )
+
     access_token = None
     auth_provider = None
     user_sub = None

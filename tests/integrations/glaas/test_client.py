@@ -35,6 +35,21 @@ def _optional_auth_client() -> GlaasClient:
     )
 
 
+def test_force_anonymous_suppresses_ssh_auth_header_generation() -> None:
+    client = GlaasClient(
+        base_url="http://localhost:9999",
+        publish_auth=PublishAuthContext(access_token="token", scope_request=None),
+        force_anonymous=True,
+    )
+
+    with patch("roar.integrations.glaas.client.make_auth_header") as make_auth_header:
+        assert client._make_auth_header("POST", "/api/v1/labels/sync", b"{}") is None
+
+    make_auth_header.assert_not_called()
+    assert client.publish_auth.access_token is None
+    assert client.publish_auth.ssh_auth_available is False
+
+
 class TestGlaasClientExceptions:
     """Test that GlaasClient raises proper exceptions."""
 

@@ -124,6 +124,7 @@ def build_publish_runtime(
     glaas_url: str | None = None,
     start_dir: str | None = None,
     allow_public_without_binding: bool = False,
+    force_anonymous: bool = False,
 ) -> Any:
     """Load publish runtime assembly only when publish workflows execute."""
     from .runtime import build_publish_runtime as _build_publish_runtime
@@ -132,6 +133,7 @@ def build_publish_runtime(
         glaas_url=glaas_url,
         start_dir=start_dir,
         allow_public_without_binding=allow_public_without_binding,
+        force_anonymous=force_anonymous,
     )
 
 
@@ -192,6 +194,7 @@ def build_register_preview_runtime(
     *,
     start_dir: str | None = None,
     allow_public_without_binding: bool = False,
+    force_anonymous: bool = False,
 ) -> Any:
     """Build only the dependencies needed for local register preview flows."""
     from ...integrations.glaas.client import GlaasClient
@@ -201,7 +204,17 @@ def build_register_preview_runtime(
     from .remote_registry import GlaasRemoteRegistryTransport
 
     publish_auth = None
-    if not allow_public_without_binding:
+    if force_anonymous:
+        publish_auth = PublishAuthContext(
+            access_token=None,
+            scope_request=None,
+            auth_provider=None,
+            user_sub=None,
+            db_user_id=None,
+            creator_identity=None,
+            ssh_auth_available=False,
+        )
+    elif not allow_public_without_binding:
         publish_auth = PublishAuthContext(
             access_token=None,
             scope_request=None,
@@ -215,6 +228,7 @@ def build_register_preview_runtime(
         start_dir=start_dir,
         publish_auth=publish_auth,
         allow_public_without_binding=allow_public_without_binding,
+        force_anonymous=force_anonymous,
     )
     session_service = SessionRegistrationService(glaas_client)
     return _RegisterPreviewRuntime(
@@ -386,23 +400,28 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         bootstrap(request.roar_dir)
     logger = get_logger()
 
+    if request.anonymous and not request.public:
+        return RegisterLineageResponse(
+            success=False,
+            error="Anonymous registration requires public visibility.",
+        )
+
     try:
         resolved_target = resolve_register_lineage_target(
             request.target,
             cwd=request.cwd,
             roar_dir=request.roar_dir,
         )
+        runtime_kwargs: dict[str, Any] = {
+            "start_dir": str(request.cwd),
+            "allow_public_without_binding": request.public,
+        }
+        if request.anonymous:
+            runtime_kwargs["force_anonymous"] = True
         runtime = (
-            build_register_preview_runtime(
-                start_dir=str(request.cwd),
-                allow_public_without_binding=request.public,
-            )
+            build_register_preview_runtime(**runtime_kwargs)
             if request.dry_run
-            else build_publish_runtime(
-                glaas_url=get_glaas_url(),
-                start_dir=str(request.cwd),
-                allow_public_without_binding=request.public,
-            )
+            else build_publish_runtime(glaas_url=get_glaas_url(), **runtime_kwargs)
         )
         collected_lineage, error = collect_register_lineage(
             target=resolved_target,
@@ -500,6 +519,13 @@ def put_artifacts(request: PutRequest) -> PutResponse:
         bootstrap(request.roar_dir)
     logger = get_logger()
 
+    if request.anonymous and not request.public:
+        return PutResponse(
+            success=False,
+            destination=request.destination,
+            error="Anonymous publication requires public visibility.",
+        )
+
     repo_root = request.repo_root or request.cwd
     if request.dry_run:
         git_state = None
@@ -527,11 +553,14 @@ def put_artifacts(request: PutRequest) -> PutResponse:
     else:
         with create_database_context(request.roar_dir) as db_ctx:
             backend = resolve_publish_storage_backend(request.destination)
-            runtime = build_publish_runtime(
-                glaas_url=get_glaas_url(),
-                start_dir=str(repo_root),
-                allow_public_without_binding=request.public,
-            )
+            runtime_kwargs: dict[str, Any] = {
+                "glaas_url": get_glaas_url(),
+                "start_dir": str(repo_root),
+                "allow_public_without_binding": request.public,
+            }
+            if request.anonymous:
+                runtime_kwargs["force_anonymous"] = True
+            runtime = build_publish_runtime(**runtime_kwargs)
             service = PutService(
                 db_context=db_ctx,
                 backend=backend,

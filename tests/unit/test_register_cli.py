@@ -144,3 +144,35 @@ def test_register_cli_private_flag_overrides_public_default_from_config(tmp_path
     )
     request = mock_register.call_args.args[0]
     assert request.public is False
+
+
+def test_register_cli_anonymous_forces_public_without_default_warning(tmp_path: Path) -> None:
+    runner = CliRunner()
+    config_set("registration.public_by_default", "false", start_dir=str(tmp_path))
+
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        mock_register.return_value = _fake_result()
+        result = runner.invoke(
+            register, ["model.pt", "--yes", "--anonymous"], obj=_mock_context(tmp_path)
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Warning: defaulting to public visibility" not in result.output
+    request = mock_register.call_args.args[0]
+    assert request.public is True
+    assert request.anonymous is True
+
+
+def test_register_cli_rejects_anonymous_private(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        result = runner.invoke(
+            register,
+            ["model.pt", "--yes", "--anonymous", "--private"],
+            obj=_mock_context(tmp_path),
+        )
+
+    assert result.exit_code != 0
+    assert "--anonymous requires public visibility" in result.output
+    mock_register.assert_not_called()

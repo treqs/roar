@@ -79,6 +79,11 @@ def _warn_public_default() -> None:
         "attributed submission; private requires attributed submission."
     ),
 )
+@click.option(
+    "--anonymous",
+    is_flag=True,
+    help="Force public anonymous registration even when local GLaaS auth is configured.",
+)
 @click.pass_obj
 @require_init
 def put(
@@ -88,6 +93,7 @@ def put(
     dry_run: bool,
     no_tag: bool,
     public: bool | None,
+    anonymous: bool,
 ) -> None:
     """Publish artifacts to cloud storage and register with GLaaS.
 
@@ -104,10 +110,12 @@ def put(
     Visibility / attribution matrix:
     - effective private -> private + attributed only
     - effective public -> public + anonymous OR public + attributed
+    - --anonymous -> public + anonymous, ignoring configured auth
     - private + anonymous is not allowed
 
     Effective visibility comes from `--public` / `--private` when provided,
-    otherwise from `registration.public_by_default` in roar config.
+    otherwise from `registration.public_by_default` in roar config. `--anonymous`
+    forces public visibility.
 
     \b
     Destination formats:
@@ -139,9 +147,15 @@ def put(
     destination = args[-1]
     sources = list(args[:-1])
 
-    resolved_public, used_public_default = _resolve_public_flag(
-        public, start_dir=str(ctx.repo_root or ctx.cwd)
-    )
+    if anonymous and public is False:
+        raise click.ClickException("--anonymous requires public visibility; remove --private.")
+
+    if anonymous:
+        resolved_public, used_public_default = True, False
+    else:
+        resolved_public, used_public_default = _resolve_public_flag(
+            public, start_dir=str(ctx.repo_root or ctx.cwd)
+        )
     if used_public_default:
         _warn_public_default()
 
@@ -156,6 +170,7 @@ def put(
                 message=message,
                 dry_run=dry_run,
                 public=resolved_public,
+                anonymous=anonymous,
                 no_tag=no_tag,
             )
         )
