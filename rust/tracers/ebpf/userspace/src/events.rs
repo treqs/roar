@@ -88,7 +88,13 @@ fn process_small_event(state: &mut TracerState, event: &SmallEvent) {
         }
         EventType::PRead => {
             if event.ret_val > 0 {
-                state.handle_pread_with_thread(pid, fd, event.arg1, event.ret_val as u64, thread_id);
+                state.handle_pread_with_thread(
+                    pid,
+                    fd,
+                    event.arg1,
+                    event.ret_val as u64,
+                    thread_id,
+                );
             }
         }
         EventType::PWrite => {
@@ -516,9 +522,9 @@ mod tests {
             thread_id: 11,
             event_type: EventType::PRead as u16,
             _pad: 0,
-            ret_val: 4096,  // bytes read
-            arg0: 3,        // fd
-            arg1: 1024,     // offset
+            ret_val: 4096, // bytes read
+            arg0: 3,       // fd
+            arg1: 1024,    // offset
         };
 
         process_small_event(&mut state, &event);
@@ -539,9 +545,9 @@ mod tests {
             thread_id: 11,
             event_type: EventType::PWrite as u16,
             _pad: 0,
-            ret_val: 2048,  // bytes written
-            arg0: 3,        // fd
-            arg1: 512,      // offset
+            ret_val: 2048, // bytes written
+            arg0: 3,       // fd
+            arg1: 512,     // offset
         };
 
         process_small_event(&mut state, &event);
@@ -561,9 +567,9 @@ mod tests {
             thread_id: 11,
             event_type: EventType::MmapRead as u16,
             _pad: 0,
-            ret_val: 65536,  // mmap length
-            arg0: 3,         // fd
-            arg1: 0,         // offset
+            ret_val: 65536, // mmap length
+            arg0: 3,        // fd
+            arg1: 0,        // offset
         };
 
         process_small_event(&mut state, &event);
@@ -582,9 +588,9 @@ mod tests {
             thread_id: 11,
             event_type: EventType::MmapWrite as u16,
             _pad: 0,
-            ret_val: 4096,  // mmap length
-            arg0: 3,        // fd
-            arg1: 0,        // offset
+            ret_val: 4096, // mmap length
+            arg0: 3,       // fd
+            arg1: 0,       // offset
         };
 
         process_small_event(&mut state, &event);

@@ -191,11 +191,7 @@ unsafe fn sys_truncate(path: *const c_char, length: off_t) -> c_int {
 #[cfg(target_os = "macos")]
 unsafe fn sys_ftruncate(fd: c_int, length: off_t) -> c_int {
     const SYS_FTRUNCATE: libc::c_int = 201;
-    libc::syscall(
-        SYS_FTRUNCATE,
-        fd as libc::c_long,
-        length as libc::c_long,
-    ) as c_int
+    libc::syscall(SYS_FTRUNCATE, fd as libc::c_long, length as libc::c_long) as c_int
 }
 
 #[cfg(target_os = "macos")]
@@ -1201,10 +1197,7 @@ pub unsafe extern "C" fn mmap(
     // storage is not available during early dyld init when mmap is called to map shared libraries.
     // A static AtomicBool is safe because it lives in BSS (zero-initialized by the kernel).
     static MMAP_IN_HOOK: AtomicBool = AtomicBool::new(false);
-    if ret != libc::MAP_FAILED
-        && fd >= 0
-        && !MMAP_IN_HOOK.swap(true, Ordering::Relaxed)
-    {
+    if ret != libc::MAP_FAILED && fd >= 0 && !MMAP_IN_HOOK.swap(true, Ordering::Relaxed) {
         if prot & libc::PROT_READ != 0 {
             emit_fd_read(fd);
         }

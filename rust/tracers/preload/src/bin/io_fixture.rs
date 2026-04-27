@@ -116,13 +116,7 @@ fn main() {
     // --- unlink test: create a temp file then unlink it ---
     let unlink_path = format!("{}.unlink_test", c_path.to_str().unwrap());
     let c_unlink = CString::new(unlink_path).expect("unlink path contains interior NUL");
-    let unlink_fd = unsafe {
-        libc::open(
-            c_unlink.as_ptr(),
-            libc::O_CREAT | libc::O_WRONLY,
-            0o644,
-        )
-    };
+    let unlink_fd = unsafe { libc::open(c_unlink.as_ptr(), libc::O_CREAT | libc::O_WRONLY, 0o644) };
     if unlink_fd >= 0 {
         unsafe { libc::close(unlink_fd) };
         if unsafe { libc::unlink(c_unlink.as_ptr()) } != 0 {

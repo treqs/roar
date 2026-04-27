@@ -158,7 +158,10 @@ impl FdTracker {
         if !path.is_empty() {
             self.extra_read_paths.insert(path.clone());
             if let Some(thread_id) = thread_id {
-                self.extra_read_threads.entry(path).or_default().insert(thread_id);
+                self.extra_read_threads
+                    .entry(path)
+                    .or_default()
+                    .insert(thread_id);
             }
         }
     }
@@ -188,23 +191,11 @@ impl FdTracker {
         self.handle_read_internal(pid, fd, bytes, None);
     }
 
-    pub fn handle_read_with_thread(
-        &mut self,
-        pid: u32,
-        fd: i32,
-        bytes: u64,
-        thread_id: u32,
-    ) {
+    pub fn handle_read_with_thread(&mut self, pid: u32, fd: i32, bytes: u64, thread_id: u32) {
         self.handle_read_internal(pid, fd, bytes, Some(thread_id));
     }
 
-    fn handle_read_internal(
-        &mut self,
-        pid: u32,
-        fd: i32,
-        bytes: u64,
-        thread_id: Option<u32>,
-    ) {
+    fn handle_read_internal(&mut self, pid: u32, fd: i32, bytes: u64, thread_id: Option<u32>) {
         if bytes == 0 {
             return;
         }
@@ -273,23 +264,11 @@ impl FdTracker {
         self.handle_write_internal(pid, fd, bytes, None);
     }
 
-    pub fn handle_write_with_thread(
-        &mut self,
-        pid: u32,
-        fd: i32,
-        bytes: u64,
-        thread_id: u32,
-    ) {
+    pub fn handle_write_with_thread(&mut self, pid: u32, fd: i32, bytes: u64, thread_id: u32) {
         self.handle_write_internal(pid, fd, bytes, Some(thread_id));
     }
 
-    fn handle_write_internal(
-        &mut self,
-        pid: u32,
-        fd: i32,
-        bytes: u64,
-        thread_id: Option<u32>,
-    ) {
+    fn handle_write_internal(&mut self, pid: u32, fd: i32, bytes: u64, thread_id: Option<u32>) {
         if bytes == 0 {
             return;
         }
@@ -412,18 +391,16 @@ impl FdTracker {
             if state.path.is_empty() {
                 continue;
             }
-            let entry = path_map
-                .entry(state.path.clone())
-                .or_insert_with(|| {
-                    (
-                        false,
-                        false,
-                        BTreeSet::new(),
-                        BTreeSet::new(),
-                        BTreeSet::new(),
-                        BTreeSet::new(),
-                    )
-                });
+            let entry = path_map.entry(state.path.clone()).or_insert_with(|| {
+                (
+                    false,
+                    false,
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                )
+            });
             entry.0 |= state.was_read;
             entry.1 |= state.was_written;
             entry.2.extend(&state.read_threads);
@@ -450,18 +427,16 @@ impl FdTracker {
             if path.is_empty() {
                 continue;
             }
-            let entry = path_map
-                .entry(path.clone())
-                .or_insert_with(|| {
-                    (
-                        false,
-                        false,
-                        BTreeSet::new(),
-                        BTreeSet::new(),
-                        BTreeSet::new(),
-                        BTreeSet::new(),
-                    )
-                });
+            let entry = path_map.entry(path.clone()).or_insert_with(|| {
+                (
+                    false,
+                    false,
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                )
+            });
             entry.0 = true;
             if let Some(threads) = self.extra_read_threads.get(path) {
                 entry.2.extend(threads);
@@ -471,18 +446,16 @@ impl FdTracker {
             if path.is_empty() {
                 continue;
             }
-            let entry = path_map
-                .entry(path.clone())
-                .or_insert_with(|| {
-                    (
-                        false,
-                        false,
-                        BTreeSet::new(),
-                        BTreeSet::new(),
-                        BTreeSet::new(),
-                        BTreeSet::new(),
-                    )
-                });
+            let entry = path_map.entry(path.clone()).or_insert_with(|| {
+                (
+                    false,
+                    false,
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                )
+            });
             entry.1 = true;
             if let Some(threads) = self.extra_written_threads.get(path) {
                 entry.3.extend(threads);
@@ -491,37 +464,39 @@ impl FdTracker {
 
         let files: Vec<FileRecord> = path_map
             .into_iter()
-            .map(|(path, (read, written, read_threads, written_threads, chunks_r, chunks_w))| {
-                let read_threads = if read_threads.is_empty() {
-                    None
-                } else {
-                    Some(read_threads.into_iter().collect())
-                };
-                let written_threads = if written_threads.is_empty() {
-                    None
-                } else {
-                    Some(written_threads.into_iter().collect())
-                };
-                let chunks_read = if self.chunk_size.is_some() && !chunks_r.is_empty() {
-                    Some(chunks_r.into_iter().collect())
-                } else {
-                    None
-                };
-                let chunks_written = if self.chunk_size.is_some() && !chunks_w.is_empty() {
-                    Some(chunks_w.into_iter().collect())
-                } else {
-                    None
-                };
-                FileRecord {
-                    path,
-                    read,
-                    written,
-                    read_threads,
-                    written_threads,
-                    chunks_read,
-                    chunks_written,
-                }
-            })
+            .map(
+                |(path, (read, written, read_threads, written_threads, chunks_r, chunks_w))| {
+                    let read_threads = if read_threads.is_empty() {
+                        None
+                    } else {
+                        Some(read_threads.into_iter().collect())
+                    };
+                    let written_threads = if written_threads.is_empty() {
+                        None
+                    } else {
+                        Some(written_threads.into_iter().collect())
+                    };
+                    let chunks_read = if self.chunk_size.is_some() && !chunks_r.is_empty() {
+                        Some(chunks_r.into_iter().collect())
+                    } else {
+                        None
+                    };
+                    let chunks_written = if self.chunk_size.is_some() && !chunks_w.is_empty() {
+                        Some(chunks_w.into_iter().collect())
+                    } else {
+                        None
+                    };
+                    FileRecord {
+                        path,
+                        read,
+                        written,
+                        read_threads,
+                        written_threads,
+                        chunks_read,
+                        chunks_written,
+                    }
+                },
+            )
             .collect();
 
         let opened_files: Vec<String> = files.iter().map(|f| f.path.clone()).collect();

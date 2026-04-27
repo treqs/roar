@@ -164,12 +164,8 @@ async fn handle_request_inner(state: &AppState, request: Request<Body>) -> Resul
     let status = s3_response.status;
     let headers = s3_response.headers.clone();
 
-    let should_buffer = should_buffer_response(
-        op.as_ref(),
-        status,
-        &headers,
-        state.response_buffer_bytes,
-    );
+    let should_buffer =
+        should_buffer_response(op.as_ref(), status, &headers, state.response_buffer_bytes);
 
     let (response_body_bytes, response_body) = if should_buffer {
         let bytes = s3_response.collect_body().await?;
@@ -221,7 +217,10 @@ fn should_buffer_response(
         return false;
     }
 
-    if !matches!(op.map(|operation| &operation.operation), Some(S3OpType::GetObject)) {
+    if !matches!(
+        op.map(|operation| &operation.operation),
+        Some(S3OpType::GetObject)
+    ) {
         return false;
     }
 
@@ -249,11 +248,7 @@ mod tests {
 
     #[test]
     fn buffers_complete_multipart_even_when_threshold_disabled() {
-        let op = S3Operation::parse(
-            &Method::POST,
-            &uri("/bucket/key?uploadId=example"),
-            None,
-        );
+        let op = S3Operation::parse(&Method::POST, &uri("/bucket/key?uploadId=example"), None);
 
         assert!(should_buffer_response(
             op.as_ref(),

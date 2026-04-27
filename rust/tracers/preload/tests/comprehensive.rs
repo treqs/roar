@@ -86,11 +86,7 @@ fn preload_lib() -> String {
         }
     }
 
-    candidates.sort_by_key(|path| {
-        fs::metadata(path)
-            .and_then(|meta| meta.modified())
-            .ok()
-    });
+    candidates.sort_by_key(|path| fs::metadata(path).and_then(|meta| meta.modified()).ok());
     if let Some(path) = candidates.pop() {
         return path.to_string_lossy().into_owned();
     }
@@ -143,10 +139,7 @@ fn print_report_summary(report: &TracerReport, label: &str) {
     eprintln!("=== {label} ===");
     eprintln!("  tracer_mode:    {}", report.tracer_mode);
     eprintln!("  duration:       {duration_ms:.1}ms");
-    eprintln!(
-        "  events_dropped: {}",
-        report.events_dropped.unwrap_or(0)
-    );
+    eprintln!("  events_dropped: {}", report.events_dropped.unwrap_or(0));
 
     eprintln!();
     eprintln!("  Processes ({}):", report.processes.len());
@@ -165,7 +158,11 @@ fn print_report_summary(report: &TracerReport, label: &str) {
 
     let read_files: Vec<_> = report.files.iter().filter(|f| f.read).collect();
     let written_files: Vec<_> = report.files.iter().filter(|f| f.written).collect();
-    let read_write_files: Vec<_> = report.files.iter().filter(|f| f.read && f.written).collect();
+    let read_write_files: Vec<_> = report
+        .files
+        .iter()
+        .filter(|f| f.read && f.written)
+        .collect();
 
     eprintln!();
     eprintln!(
@@ -184,7 +181,11 @@ fn print_report_summary(report: &TracerReport, label: &str) {
         }
     }
 
-    let read_only: Vec<_> = report.files.iter().filter(|f| f.read && !f.written).collect();
+    let read_only: Vec<_> = report
+        .files
+        .iter()
+        .filter(|f| f.read && !f.written)
+        .collect();
     if !read_only.is_empty() {
         eprintln!();
         eprintln!("  Read-only ({}):", read_only.len());
@@ -240,18 +241,13 @@ fn comprehensive_io_fixture() {
     );
     let root = &report.processes[0];
     assert!(
-        root.command
-            .iter()
-            .any(|c| c.contains("io_fixture")),
+        root.command.iter().any(|c| c.contains("io_fixture")),
         "root process command should contain io_fixture: {:?}",
         root.command
     );
 
     // --- files ---
-    assert!(
-        !report.files.is_empty(),
-        "should capture file I/O events"
-    );
+    assert!(!report.files.is_empty(), "should capture file I/O events");
 
     // Target file: written (write + truncate + rename-back), read (read + mmap)
     let target_file = report
@@ -305,9 +301,7 @@ fn comprehensive_io_fixture() {
 #[test]
 fn comprehensive_python_one_liner() {
     // Skip if python3 is not available
-    let python_check = Command::new("python3")
-        .arg("--version")
-        .output();
+    let python_check = Command::new("python3").arg("--version").output();
     if python_check.is_err() || !python_check.expect("checked").status.success() {
         eprintln!("python3 not available, skipping");
         return;
@@ -375,9 +369,7 @@ fn comprehensive_python_one_liner() {
         .iter()
         .filter(|f| f.path.ends_with(".dylib") || f.path.ends_with(".so"))
         .count();
-    eprintln!(
-        "  Shared libraries captured: {shared_lib_count} (.dylib/.so files)"
-    );
+    eprintln!("  Shared libraries captured: {shared_lib_count} (.dylib/.so files)");
 
     // Should see .pyc or .py files
     let py_file_count = report
@@ -427,10 +419,7 @@ fn comprehensive_multi_process() {
         );
     } else {
         let test_record = test_record.expect("checked above");
-        assert!(
-            test_record.written,
-            "test file should be written (echo >)"
-        );
+        assert!(test_record.written, "test file should be written (echo >)");
         // cat may be a separate process that SIP blocks, so read is best-effort
         if test_record.read {
             eprintln!("  test file correctly marked as read+written");

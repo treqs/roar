@@ -426,8 +426,8 @@ mod tests {
 
     #[test]
     fn log_line_get_object_with_response_size() {
-        let op = S3Operation::parse(&Method::GET, &uri("/bucket/data.csv"), None)
-            .expect("should parse");
+        let op =
+            S3Operation::parse(&Method::GET, &uri("/bucket/data.csv"), None).expect("should parse");
         let meta = LogMeta {
             etag: Some("abc".to_string()),
             response_content_length: Some(8192),
