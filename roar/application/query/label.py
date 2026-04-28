@@ -8,7 +8,7 @@ from typing import Any
 
 from ...db.context import create_database_context
 from ...integrations.glaas import GlaasClient
-from ...publish_auth import PublishAuthError, load_publish_auth_context
+from ...publish_auth import PublishAuthContext, PublishAuthError, load_publish_auth_context
 from ..label_rendering import flatten_label_metadata
 from ..labels import (
     LabelService,
@@ -146,18 +146,12 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
             if not labels:
                 raise ValueError("No local user-managed labels to sync for current lineage.")
 
-    try:
-        publish_auth = load_publish_auth_context(
-            request.cwd,
-            allow_public_without_binding=False,
-        )
-    except PublishAuthError as exc:
-        raise ValueError(str(exc)) from exc
+    publish_auth = _load_label_sync_publish_auth(request.cwd)
 
     client = GlaasClient(
         start_dir=str(request.cwd),
         publish_auth=publish_auth,
-        allow_public_without_binding=False,
+        allow_public_without_binding=publish_auth.scope_request is None,
     )
     if not client.publish_auth.access_token and not client.publish_auth.ssh_auth_available:
         raise ValueError(
@@ -196,6 +190,24 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
 def show_labels(request: LabelShowRequest) -> str:
     """Show the current local label document for a target."""
     return build_show_labels_summary(request).render()
+
+
+def _load_label_sync_publish_auth(cwd: Any) -> PublishAuthContext:
+    """Load sync auth, using repo binding when present and public auth otherwise."""
+    try:
+        return load_publish_auth_context(
+            cwd,
+            allow_public_without_binding=False,
+        )
+    except PublishAuthError as exc:
+        message = str(exc)
+        if "No GLaaS repo binding found" not in message:
+            raise ValueError(message) from exc
+
+    return load_publish_auth_context(
+        cwd,
+        allow_public_without_binding=True,
+    )
 
 
 def build_show_labels_summary(request: LabelShowRequest) -> LabelCurrentSummary:

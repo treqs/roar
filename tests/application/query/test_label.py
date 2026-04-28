@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from roar.application.query import (
     LabelCopyRequest,
@@ -21,6 +21,7 @@ from roar.application.query.label import (
     build_sync_labels_summary,
     build_unset_labels_summary,
 )
+from roar.publish_auth import PublishAuthError
 
 
 def _set_request(tmp_path: Path, **overrides) -> LabelSetRequest:
@@ -300,6 +301,69 @@ def test_build_sync_labels_summary_reconciles_target_labels(tmp_path: Path) -> N
         "Synced remote labels: processed=1 created=0 updated=1 noops=0\n"
         f"  artifact:{'a' * 64}=updated version 2"
     )
+
+
+def test_build_sync_labels_summary_falls_back_to_public_auth_without_repo_binding(
+    tmp_path: Path,
+) -> None:
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    client = MagicMock()
+    public_auth = SimpleNamespace(
+        access_token="test-token",
+        ssh_auth_available=False,
+        scope_request=None,
+    )
+    client.publish_auth = public_auth
+    client.reconcile_labels.return_value = (
+        {"processed": 1, "created": 0, "updated": 0, "noops": 1, "results": []},
+        None,
+    )
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_current_lineage",
+            return_value=(
+                "s" * 64,
+                [{"entity_type": "dag", "session_hash": "s" * 64, "metadata": {"phase": "gold"}}],
+            ),
+        ),
+        patch(
+            "roar.application.query.label.load_publish_auth_context",
+            side_effect=[
+                PublishAuthError("No GLaaS repo binding found for this publish."),
+                public_auth,
+            ],
+        ) as load_auth,
+        patch("roar.application.query.label.GlaasClient", return_value=client) as client_class,
+    ):
+        summary = build_sync_labels_summary(
+            LabelSyncRequest(
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                dry_run=False,
+                output_json=False,
+            )
+        )
+
+    load_auth.assert_has_calls(
+        [
+            call(tmp_path, allow_public_without_binding=False),
+            call(tmp_path, allow_public_without_binding=True),
+        ]
+    )
+    client_class.assert_called_once_with(
+        start_dir=str(tmp_path),
+        publish_auth=public_auth,
+        allow_public_without_binding=True,
+    )
+    client.reconcile_labels.assert_called_once()
+    assert not isinstance(summary, str)
+    assert summary.heading == "Synced remote labels: processed=1 created=0 updated=0 noops=1"
 
 
 def test_build_sync_labels_summary_supports_json_dry_run(tmp_path: Path) -> None:
