@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
-from roar.application.labels import LabelService, collect_label_sync_payloads
+from roar.application.labels import (
+    LabelService,
+    _apply_published_remote_job_uids,
+    _published_remote_session_hash,
+    collect_label_sync_payloads,
+)
 from roar.core.label_origins import build_current_key_origins
 
 
@@ -188,6 +194,34 @@ def test_collect_label_sync_payloads_includes_current_key_origins() -> None:
             "metadata": {"generated": {"phase": "profiled"}, "stage": "gold"},
             "key_origins": {"generated.phase": "system", "stage": "user"},
         },
+    ]
+
+
+def test_published_glaas_mapping_reads_session_hash_and_job_uids() -> None:
+    session = {
+        "metadata": json.dumps(
+            {
+                "roar": {
+                    "remote_publication": {
+                        "glaas": {
+                            "schema_version": 1,
+                            "session_hash": "a" * 64,
+                            "prepared_session_hash": "b" * 64,
+                            "jobs": {"local-job-1": "remote-job-1"},
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    assert _published_remote_session_hash(session) == "a" * 64
+    assert _apply_published_remote_job_uids(
+        [{"id": 11, "job_uid": "local-job-1"}, {"id": 12, "job_uid": "local-job-2"}],
+        session,
+    ) == [
+        {"id": 11, "job_uid": "local-job-1", "remote_job_uid": "remote-job-1"},
+        {"id": 12, "job_uid": "local-job-2"},
     ]
 
 

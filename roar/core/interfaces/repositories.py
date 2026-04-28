@@ -197,6 +197,10 @@ class SessionRepository(Protocol):
         """Update session hash."""
         ...
 
+    def update_metadata(self, session_id: int, metadata: str | None) -> None:
+        """Update session metadata."""
+        ...
+
     def update_current_step(self, session_id: int, step_number: int) -> None:
         """Update current step number."""
         ...

@@ -110,6 +110,7 @@ def test_label_sync_artifact_reconciles_user_labels(
     python_exe: str,
     fake_glaas_publish_server: FakeGlaasServer,
 ) -> None:
+    fake_glaas_publish_server.force_authoritative_finalize_hash = True
     env = _configure_label_sync_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
     _create_tracked_output(
         temp_git_repo,
@@ -164,6 +165,7 @@ def test_label_sync_job_omits_system_labels_and_targets_published_job_uid(
     python_exe: str,
     fake_glaas_publish_server: FakeGlaasServer,
 ) -> None:
+    fake_glaas_publish_server.force_authoritative_finalize_hash = True
     env = _configure_label_sync_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
     _create_tracked_output(
         temp_git_repo,

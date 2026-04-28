@@ -224,6 +224,14 @@ class SQLAlchemySessionRepository(SessionRepository):
         )
         return [self._session_to_dict(session) for session in sessions]
 
+    def update_metadata(self, session_id: int, metadata: str | None) -> None:
+        """Update the opaque metadata document for a session."""
+        session = self._session.get(Session, session_id)
+        if session is None:
+            return
+        session.metadata_ = metadata
+        self._session.flush()
+
     def get_by_hash(self, session_hash: str) -> dict[str, Any] | None:
         """
         Get a session by its content hash.

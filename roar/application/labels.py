@@ -321,16 +321,20 @@ def build_remote_label_mutation_payload(
             raise ValueError("Job target is missing a local session id.")
         if not isinstance(job_uid, str) or not job_uid:
             raise ValueError("Job target is missing a job UID.")
+        session = db_ctx.sessions.get(session_id)
         session_hash = _canonical_remote_session_hash(
             db_ctx,
             roar_dir=roar_dir,
             session_id=session_id,
         )
-        resolved_job_uid = (
-            build_remote_publication_job_uid(session_hash, job_uid)
-            if prefer_remote_publication_uid
-            else job_uid
-        )
+        published_job_uid = _published_remote_job_uid(session, job_uid)
+        if prefer_remote_publication_uid:
+            resolved_job_uid = published_job_uid or build_remote_publication_job_uid(
+                session_hash,
+                job_uid,
+            )
+        else:
+            resolved_job_uid = job_uid
         return {
             "entity_type": "job",
             "session_hash": session_hash,
@@ -482,11 +486,15 @@ def build_reconcile_payload_for_current_lineage(
         session_id=session_id,
     )
     lineage = LineageCollector().collect_session(session_id, roar_dir)
+    jobs = _apply_published_remote_job_uids(
+        list(getattr(lineage, "jobs", []) or []),
+        session,
+    )
     payloads = collect_label_sync_payloads(
         db_ctx,
         session_id=session_id,
         session_hash=session_hash,
-        jobs=list(getattr(lineage, "jobs", []) or []),
+        jobs=jobs,
         artifacts=list(getattr(lineage, "artifacts", []) or []),
     )
     return session_hash, _user_managed_reconcile_payloads(payloads)
@@ -529,6 +537,10 @@ def _canonical_remote_session_hash(
     session = db_ctx.sessions.get(session_id)
     if not isinstance(session, dict):
         raise ValueError("Session not found.")
+
+    published_session_hash = _published_remote_session_hash(session)
+    if published_session_hash:
+        return published_session_hash
 
     lineage = LineageCollector().collect_session(session_id, roar_dir)
     if not getattr(lineage, "jobs", None):
@@ -617,6 +629,81 @@ def _user_managed_reconcile_payloads(payloads: list[dict[str, Any]]) -> list[dic
             }
         )
     return filtered
+
+
+def _published_remote_session_hash(session: Any) -> str | None:
+    publication = _glaas_publication_metadata(session)
+    session_hash = publication.get("session_hash") if publication else None
+    if isinstance(session_hash, str) and _looks_like_hash(session_hash):
+        return session_hash
+    return None
+
+
+def _published_remote_job_uid(session: Any, local_job_uid: str) -> str | None:
+    publication = _glaas_publication_metadata(session)
+    jobs = publication.get("jobs") if publication else None
+    if not isinstance(jobs, dict):
+        return None
+    remote_job_uid = jobs.get(local_job_uid)
+    if isinstance(remote_job_uid, str) and remote_job_uid:
+        return remote_job_uid
+    return None
+
+
+def _apply_published_remote_job_uids(
+    jobs: list[dict[str, Any]],
+    session: Any,
+) -> list[dict[str, Any]]:
+    publication = _glaas_publication_metadata(session)
+    job_mapping = publication.get("jobs") if publication else None
+    if not isinstance(job_mapping, dict) or not job_mapping:
+        return jobs
+
+    annotated: list[dict[str, Any]] = []
+    for job in jobs:
+        local_job_uid = job.get("job_uid")
+        if isinstance(local_job_uid, str):
+            remote_job_uid = job_mapping.get(local_job_uid)
+        else:
+            remote_job_uid = None
+        if isinstance(remote_job_uid, str) and remote_job_uid:
+            prepared = dict(job)
+            prepared["remote_job_uid"] = remote_job_uid
+            annotated.append(prepared)
+        else:
+            annotated.append(job)
+    return annotated
+
+
+def _glaas_publication_metadata(session: Any) -> dict[str, Any] | None:
+    if not isinstance(session, dict):
+        return None
+    metadata = _parse_session_metadata(session.get("metadata"))
+    roar_metadata = metadata.get("roar")
+    if not isinstance(roar_metadata, dict):
+        return None
+    remote_publication = roar_metadata.get("remote_publication")
+    if not isinstance(remote_publication, dict):
+        return None
+    glaas = remote_publication.get("glaas")
+    return glaas if isinstance(glaas, dict) else None
+
+
+def _parse_session_metadata(raw_metadata: Any) -> dict[str, Any]:
+    if isinstance(raw_metadata, dict):
+        return raw_metadata
+    if isinstance(raw_metadata, str) and raw_metadata.strip():
+        try:
+            parsed = json.loads(raw_metadata)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _looks_like_hash(value: str) -> bool:
+    normalized = value.strip().lower()
+    return len(normalized) == 64 and all(char in "0123456789abcdef" for char in normalized)
 
 
 def _normalize_label_key(key: str) -> str:

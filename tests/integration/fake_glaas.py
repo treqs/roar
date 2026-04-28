@@ -40,6 +40,7 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.job_owners_by_uid: dict[str, dict[str, Any]] = {}
         self.supports_anonymous_public_registration_sessions = True
         self.supports_finalize_expected_hash = True
+        self.force_authoritative_finalize_hash = False
         self._next_job_id = 1
         self._next_registration_session_id = 1
         self._next_finalized_hash = 1
@@ -705,11 +706,15 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 )
                 return
 
-            lineage_hash = session_state.get("hash") or self._compute_registration_session_hash(
-                session_state,
-                payload,
-                auth_for_finalize,
-            )
+            lineage_hash = session_state.get("hash")
+            if not lineage_hash and self.server.force_authoritative_finalize_hash:
+                lineage_hash = self.server.allocate_lineage_hash()
+            if not lineage_hash:
+                lineage_hash = self._compute_registration_session_hash(
+                    session_state,
+                    payload,
+                    auth_for_finalize,
+                )
             if not lineage_hash:
                 lineage_hash = self.server.allocate_lineage_hash()
 
@@ -1187,6 +1192,14 @@ class FakeGlaasServer:
     @property
     def label_mutations(self) -> list[dict[str, Any]]:
         return self._server.label_mutations
+
+    @property
+    def force_authoritative_finalize_hash(self) -> bool:
+        return self._server.force_authoritative_finalize_hash
+
+    @force_authoritative_finalize_hash.setter
+    def force_authoritative_finalize_hash(self, value: bool) -> None:
+        self._server.force_authoritative_finalize_hash = value
 
     def set_anonymous_public_registration_session_support(
         self,

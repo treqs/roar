@@ -366,6 +366,50 @@ def test_build_sync_labels_summary_falls_back_to_public_auth_without_repo_bindin
     assert summary.heading == "Synced remote labels: processed=1 created=0 updated=0 noops=1"
 
 
+def test_build_sync_labels_summary_preserves_reconcile_application_404s(tmp_path: Path) -> None:
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    client = MagicMock()
+    client.publish_auth = SimpleNamespace(
+        access_token="test-token",
+        ssh_auth_available=False,
+        scope_request=None,
+    )
+    client.reconcile_labels.return_value = (None, "HTTP 404: Session not found: s")
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_current_lineage",
+            return_value=(
+                "s" * 64,
+                [{"entity_type": "dag", "session_hash": "s" * 64, "metadata": {"phase": "gold"}}],
+            ),
+        ),
+        patch(
+            "roar.application.query.label.load_publish_auth_context",
+            return_value=client.publish_auth,
+        ),
+        patch("roar.application.query.label.GlaasClient", return_value=client),
+    ):
+        try:
+            build_sync_labels_summary(
+                LabelSyncRequest(
+                    roar_dir=tmp_path / ".roar",
+                    cwd=tmp_path,
+                    dry_run=False,
+                    output_json=False,
+                )
+            )
+        except ValueError as exc:
+            assert str(exc) == "Remote label sync failed: HTTP 404: Session not found: s"
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for reconcile application 404")
+
+
 def test_build_sync_labels_summary_supports_json_dry_run(tmp_path: Path) -> None:
     db_ctx = MagicMock()
     db_ctx.__enter__.return_value = db_ctx

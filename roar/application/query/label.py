@@ -170,7 +170,7 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
 
     result, error = client.reconcile_labels(payload)
     if error:
-        if error.startswith("HTTP 404:"):
+        if _is_missing_reconcile_route_error(error):
             raise ValueError(
                 "Remote label sync requires GLaaS support for /api/v1/labels/reconcile."
             ) from None
@@ -190,6 +190,13 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
 def show_labels(request: LabelShowRequest) -> str:
     """Show the current local label document for a target."""
     return build_show_labels_summary(request).render()
+
+
+def _is_missing_reconcile_route_error(error: str) -> bool:
+    if not error.startswith("HTTP 404:"):
+        return False
+    normalized = error.lower()
+    return "cannot post" in normalized and "/api/v1/labels/reconcile" in normalized
 
 
 def _load_label_sync_publish_auth(cwd: Any) -> PublishAuthContext:

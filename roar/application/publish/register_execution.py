@@ -6,6 +6,8 @@ Owns the registration mechanics after local lineage has already been collected.
 
 from __future__ import annotations
 
+import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -438,13 +440,31 @@ class RegisterService:
         total_artifacts_registered = batch_result.artifacts_registered + composite_registered
         total_artifacts_failed = batch_result.artifacts_failed + composite_failed
 
+        success = (
+            batch_result.jobs_failed == 0 and total_artifacts_failed == 0 and not finalize_failed
+        )
+        if success and session_id is not None:
+            try:
+                with create_database_context(roar_dir) as db_ctx:
+                    persist_glaas_publication_mapping(
+                        db_ctx=db_ctx,
+                        session_id=session_id,
+                        prepared_session_hash=session_hash,
+                        finalized_session_hash=finalized_session_hash,
+                        jobs=remote_registration_jobs,
+                    )
+            except Exception as exc:  # pragma: no cover - defensive durability best effort
+                self._logger.warning(
+                    "Failed to persist GLaaS publication mapping for session %s: %s",
+                    session_id,
+                    exc,
+                )
+
         if registration_errors:
             self._logger.warning("Registration completed with errors: %s", registration_errors)
 
         return RegisterResult(
-            success=batch_result.jobs_failed == 0
-            and total_artifacts_failed == 0
-            and not finalize_failed,
+            success=success,
             session_hash=finalized_session_hash,
             artifact_hash=artifact_hash,
             jobs_registered=batch_result.jobs_created,
@@ -458,3 +478,64 @@ class RegisterService:
     @staticmethod
     def _extract_registration_hashes(artifact: dict[str, Any]) -> list[dict[str, str]]:
         return normalize_registration_hashes(artifact, fallback_to_hash=True)
+
+
+def persist_glaas_publication_mapping(
+    *,
+    db_ctx: Any,
+    session_id: int,
+    prepared_session_hash: str,
+    finalized_session_hash: str,
+    jobs: list[dict[str, Any]],
+) -> None:
+    """Persist local-to-remote GLaaS publication identity for later label sync."""
+    session = db_ctx.sessions.get(session_id)
+    if not isinstance(session, dict):
+        return
+
+    metadata = _load_session_metadata(session.get("metadata"))
+    roar_metadata = metadata.setdefault("roar", {})
+    if not isinstance(roar_metadata, dict):
+        roar_metadata = {}
+        metadata["roar"] = roar_metadata
+    remote_publication = roar_metadata.setdefault("remote_publication", {})
+    if not isinstance(remote_publication, dict):
+        remote_publication = {}
+        roar_metadata["remote_publication"] = remote_publication
+
+    remote_publication["glaas"] = {
+        "schema_version": 1,
+        "session_hash": finalized_session_hash,
+        "prepared_session_hash": prepared_session_hash,
+        "published_at": time.time(),
+        "jobs": _remote_job_uid_mapping(jobs),
+    }
+    db_ctx.sessions.update_metadata(
+        session_id,
+        json.dumps(metadata, sort_keys=True, separators=(",", ":")),
+    )
+
+
+def _load_session_metadata(raw_metadata: Any) -> dict[str, Any]:
+    if isinstance(raw_metadata, dict):
+        return dict(raw_metadata)
+    if isinstance(raw_metadata, str) and raw_metadata.strip():
+        try:
+            parsed = json.loads(raw_metadata)
+        except json.JSONDecodeError:
+            return {"raw": raw_metadata}
+        if isinstance(parsed, dict):
+            return parsed
+        return {"value": parsed}
+    return {}
+
+
+def _remote_job_uid_mapping(jobs: list[dict[str, Any]]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for job in jobs:
+        local_job_uid = job.get("job_uid") or job.get("local_job_uid") or job.get("source_job_uid")
+        remote_job_uid = job.get("remote_job_uid") or job.get("job_uid")
+        if not local_job_uid or not remote_job_uid:
+            continue
+        mapping[str(local_job_uid)] = str(remote_job_uid)
+    return mapping
