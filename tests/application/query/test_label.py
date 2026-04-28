@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from roar.application.query import (
@@ -222,6 +223,11 @@ def test_build_sync_labels_summary_reconciles_target_labels(tmp_path: Path) -> N
     service.resolve_target.return_value = resolved_target
     service.current_metadata.return_value = {"owner": "ml", "stage": "gold"}
     client = MagicMock()
+    client.publish_auth = SimpleNamespace(
+        access_token="test-token",
+        ssh_auth_available=False,
+        scope_request=None,
+    )
     client.reconcile_labels.return_value = (
         {
             "processed": 1,
@@ -251,12 +257,17 @@ def test_build_sync_labels_summary_reconciles_target_labels(tmp_path: Path) -> N
                 [
                     {
                         "entity_type": "artifact",
+                        "session_hash": "s" * 64,
                         "artifact_hash": "a" * 64,
                         "metadata": {"owner": "ml", "stage": "gold"},
                     }
                 ],
             ),
         ) as build_payload,
+        patch(
+            "roar.application.query.label.load_publish_auth_context",
+            return_value=client.publish_auth,
+        ),
         patch("roar.application.query.label.GlaasClient", return_value=client),
     ):
         summary = build_sync_labels_summary(_sync_request(tmp_path))
@@ -270,11 +281,13 @@ def test_build_sync_labels_summary_reconciles_target_labels(tmp_path: Path) -> N
     client.reconcile_labels.assert_called_once_with(
         {
             "session_hash": "s" * 64,
+            "mode": "sync_user_labels",
             "dry_run": False,
             "prune": False,
             "labels": [
                 {
                     "entity_type": "artifact",
+                    "session_hash": "s" * 64,
                     "artifact_hash": "a" * 64,
                     "metadata": {"owner": "ml", "stage": "gold"},
                 }
@@ -295,6 +308,11 @@ def test_build_sync_labels_summary_supports_json_dry_run(tmp_path: Path) -> None
     db_ctx.__exit__.return_value = None
     service = MagicMock()
     client = MagicMock()
+    client.publish_auth = SimpleNamespace(
+        access_token="test-token",
+        ssh_auth_available=False,
+        scope_request=None,
+    )
     client.reconcile_labels.return_value = (
         {"dryRun": True, "processed": 1, "created": 1, "updated": 0, "noops": 0},
         None,
@@ -309,6 +327,10 @@ def test_build_sync_labels_summary_supports_json_dry_run(tmp_path: Path) -> None
                 "s" * 64,
                 [{"entity_type": "dag", "session_hash": "s" * 64, "metadata": {"phase": "gold"}}],
             ),
+        ),
+        patch(
+            "roar.application.query.label.load_publish_auth_context",
+            return_value=client.publish_auth,
         ),
         patch("roar.application.query.label.GlaasClient", return_value=client),
     ):
@@ -332,6 +354,7 @@ def test_build_sync_labels_summary_supports_json_dry_run(tmp_path: Path) -> None
     client.reconcile_labels.assert_called_once_with(
         {
             "session_hash": "s" * 64,
+            "mode": "sync_user_labels",
             "dry_run": True,
             "prune": False,
             "labels": [

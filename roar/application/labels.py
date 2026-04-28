@@ -373,6 +373,11 @@ def build_remote_label_mutation_payload(
             raise ValueError("Artifact target is missing a content hash.")
         return {
             "entity_type": "artifact",
+            "session_hash": _canonical_remote_session_hash_for_target(
+                db_ctx,
+                roar_dir=roar_dir,
+                target=target,
+            ),
             "artifact_hash": artifact_hash,
             "metadata": metadata,
         }
@@ -450,6 +455,7 @@ def collect_label_sync_payloads(
             payloads.append(
                 {
                     "entity_type": "artifact",
+                    "session_hash": session_hash,
                     "artifact_hash": artifact_hash,
                     "metadata": current["metadata"],
                     "key_origins": build_current_key_origins(history),
@@ -624,10 +630,7 @@ def _normalize_label_key(key: str) -> str:
 
 def _prune_empty_containers(value: Any) -> Any:
     if isinstance(value, dict):
-        pruned = {
-            key: _prune_empty_containers(child)
-            for key, child in value.items()
-        }
+        pruned = {key: _prune_empty_containers(child) for key, child in value.items()}
         return {key: child for key, child in pruned.items() if child != {}}
     if isinstance(value, list):
         return [_prune_empty_containers(item) for item in value]

@@ -573,6 +573,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                         current_label["sessionHash"] = label.get("session_hash")
                         current_label["jobUid"] = label.get("job_uid")
                     elif label.get("entity_type") == "artifact":
+                        current_label["sessionHash"] = label.get("session_hash")
                         current_label["artifactHash"] = label.get("artifact_hash")
                     self.server.current_labels_by_target[target_key] = current_label
                 self._write_json(
@@ -1062,7 +1063,7 @@ def _label_target_key(payload: dict[str, Any]) -> str:
         return f"dag:{payload.get('session_hash', '')}"
     if entity_type == "job":
         return f"job:{payload.get('session_hash', '')}:{payload.get('job_uid', '')}"
-    return f"artifact:{payload.get('artifact_hash', '')}"
+    return f"artifact:{payload.get('session_hash', '')}:{payload.get('artifact_hash', '')}"
 
 
 def _label_response_row(
@@ -1088,6 +1089,7 @@ def _label_response_row(
         row["sessionHash"] = payload.get("session_hash")
         row["jobUid"] = payload.get("job_uid")
     elif entity_type == "artifact":
+        row["sessionHash"] = payload.get("session_hash")
         row["artifactHash"] = payload.get("artifact_hash")
     return row
 

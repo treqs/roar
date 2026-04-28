@@ -584,7 +584,12 @@ class GlaasClient:
         payload: dict[str, Any],
     ) -> tuple[dict | None, str | None]:
         """Reconcile user-managed local labels for a registered lineage."""
-        return self._request("POST", "/api/v1/labels/reconcile", payload)
+        return self._request(
+            "POST",
+            "/api/v1/labels/reconcile",
+            payload,
+            allow_auth_fallback=False,
+        )
 
     def register_job_under_registration_session(
         self,

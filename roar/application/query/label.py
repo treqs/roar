@@ -8,6 +8,7 @@ from typing import Any
 
 from ...db.context import create_database_context
 from ...integrations.glaas import GlaasClient
+from ...publish_auth import PublishAuthError, load_publish_auth_context
 from ..label_rendering import flatten_label_metadata
 from ..labels import (
     LabelService,
@@ -145,15 +146,35 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
             if not labels:
                 raise ValueError("No local user-managed labels to sync for current lineage.")
 
-    client = GlaasClient(start_dir=str(request.cwd), allow_public_without_binding=True)
-    result, error = client.reconcile_labels(
-        {
-            "session_hash": session_hash,
-            "dry_run": request.dry_run,
-            "prune": False,
-            "labels": labels,
-        }
+    try:
+        publish_auth = load_publish_auth_context(
+            request.cwd,
+            allow_public_without_binding=False,
+        )
+    except PublishAuthError as exc:
+        raise ValueError(str(exc)) from exc
+
+    client = GlaasClient(
+        start_dir=str(request.cwd),
+        publish_auth=publish_auth,
+        allow_public_without_binding=False,
     )
+    if not client.publish_auth.access_token and not client.publish_auth.ssh_auth_available:
+        raise ValueError(
+            "Remote label sync requires authentication. Run `roar login` or configure SSH auth."
+        )
+
+    payload: dict[str, Any] = {
+        "session_hash": session_hash,
+        "mode": "sync_user_labels",
+        "dry_run": request.dry_run,
+        "prune": False,
+        "labels": labels,
+    }
+    if client.publish_auth.scope_request:
+        payload["scope"] = dict(client.publish_auth.scope_request)
+
+    result, error = client.reconcile_labels(payload)
     if error:
         if error.startswith("HTTP 404:"):
             raise ValueError(
@@ -218,9 +239,7 @@ def _render_sync_heading(result: Any, *, dry_run: bool) -> str:
     noops = int(payload.get("noops") or 0)
     conflicts = payload.get("conflicts")
     conflict_count = len(conflicts) if isinstance(conflicts, list) else 0
-    suffix = (
-        f" processed={processed} created={created} updated={updated} noops={noops}"
-    )
+    suffix = f" processed={processed} created={created} updated={updated} noops={noops}"
     if conflict_count:
         suffix += f" conflicts={conflict_count}"
     return f"{prefix}:{suffix}"
@@ -249,7 +268,14 @@ def _build_sync_entries(result: Any) -> list[LabelEntrySummary]:
 
 
 def _sync_target_display(row: dict[str, Any]) -> str:
-    for key in ("sessionHash", "session_hash", "jobUid", "job_uid", "artifactHash", "artifact_hash"):
+    for key in (
+        "sessionHash",
+        "session_hash",
+        "jobUid",
+        "job_uid",
+        "artifactHash",
+        "artifact_hash",
+    ):
         value = row.get(key)
         if isinstance(value, str) and value:
             return value

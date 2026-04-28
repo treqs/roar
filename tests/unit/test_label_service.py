@@ -183,6 +183,7 @@ def test_collect_label_sync_payloads_includes_current_key_origins() -> None:
         },
         {
             "entity_type": "artifact",
+            "session_hash": "s" * 64,
             "artifact_hash": "a" * 64,
             "metadata": {"generated": {"phase": "profiled"}, "stage": "gold"},
             "key_origins": {"generated.phase": "system", "stage": "user"},

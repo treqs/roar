@@ -131,13 +131,21 @@ def test_label_sync_artifact_reconciles_user_labels(
     roar_cli("register", "processed.csv", "--yes", env_overrides=env)
 
     artifact_hash = _artifact_hash_for(roar_cli, "processed.csv")
+    published_session_hash = fake_glaas_publish_server.registration_session_finalizations[0]["hash"]
     result = roar_cli("label", "sync", "artifact", "processed.csv", env_overrides=env)
 
     assert result.returncode == 0
     assert "Synced remote labels: processed=1 created=0 updated=0 noops=1" in result.stdout
+    assert fake_glaas_publish_server.label_reconciles[-1]["scope"] == {
+        "owner_id": "owner-test",
+        "owner_type": "organization",
+        "project_id": "proj-test",
+        "visibility": "private",
+    }
     assert fake_glaas_publish_server.label_reconciles[-1]["labels"] == [
         {
             "entity_type": "artifact",
+            "session_hash": published_session_hash,
             "artifact_hash": artifact_hash,
             "metadata": {"owner": "ml", "stage": "gold"},
         }
