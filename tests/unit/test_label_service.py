@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,7 @@ from roar.application.labels import (
     LabelService,
     _apply_published_remote_job_uids,
     _published_remote_session_hash,
+    build_reconcile_payload_for_current_lineage,
     collect_label_sync_payloads,
 )
 from roar.core.label_origins import build_current_key_origins
@@ -223,6 +225,30 @@ def test_published_glaas_mapping_reads_session_hash_and_job_uids() -> None:
         {"id": 11, "job_uid": "local-job-1", "remote_job_uid": "remote-job-1"},
         {"id": 12, "job_uid": "local-job-2"},
     ]
+
+
+def test_build_reconcile_payload_requires_published_glaas_mapping(tmp_path: Path) -> None:
+    local_hash = "c" * 64
+
+    class StubSessions:
+        def get_active(self):
+            return {"id": 7, "hash": local_hash, "metadata": None}
+
+        def get(self, session_id: int):
+            assert session_id == 7
+            return {"id": 7, "hash": local_hash, "metadata": None}
+
+    with pytest.raises(ValueError) as exc_info:
+        build_reconcile_payload_for_current_lineage(
+            SimpleNamespace(sessions=StubSessions()),
+            roar_dir=tmp_path / ".roar",
+        )
+
+    assert str(exc_info.value) == (
+        "Selected lineage has not been registered to GLaaS yet. "
+        f"Run `roar register {local_hash} --yes` or `roar put <artifact> <destination>` "
+        "first, then retry `roar label sync`."
+    )
 
 
 def test_collect_label_sync_payloads_prefers_remote_job_uid_when_present() -> None:

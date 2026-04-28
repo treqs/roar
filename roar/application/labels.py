@@ -294,6 +294,7 @@ def build_remote_label_mutation_payload(
     target: LabelTargetRef,
     metadata: dict[str, Any],
     prefer_remote_publication_uid: bool = True,
+    require_published_session: bool = False,
 ) -> dict[str, Any]:
     """Build a GLaaS label-mutation payload for one local target."""
     if target.entity_type == "dag":
@@ -305,6 +306,7 @@ def build_remote_label_mutation_payload(
                 db_ctx,
                 roar_dir=roar_dir,
                 session_id=int(target.session_id),
+                require_published=require_published_session,
             ),
             "metadata": metadata,
         }
@@ -326,6 +328,7 @@ def build_remote_label_mutation_payload(
             db_ctx,
             roar_dir=roar_dir,
             session_id=session_id,
+            require_published=require_published_session,
         )
         published_job_uid = _published_remote_job_uid(session, job_uid)
         if prefer_remote_publication_uid:
@@ -381,6 +384,7 @@ def build_remote_label_mutation_payload(
                 db_ctx,
                 roar_dir=roar_dir,
                 target=target,
+                require_published=require_published_session,
             ),
             "artifact_hash": artifact_hash,
             "metadata": metadata,
@@ -484,6 +488,7 @@ def build_reconcile_payload_for_current_lineage(
         db_ctx,
         roar_dir=roar_dir,
         session_id=session_id,
+        require_published=True,
     )
     lineage = LineageCollector().collect_session(session_id, roar_dir)
     jobs = _apply_published_remote_job_uids(
@@ -513,6 +518,7 @@ def build_reconcile_payload_for_target(
         roar_dir=roar_dir,
         target=target,
         metadata=metadata,
+        require_published_session=True,
     )
     session_hash = payload.get("session_hash")
     if not isinstance(session_hash, str) or not session_hash:
@@ -520,6 +526,7 @@ def build_reconcile_payload_for_target(
             db_ctx,
             roar_dir=roar_dir,
             target=target,
+            require_published=True,
         )
     return session_hash, _user_managed_reconcile_payloads([payload])
 
@@ -529,6 +536,7 @@ def _canonical_remote_session_hash(
     *,
     roar_dir: Path,
     session_id: int,
+    require_published: bool = False,
 ) -> str:
     from ..core.logging import get_logger
     from .publish.runtime import build_publish_runtime
@@ -541,6 +549,8 @@ def _canonical_remote_session_hash(
     published_session_hash = _published_remote_session_hash(session)
     if published_session_hash:
         return published_session_hash
+    if require_published:
+        raise ValueError(_unpublished_lineage_sync_error(session))
 
     lineage = LineageCollector().collect_session(session_id, roar_dir)
     if not getattr(lineage, "jobs", None):
@@ -569,12 +579,14 @@ def _canonical_remote_session_hash_for_target(
     *,
     roar_dir: Path,
     target: LabelTargetRef,
+    require_published: bool = False,
 ) -> str:
     if target.session_id is not None:
         return _canonical_remote_session_hash(
             db_ctx,
             roar_dir=roar_dir,
             session_id=int(target.session_id),
+            require_published=require_published,
         )
 
     if target.job_id is not None:
@@ -584,6 +596,7 @@ def _canonical_remote_session_hash_for_target(
                 db_ctx,
                 roar_dir=roar_dir,
                 session_id=int(job["session_id"]),
+                require_published=require_published,
             )
         raise ValueError("Job target is missing a local session id.")
 
@@ -594,6 +607,7 @@ def _canonical_remote_session_hash_for_target(
                 db_ctx,
                 roar_dir=roar_dir,
                 session_id=int(session["id"]),
+                require_published=require_published,
             )
 
         jobs = db_ctx.artifacts.get_jobs(str(target.artifact_id))
@@ -604,6 +618,7 @@ def _canonical_remote_session_hash_for_target(
                         db_ctx,
                         roar_dir=roar_dir,
                         session_id=int(job["session_id"]),
+                        require_published=require_published,
                     )
 
     raise ValueError("Unable to infer a local session for label sync.")
@@ -637,6 +652,21 @@ def _published_remote_session_hash(session: Any) -> str | None:
     if isinstance(session_hash, str) and _looks_like_hash(session_hash):
         return session_hash
     return None
+
+
+def _unpublished_lineage_sync_error(session: dict[str, Any]) -> str:
+    local_hash = session.get("hash")
+    if isinstance(local_hash, str) and local_hash.strip():
+        return (
+            "Selected lineage has not been registered to GLaaS yet. "
+            f"Run `roar register {local_hash} --yes` or `roar put <artifact> <destination>` "
+            "first, then retry `roar label sync`."
+        )
+    return (
+        "Selected lineage has not been registered to GLaaS yet. "
+        "Run `roar register <dag-hash> --yes` or `roar put <artifact> <destination>` "
+        "first, then retry `roar label sync`."
+    )
 
 
 def _published_remote_job_uid(session: Any, local_job_uid: str) -> str | None:
