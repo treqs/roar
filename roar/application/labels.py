@@ -48,6 +48,9 @@ class _LabelSyncDatabaseContext(Protocol):
 
 class _RemoteLabelMutationDatabaseContext(Protocol):
     @property
+    def labels(self) -> Any: ...
+
+    @property
     def sessions(self) -> Any: ...
 
     @property
@@ -200,6 +203,40 @@ class LabelService:
             version=int(created["version"]),
         )
 
+    def unset_metadata(self, target: LabelTargetRef, keys: tuple[str, ...]) -> LabelWriteResult:
+        """Remove user-managed label keys and append a new version if changed."""
+        normalized_keys = tuple(_normalize_label_key(key) for key in keys)
+        self._reject_reserved_key_paths(normalized_keys)
+        current = self.current_metadata(target)
+        updated = json.loads(json.dumps(current))
+        changed = False
+        for key in normalized_keys:
+            changed = _remove_nested(updated, key.split(".")) or changed
+
+        if not changed:
+            current_row = self._db.labels.get_current(
+                target.entity_type,
+                session_id=target.session_id,
+                job_id=target.job_id,
+                artifact_id=target.artifact_id,
+            )
+            current_version = int(current_row["version"]) if current_row else None
+            return LabelWriteResult(changed=False, metadata=current, version=current_version)
+
+        created = self._db.labels.create_version(
+            target.entity_type,
+            updated,
+            session_id=target.session_id,
+            job_id=target.job_id,
+            artifact_id=target.artifact_id,
+            write_origin=LABEL_ORIGIN_USER,
+        )
+        return LabelWriteResult(
+            changed=True,
+            metadata=updated,
+            version=int(created["version"]),
+        )
+
     def copy_metadata(
         self,
         source: LabelTargetRef,
@@ -240,6 +277,10 @@ class LabelService:
     @staticmethod
     def _reject_reserved_keys(metadata: dict[str, Any]) -> None:
         keys = {key for key, _value in flatten_label_metadata(metadata)}
+        LabelService._reject_reserved_key_paths(tuple(keys))
+
+    @staticmethod
+    def _reject_reserved_key_paths(keys: tuple[str, ...]) -> None:
         reserved = sorted(key for key in keys if is_reserved_system_label_path(key))
         if reserved:
             joined = ", ".join(reserved)
@@ -418,6 +459,57 @@ def collect_label_sync_payloads(
     return payloads
 
 
+def build_reconcile_payload_for_current_lineage(
+    db_ctx: _RemoteLabelMutationDatabaseContext,
+    *,
+    roar_dir: Path,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Build a user-managed reconcile payload for the active local lineage."""
+    session = db_ctx.sessions.get_active()
+    if not isinstance(session, dict) or not isinstance(session.get("id"), int):
+        raise ValueError("No active session.")
+
+    session_id = int(session["id"])
+    session_hash = _canonical_remote_session_hash(
+        db_ctx,
+        roar_dir=roar_dir,
+        session_id=session_id,
+    )
+    lineage = LineageCollector().collect_session(session_id, roar_dir)
+    payloads = collect_label_sync_payloads(
+        db_ctx,
+        session_id=session_id,
+        session_hash=session_hash,
+        jobs=list(getattr(lineage, "jobs", []) or []),
+        artifacts=list(getattr(lineage, "artifacts", []) or []),
+    )
+    return session_hash, _user_managed_reconcile_payloads(payloads)
+
+
+def build_reconcile_payload_for_target(
+    db_ctx: _RemoteLabelMutationDatabaseContext,
+    *,
+    roar_dir: Path,
+    target: LabelTargetRef,
+    metadata: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Build a single-target user-managed reconcile payload."""
+    payload = build_remote_label_mutation_payload(
+        db_ctx,
+        roar_dir=roar_dir,
+        target=target,
+        metadata=metadata,
+    )
+    session_hash = payload.get("session_hash")
+    if not isinstance(session_hash, str) or not session_hash:
+        session_hash = _canonical_remote_session_hash_for_target(
+            db_ctx,
+            roar_dir=roar_dir,
+            target=target,
+        )
+    return session_hash, _user_managed_reconcile_payloads([payload])
+
+
 def _canonical_remote_session_hash(
     db_ctx: _RemoteLabelMutationDatabaseContext,
     *,
@@ -452,6 +544,119 @@ def _canonical_remote_session_hash(
         lineage=lineage,
     )
     return str(prepared.session_hash)
+
+
+def _canonical_remote_session_hash_for_target(
+    db_ctx: _RemoteLabelMutationDatabaseContext,
+    *,
+    roar_dir: Path,
+    target: LabelTargetRef,
+) -> str:
+    if target.session_id is not None:
+        return _canonical_remote_session_hash(
+            db_ctx,
+            roar_dir=roar_dir,
+            session_id=int(target.session_id),
+        )
+
+    if target.job_id is not None:
+        job = db_ctx.jobs.get(int(target.job_id))
+        if isinstance(job, dict) and isinstance(job.get("session_id"), int):
+            return _canonical_remote_session_hash(
+                db_ctx,
+                roar_dir=roar_dir,
+                session_id=int(job["session_id"]),
+            )
+        raise ValueError("Job target is missing a local session id.")
+
+    if target.artifact_id is not None:
+        session = db_ctx.sessions.get_active()
+        if isinstance(session, dict) and isinstance(session.get("id"), int):
+            return _canonical_remote_session_hash(
+                db_ctx,
+                roar_dir=roar_dir,
+                session_id=int(session["id"]),
+            )
+
+        jobs = db_ctx.artifacts.get_jobs(str(target.artifact_id))
+        for relation in ("produced_by", "consumed_by"):
+            for job in jobs.get(relation, []):
+                if isinstance(job, dict) and isinstance(job.get("session_id"), int):
+                    return _canonical_remote_session_hash(
+                        db_ctx,
+                        roar_dir=roar_dir,
+                        session_id=int(job["session_id"]),
+                    )
+
+    raise ValueError("Unable to infer a local session for label sync.")
+
+
+def _user_managed_reconcile_payloads(payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for payload in payloads:
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        user_metadata = _prune_empty_containers(strip_reserved_system_labels(metadata))
+        if not user_metadata:
+            continue
+        filtered.append(
+            {
+                key: value
+                for key, value in {
+                    **payload,
+                    "metadata": user_metadata,
+                }.items()
+                if key != "key_origins"
+            }
+        )
+    return filtered
+
+
+def _normalize_label_key(key: str) -> str:
+    normalized = str(key or "").strip()
+    if not normalized:
+        raise ValueError("Label key must not be empty.")
+    if "=" in normalized:
+        raise ValueError(f"Invalid label key '{key}'. Expected a key path, not key=value.")
+    return normalized
+
+
+def _prune_empty_containers(value: Any) -> Any:
+    if isinstance(value, dict):
+        pruned = {
+            key: _prune_empty_containers(child)
+            for key, child in value.items()
+        }
+        return {key: child for key, child in pruned.items() if child != {}}
+    if isinstance(value, list):
+        return [_prune_empty_containers(item) for item in value]
+    return value
+
+
+def _remove_nested(root: dict[str, Any], path: list[str]) -> bool:
+    if not path:
+        return False
+    cursor = root
+    parents: list[tuple[dict[str, Any], str]] = []
+    for key in path[:-1]:
+        value = cursor.get(key)
+        if not isinstance(value, dict):
+            return False
+        parents.append((cursor, key))
+        cursor = value
+
+    if path[-1] not in cursor:
+        return False
+    del cursor[path[-1]]
+
+    for parent, key in reversed(parents):
+        child = parent.get(key)
+        if isinstance(child, dict) and not child:
+            del parent[key]
+        else:
+            break
+    return True
 
 
 def _assign_nested(root: dict[str, Any], path: list[str], value: Any) -> None:

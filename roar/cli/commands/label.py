@@ -3,10 +3,11 @@ Local label command group.
 
 Usage:
     roar label set <dag|job|artifact> <target> key=value [...]
+    roar label unset <dag|job|artifact> <target> key [...]
     roar label cp <dag|job|artifact> <source> <dag|job|artifact> <dest>
     roar label show <dag|job|artifact> <target>
     roar label history <dag|job|artifact> <target>
-    roar label push <dag|job|artifact> <target>
+    roar label sync [dag|job|artifact] [target]
 """
 
 from __future__ import annotations
@@ -15,9 +16,10 @@ import click
 
 from ...application.query.label import (
     copy_labels,
-    push_labels,
     set_labels,
     show_labels,
+    sync_labels,
+    unset_labels,
 )
 from ...application.query.label import (
     label_history as render_label_history,
@@ -25,9 +27,10 @@ from ...application.query.label import (
 from ...application.query.requests import (
     LabelCopyRequest,
     LabelHistoryRequest,
-    LabelPushRequest,
     LabelSetRequest,
     LabelShowRequest,
+    LabelSyncRequest,
+    LabelUnsetRequest,
 )
 from ..context import RoarContext
 from ..decorators import require_init
@@ -38,7 +41,7 @@ _ENTITY_TYPE = click.Choice(["dag", "job", "artifact"], case_sensitive=False)
 @click.group("label", invoke_without_command=True)
 @click.pass_context
 def label(ctx: click.Context) -> None:
-    """Manage local labels and push user-managed label updates to GLaaS."""
+    """Manage local labels and sync user-managed label updates to GLaaS."""
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 
@@ -59,6 +62,29 @@ def label_set(ctx: RoarContext, entity_type: str, target: str, pairs: tuple[str,
                 entity_type=entity_type,
                 target=target,
                 pairs=pairs,
+            )
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(rendered)
+
+
+@label.command("unset")
+@click.argument("entity_type", type=_ENTITY_TYPE)
+@click.argument("target")
+@click.argument("keys", nargs=-1, required=True)
+@click.pass_obj
+@require_init
+def label_unset(ctx: RoarContext, entity_type: str, target: str, keys: tuple[str, ...]) -> None:
+    """Remove label keys from the current local label document for a target."""
+    try:
+        rendered = unset_labels(
+            LabelUnsetRequest(
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                entity_type=entity_type,
+                target=target,
+                keys=keys,
             )
         )
     except ValueError as exc:
@@ -118,20 +144,30 @@ def label_show(ctx: RoarContext, entity_type: str, target: str) -> None:
     click.echo(rendered)
 
 
-@label.command("push")
-@click.argument("entity_type", type=_ENTITY_TYPE)
-@click.argument("target")
+@label.command("sync")
+@click.argument("entity_type", type=_ENTITY_TYPE, required=False)
+@click.argument("target", required=False)
+@click.option("--dry-run", is_flag=True, help="Preview remote reconcile without writing.")
+@click.option("--json", "output_json", is_flag=True, help="Render the GLaaS reconcile response.")
 @click.pass_obj
 @require_init
-def label_push(ctx: RoarContext, entity_type: str, target: str) -> None:
-    """Push the current local user-managed labels for a target to GLaaS."""
+def label_sync(
+    ctx: RoarContext,
+    entity_type: str | None,
+    target: str | None,
+    dry_run: bool,
+    output_json: bool,
+) -> None:
+    """Sync current local user-managed labels to GLaaS."""
     try:
-        rendered = push_labels(
-            LabelPushRequest(
+        rendered = sync_labels(
+            LabelSyncRequest(
                 roar_dir=ctx.roar_dir,
                 cwd=ctx.cwd,
                 entity_type=entity_type,
                 target=target,
+                dry_run=dry_run,
+                output_json=output_json,
             )
         )
     except (ValueError, RuntimeError) as exc:

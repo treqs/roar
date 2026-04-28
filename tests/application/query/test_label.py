@@ -1,21 +1,24 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 from roar.application.query import (
     LabelCopyRequest,
     LabelHistoryRequest,
-    LabelPushRequest,
     LabelSetRequest,
     LabelShowRequest,
+    LabelSyncRequest,
+    LabelUnsetRequest,
 )
 from roar.application.query.label import (
     build_copy_labels_summary,
     build_label_history_summary,
-    build_push_labels_summary,
     build_set_labels_summary,
     build_show_labels_summary,
+    build_sync_labels_summary,
+    build_unset_labels_summary,
 )
 
 
@@ -26,6 +29,17 @@ def _set_request(tmp_path: Path, **overrides) -> LabelSetRequest:
         entity_type=overrides.pop("entity_type", "artifact"),
         target=overrides.pop("target", "processed.csv"),
         pairs=overrides.pop("pairs", ("stage=gold", "owner=ml")),
+        **overrides,
+    )
+
+
+def _unset_request(tmp_path: Path, **overrides) -> LabelUnsetRequest:
+    return LabelUnsetRequest(
+        roar_dir=overrides.pop("roar_dir", tmp_path / ".roar"),
+        cwd=overrides.pop("cwd", tmp_path),
+        entity_type=overrides.pop("entity_type", "artifact"),
+        target=overrides.pop("target", "processed.csv"),
+        keys=overrides.pop("keys", ("stage",)),
         **overrides,
     )
 
@@ -62,12 +76,14 @@ def _history_request(tmp_path: Path, **overrides) -> LabelHistoryRequest:
     )
 
 
-def _push_request(tmp_path: Path, **overrides) -> LabelPushRequest:
-    return LabelPushRequest(
+def _sync_request(tmp_path: Path, **overrides) -> LabelSyncRequest:
+    return LabelSyncRequest(
         roar_dir=overrides.pop("roar_dir", tmp_path / ".roar"),
         cwd=overrides.pop("cwd", tmp_path),
         entity_type=overrides.pop("entity_type", "artifact"),
         target=overrides.pop("target", "processed.csv"),
+        dry_run=overrides.pop("dry_run", False),
+        output_json=overrides.pop("output_json", False),
         **overrides,
     )
 
@@ -133,6 +149,29 @@ def test_build_set_labels_summary_reports_no_label_changes_for_noop_updates(
     assert summary.render() == "Labels unchanged (version 2):\n  No label changes."
 
 
+def test_build_unset_labels_summary_returns_removed_labels(tmp_path: Path) -> None:
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.resolve_target.return_value = object()
+    service.current_metadata.return_value = {"owner": "ml", "stage": "gold"}
+    service.unset_metadata.return_value = MagicMock(
+        changed=True,
+        version=3,
+        metadata={"owner": "ml"},
+    )
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+    ):
+        summary = build_unset_labels_summary(_unset_request(tmp_path))
+
+    assert summary.heading == "Removed labels (version 3):"
+    assert summary.render() == "Removed labels (version 3):\n  stage=gold"
+
+
 def test_build_copy_labels_summary_preserves_no_change_heading(tmp_path: Path) -> None:
     db_ctx = MagicMock()
     db_ctx.__enter__.return_value = db_ctx
@@ -174,7 +213,7 @@ def test_build_show_labels_summary_renders_no_labels_when_empty(tmp_path: Path) 
     assert summary.render() == "No labels."
 
 
-def test_build_push_labels_summary_returns_remote_versioned_summary(tmp_path: Path) -> None:
+def test_build_sync_labels_summary_reconciles_target_labels(tmp_path: Path) -> None:
     db_ctx = MagicMock()
     db_ctx.__enter__.return_value = db_ctx
     db_ctx.__exit__.return_value = None
@@ -183,10 +222,21 @@ def test_build_push_labels_summary_returns_remote_versioned_summary(tmp_path: Pa
     service.resolve_target.return_value = resolved_target
     service.current_metadata.return_value = {"owner": "ml", "stage": "gold"}
     client = MagicMock()
-    client.patch_current_label.return_value = (
+    client.reconcile_labels.return_value = (
         {
-            "version": 2,
-            "metadata": {"owner": "ml", "stage": "gold"},
+            "processed": 1,
+            "created": 0,
+            "updated": 1,
+            "noops": 0,
+            "conflicts": [],
+            "results": [
+                {
+                    "entityType": "artifact",
+                    "artifactHash": "a" * 64,
+                    "action": "updated",
+                    "version": 2,
+                }
+            ],
         },
         None,
     )
@@ -195,16 +245,21 @@ def test_build_push_labels_summary_returns_remote_versioned_summary(tmp_path: Pa
         patch("roar.application.query.label.create_database_context", return_value=db_ctx),
         patch("roar.application.query.label.LabelService", return_value=service),
         patch(
-            "roar.application.query.label.build_remote_label_mutation_payload",
-            return_value={
-                "entity_type": "artifact",
-                "artifact_hash": "a" * 64,
-                "metadata": {"owner": "ml", "stage": "gold"},
-            },
+            "roar.application.query.label.build_reconcile_payload_for_target",
+            return_value=(
+                "s" * 64,
+                [
+                    {
+                        "entity_type": "artifact",
+                        "artifact_hash": "a" * 64,
+                        "metadata": {"owner": "ml", "stage": "gold"},
+                    }
+                ],
+            ),
         ) as build_payload,
         patch("roar.application.query.label.GlaasClient", return_value=client),
     ):
-        summary = build_push_labels_summary(_push_request(tmp_path))
+        summary = build_sync_labels_summary(_sync_request(tmp_path))
 
     build_payload.assert_called_once_with(
         db_ctx,
@@ -212,95 +267,81 @@ def test_build_push_labels_summary_returns_remote_versioned_summary(tmp_path: Pa
         target=resolved_target,
         metadata={"owner": "ml", "stage": "gold"},
     )
-    client.patch_current_label.assert_called_once_with(
+    client.reconcile_labels.assert_called_once_with(
         {
-            "entity_type": "artifact",
-            "artifact_hash": "a" * 64,
-            "metadata": {"owner": "ml", "stage": "gold"},
+            "session_hash": "s" * 64,
+            "dry_run": False,
+            "prune": False,
+            "labels": [
+                {
+                    "entity_type": "artifact",
+                    "artifact_hash": "a" * 64,
+                    "metadata": {"owner": "ml", "stage": "gold"},
+                }
+            ],
         }
     )
-    assert summary.heading == "Pushed remote labels (version 2):"
-    assert summary.render() == "Pushed remote labels (version 2):\n  owner=ml\n  stage=gold"
+    assert not isinstance(summary, str)
+    assert summary.heading == "Synced remote labels: processed=1 created=0 updated=1 noops=0"
+    assert summary.render() == (
+        "Synced remote labels: processed=1 created=0 updated=1 noops=0\n"
+        f"  artifact:{'a' * 64}=updated version 2"
+    )
 
 
-def test_build_push_labels_summary_retries_job_push_with_legacy_job_uid_on_not_found(
-    tmp_path: Path,
-) -> None:
+def test_build_sync_labels_summary_supports_json_dry_run(tmp_path: Path) -> None:
     db_ctx = MagicMock()
     db_ctx.__enter__.return_value = db_ctx
     db_ctx.__exit__.return_value = None
     service = MagicMock()
-    resolved_target = MagicMock(entity_type="job")
-    service.resolve_target.return_value = resolved_target
-    service.current_metadata.return_value = {"phase": "gold"}
     client = MagicMock()
-    client.patch_current_label.side_effect = [
-        (None, "HTTP 404: Label not found"),
-        ({"version": 3, "metadata": {"phase": "gold"}}, None),
-    ]
+    client.reconcile_labels.return_value = (
+        {"dryRun": True, "processed": 1, "created": 1, "updated": 0, "noops": 0},
+        None,
+    )
 
     with (
         patch("roar.application.query.label.create_database_context", return_value=db_ctx),
         patch("roar.application.query.label.LabelService", return_value=service),
         patch(
-            "roar.application.query.label.build_remote_label_mutation_payload",
-            side_effect=[
-                {
-                    "entity_type": "job",
-                    "session_hash": "s" * 64,
-                    "job_uid": "remote-job-1",
-                    "metadata": {"phase": "gold"},
-                },
-                {
-                    "entity_type": "job",
-                    "session_hash": "s" * 64,
-                    "job_uid": "local-job-1",
-                    "metadata": {"phase": "gold"},
-                },
-            ],
-        ) as build_payload,
+            "roar.application.query.label.build_reconcile_payload_for_current_lineage",
+            return_value=(
+                "s" * 64,
+                [{"entity_type": "dag", "session_hash": "s" * 64, "metadata": {"phase": "gold"}}],
+            ),
+        ),
         patch("roar.application.query.label.GlaasClient", return_value=client),
     ):
-        summary = build_push_labels_summary(_push_request(tmp_path, target="@1", entity_type="job"))
+        rendered = build_sync_labels_summary(
+            LabelSyncRequest(
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                dry_run=True,
+                output_json=True,
+            )
+        )
 
-    assert build_payload.call_args_list == [
-        call(
-            db_ctx,
-            roar_dir=tmp_path / ".roar",
-            target=resolved_target,
-            metadata={"phase": "gold"},
-        ),
-        call(
-            db_ctx,
-            roar_dir=tmp_path / ".roar",
-            target=resolved_target,
-            metadata={"phase": "gold"},
-            prefer_remote_publication_uid=False,
-        ),
-    ]
-    assert client.patch_current_label.call_args_list == [
-        call(
-            {
-                "entity_type": "job",
-                "session_hash": "s" * 64,
-                "job_uid": "remote-job-1",
-                "metadata": {"phase": "gold"},
-            }
-        ),
-        call(
-            {
-                "entity_type": "job",
-                "session_hash": "s" * 64,
-                "job_uid": "local-job-1",
-                "metadata": {"phase": "gold"},
-            }
-        ),
-    ]
-    assert summary.heading == "Pushed remote labels (version 3):"
-    assert summary.render() == "Pushed remote labels (version 3):\n  phase=gold"
+    assert isinstance(rendered, str)
+    assert json.loads(rendered) == {
+        "dryRun": True,
+        "processed": 1,
+        "created": 1,
+        "updated": 0,
+        "noops": 0,
+    }
+    client.reconcile_labels.assert_called_once_with(
+        {
+            "session_hash": "s" * 64,
+            "dry_run": True,
+            "prune": False,
+            "labels": [
+                {"entity_type": "dag", "session_hash": "s" * 64, "metadata": {"phase": "gold"}}
+            ],
+        }
+    )
 
 
-def test_build_push_labels_summary_rejects_missing_user_managed_labels(tmp_path: Path) -> None:
+def test_build_sync_labels_summary_rejects_missing_user_managed_labels(tmp_path: Path) -> None:
     db_ctx = MagicMock()
     db_ctx.__enter__.return_value = db_ctx
     db_ctx.__exit__.return_value = None
@@ -313,9 +354,9 @@ def test_build_push_labels_summary_rejects_missing_user_managed_labels(tmp_path:
         patch("roar.application.query.label.LabelService", return_value=service),
     ):
         try:
-            build_push_labels_summary(_push_request(tmp_path, target="@1", entity_type="job"))
+            build_sync_labels_summary(_sync_request(tmp_path, target="@1", entity_type="job"))
         except ValueError as exc:
-            assert str(exc) == "No local user-managed labels to push for @1."
+            assert str(exc) == "No local user-managed labels to sync for @1."
         else:  # pragma: no cover - defensive assertion style
             raise AssertionError("Expected ValueError for missing user-managed labels")
 

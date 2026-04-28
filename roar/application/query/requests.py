@@ -59,6 +59,15 @@ class LabelSetRequest:
 
 
 @dataclass(frozen=True)
+class LabelUnsetRequest:
+    roar_dir: Path
+    cwd: Path
+    entity_type: str
+    target: str
+    keys: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class LabelCopyRequest:
     roar_dir: Path
     cwd: Path
@@ -85,11 +94,13 @@ class LabelHistoryRequest:
 
 
 @dataclass(frozen=True)
-class LabelPushRequest:
+class LabelSyncRequest:
     roar_dir: Path
     cwd: Path
-    entity_type: str
-    target: str
+    entity_type: str | None = None
+    target: str | None = None
+    dry_run: bool = False
+    output_json: bool = False
 
 
 DiffFormat = Literal["summary", "category", "dag"]
