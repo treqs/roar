@@ -259,6 +259,44 @@ class TestLabelCommand:
         rows = _artifact_label_rows(temp_git_repo, temp_git_repo / "processed.csv")
         assert rows == [(1, {"owner": "ml", "stage": "raw"})]
 
+    def test_artifact_label_unset_removes_user_key_and_preserves_history(
+        self,
+        temp_git_repo,
+        roar_cli,
+        git_commit,
+        sample_scripts,
+        sample_data,
+        python_exe,
+    ):
+        result = roar_cli("run", python_exe, "preprocess.py", "input.csv", "processed.csv")
+        assert result.returncode == 0
+        git_commit("After preprocess")
+
+        _assert_ok(
+            roar_cli(
+                "label",
+                "set",
+                "artifact",
+                "processed.csv",
+                "stage=raw",
+                "owner=ml",
+                check=False,
+            )
+        )
+        unset_output = _assert_ok(
+            roar_cli("label", "unset", "artifact", "processed.csv", "stage", check=False)
+        )
+
+        assert "Removed labels (version 2):" in unset_output
+        assert "stage=raw" in unset_output
+        label_show = _assert_ok(roar_cli("label", "show", "artifact", "processed.csv", check=False))
+        assert "owner=ml" in label_show
+        assert "stage=raw" not in label_show
+        assert _artifact_label_rows(temp_git_repo, temp_git_repo / "processed.csv") == [
+            (1, {"owner": "ml", "stage": "raw"}),
+            (2, {"owner": "ml"}),
+        ]
+
     def test_job_label_set_output_shows_only_changed_labels_not_system_labels(
         self,
         temp_git_repo,

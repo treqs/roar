@@ -579,12 +579,17 @@ class GlaasClient:
             return {"created": 0, "updated": 0, "unchanged": 0}, None
         return self._request("POST", "/api/v1/labels/sync", {"labels": labels})
 
-    def patch_current_label(
+    def reconcile_labels(
         self,
-        label: dict[str, Any],
+        payload: dict[str, Any],
     ) -> tuple[dict | None, str | None]:
-        """Patch the current remote label document for one lineage target."""
-        return self._request("PATCH", "/api/v1/labels/current", label)
+        """Reconcile user-managed local labels for a registered lineage."""
+        return self._request(
+            "POST",
+            "/api/v1/labels/reconcile",
+            payload,
+            allow_auth_fallback=False,
+        )
 
     def register_job_under_registration_session(
         self,

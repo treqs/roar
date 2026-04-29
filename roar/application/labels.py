@@ -48,6 +48,9 @@ class _LabelSyncDatabaseContext(Protocol):
 
 class _RemoteLabelMutationDatabaseContext(Protocol):
     @property
+    def labels(self) -> Any: ...
+
+    @property
     def sessions(self) -> Any: ...
 
     @property
@@ -200,6 +203,40 @@ class LabelService:
             version=int(created["version"]),
         )
 
+    def unset_metadata(self, target: LabelTargetRef, keys: tuple[str, ...]) -> LabelWriteResult:
+        """Remove user-managed label keys and append a new version if changed."""
+        normalized_keys = tuple(_normalize_label_key(key) for key in keys)
+        self._reject_reserved_key_paths(normalized_keys)
+        current = self.current_metadata(target)
+        updated = json.loads(json.dumps(current))
+        changed = False
+        for key in normalized_keys:
+            changed = _remove_nested(updated, key.split(".")) or changed
+
+        if not changed:
+            current_row = self._db.labels.get_current(
+                target.entity_type,
+                session_id=target.session_id,
+                job_id=target.job_id,
+                artifact_id=target.artifact_id,
+            )
+            current_version = int(current_row["version"]) if current_row else None
+            return LabelWriteResult(changed=False, metadata=current, version=current_version)
+
+        created = self._db.labels.create_version(
+            target.entity_type,
+            updated,
+            session_id=target.session_id,
+            job_id=target.job_id,
+            artifact_id=target.artifact_id,
+            write_origin=LABEL_ORIGIN_USER,
+        )
+        return LabelWriteResult(
+            changed=True,
+            metadata=updated,
+            version=int(created["version"]),
+        )
+
     def copy_metadata(
         self,
         source: LabelTargetRef,
@@ -240,6 +277,10 @@ class LabelService:
     @staticmethod
     def _reject_reserved_keys(metadata: dict[str, Any]) -> None:
         keys = {key for key, _value in flatten_label_metadata(metadata)}
+        LabelService._reject_reserved_key_paths(tuple(keys))
+
+    @staticmethod
+    def _reject_reserved_key_paths(keys: tuple[str, ...]) -> None:
         reserved = sorted(key for key in keys if is_reserved_system_label_path(key))
         if reserved:
             joined = ", ".join(reserved)
@@ -253,6 +294,7 @@ def build_remote_label_mutation_payload(
     target: LabelTargetRef,
     metadata: dict[str, Any],
     prefer_remote_publication_uid: bool = True,
+    require_published_session: bool = False,
 ) -> dict[str, Any]:
     """Build a GLaaS label-mutation payload for one local target."""
     if target.entity_type == "dag":
@@ -264,6 +306,7 @@ def build_remote_label_mutation_payload(
                 db_ctx,
                 roar_dir=roar_dir,
                 session_id=int(target.session_id),
+                require_published=require_published_session,
             ),
             "metadata": metadata,
         }
@@ -280,16 +323,21 @@ def build_remote_label_mutation_payload(
             raise ValueError("Job target is missing a local session id.")
         if not isinstance(job_uid, str) or not job_uid:
             raise ValueError("Job target is missing a job UID.")
+        session = db_ctx.sessions.get(session_id)
         session_hash = _canonical_remote_session_hash(
             db_ctx,
             roar_dir=roar_dir,
             session_id=session_id,
+            require_published=require_published_session,
         )
-        resolved_job_uid = (
-            build_remote_publication_job_uid(session_hash, job_uid)
-            if prefer_remote_publication_uid
-            else job_uid
-        )
+        published_job_uid = _published_remote_job_uid(session, job_uid)
+        if prefer_remote_publication_uid:
+            resolved_job_uid = published_job_uid or build_remote_publication_job_uid(
+                session_hash,
+                job_uid,
+            )
+        else:
+            resolved_job_uid = job_uid
         return {
             "entity_type": "job",
             "session_hash": session_hash,
@@ -332,6 +380,12 @@ def build_remote_label_mutation_payload(
             raise ValueError("Artifact target is missing a content hash.")
         return {
             "entity_type": "artifact",
+            "session_hash": _canonical_remote_session_hash_for_target(
+                db_ctx,
+                roar_dir=roar_dir,
+                target=target,
+                require_published=require_published_session,
+            ),
             "artifact_hash": artifact_hash,
             "metadata": metadata,
         }
@@ -409,6 +463,7 @@ def collect_label_sync_payloads(
             payloads.append(
                 {
                     "entity_type": "artifact",
+                    "session_hash": session_hash,
                     "artifact_hash": artifact_hash,
                     "metadata": current["metadata"],
                     "key_origins": build_current_key_origins(history),
@@ -418,11 +473,70 @@ def collect_label_sync_payloads(
     return payloads
 
 
+def build_reconcile_payload_for_current_lineage(
+    db_ctx: _RemoteLabelMutationDatabaseContext,
+    *,
+    roar_dir: Path,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Build a user-managed reconcile payload for the active local lineage."""
+    session = db_ctx.sessions.get_active()
+    if not isinstance(session, dict) or not isinstance(session.get("id"), int):
+        raise ValueError("No active session.")
+
+    session_id = int(session["id"])
+    session_hash = _canonical_remote_session_hash(
+        db_ctx,
+        roar_dir=roar_dir,
+        session_id=session_id,
+        require_published=True,
+    )
+    lineage = LineageCollector().collect_session(session_id, roar_dir)
+    jobs = _apply_published_remote_job_uids(
+        list(getattr(lineage, "jobs", []) or []),
+        session,
+    )
+    payloads = collect_label_sync_payloads(
+        db_ctx,
+        session_id=session_id,
+        session_hash=session_hash,
+        jobs=jobs,
+        artifacts=list(getattr(lineage, "artifacts", []) or []),
+    )
+    return session_hash, _user_managed_reconcile_payloads(payloads)
+
+
+def build_reconcile_payload_for_target(
+    db_ctx: _RemoteLabelMutationDatabaseContext,
+    *,
+    roar_dir: Path,
+    target: LabelTargetRef,
+    metadata: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Build a single-target user-managed reconcile payload."""
+    payload = build_remote_label_mutation_payload(
+        db_ctx,
+        roar_dir=roar_dir,
+        target=target,
+        metadata=metadata,
+        require_published_session=True,
+    )
+    session_hash = payload.get("session_hash")
+    if not isinstance(session_hash, str) or not session_hash:
+        session_hash = _canonical_remote_session_hash_for_target(
+            db_ctx,
+            roar_dir=roar_dir,
+            target=target,
+            require_published=True,
+        )
+    return session_hash, _user_managed_reconcile_payloads([payload])
+
+
 def _canonical_remote_session_hash(
     db_ctx: _RemoteLabelMutationDatabaseContext,
     *,
     roar_dir: Path,
     session_id: int,
+    require_published: bool = False,
 ) -> str:
     from ..core.logging import get_logger
     from .publish.runtime import build_publish_runtime
@@ -431,6 +545,12 @@ def _canonical_remote_session_hash(
     session = db_ctx.sessions.get(session_id)
     if not isinstance(session, dict):
         raise ValueError("Session not found.")
+
+    published_session_hash = _published_remote_session_hash(session)
+    if published_session_hash:
+        return published_session_hash
+    if require_published:
+        raise ValueError(_unpublished_lineage_sync_error(session))
 
     lineage = LineageCollector().collect_session(session_id, roar_dir)
     if not getattr(lineage, "jobs", None):
@@ -452,6 +572,211 @@ def _canonical_remote_session_hash(
         lineage=lineage,
     )
     return str(prepared.session_hash)
+
+
+def _canonical_remote_session_hash_for_target(
+    db_ctx: _RemoteLabelMutationDatabaseContext,
+    *,
+    roar_dir: Path,
+    target: LabelTargetRef,
+    require_published: bool = False,
+) -> str:
+    if target.session_id is not None:
+        return _canonical_remote_session_hash(
+            db_ctx,
+            roar_dir=roar_dir,
+            session_id=int(target.session_id),
+            require_published=require_published,
+        )
+
+    if target.job_id is not None:
+        job = db_ctx.jobs.get(int(target.job_id))
+        if isinstance(job, dict) and isinstance(job.get("session_id"), int):
+            return _canonical_remote_session_hash(
+                db_ctx,
+                roar_dir=roar_dir,
+                session_id=int(job["session_id"]),
+                require_published=require_published,
+            )
+        raise ValueError("Job target is missing a local session id.")
+
+    if target.artifact_id is not None:
+        session = db_ctx.sessions.get_active()
+        if isinstance(session, dict) and isinstance(session.get("id"), int):
+            return _canonical_remote_session_hash(
+                db_ctx,
+                roar_dir=roar_dir,
+                session_id=int(session["id"]),
+                require_published=require_published,
+            )
+
+        jobs = db_ctx.artifacts.get_jobs(str(target.artifact_id))
+        for relation in ("produced_by", "consumed_by"):
+            for job in jobs.get(relation, []):
+                if isinstance(job, dict) and isinstance(job.get("session_id"), int):
+                    return _canonical_remote_session_hash(
+                        db_ctx,
+                        roar_dir=roar_dir,
+                        session_id=int(job["session_id"]),
+                        require_published=require_published,
+                    )
+
+    raise ValueError("Unable to infer a local session for label sync.")
+
+
+def _user_managed_reconcile_payloads(payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for payload in payloads:
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        user_metadata = _prune_empty_containers(strip_reserved_system_labels(metadata))
+        if not user_metadata:
+            continue
+        filtered.append(
+            {
+                key: value
+                for key, value in {
+                    **payload,
+                    "metadata": user_metadata,
+                }.items()
+                if key != "key_origins"
+            }
+        )
+    return filtered
+
+
+def _published_remote_session_hash(session: Any) -> str | None:
+    publication = _glaas_publication_metadata(session)
+    session_hash = publication.get("session_hash") if publication else None
+    if isinstance(session_hash, str) and _looks_like_hash(session_hash):
+        return session_hash
+    return None
+
+
+def _unpublished_lineage_sync_error(session: dict[str, Any]) -> str:
+    local_hash = session.get("hash")
+    if isinstance(local_hash, str) and local_hash.strip():
+        return (
+            "Selected lineage has not been registered to GLaaS yet. "
+            f"Run `roar register {local_hash} --yes` or `roar put <artifact> <destination>` "
+            "first, then retry `roar label sync`."
+        )
+    return (
+        "Selected lineage has not been registered to GLaaS yet. "
+        "Run `roar register <dag-hash> --yes` or `roar put <artifact> <destination>` "
+        "first, then retry `roar label sync`."
+    )
+
+
+def _published_remote_job_uid(session: Any, local_job_uid: str) -> str | None:
+    publication = _glaas_publication_metadata(session)
+    jobs = publication.get("jobs") if publication else None
+    if not isinstance(jobs, dict):
+        return None
+    remote_job_uid = jobs.get(local_job_uid)
+    if isinstance(remote_job_uid, str) and remote_job_uid:
+        return remote_job_uid
+    return None
+
+
+def _apply_published_remote_job_uids(
+    jobs: list[dict[str, Any]],
+    session: Any,
+) -> list[dict[str, Any]]:
+    publication = _glaas_publication_metadata(session)
+    job_mapping = publication.get("jobs") if publication else None
+    if not isinstance(job_mapping, dict) or not job_mapping:
+        return jobs
+
+    annotated: list[dict[str, Any]] = []
+    for job in jobs:
+        local_job_uid = job.get("job_uid")
+        if isinstance(local_job_uid, str):
+            remote_job_uid = job_mapping.get(local_job_uid)
+        else:
+            remote_job_uid = None
+        if isinstance(remote_job_uid, str) and remote_job_uid:
+            prepared = dict(job)
+            prepared["remote_job_uid"] = remote_job_uid
+            annotated.append(prepared)
+        else:
+            annotated.append(job)
+    return annotated
+
+
+def _glaas_publication_metadata(session: Any) -> dict[str, Any] | None:
+    if not isinstance(session, dict):
+        return None
+    metadata = _parse_session_metadata(session.get("metadata"))
+    roar_metadata = metadata.get("roar")
+    if not isinstance(roar_metadata, dict):
+        return None
+    remote_publication = roar_metadata.get("remote_publication")
+    if not isinstance(remote_publication, dict):
+        return None
+    glaas = remote_publication.get("glaas")
+    return glaas if isinstance(glaas, dict) else None
+
+
+def _parse_session_metadata(raw_metadata: Any) -> dict[str, Any]:
+    if isinstance(raw_metadata, dict):
+        return raw_metadata
+    if isinstance(raw_metadata, str) and raw_metadata.strip():
+        try:
+            parsed = json.loads(raw_metadata)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _looks_like_hash(value: str) -> bool:
+    normalized = value.strip().lower()
+    return len(normalized) == 64 and all(char in "0123456789abcdef" for char in normalized)
+
+
+def _normalize_label_key(key: str) -> str:
+    normalized = str(key or "").strip()
+    if not normalized:
+        raise ValueError("Label key must not be empty.")
+    if "=" in normalized:
+        raise ValueError(f"Invalid label key '{key}'. Expected a key path, not key=value.")
+    return normalized
+
+
+def _prune_empty_containers(value: Any) -> Any:
+    if isinstance(value, dict):
+        pruned = {key: _prune_empty_containers(child) for key, child in value.items()}
+        return {key: child for key, child in pruned.items() if child != {}}
+    if isinstance(value, list):
+        return [_prune_empty_containers(item) for item in value]
+    return value
+
+
+def _remove_nested(root: dict[str, Any], path: list[str]) -> bool:
+    if not path:
+        return False
+    cursor = root
+    parents: list[tuple[dict[str, Any], str]] = []
+    for key in path[:-1]:
+        value = cursor.get(key)
+        if not isinstance(value, dict):
+            return False
+        parents.append((cursor, key))
+        cursor = value
+
+    if path[-1] not in cursor:
+        return False
+    del cursor[path[-1]]
+
+    for parent, key in reversed(parents):
+        child = parent.get(key)
+        if isinstance(child, dict) and not child:
+            del parent[key]
+        else:
+            break
+    return True
 
 
 def _assign_nested(root: dict[str, Any], path: list[str], value: Any) -> None:

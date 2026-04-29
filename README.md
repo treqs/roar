@@ -272,6 +272,9 @@ roar label set dag current owner=alice team=ml
 roar label set job @2 phase=train lr=0.001
 roar label set artifact ./outputs/model.pt model.name=resnet50 stage=baseline
 
+# Remove labels
+roar label unset artifact ./outputs/model.pt stage
+
 # Copy labels from one entity to another
 roar label cp job @2 artifact ./outputs/model.pt
 
@@ -284,9 +287,10 @@ roar label show artifact ./outputs/model.pt
 roar label history dag current
 roar label history artifact <artifact-hash>
 
-# Push current local user-managed labels to GLaaS
-roar label push job @2
-roar label push artifact ./outputs/model.pt
+# Sync local user-managed labels to GLaaS
+roar label sync
+roar label sync job @2
+roar label sync artifact ./outputs/model.pt --dry-run
 ```
 
 **Entity targets:**
@@ -295,7 +299,7 @@ roar label push artifact ./outputs/model.pt
 - `job`: step ref (`@N` or `@BN`) or job UID
 - `artifact`: file path or artifact hash
 
-Labels are stored locally by default. You can explicitly push the current local user-managed labels for one target to GLaaS with `roar label push ...`, and labels are also included in lineage registration/publish flows when supported by the configured server.
+Labels are stored locally by default. You can explicitly reconcile current local user-managed labels to GLaaS with `roar label sync ...`, and labels are also included in lineage registration/publish flows when supported by the configured server.
 
 ### `roar register`
 

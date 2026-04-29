@@ -27,6 +27,7 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.registration_session_input_links: list[dict[str, Any]] = []
         self.registration_session_output_links: list[dict[str, Any]] = []
         self.label_syncs: list[list[dict[str, Any]]] = []
+        self.label_reconciles: list[dict[str, Any]] = []
         self.label_mutation_attempts: list[dict[str, Any]] = []
         self.label_mutations: list[dict[str, Any]] = []
         self.current_labels_by_target: dict[str, dict[str, Any]] = {}
@@ -39,6 +40,7 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.job_owners_by_uid: dict[str, dict[str, Any]] = {}
         self.supports_anonymous_public_registration_sessions = True
         self.supports_finalize_expected_hash = True
+        self.force_authoritative_finalize_hash = False
         self._next_job_id = 1
         self._next_registration_session_id = 1
         self._next_finalized_hash = 1
@@ -572,6 +574,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                         current_label["sessionHash"] = label.get("session_hash")
                         current_label["jobUid"] = label.get("job_uid")
                     elif label.get("entity_type") == "artifact":
+                        current_label["sessionHash"] = label.get("session_hash")
                         current_label["artifactHash"] = label.get("artifact_hash")
                     self.server.current_labels_by_target[target_key] = current_label
                 self._write_json(
@@ -579,6 +582,73 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                     {"created": 0, "updated": 0, "unchanged": len(labels)},
                 )
                 return
+
+        if self.path == "/api/v1/labels/reconcile":
+            if authenticated_user is None:
+                self._write_json(401, {"error": "Missing or invalid auth"})
+                return
+
+            labels = payload.get("labels", [])
+            if not isinstance(labels, list):
+                labels = []
+            self.server.label_reconciles.append(payload)
+            dry_run = bool(payload.get("dry_run"))
+            created = 0
+            updated = 0
+            noops = 0
+            results: list[dict[str, Any]] = []
+            for label in labels:
+                if not isinstance(label, dict):
+                    continue
+                target_key = _label_target_key(label)
+                current = self.server.current_labels_by_target.get(target_key)
+                metadata = label.get("metadata") if isinstance(label.get("metadata"), dict) else {}
+                current_metadata = current.get("metadata") if isinstance(current, dict) else {}
+                if not isinstance(current_metadata, dict):
+                    current_metadata = {}
+                merged_metadata = _deep_merge(current_metadata, metadata)
+                if not current and metadata:
+                    action = "created"
+                    version = 1
+                    created += 1
+                elif merged_metadata != current_metadata:
+                    action = "updated"
+                    version = int(current.get("version", 0)) + 1 if isinstance(current, dict) else 1
+                    updated += 1
+                else:
+                    action = "noop"
+                    version = int(current.get("version", 0)) if isinstance(current, dict) else None
+                    noops += 1
+
+                result_row = _label_response_row(label, action=action, version=version)
+                results.append(result_row)
+                if dry_run or action == "noop":
+                    continue
+
+                current_label = {
+                    **result_row,
+                    "id": f"label-{len(self.server.current_labels_by_target) + 1}",
+                    "metadata": merged_metadata,
+                    "createdAt": "2026-01-01T00:00:00Z",
+                }
+                self.server.current_labels_by_target[target_key] = current_label
+
+            self._write_json(
+                200,
+                {
+                    "sessionHash": payload.get("session_hash"),
+                    "dryRun": dry_run,
+                    "processed": len(labels),
+                    "created": created,
+                    "updated": updated,
+                    "deletedKeys": 0,
+                    "preservedKeys": 0,
+                    "noops": noops,
+                    "conflicts": [],
+                    "results": results,
+                },
+            )
+            return
 
         if self.path == "/api/v1/artifacts/composites":
             self.server.composite_registrations.append(payload)
@@ -636,11 +706,15 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 )
                 return
 
-            lineage_hash = session_state.get("hash") or self._compute_registration_session_hash(
-                session_state,
-                payload,
-                auth_for_finalize,
-            )
+            lineage_hash = session_state.get("hash")
+            if not lineage_hash and self.server.force_authoritative_finalize_hash:
+                lineage_hash = self.server.allocate_lineage_hash()
+            if not lineage_hash:
+                lineage_hash = self._compute_registration_session_hash(
+                    session_state,
+                    payload,
+                    auth_for_finalize,
+                )
             if not lineage_hash:
                 lineage_hash = self.server.allocate_lineage_hash()
 
@@ -994,7 +1068,35 @@ def _label_target_key(payload: dict[str, Any]) -> str:
         return f"dag:{payload.get('session_hash', '')}"
     if entity_type == "job":
         return f"job:{payload.get('session_hash', '')}:{payload.get('job_uid', '')}"
-    return f"artifact:{payload.get('artifact_hash', '')}"
+    return f"artifact:{payload.get('session_hash', '')}:{payload.get('artifact_hash', '')}"
+
+
+def _label_response_row(
+    payload: dict[str, Any],
+    *,
+    action: str,
+    version: int | None,
+) -> dict[str, Any]:
+    entity_type = str(payload.get("entity_type") or "")
+    row: dict[str, Any] = {
+        "entityType": entity_type,
+        "action": action,
+        "createdKeys": [],
+        "updatedKeys": [],
+        "deletedKeys": [],
+        "preservedKeys": [],
+    }
+    if version is not None:
+        row["version"] = version
+    if entity_type == "dag":
+        row["sessionHash"] = payload.get("session_hash")
+    elif entity_type == "job":
+        row["sessionHash"] = payload.get("session_hash")
+        row["jobUid"] = payload.get("job_uid")
+    elif entity_type == "artifact":
+        row["sessionHash"] = payload.get("session_hash")
+        row["artifactHash"] = payload.get("artifact_hash")
+    return row
 
 
 def _deep_merge(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
@@ -1080,12 +1182,24 @@ class FakeGlaasServer:
         return self._server.label_syncs
 
     @property
+    def label_reconciles(self) -> list[dict[str, Any]]:
+        return self._server.label_reconciles
+
+    @property
     def label_mutation_attempts(self) -> list[dict[str, Any]]:
         return self._server.label_mutation_attempts
 
     @property
     def label_mutations(self) -> list[dict[str, Any]]:
         return self._server.label_mutations
+
+    @property
+    def force_authoritative_finalize_hash(self) -> bool:
+        return self._server.force_authoritative_finalize_hash
+
+    @force_authoritative_finalize_hash.setter
+    def force_authoritative_finalize_hash(self, value: bool) -> None:
+        self._server.force_authoritative_finalize_hash = value
 
     def set_anonymous_public_registration_session_support(
         self,
