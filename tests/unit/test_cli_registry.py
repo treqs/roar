@@ -21,7 +21,13 @@ def test_help_groups_are_built_from_command_specs() -> None:
     help_groups = dict(build_help_groups())
 
     assert help_groups["Start Here"] == ("init", "run", "build", "dag")
-    assert help_groups["Share and Publish"] == ("put", "register", "get", "label")
+    assert help_groups["Share and Publish"] == (
+        "put",
+        "register",
+        "export-registration-package",
+        "get",
+        "label",
+    )
     assert help_groups["GLaaS / TReqs Account"] == (
         "login",
         "logout",

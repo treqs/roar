@@ -106,6 +106,13 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "Share and Publish",
     ),
     CommandSpec(
+        "export-registration-package",
+        "roar.cli.commands.export_registration_package",
+        "export_registration_package",
+        "Export local lineage for server-side registration",
+        "Share and Publish",
+    ),
+    CommandSpec(
         "get", "roar.cli.commands.get", "get", "Download published artifacts", "Share and Publish"
     ),
     CommandSpec(
