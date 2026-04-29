@@ -11,7 +11,7 @@ from pathlib import Path
 class RegisterLineageRequest:
     """Application request for `roar register`."""
 
-    target: str
+    target: str | None
     roar_dir: Path
     cwd: Path
     dry_run: bool = False
@@ -20,6 +20,7 @@ class RegisterLineageRequest:
     anonymous: bool = False
     skip_confirmation: bool = False
     confirm_callback: Callable[[list[str]], bool] | None = None
+    no_tag: bool = False
 
 
 @dataclass(frozen=True)

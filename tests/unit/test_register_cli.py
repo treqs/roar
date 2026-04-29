@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -58,6 +59,26 @@ def test_register_cli_accepts_s3_uri(tmp_path: Path) -> None:
     mock_register.assert_called_once()
     request = mock_register.call_args.args[0]
     assert request.target == "s3://output-bucket/results/run123/final_report.json"
+
+
+def test_register_cli_supports_current_session_json_without_tagging(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        mock_register.return_value = _fake_result()
+        result = runner.invoke(
+            register,
+            ["--yes", "--json", "--no-tag"],
+            obj=_mock_context(tmp_path),
+        )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["success"] is True
+    assert payload["session_hash"] == "a" * 64
+    request = mock_register.call_args.args[0]
+    assert request.target is None
+    assert request.no_tag is True
 
 
 def test_register_cli_prints_next_steps_for_artifacts(tmp_path: Path) -> None:

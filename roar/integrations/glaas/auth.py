@@ -20,7 +20,7 @@ def get_glaas_url() -> str | None:
     """Get GLaaS server URL from config or environment."""
     from ..config import config_get
 
-    url = os.environ.get("GLAAS_URL")
+    url = os.environ.get("ROAR_GLAAS_URL") or os.environ.get("GLAAS_URL")
     if not url:
         url = config_get("glaas.url")
     return url

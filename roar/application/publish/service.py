@@ -455,6 +455,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
                     dry_run=False,
                     session_hash_override=collected_lineage.session_hash_override,
                     logger=logger,
+                    no_tag=request.no_tag,
                     lineage=collected_lineage.lineage,
                 )
         except ValueError as exc:

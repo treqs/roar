@@ -1,10 +1,13 @@
 """
 Native Click implementation of the register command.
 
-Usage: roar register [options] <target>
+Usage: roar register [options] [target]
 
-Registers artifact, job, step, or session lineage with GLaaS.
+Registers artifact, job, step, or session lineage with GLaaS. Without a target,
+registers the current active session.
 """
+
+import json
 
 import click
 
@@ -57,7 +60,7 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
 
 
 @click.command("register")
-@click.argument("target", type=click.STRING)
+@click.argument("target", type=click.STRING, required=False)
 @click.option(
     "--dry-run",
     is_flag=True,
@@ -89,16 +92,29 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     is_flag=True,
     help="Force public anonymous registration even when local GLaaS auth is configured.",
 )
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Emit machine-readable JSON and suppress the human summary.",
+)
+@click.option(
+    "--no-tag",
+    is_flag=True,
+    help="Do not create/update a local roar git tag after successful registration.",
+)
 @click.pass_obj
 @require_init
 def register(
     ctx: RoarContext,
-    target: str,
+    target: str | None,
     dry_run: bool,
     yes: bool,
     as_blake3: bool,
     public: bool | None,
     anonymous: bool,
+    json_output: bool,
+    no_tag: bool,
 ) -> None:
     """Register lineage with GLaaS.
 
@@ -166,6 +182,7 @@ def register(
             anonymous=anonymous,
             skip_confirmation=yes,
             confirm_callback=_confirm_secrets if not yes else None,
+            no_tag=no_tag,
         )
     )
 
@@ -175,12 +192,36 @@ def register(
             raise SystemExit(1)
         raise click.ClickException(response.error or "Registration failed")
 
+    if json_output:
+        click.echo(
+            json.dumps(
+                {
+                    "success": True,
+                    "session_hash": response.session_hash,
+                    "session_url": f"/sessions/{response.session_hash}"
+                    if response.session_hash
+                    else None,
+                    "jobs_registered": response.jobs_registered,
+                    "artifacts_registered": response.artifacts_registered,
+                    "links_created": response.links_created,
+                    "artifact_hash": response.artifact_hash or None,
+                    "dry_run": dry_run,
+                    "secrets_detected": list(response.secrets_detected),
+                    "secrets_redacted": response.secrets_redacted,
+                    "error": response.error,
+                },
+                sort_keys=True,
+            )
+        )
+        return
+
     web_url = _resolve_glaas_web_url(start_dir=str(ctx.cwd))
     session_preview = _preview_hash(response.session_hash) if response.session_hash else ""
+    display_target = target or "current session"
 
     # Format output
     if dry_run:
-        click.echo(f"Dry run: would register lineage for: {target}")
+        click.echo(f"Dry run: would register lineage for: {display_target}")
         click.echo(f"  Session: {session_preview}")
         click.echo(f"  Jobs: {response.jobs_registered}")
         click.echo(f"  Artifacts: {response.artifacts_registered}")
@@ -193,7 +234,7 @@ def register(
         if response.artifact_hash:
             click.echo(f"  Artifact: {web_url}/artifact/{response.artifact_hash}")
     else:
-        click.echo(f"Registered lineage for: {target}")
+        click.echo(f"Registered lineage for: {display_target}")
         click.echo(f"  Session: {session_preview}")
         click.echo(f"  Jobs: {response.jobs_registered}")
         click.echo(f"  Artifacts: {response.artifacts_registered}")

@@ -312,7 +312,8 @@ class RegisterService:
                             git_context=git_context,
                             expected_counts=(
                                 build_staged_lineage_counts(remote_registration_jobs)
-                                if registration_session_mode == "anonymous_public"
+                                if registration_session_mode
+                                in {"anonymous_public", "treqs_brokered"}
                                 else None
                             ),
                         )

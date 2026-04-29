@@ -24,13 +24,15 @@ class ResolvedRegisterTarget:
 
 
 def resolve_register_lineage_target(
-    target: str,
+    target: str | None,
     *,
     cwd: Path,
     roar_dir: Path,
 ) -> ResolvedRegisterTarget:
     """Resolve a CLI register target into the workflow it should trigger."""
-    normalized_target = target.strip()
+    normalized_target = target.strip() if isinstance(target, str) else ""
+    if not normalized_target:
+        return ResolvedRegisterTarget(kind="active_session", value="")
     if is_register_step_reference(normalized_target):
         return ResolvedRegisterTarget(kind="step_reference", value=normalized_target)
 

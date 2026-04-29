@@ -383,6 +383,24 @@ def prepare_publish_session(
                         "Configured SSH publish auth is unavailable remotely; using anonymous public registration session"
                     )
 
+    preconfigured_registration_session = _get_preconfigured_registration_session(
+        resolved_remote_registry.client
+    )
+    if preconfigured_registration_session:
+        registration_session_id = preconfigured_registration_session["registration_session_id"]
+        registration_session_mode = preconfigured_registration_session.get("mode")
+        logger.debug(
+            "Using preconfigured remote registration session with GLaaS: %s (mode=%s)",
+            registration_session_id,
+            registration_session_mode,
+        )
+        return PreparedPublishSession(
+            session_hash=session_hash,
+            session_url=None,
+            registration_session_id=registration_session_id,
+            registration_session_mode=registration_session_mode,
+        )
+
     supports_anonymous_public_path = (
         not has_access_token and not has_ssh_auth and anonymous_public_capable
     )
@@ -427,3 +445,20 @@ def prepare_publish_session(
         session_hash=session_hash,
         session_url=session_result.session_url,
     )
+
+
+def _get_preconfigured_registration_session(client: Any) -> dict[str, str] | None:
+    getter = getattr(client, "preconfigured_registration_session", None)
+    if not callable(getter):
+        return None
+    result = getter()
+    if not isinstance(result, dict):
+        return None
+    registration_session_id = result.get("registration_session_id")
+    if not isinstance(registration_session_id, str) or not registration_session_id.strip():
+        return None
+    mode = result.get("mode")
+    return {
+        "registration_session_id": registration_session_id.strip(),
+        **({"mode": mode.strip()} if isinstance(mode, str) and mode.strip() else {}),
+    }

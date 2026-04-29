@@ -39,6 +39,7 @@ def prepare_register_execution(
     dry_run: bool,
     session_hash_override: str | None,
     logger: ILogger,
+    no_tag: bool = False,
     lineage: LineageData | None = None,
 ) -> PreparedRegisterExecution:
     """Resolve the local context needed to execute a register workflow."""
@@ -54,6 +55,9 @@ def prepare_register_execution(
         tagging_enabled = config_get("registration.tagging.enabled")
         if tagging_enabled is None:
             tagging_enabled = True
+
+    if no_tag:
+        tagging_enabled = False
 
     if not dry_run and tagging_enabled and git_context.commit:
         git_state = ensure_clean_git_repo(

@@ -70,6 +70,11 @@ def collect_register_lineage(
             lineage_collector=lineage_collector,
             session_service=session_service,
         )
+    if target.kind == "active_session":
+        return _collect_active_session_lineage(
+            roar_dir=roar_dir,
+            lineage_collector=lineage_collector,
+        )
     if target.kind == "artifact_path":
         return _collect_artifact_path_lineage(
             artifact_path=target.value,
@@ -128,6 +133,28 @@ def _collect_step_lineage(
             lineage=lineage,
             session_id=int(lineage.pipeline["id"]) if lineage.pipeline else None,
             artifact_hash=select_representative_hash(lineage),
+        ),
+        None,
+    )
+
+
+def _collect_active_session_lineage(
+    *,
+    roar_dir: Path,
+    lineage_collector: LineageCollector,
+) -> tuple[CollectedRegisterLineage | None, str | None]:
+    with create_database_context(roar_dir) as db_ctx:
+        session = db_ctx.sessions.get_active()
+        if not session:
+            return None, "No active session. Run 'roar run' to create a session first."
+        lineage = lineage_collector.collect_session(int(session["id"]), roar_dir)
+
+    return (
+        CollectedRegisterLineage(
+            lineage=lineage,
+            session_id=int(session["id"]),
+            artifact_hash="",
+            session_hash_override=None,
         ),
         None,
     )

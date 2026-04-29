@@ -1,6 +1,7 @@
 """GLaaS client for communicating with the Graph Lineage-as-a-Service server."""
 
 import contextlib
+import os
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -89,8 +90,13 @@ class GlaasClient:
                 allow_public_without_binding=allow_public_without_binding,
             )
         )
-        self._registration_session_mode: str | None = None
-        self._registration_session_token: str | None = None
+        self._registration_session_id: str | None = _env_str("ROAR_REGISTRATION_SESSION_ID")
+        self._registration_session_mode: str | None = _env_str(
+            "ROAR_REGISTRATION_SESSION_MODE"
+        )
+        self._registration_session_token: str | None = _env_str(
+            "ROAR_REGISTRATION_SESSION_TOKEN"
+        )
 
     @property
     def publish_auth(self) -> PublishAuthContext:
@@ -196,15 +202,24 @@ class GlaasClient:
         return auth_mode == "authenticated"
 
     def _registration_session_auth_header(self) -> str | None:
-        if (
-            self._registration_session_mode == "anonymous_public"
-            and isinstance(self._registration_session_token, str)
-            and self._registration_session_token.strip()
-        ):
+        if isinstance(self._registration_session_token, str) and self._registration_session_token.strip():
             return f"RegistrationSession {self._registration_session_token.strip()}"
         return None
 
+    def has_preconfigured_registration_session(self) -> bool:
+        return bool(self._registration_session_id and self._registration_session_token)
+
+    def preconfigured_registration_session(self) -> dict[str, str] | None:
+        if not self.has_preconfigured_registration_session():
+            return None
+        result = {
+            "registration_session_id": self._registration_session_id or "",
+            "mode": self._registration_session_mode or "preconfigured",
+        }
+        return result
+
     def _clear_registration_session_auth(self) -> None:
+        self._registration_session_id = None
         self._registration_session_mode = None
         self._registration_session_token = None
 
@@ -566,7 +581,11 @@ class GlaasClient:
             auth_header_value=self._registration_session_auth_header(),
             allow_auth_fallback=False,
         )
-        if error is None and self._registration_session_mode == "anonymous_public":
+        if error is None and self._registration_session_mode in {
+            "anonymous_public",
+            "treqs_brokered",
+            "preconfigured",
+        }:
             self._clear_registration_session_auth()
         return result, error
 
@@ -781,3 +800,11 @@ class GlaasClient:
         """
         result, error = self._request("GET", f"/api/v1/sessions/{session_hash}")
         return result, error
+
+
+def _env_str(name: str) -> str | None:
+    value = os.environ.get(name)
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
