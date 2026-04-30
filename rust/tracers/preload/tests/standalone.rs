@@ -188,10 +188,7 @@ fn standalone_preload_tracer_emits_msgpack_report() {
         report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
     );
     let target_file = target_file.unwrap();
-    assert!(
-        target_file.read,
-        "target file should be marked as read"
-    );
+    assert!(target_file.read, "target file should be marked as read");
     assert!(
         target_file.written,
         "target file should be marked as written"

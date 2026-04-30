@@ -59,6 +59,23 @@ fn attach_all_tracepoints(bpf: &mut Ebpf) -> Result<()> {
         "sys_exit_copy_file_range",
     )?;
 
+    // rename / link path publication
+    attach_tp(bpf, "sys_enter_rename", "syscalls", "sys_enter_rename")?;
+    attach_tp(bpf, "sys_exit_rename", "syscalls", "sys_exit_rename")?;
+    attach_tp(bpf, "sys_enter_renameat", "syscalls", "sys_enter_renameat")?;
+    attach_tp(bpf, "sys_exit_renameat", "syscalls", "sys_exit_renameat")?;
+    attach_tp(
+        bpf,
+        "sys_enter_renameat2",
+        "syscalls",
+        "sys_enter_renameat2",
+    )?;
+    attach_tp(bpf, "sys_exit_renameat2", "syscalls", "sys_exit_renameat2")?;
+    attach_tp(bpf, "sys_enter_link", "syscalls", "sys_enter_link")?;
+    attach_tp(bpf, "sys_exit_link", "syscalls", "sys_exit_link")?;
+    attach_tp(bpf, "sys_enter_linkat", "syscalls", "sys_enter_linkat")?;
+    attach_tp(bpf, "sys_exit_linkat", "syscalls", "sys_exit_linkat")?;
+
     // dup2 / dup3
     attach_tp(bpf, "sys_enter_dup2", "syscalls", "sys_enter_dup2")?;
     attach_tp(bpf, "sys_exit_dup2", "syscalls", "sys_exit_dup2")?;

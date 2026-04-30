@@ -183,6 +183,27 @@ pub fn resolve_path(pid: u32, raw_path: &str) -> String {
     resolve_runtime_path(raw_path, pid)
 }
 
+/// Resolve an *at syscall path relative to its dirfd when possible.
+pub fn resolve_at_path(pid: u32, dirfd: u64, raw_path: &str) -> String {
+    let dirfd_i32 = dirfd as i32;
+    if raw_path.starts_with('/') || dirfd == u64::MAX || dirfd_i32 == libc::AT_FDCWD {
+        return resolve_path(pid, raw_path);
+    }
+
+    if dirfd_i32 >= 0 {
+        let fd_link = format!("/proc/{pid}/fd/{dirfd_i32}");
+        if let Ok(base) = std::fs::read_link(fd_link) {
+            let full_path = base.join(raw_path);
+            if let Ok(canonical) = full_path.canonicalize() {
+                return canonical.to_string_lossy().into_owned();
+            }
+            return full_path.to_string_lossy().into_owned();
+        }
+    }
+
+    resolve_path(pid, raw_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

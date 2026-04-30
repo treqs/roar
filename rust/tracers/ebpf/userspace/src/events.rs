@@ -1,6 +1,6 @@
 use roar_ebpf_common::{EventType, LargeEvent, SmallEvent, MAX_PATH_LEN, TAG_LARGE, TAG_SMALL};
 
-use crate::state::{resolve_path, TracerState};
+use crate::state::{resolve_at_path, resolve_path, TracerState};
 
 /// Extract a null-terminated string from a fixed-size byte buffer.
 pub fn path_from_bytes(buf: &[u8; MAX_PATH_LEN]) -> String {
@@ -88,7 +88,13 @@ fn process_small_event(state: &mut TracerState, event: &SmallEvent) {
         }
         EventType::PRead => {
             if event.ret_val > 0 {
-                state.handle_pread_with_thread(pid, fd, event.arg1, event.ret_val as u64, thread_id);
+                state.handle_pread_with_thread(
+                    pid,
+                    fd,
+                    event.arg1,
+                    event.ret_val as u64,
+                    thread_id,
+                );
             }
         }
         EventType::PWrite => {
@@ -176,9 +182,9 @@ fn process_large_event(state: &mut TracerState, event: &LargeEvent) {
             state.handle_open(pid, fd, path, flags);
         }
         EventType::Rename => {
-            // Destination path is "written"
+            // Destination path from a rename/link-style publication is "written".
             let raw_path = path_from_bytes(&event.path);
-            let path = resolve_path(pid, &raw_path);
+            let path = resolve_at_path(pid, event.arg1, &raw_path);
             if event.ret_val >= 0 {
                 state.mark_path_written(path);
             }
@@ -381,6 +387,55 @@ mod tests {
     }
 
     #[test]
+    fn test_process_large_event_link_publication_marks_destination_written() {
+        let mut state = TracerState::new(None);
+
+        let mut path = [0u8; MAX_PATH_LEN];
+        let p = b"/tmp/out/artifact.txt";
+        path[..p.len()].copy_from_slice(p);
+
+        let event = LargeEvent {
+            pid: 1,
+            event_type: EventType::Rename as u16,
+            _pad: 0,
+            ret_val: 0,
+            arg0: 0,
+            arg1: u64::MAX,
+            path,
+        };
+
+        process_large_event(&mut state, &event);
+
+        let report = state.build_report();
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].path, "/tmp/out/artifact.txt");
+        assert!(report.files[0].written);
+    }
+
+    #[test]
+    fn test_process_large_event_failed_link_publication_ignored() {
+        let mut state = TracerState::new(None);
+
+        let mut path = [0u8; MAX_PATH_LEN];
+        let p = b"/tmp/out/artifact.txt";
+        path[..p.len()].copy_from_slice(p);
+
+        let event = LargeEvent {
+            pid: 1,
+            event_type: EventType::Rename as u16,
+            _pad: 0,
+            ret_val: -1,
+            arg0: 0,
+            arg1: u64::MAX,
+            path,
+        };
+
+        process_large_event(&mut state, &event);
+
+        assert!(state.build_report().files.is_empty());
+    }
+
+    #[test]
     fn test_process_event_raw_bytes_small() {
         let mut state = TracerState::new(None);
         state.handle_open(1, 3, "/tmp/test.txt".to_string(), 0);
@@ -516,9 +571,9 @@ mod tests {
             thread_id: 11,
             event_type: EventType::PRead as u16,
             _pad: 0,
-            ret_val: 4096,  // bytes read
-            arg0: 3,        // fd
-            arg1: 1024,     // offset
+            ret_val: 4096, // bytes read
+            arg0: 3,       // fd
+            arg1: 1024,    // offset
         };
 
         process_small_event(&mut state, &event);
@@ -539,9 +594,9 @@ mod tests {
             thread_id: 11,
             event_type: EventType::PWrite as u16,
             _pad: 0,
-            ret_val: 2048,  // bytes written
-            arg0: 3,        // fd
-            arg1: 512,      // offset
+            ret_val: 2048, // bytes written
+            arg0: 3,       // fd
+            arg1: 512,     // offset
         };
 
         process_small_event(&mut state, &event);
@@ -561,9 +616,9 @@ mod tests {
             thread_id: 11,
             event_type: EventType::MmapRead as u16,
             _pad: 0,
-            ret_val: 65536,  // mmap length
-            arg0: 3,         // fd
-            arg1: 0,         // offset
+            ret_val: 65536, // mmap length
+            arg0: 3,        // fd
+            arg1: 0,        // offset
         };
 
         process_small_event(&mut state, &event);
@@ -582,9 +637,9 @@ mod tests {
             thread_id: 11,
             event_type: EventType::MmapWrite as u16,
             _pad: 0,
-            ret_val: 4096,  // mmap length
-            arg0: 3,        // fd
-            arg1: 0,        // offset
+            ret_val: 4096, // mmap length
+            arg0: 3,       // fd
+            arg1: 0,       // offset
         };
 
         process_small_event(&mut state, &event);

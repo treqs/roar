@@ -624,6 +624,130 @@ fn try_sys_exit_copy_file_range(ctx: &TracePointContext) -> Result<(), i64> {
     Ok(())
 }
 
+// ── rename / link path publication ──────────────────────────────────────────
+// File-publication syscalls make their destination path visible as a produced file.
+
+#[inline(always)]
+fn stash_path_publish_entry(syscall_nr: u64, dirfd: u64, path_ptr: u64) -> Result<(), i64> {
+    let scratch = get_scratch().ok_or(1i64)?;
+    unsafe {
+        (*scratch).syscall_nr = syscall_nr;
+        (*scratch).arg0 = 0;
+        (*scratch).arg1 = dirfd;
+        (*scratch).arg2 = 0;
+        (*scratch).arg3 = 0;
+        (*scratch).arg4 = 0;
+        core::ptr::write_bytes((*scratch).path.as_mut_ptr(), 0, MAX_PATH_LEN);
+        let _ = aya_ebpf::helpers::bpf_probe_read_user_str_bytes(
+            path_ptr as *const u8,
+            &mut (*scratch).path,
+        );
+    }
+    stash_scratch();
+    Ok(())
+}
+
+#[inline(always)]
+fn try_sys_enter_path_publish(
+    ctx: &TracePointContext,
+    syscall_nr: u64,
+    dirfd_arg_index: i64,
+    path_arg_index: usize,
+) -> Result<(), i64> {
+    let pid = current_pid();
+    if !pid_tracked(pid) {
+        return Ok(());
+    }
+
+    let dirfd = if dirfd_arg_index >= 0 {
+        unsafe { read_sys_enter_arg(ctx, dirfd_arg_index as usize)? }
+    } else {
+        u64::MAX
+    };
+    let path_ptr = unsafe { read_sys_enter_arg(ctx, path_arg_index)? };
+    stash_path_publish_entry(syscall_nr, dirfd, path_ptr)
+}
+
+#[inline(always)]
+fn try_sys_exit_path_publish(ctx: &TracePointContext) -> Result<(), i64> {
+    let pid = current_pid();
+    if !pid_tracked(pid) {
+        return Ok(());
+    }
+
+    let key = current_pid_tgid();
+    let args = unsafe { PENDING_ARGS.get(&key).ok_or(1i64)? };
+    let dirfd = args.arg1;
+    let ret = unsafe { read_sys_exit_ret(ctx)? };
+
+    if ret >= 0 {
+        emit_large_direct(pid, EventType::Rename, ret, 0, dirfd, args.path.as_ptr());
+    }
+
+    let _ = PENDING_ARGS.remove(&key);
+    Ok(())
+}
+
+#[tracepoint]
+pub fn sys_enter_rename(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_enter_path_publish(&ctx, roar_ebpf_common::syscall_nr::RENAME, -1, 1);
+    0
+}
+
+#[tracepoint]
+pub fn sys_exit_rename(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_exit_path_publish(&ctx);
+    0
+}
+
+#[tracepoint]
+pub fn sys_enter_renameat(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_enter_path_publish(&ctx, roar_ebpf_common::syscall_nr::RENAMEAT, 2, 3);
+    0
+}
+
+#[tracepoint]
+pub fn sys_exit_renameat(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_exit_path_publish(&ctx);
+    0
+}
+
+#[tracepoint]
+pub fn sys_enter_renameat2(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_enter_path_publish(&ctx, roar_ebpf_common::syscall_nr::RENAMEAT2, 2, 3);
+    0
+}
+
+#[tracepoint]
+pub fn sys_exit_renameat2(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_exit_path_publish(&ctx);
+    0
+}
+
+#[tracepoint]
+pub fn sys_enter_link(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_enter_path_publish(&ctx, roar_ebpf_common::syscall_nr::LINK, -1, 1);
+    0
+}
+
+#[tracepoint]
+pub fn sys_exit_link(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_exit_path_publish(&ctx);
+    0
+}
+
+#[tracepoint]
+pub fn sys_enter_linkat(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_enter_path_publish(&ctx, roar_ebpf_common::syscall_nr::LINKAT, 2, 3);
+    0
+}
+
+#[tracepoint]
+pub fn sys_exit_linkat(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_exit_path_publish(&ctx);
+    0
+}
+
 // ── dup2 / dup3 ──────────────────────────────────────────────────────────────
 // Shell uses dup2 for I/O redirections.
 
