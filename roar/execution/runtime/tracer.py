@@ -6,6 +6,7 @@ Handles tracer binary discovery and process execution via the tracer.
 
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -69,6 +70,30 @@ class TracerService:
         except Exception:
             pass
         return True
+
+    def _runtime_pythonpath_entries(self) -> list[str]:
+        """Return Roar runtime import roots for injected child interpreters."""
+        entries: list[str] = []
+        seen: set[str] = set()
+
+        def add(path: str | Path) -> None:
+            resolved = str(Path(path).resolve())
+            if resolved in seen or not os.path.exists(resolved):
+                return
+            seen.add(resolved)
+            entries.append(resolved)
+
+        # The installed package root, or the source checkout root for editable installs.
+        add(Path(__file__).resolve().parents[3])
+
+        # Editable installs keep dependencies in the parent interpreter's site-packages.
+        for path in sys.path:
+            if not path:
+                continue
+            if "site-packages" in path or "dist-packages" in path:
+                add(path)
+
+        return entries
 
     def _find_ptrace_tracer(self) -> str | None:
         """Find the roar-tracer (ptrace) binary."""
@@ -386,9 +411,14 @@ class TracerService:
         if extra_env:
             env.update(extra_env)
 
-        # inject/ is now in the same directory as this file
-        inject_dir = str(Path(__file__).parent / "inject")
-        env["PYTHONPATH"] = inject_dir + os.pathsep + env.get("PYTHONPATH", "")
+        # Make sitecustomize discoverable while letting the workload's own venv
+        # keep precedence over Roar's runtime dependencies.
+        inject_dir = str(Path(__file__).resolve().parent / "inject")
+        existing_pythonpath = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            f"{inject_dir}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else inject_dir
+        )
+        env["ROAR_RUNTIME_PYTHONPATH"] = os.pathsep.join(self._runtime_pythonpath_entries())
         env["ROAR_LOG_FILE"] = inject_log_file
         env["ROAR_WRAP"] = "1"
         env["ROAR_PROJECT_DIR"] = str(roar_dir.parent)

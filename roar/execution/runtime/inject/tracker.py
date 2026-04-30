@@ -97,6 +97,23 @@ def get_used_packages(
     return used
 
 
+def get_active_runtime_pythonpath(environ: Mapping[str, str]) -> tuple[str, ...]:
+    entries: list[str] = []
+    for raw_path in environ.get("ROAR_RUNTIME_PYTHONPATH_ACTIVE", "").split(os.pathsep):
+        if not raw_path:
+            continue
+        with contextlib.suppress(Exception):
+            entries.append(os.path.abspath(raw_path).rstrip(os.sep) + os.sep)
+    return tuple(entries)
+
+
+def is_under_any_runtime_path(path: str, runtime_paths: Sequence[str]) -> bool:
+    if not runtime_paths:
+        return False
+    abs_path = os.path.abspath(path)
+    return any(abs_path.startswith(runtime_path) for runtime_path in runtime_paths)
+
+
 class RuntimeInjectionTracker:
     """Capture generic process activity for the parent-side recorder."""
 
@@ -160,11 +177,16 @@ class RuntimeInjectionTracker:
         if not self._log_file:
             return
 
+        runtime_pythonpath = get_active_runtime_pythonpath(self._environ)
         modules_files = sorted(
             os.path.abspath(getattr(module, "__file__", ""))
             for module in sys.modules.values()
             if getattr(module, "__file__", None)
             and not os.path.abspath(getattr(module, "__file__", "")).startswith(self._inject_dir)
+            and not is_under_any_runtime_path(
+                os.path.abspath(getattr(module, "__file__", "")),
+                runtime_pythonpath,
+            )
         )
         installed_packages = get_installed_packages()
         used_packages = get_used_packages(modules_files, installed_packages)
