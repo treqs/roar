@@ -107,6 +107,45 @@ fn main() {
         std::process::exit(1);
     }
 
+    // --- hard-link publication test: write temp, link final, unlink temp ---
+    let link_tmp = format!("{}.linked#1", c_path.to_str().unwrap());
+    let link_final = format!("{}.linked", c_path.to_str().unwrap());
+    let c_link_tmp = CString::new(link_tmp).expect("link temp path contains interior NUL");
+    let c_link_final = CString::new(link_final).expect("link final path contains interior NUL");
+    let link_fd = unsafe {
+        libc::open(
+            c_link_tmp.as_ptr(),
+            libc::O_CREAT | libc::O_TRUNC | libc::O_WRONLY,
+            0o644,
+        )
+    };
+    if link_fd < 0 {
+        eprintln!("failed to open hard-link temp for writing");
+        std::process::exit(1);
+    }
+    let link_write_rc = unsafe {
+        libc::write(
+            link_fd,
+            payload.as_ptr() as *const libc::c_void,
+            payload.len(),
+        )
+    };
+    unsafe {
+        libc::close(link_fd);
+    }
+    if link_write_rc < 0 || link_write_rc as usize != payload.len() {
+        eprintln!("failed to write hard-link temp payload");
+        std::process::exit(1);
+    }
+    if unsafe { libc::link(c_link_tmp.as_ptr(), c_link_final.as_ptr()) } != 0 {
+        eprintln!("hard link failed");
+        std::process::exit(1);
+    }
+    if unsafe { libc::unlink(c_link_tmp.as_ptr()) } != 0 {
+        eprintln!("hard-link temp unlink failed");
+        std::process::exit(1);
+    }
+
     // --- truncate test: truncate the file to a smaller size ---
     if unsafe { libc::truncate(c_path.as_ptr(), 5) } != 0 {
         eprintln!("truncate failed");
@@ -116,13 +155,7 @@ fn main() {
     // --- unlink test: create a temp file then unlink it ---
     let unlink_path = format!("{}.unlink_test", c_path.to_str().unwrap());
     let c_unlink = CString::new(unlink_path).expect("unlink path contains interior NUL");
-    let unlink_fd = unsafe {
-        libc::open(
-            c_unlink.as_ptr(),
-            libc::O_CREAT | libc::O_WRONLY,
-            0o644,
-        )
-    };
+    let unlink_fd = unsafe { libc::open(c_unlink.as_ptr(), libc::O_CREAT | libc::O_WRONLY, 0o644) };
     if unlink_fd >= 0 {
         unsafe { libc::close(unlink_fd) };
         if unsafe { libc::unlink(c_unlink.as_ptr()) } != 0 {

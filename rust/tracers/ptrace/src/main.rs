@@ -33,8 +33,10 @@ const SYS_SENDFILE: u64 = 40; // zero-copy file-to-file/socket
 const SYS_CHDIR: u64 = 80;
 const SYS_FCHDIR: u64 = 81;
 const SYS_RENAME: u64 = 82; // rename(oldpath, newpath)
+const SYS_LINK: u64 = 86; // link(oldpath, newpath)
 const SYS_OPENAT: u64 = 257;
 const SYS_RENAMEAT: u64 = 264; // renameat(olddirfd, oldpath, newdirfd, newpath)
+const SYS_LINKAT: u64 = 265; // linkat(olddirfd, oldpath, newdirfd, newpath, flags)
 const SYS_PREADV: u64 = 295; // positional scatter read
 const SYS_PWRITEV: u64 = 296; // positional gather write
 const SYS_RENAMEAT2: u64 = 316; // renameat2 with flags
@@ -57,8 +59,10 @@ const TRACKED_SYSCALLS: &[u64] = &[
     SYS_CHDIR,
     SYS_FCHDIR,
     SYS_RENAME,
+    SYS_LINK,
     SYS_OPENAT,
     SYS_RENAMEAT,
+    SYS_LINKAT,
     SYS_PREADV,
     SYS_PWRITEV,
     SYS_RENAMEAT2,
@@ -131,8 +135,9 @@ struct TracerState {
     awaiting_exit: HashSet<i32>, // PIDs waiting for syscall exit stop
     pending_opens: HashMap<i32, (String, u64)>, // pid -> (path, flags)
     pending_writes: HashMap<i32, (String, u32)>, // tid -> (path, thread_id)
+    pending_path_writes: HashMap<i32, (String, Option<u32>)>, // pid -> (destination path, thread_id)
     pending_closes: HashMap<i32, i32>, // pid -> fd (close syscalls pending confirmation)
-    pending_chdirs: HashMap<i32, ()>, // pid -> () (chdir pending confirmation)
+    pending_chdirs: HashMap<i32, ()>,  // pid -> () (chdir pending confirmation)
     pending_fchdirs: HashMap<i32, ()>, // pid -> () (fchdir pending confirmation)
     active_pids: HashSet<i32>,
 
@@ -148,6 +153,7 @@ impl TracerState {
             awaiting_exit: HashSet::new(),
             pending_opens: HashMap::new(),
             pending_writes: HashMap::new(),
+            pending_path_writes: HashMap::new(),
             pending_closes: HashMap::new(),
             pending_chdirs: HashMap::new(),
             pending_fchdirs: HashMap::new(),
@@ -237,6 +243,11 @@ fn needs_exit_stop(syscall_num: u64) -> bool {
             | SYS_PWRITEV2
             | SYS_SENDFILE
             | SYS_COPY_FILE_RANGE
+            | SYS_RENAME
+            | SYS_LINK
+            | SYS_RENAMEAT
+            | SYS_LINKAT
+            | SYS_RENAMEAT2
             | SYS_CHDIR
             | SYS_FCHDIR
     )
@@ -353,30 +364,43 @@ fn handle_syscall_entry(
         }
         SYS_RENAME => {
             // rename(oldpath, newpath): rdi=oldpath, rsi=newpath
-            // The destination (newpath) is effectively written
+            // The destination (newpath) is written only if the syscall succeeds.
             if let Some(newpath) = read_string_from_tracee(pid, regs.rsi) {
                 let abs_path = resolve_path(&newpath, pid_raw, &mut state.cwd_cache);
-                if let Some(pid_u32) = pid_u32 {
-                    state
-                        .fd_tracker
-                        .mark_path_written_with_thread(abs_path, pid_u32);
-                } else {
-                    state.fd_tracker.mark_path_written(abs_path);
-                }
+                state
+                    .pending_path_writes
+                    .insert(pid_raw, (abs_path, pid_u32));
+            }
+        }
+        SYS_LINK => {
+            // link(oldpath, newpath): rdi=oldpath, rsi=newpath
+            // Do not mark the source as written; the destination is published on success.
+            if let Some(newpath) = read_string_from_tracee(pid, regs.rsi) {
+                let abs_path = resolve_path(&newpath, pid_raw, &mut state.cwd_cache);
+                state
+                    .pending_path_writes
+                    .insert(pid_raw, (abs_path, pid_u32));
             }
         }
         SYS_RENAMEAT | SYS_RENAMEAT2 => {
-            // renameat(olddirfd, oldpath, newdirfd, newpath): rsi=oldpath, r10=newpath
-            // The destination (newpath) is effectively written
+            // renameat(olddirfd, oldpath, newdirfd, newpath): rdx=newdirfd, r10=newpath
+            // renameat2 has the same first four arguments plus flags in r8.
             if let Some(newpath) = read_string_from_tracee(pid, regs.r10) {
-                let abs_path = resolve_path(&newpath, pid_raw, &mut state.cwd_cache);
-                if let Some(pid_u32) = pid_u32 {
-                    state
-                        .fd_tracker
-                        .mark_path_written_with_thread(abs_path, pid_u32);
-                } else {
-                    state.fd_tracker.mark_path_written(abs_path);
-                }
+                let new_dir_fd = regs.rdx as i32;
+                let abs_path = resolve_at_path(&newpath, new_dir_fd, pid_raw, &mut state.cwd_cache);
+                state
+                    .pending_path_writes
+                    .insert(pid_raw, (abs_path, pid_u32));
+            }
+        }
+        SYS_LINKAT => {
+            // linkat(olddirfd, oldpath, newdirfd, newpath, flags): rdx=newdirfd, r10=newpath
+            if let Some(newpath) = read_string_from_tracee(pid, regs.r10) {
+                let new_dir_fd = regs.rdx as i32;
+                let abs_path = resolve_at_path(&newpath, new_dir_fd, pid_raw, &mut state.cwd_cache);
+                state
+                    .pending_path_writes
+                    .insert(pid_raw, (abs_path, pid_u32));
             }
         }
         SYS_CHDIR => {
@@ -432,6 +456,19 @@ fn handle_syscall_exit(
                 }
             }
         }
+        SYS_RENAME | SYS_LINK | SYS_RENAMEAT | SYS_LINKAT | SYS_RENAMEAT2 => {
+            if let Some((path, thread_id)) = state.pending_path_writes.remove(&pid_raw) {
+                if ret_val == 0 {
+                    if let Some(thread_id) = thread_id {
+                        state
+                            .fd_tracker
+                            .mark_path_written_with_thread(path, thread_id);
+                    } else {
+                        state.fd_tracker.mark_path_written(path);
+                    }
+                }
+            }
+        }
         SYS_CHDIR => {
             if state.pending_chdirs.remove(&pid_raw).is_some() && ret_val == 0 {
                 // Invalidate CWD cache on successful chdir
@@ -457,6 +494,30 @@ fn resolve_path(path: &str, pid: i32, cwd_cache: &mut HashMap<u32, String>) -> S
         return path.to_string();
     }
     resolve_path_with_cache(path, pid as u32, cwd_cache)
+}
+
+fn resolve_at_path(
+    path: &str,
+    dirfd: i32,
+    pid: i32,
+    cwd_cache: &mut HashMap<u32, String>,
+) -> String {
+    if path.starts_with('/') || dirfd == libc::AT_FDCWD {
+        return resolve_path(path, pid, cwd_cache);
+    }
+
+    if pid > 0 && dirfd >= 0 {
+        let fd_link = format!("/proc/{pid}/fd/{dirfd}");
+        if let Ok(base) = fs::read_link(fd_link) {
+            let full_path = base.join(path);
+            if let Ok(canonical) = full_path.canonicalize() {
+                return canonical.to_string_lossy().to_string();
+            }
+            return full_path.to_string_lossy().to_string();
+        }
+    }
+
+    resolve_path(path, pid, cwd_cache)
 }
 
 // =============================================================================
@@ -856,6 +917,7 @@ fn trace_loop(state: &mut TracerState) -> i32 {
                 }
                 state.pending_chdirs.remove(&pid_raw);
                 state.pending_fchdirs.remove(&pid_raw);
+                state.pending_path_writes.remove(&pid_raw);
                 // Capture exit code of the root process
                 if state
                     .processes
@@ -875,6 +937,7 @@ fn trace_loop(state: &mut TracerState) -> i32 {
                 }
                 state.pending_chdirs.remove(&pid_raw);
                 state.pending_fchdirs.remove(&pid_raw);
+                state.pending_path_writes.remove(&pid_raw);
                 // If root process was signaled, reflect that
                 if state
                     .processes
