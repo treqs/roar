@@ -92,6 +92,33 @@ def test_register_cli_prints_next_steps_for_artifacts(tmp_path: Path) -> None:
     assert f"roar reproduce {artifact_hash}" in result.output
 
 
+def test_register_cli_prefers_returned_session_url(tmp_path: Path) -> None:
+    runner = CliRunner()
+    response = RegisterLineageResponse(
+        success=True,
+        session_hash="0123456789abcdef0123456789abcdef",
+        session_url="https://glaas.example/sessions/published-session",
+        jobs_registered=3,
+        artifacts_registered=4,
+        links_created=5,
+    )
+
+    with (
+        patch("roar.cli.commands.register.register_lineage_target", return_value=response),
+        patch(
+            "roar.cli.commands.register._resolve_glaas_web_url",
+            return_value="https://fallback.glaas.example",
+        ),
+    ):
+        result = runner.invoke(register, ["model.pt"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert "https://glaas.example/sessions/published-session" in result.output
+    assert (
+        "https://fallback.glaas.example/dag/0123456789abcdef0123456789abcdef" not in result.output
+    )
+
+
 def test_register_cli_dry_run_mentions_target(tmp_path: Path) -> None:
     runner = CliRunner()
     response = RegisterLineageResponse(

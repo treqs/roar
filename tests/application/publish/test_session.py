@@ -8,6 +8,7 @@ import pytest
 from roar.application.publish.session import PreparedPublishSession, prepare_publish_session
 from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import GitContext, SessionRegistrationResult
+from roar.integrations.glaas.registration.session import SessionRegistrationService
 
 
 def _git_context() -> GitContext:
@@ -28,6 +29,53 @@ def _lineage() -> LineageData:
                 "metadata": {"runner": "python"},
             }
         ]
+    )
+
+
+def test_session_registration_service_accepts_published_return_fields() -> None:
+    client = MagicMock()
+    client.register_session.return_value = (
+        {
+            "published_session_hash": "published-session",
+            "published_url": "https://glaas.example/sessions/published-session",
+            "created": True,
+        },
+        None,
+    )
+    service = SessionRegistrationService(client=client, logger=MagicMock())
+
+    result = service.register("prepared-session", _git_context())
+
+    assert result == SessionRegistrationResult(
+        success=True,
+        session_hash="published-session",
+        session_url="https://glaas.example/sessions/published-session",
+        created=True,
+    )
+
+
+def test_session_registration_service_finalizes_with_published_return_fields() -> None:
+    client = MagicMock()
+    client.finalize_registration_session.return_value = (
+        {
+            "published_session_hash": "published-session",
+            "published_url": "https://glaas.example/sessions/published-session",
+            "created": False,
+            "status": "closed",
+        },
+        None,
+    )
+    service = SessionRegistrationService(client=client, logger=MagicMock())
+
+    result = service.finalize_registration_session("reg-1", _git_context())
+
+    assert result == SessionRegistrationResult(
+        success=True,
+        session_hash="published-session",
+        session_url="https://glaas.example/sessions/published-session",
+        registration_session_id="reg-1",
+        created=False,
+        status="closed",
     )
 
 

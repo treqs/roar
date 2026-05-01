@@ -11,6 +11,7 @@ class RegisterLineageResponse:
 
     success: bool
     session_hash: str = ""
+    session_url: str | None = None
     artifact_hash: str = ""
     jobs_registered: int = 0
     artifacts_registered: int = 0

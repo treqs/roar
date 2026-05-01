@@ -37,6 +37,13 @@ def _resolve_public_flag(public: bool | None, *, start_dir: str | None = None) -
     return resolved_public, resolved_public
 
 
+def _display_session_url(response_session_url: str | None, web_url: str, session_hash: str) -> str:
+    """Prefer GLaaS' returned URL and fall back to the legacy local URL shape."""
+    if response_session_url:
+        return response_session_url
+    return f"{web_url}/dag/{session_hash}"
+
+
 def _warn_public_default() -> None:
     """Tell the user when config caused public visibility."""
     click.echo(
@@ -177,6 +184,7 @@ def register(
 
     web_url = _resolve_glaas_web_url(start_dir=str(ctx.cwd))
     session_preview = _preview_hash(response.session_hash) if response.session_hash else ""
+    session_url = _display_session_url(response.session_url, web_url, response.session_hash)
 
     # Format output
     if dry_run:
@@ -189,7 +197,7 @@ def register(
             click.echo(f"  Secrets to redact: {len(response.secrets_detected)} types")
         click.echo("")
         click.echo("GLaaS:")
-        click.echo(f"  Session:  {web_url}/dag/{response.session_hash}")
+        click.echo(f"  Session:  {session_url}")
         if response.artifact_hash:
             click.echo(f"  Artifact: {web_url}/artifact/{response.artifact_hash}")
     else:
@@ -210,7 +218,7 @@ def register(
 
         click.echo("")
         click.echo("GLaaS:")
-        click.echo(f"  Session:  {web_url}/dag/{response.session_hash}")
+        click.echo(f"  Session:  {session_url}")
         if response.artifact_hash:
             click.echo(f"  Artifact: {web_url}/artifact/{response.artifact_hash}")
             click.echo("")

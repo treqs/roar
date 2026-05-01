@@ -27,6 +27,7 @@ from .job_preparation import (
     refresh_job_artifact_references,
 )
 from .lineage import LineageCollector
+from .lineage_composites import build_lineage_composite_payloads
 from .registration import normalize_registration_hashes, normalize_registration_source_type
 from .secrets import detect_lineage_secrets, filter_lineage_secrets
 
@@ -82,13 +83,16 @@ def export_registration_package(
         )
 
     git_context = resolve_roar_git_context(request.cwd, logger=logger)
-    package, encoded = build_registration_package(
-        session=session,
-        lineage=lineage,
-        git_context=git_context,
-        cwd=request.cwd,
-        logger=logger,
-    )
+    with create_database_context(request.roar_dir) as db_ctx:
+        package, encoded = build_registration_package(
+            session=session,
+            lineage=lineage,
+            git_context=git_context,
+            cwd=request.cwd,
+            db_ctx=db_ctx,
+            session_hash=str(session.get("hash") or ""),
+            logger=logger,
+        )
 
     request.output.parent.mkdir(parents=True, exist_ok=True)
     request.output.write_bytes(encoded)
@@ -112,6 +116,9 @@ def build_registration_package(
     lineage: LineageData,
     git_context: GitContext,
     cwd: Path,
+    db_ctx: Any | None = None,
+    session_hash: str | None = None,
+    composite_builder: Any | None = None,
     logger: ILogger | None = None,
     created_at: str | None = None,
     producer_version: str | None = None,
@@ -164,7 +171,13 @@ def build_registration_package(
         "redaction": redaction,
     }
 
-    composites = _build_composite_records(redacted_lineage.artifacts, logger=resolved_logger)
+    composites = _build_composite_records(
+        redacted_lineage.artifacts,
+        db_ctx=db_ctx,
+        session_hash=session_hash or str(session.get("hash") or ""),
+        composite_builder=composite_builder,
+        logger=resolved_logger,
+    )
     if composites:
         package["composites"] = composites
 
@@ -232,9 +245,9 @@ def _apply_redaction(
     filtered_lineage, job_git_detections = _filter_job_git_repos(filtered_lineage, omit_filter)
     detected.extend(job_git_detections)
 
-    applied = bool(detected) or serialize_registration_package(_lineage_payload(filtered_lineage)) != (
-        serialize_registration_package(_lineage_payload(lineage))
-    )
+    applied = bool(detected) or serialize_registration_package(
+        _lineage_payload(filtered_lineage)
+    ) != (serialize_registration_package(_lineage_payload(lineage)))
     warning_ids = sorted(set(detected))
     return (
         filtered_lineage,
@@ -410,8 +423,23 @@ def _link_artifact_hash(item: dict[str, Any]) -> str | None:
 def _build_composite_records(
     artifacts: list[dict[str, Any]],
     *,
+    db_ctx: Any | None,
+    session_hash: str,
+    composite_builder: Any | None,
     logger: ILogger,
 ) -> list[dict[str, Any]]:
+    if db_ctx is not None:
+        from .composite_builder import CompositeArtifactBuilder
+
+        payloads = build_lineage_composite_payloads(
+            db_ctx=db_ctx,
+            lineage_artifacts=artifacts,
+            session_hash=session_hash,
+            composite_builder=composite_builder or CompositeArtifactBuilder(),
+            logger=logger,
+        )
+        return [_json_safe(item.payload) for item in payloads]
+
     records: list[dict[str, Any]] = []
     for artifact in _sort_artifacts(artifacts):
         if str(artifact.get("kind") or "primitive") != "composite":

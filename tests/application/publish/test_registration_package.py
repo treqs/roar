@@ -69,6 +69,50 @@ def _lineage() -> LineageData:
     )
 
 
+def _lineage_with_composite() -> LineageData:
+    primitive_digest = "a" * 64
+    composite_digest = "c" * 64
+    return LineageData(
+        jobs=[
+            {
+                "id": 1,
+                "job_uid": "job-1",
+                "timestamp": 123.0,
+                "command": "python generate.py",
+                "step_number": 1,
+                "git_commit": "deadbeef",
+                "git_branch": "main",
+                "duration_seconds": 1.0,
+                "exit_code": 0,
+                "job_type": "run",
+                "_inputs": [{"hash": primitive_digest, "path": "inputs/source.csv"}],
+                "_outputs": [{"hash": composite_digest, "path": "outputs/dataset"}],
+                "_input_hashes": [primitive_digest],
+                "_output_hashes": [composite_digest],
+            }
+        ],
+        artifacts=[
+            {
+                "id": "artifact-input",
+                "size": 5,
+                "first_seen_path": "inputs/source.csv",
+                "kind": "primitive",
+                "hashes": [{"algorithm": "blake3", "digest": primitive_digest}],
+            },
+            {
+                "id": "artifact-composite",
+                "size": 13,
+                "first_seen_path": "outputs/dataset",
+                "kind": "composite",
+                "component_count": 2,
+                "hashes": [{"algorithm": "composite-blake3", "digest": composite_digest}],
+            },
+        ],
+        artifact_hashes={primitive_digest, composite_digest},
+        pipeline={"id": 7},
+    )
+
+
 def test_registration_package_shape_digest_counts_and_redaction(tmp_path: Path) -> None:
     package, encoded = build_registration_package(
         session={"id": 7, "hash": "local-hash", "created_at": 123.0},
@@ -121,6 +165,82 @@ def test_registration_package_shape_digest_counts_and_redaction(tmp_path: Path) 
     ]
     assert package["redaction"]["applied"] is True
     assert {warning["severity"] for warning in package["redaction"]["warnings"]} == {"warning"}
+
+
+def test_registration_package_exports_full_lineage_composite_payload(tmp_path: Path) -> None:
+    db_ctx = MagicMock()
+    db_ctx.composites = MagicMock()
+    db_ctx.composites.get_components.return_value = [
+        {
+            "relative_path": "part-000.json",
+            "leaf_kind": "file",
+            "component_algorithm": "blake3",
+            "component_digest": "d" * 64,
+            "component_size": 5,
+            "component_type": "application/json",
+        },
+        {
+            "relative_path": "part-001.json",
+            "leaf_kind": "file",
+            "component_algorithm": "blake3",
+            "component_digest": "e" * 64,
+            "component_size": 8,
+            "component_type": "application/json",
+        },
+    ]
+    db_ctx.composites.get_membership_index.return_value = None
+
+    package, _encoded = build_registration_package(
+        session={"id": 7, "hash": "session-hash-123", "created_at": 123.0},
+        lineage=_lineage_with_composite(),
+        git_context=GitContext(repo="repo", commit="deadbeef", branch="main"),
+        cwd=tmp_path,
+        db_ctx=db_ctx,
+        session_hash="session-hash-123",
+        created_at="2026-04-29T00:00:00Z",
+        producer_version="test-version",
+    )
+
+    assert package["manifest"]["artifact_count"] == 2
+    assert package["composites"] == [
+        {
+            "hash": "c" * 64,
+            "hashes": [{"algorithm": "composite-blake3", "digest": "c" * 64}],
+            "size": 13,
+            "source_type": None,
+            "session_hash": "session-hash-123",
+            "component_count_total": 2,
+            "components": [
+                {
+                    "relative_path": "part-000.json",
+                    "leaf_kind": "file",
+                    "component_algorithm": "blake3",
+                    "component_digest": "d" * 64,
+                    "component_size": 5,
+                    "component_type": "application/json",
+                },
+                {
+                    "relative_path": "part-001.json",
+                    "leaf_kind": "file",
+                    "component_algorithm": "blake3",
+                    "component_digest": "e" * 64,
+                    "component_size": 8,
+                    "component_type": "application/json",
+                },
+            ],
+            "membership_index": {
+                "total_components": 2,
+                "stored_components": 2,
+                "bloom_filter_base64": package["composites"][0]["membership_index"][
+                    "bloom_filter_base64"
+                ],
+                "bloom_bits": package["composites"][0]["membership_index"]["bloom_bits"],
+                "bloom_hashes": package["composites"][0]["membership_index"]["bloom_hashes"],
+                "bloom_version": 1,
+            },
+        }
+    ]
+    assert package["composites"][0]["membership_index"]["bloom_filter_base64"]
 
 
 def test_export_registration_package_writes_package_without_glaas_client(

@@ -175,7 +175,11 @@ def test_register_lineage_target_returns_preparation_error(tmp_path: Path) -> No
 
 
 def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -> None:
-    expected = RegisterResult(success=True, session_hash="a" * 64)
+    expected = RegisterResult(
+        success=True,
+        session_hash="a" * 64,
+        session_url="https://glaas.local/sessions/published",
+    )
     runtime = MagicMock()
     logger = MagicMock()
     collected = MagicMock()
@@ -222,7 +226,11 @@ def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -
             )
         )
 
-    assert response == RegisterLineageResponse(success=True, session_hash="a" * 64)
+    assert response == RegisterLineageResponse(
+        success=True,
+        session_hash="a" * 64,
+        session_url="https://glaas.local/sessions/published",
+    )
     finalize_register.assert_called_once_with(
         result_success=True,
         dry_run=False,
