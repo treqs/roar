@@ -24,7 +24,6 @@ def test_help_groups_are_built_from_command_specs() -> None:
     assert help_groups["Share and Publish"] == (
         "put",
         "register",
-        "export-registration-package",
         "get",
         "label",
     )
@@ -43,6 +42,15 @@ def test_help_does_not_list_composite_command() -> None:
 
     assert result.exit_code == 0, result.output
     assert "composite" not in result.output
+
+
+def test_help_hides_internal_export_registration_package_command() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "export-registration-package" not in result.output
+    assert "export-registration-package" in LAZY_COMMANDS
 
 
 def test_help_hides_experimental_account_commands_by_default() -> None:

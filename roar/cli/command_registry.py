@@ -14,6 +14,7 @@ class CommandSpec:
     attr_name: str
     short_help: str
     help_section: str | None = None
+    hidden: bool = False
 
 
 _HELP_SECTION_ORDER: tuple[str, ...] = (
@@ -111,6 +112,7 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "export_registration_package",
         "Export local lineage for server-side registration",
         "Share and Publish",
+        hidden=True,
     ),
     CommandSpec(
         "get", "roar.cli.commands.get", "get", "Download published artifacts", "Share and Publish"
@@ -198,10 +200,10 @@ def iter_command_specs() -> tuple[CommandSpec, ...]:
     return _COMMAND_SPECS
 
 
-def build_lazy_commands() -> dict[str, tuple[str, str, str]]:
+def build_lazy_commands() -> dict[str, tuple[str, str, str, bool]]:
     """Build the lazy-command registry consumed by ``LazyGroup``."""
     return {
-        spec.name: (spec.module_path, spec.attr_name, spec.short_help)
+        spec.name: (spec.module_path, spec.attr_name, spec.short_help, spec.hidden)
         for spec in iter_command_specs()
     }
 
@@ -210,7 +212,7 @@ def build_help_groups() -> tuple[tuple[str, tuple[str, ...]], ...]:
     """Build grouped help sections from registered command specs."""
     sections: dict[str, list[str]] = {section: [] for section in _HELP_SECTION_ORDER}
     for spec in iter_command_specs():
-        if spec.help_section is None:
+        if spec.hidden or spec.help_section is None:
             continue
         sections.setdefault(spec.help_section, []).append(spec.name)
 
