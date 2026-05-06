@@ -1,7 +1,10 @@
 """Tests for TracerService extra_env handling."""
 
+import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from roar.execution.runtime import tracer as tracer_module
 from roar.execution.runtime.tracer import TracerService
 
 
@@ -147,3 +150,35 @@ class TestTracerExtraEnv:
         assert env["ROAR_WRAP"] == "1"
         assert env["ROAR_PROJECT_DIR"] == str(tmp_path)
         assert env["ROAR_JOB_ID"] == "job-123"
+
+    def test_runtime_import_paths_do_not_shadow_existing_pythonpath(self, tmp_path, monkeypatch):
+        workload_pythonpath = str(tmp_path / "workload-site-packages")
+        monkeypatch.setenv("PYTHONPATH", workload_pythonpath)
+
+        svc = TracerService(package_path=tmp_path / "roar")
+        svc.resolve_execution_candidates = MagicMock(return_value=[("ptrace", "/fake/roar-tracer")])
+
+        mock_proc = MagicMock()
+        mock_proc.wait.return_value = 0
+        mock_proc.pid = 12345
+
+        roar_dir = tmp_path / ".roar"
+        roar_dir.mkdir()
+
+        with (
+            patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
+            patch("roar.integrations.config.access.load_config", return_value={}),
+        ):
+            svc.execute(
+                command=["python", "train.py"],
+                roar_dir=roar_dir,
+                signal_handler=_make_signal_handler(),
+            )
+
+        env = mock_popen.call_args.kwargs["env"]
+        pythonpath = env["PYTHONPATH"].split(os.pathsep)
+        inject_dir = str(Path(tracer_module.__file__).resolve().parent / "inject")
+        package_root = str(Path(tracer_module.__file__).resolve().parents[3])
+
+        assert pythonpath == [inject_dir, workload_pythonpath]
+        assert package_root in env["ROAR_RUNTIME_PYTHONPATH"].split(os.pathsep)

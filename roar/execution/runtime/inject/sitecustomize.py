@@ -1,5 +1,23 @@
+# ruff: noqa: E402
 import atexit
+import importlib.util
 import os
+import sys
+
+
+def _append_roar_runtime_pythonpath() -> None:
+    if importlib.util.find_spec("roar") is not None:
+        return
+    appended = []
+    for path in os.environ.get("ROAR_RUNTIME_PYTHONPATH", "").split(os.pathsep):
+        if path and path not in sys.path:
+            sys.path.append(path)
+            appended.append(path)
+    if appended:
+        os.environ["ROAR_RUNTIME_PYTHONPATH_ACTIVE"] = os.pathsep.join(appended)
+
+
+_append_roar_runtime_pythonpath()
 
 from roar.execution.framework.runtime_imports import RuntimeImportController
 from roar.execution.runtime.inject.tracker import RuntimeInjectionTracker

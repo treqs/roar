@@ -19,6 +19,41 @@ from ....core.validation import validate_session_registration
 from ..client import GlaasClient
 
 
+def _string_field(result: dict[str, object] | None, *keys: str) -> str | None:
+    if not isinstance(result, dict):
+        return None
+    for key in keys:
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _session_hash_field(
+    result: dict[str, object] | None, fallback: str | None = None
+) -> str | None:
+    return (
+        _string_field(
+            result,
+            "published_session_hash",
+            "lineage_published_session_hash",
+            "session_hash",
+            "hash",
+        )
+        or fallback
+    )
+
+
+def _session_url_field(result: dict[str, object] | None) -> str | None:
+    return _string_field(
+        result,
+        "published_url",
+        "lineage_published_url",
+        "session_url",
+        "url",
+    )
+
+
 class SessionRegistrationService(ISessionRegistrar):
     """
     Service for session registration operations.
@@ -128,16 +163,17 @@ class SessionRegistrationService(ISessionRegistrar):
                 error=error,
             )
 
-        session_url = result.get("url") if result else None
+        registered_session_hash = _session_hash_field(result, fallback=session_hash) or session_hash
+        session_url = _session_url_field(result)
         self._logger.debug(
             "Session registered successfully: %s, url=%s",
-            session_hash[:12],
+            registered_session_hash[:12],
             session_url,
         )
 
         return SessionRegistrationResult(
             success=True,
-            session_hash=session_hash,
+            session_hash=registered_session_hash,
             session_url=session_url,
             created=result.get("created") if result else None,
         )
@@ -207,13 +243,16 @@ class SessionRegistrationService(ISessionRegistrar):
             self._logger.warning("Registration session finalize failed: %s", error)
             return SessionRegistrationResult(success=False, session_hash="", error=error)
 
-        session_hash = result.get("hash") if result else None
+        session_hash = _session_hash_field(result)
         if not isinstance(session_hash, str) or not session_hash:
-            error_msg = "registration session finalize response did not include hash"
+            error_msg = (
+                "registration session finalize response did not include "
+                "published_session_hash or hash"
+            )
             self._logger.warning("Registration session finalize failed: %s", error_msg)
             return SessionRegistrationResult(success=False, session_hash="", error=error_msg)
 
-        session_url = result.get("url") if result else None
+        session_url = _session_url_field(result)
         self._logger.debug(
             "Registration session finalized successfully: %s -> %s",
             registration_session_id,

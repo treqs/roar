@@ -115,6 +115,7 @@ class RegisterResult:
 
     success: bool
     session_hash: str = ""
+    session_url: str | None = None
     artifact_hash: str = ""
     jobs_registered: int = 0
     artifacts_registered: int = 0
@@ -293,6 +294,7 @@ class RegisterService:
         composite_registrations: list[dict[str, Any]] = []
         registration_errors: list[str] = []
         finalized_session_hash = session_hash
+        finalized_session_url = prepared.session_url
         finalize_failed = False
         with Spinner("Publishing lineage to GLaaS...") as spin:
             refresh_job_artifact_references(lineage.jobs, lineage.artifacts)
@@ -326,6 +328,7 @@ class RegisterService:
                         )
                     else:
                         finalized_session_hash = finalize_result.session_hash
+                        finalized_session_url = finalize_result.session_url
 
                         if has_lineage_composites(lineage.artifacts):
                             spin.update("Registering composite artifacts...")
@@ -466,6 +469,7 @@ class RegisterService:
         return RegisterResult(
             success=success,
             session_hash=finalized_session_hash,
+            session_url=finalized_session_url,
             artifact_hash=artifact_hash,
             jobs_registered=batch_result.jobs_created,
             artifacts_registered=total_artifacts_registered,

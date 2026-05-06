@@ -500,6 +500,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         return RegisterLineageResponse(
             success=result.success,
             session_hash=result.session_hash,
+            session_url=result.session_url,
             artifact_hash=result.artifact_hash,
             jobs_registered=result.jobs_registered,
             artifacts_registered=result.artifacts_registered,
