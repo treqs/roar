@@ -35,8 +35,9 @@ def load_dag(
     expanded: bool = False,
     show_artifacts: bool = True,
     stale_only: bool = False,
+    session_ref: str | None = None,
 ) -> DagVisualization:
-    """Fetch the structured DAG for the active session."""
+    """Fetch the structured DAG for a session (active by default)."""
     return build_dag_visualization(
         DagQueryRequest(
             roar_dir=roar_dir,
@@ -45,8 +46,42 @@ def load_dag(
             use_color=False,
             show_artifacts=show_artifacts,
             stale_only=stale_only,
+            session_ref=session_ref,
         )
     )
+
+
+@dataclass(frozen=True)
+class SessionListing:
+    """Lightweight session row for the picker (avoids per-row heavyweight summaries)."""
+
+    hash: str
+    short_hash: str
+    created_at: float | None
+    is_active: bool
+    job_count: int
+
+
+def list_sessions(roar_dir: Path) -> list[SessionListing]:
+    """All sessions in this project, newest first, marking which is active."""
+    with create_query_database_context(roar_dir) as db_ctx:
+        active = db_ctx.sessions.get_active()
+        active_id = int(active["id"]) if active else None
+        rows: list[SessionListing] = []
+        for session in db_ctx.sessions.get_all():
+            sid = int(session["id"])
+            session_hash = session.get("hash") or ""
+            jobs = db_ctx.jobs.get_by_session(sid)
+            rows.append(
+                SessionListing(
+                    hash=session_hash,
+                    short_hash=session_hash[:12] if session_hash else "-",
+                    created_at=session.get("created_at"),
+                    is_active=(sid == active_id),
+                    job_count=len(jobs),
+                )
+            )
+    return rows
 
 
 def load_active_session(roar_dir: Path) -> ShowSessionSummary | None:
