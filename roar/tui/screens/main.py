@@ -90,6 +90,11 @@ class MainScreen(Screen):
         # Cached session listing for `[`/`]` navigation; refreshed when the
         # picker opens or when we paginate past the cached edges.
         self._session_listing: list[tui_data.SessionListing] = []
+        # What's actually showing in the detail pane right now. Distinct from
+        # the tree cursor — link clicks / `right`-Enter navigate the detail
+        # away from the tree, and the 5s auto-refresh has to refresh *that*
+        # entity, not whatever the tree cursor points at.
+        self._detail_target: dict | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -145,6 +150,7 @@ class MainScreen(Screen):
         pane = self.query_one("#detail-pane")
         if pane.has_class("-visible"):
             pane.remove_class("-visible")
+            self._detail_target = None
             self.query_one("#dag-tree", Tree).focus()
         else:
             self.app.exit()
@@ -207,23 +213,13 @@ class MainScreen(Screen):
 
     def action_open_artifact_path(self, path: str) -> None:
         """Click target for path links rendered inside detail panes."""
-        artifact = tui_data.load_artifact_by_path(self.roar_dir, self.cwd, path)
-        if artifact is None:
-            return
-        self.query_one("#artifact-detail", ArtifactDetail).update_artifact(
-            artifact, current_session_hash=self._current_session_hash_str()
-        )
-        self.query_one("#detail-switcher", ContentSwitcher).current = "artifact-detail"
+        self._populate_detail({"kind": "artifact", "path": path})
         self._reveal_detail()
         self._focus_detail()
 
     def action_open_job_uid(self, uid: str) -> None:
         """Click target for job-uid links (jumps cross-session via uid lookup)."""
-        job = tui_data.load_job(self.roar_dir, self.cwd, uid)
-        if job is None:
-            return
-        self.query_one("#job-detail", JobDetail).update_job(job)
-        self.query_one("#detail-switcher", ContentSwitcher).current = "job-detail"
+        self._populate_detail({"kind": "job_uid", "uid": uid})
         self._reveal_detail()
         self._focus_detail()
 
@@ -322,11 +318,14 @@ class MainScreen(Screen):
         # the tree renders, so defer restoration until the next refresh tick.
         self.call_after_refresh(self._restore_cursor, tree, saved_cursor)
 
-        # If detail pane is open, refresh its content too.
-        if self.query_one("#detail-pane").has_class("-visible"):
-            cursor = tree.cursor_node
-            if cursor is not None and cursor.data:
-                self._populate_detail(cursor.data)
+        # If detail pane is open, refresh whatever entity is *displayed* —
+        # not whatever the tree cursor currently points at. The user may have
+        # navigated to a different entity via a link.
+        if (
+            self.query_one("#detail-pane").has_class("-visible")
+            and self._detail_target is not None
+        ):
+            self._populate_detail(self._detail_target)
 
     def _format_session_info(self, session, dag) -> str:
         if session is None:
@@ -388,8 +387,18 @@ class MainScreen(Screen):
         return session.hash if session else None
 
     def _populate_detail(self, data: dict) -> None:
+        """Render `data` into the detail pane and remember it as the target.
+
+        Subsequent auto-refresh ticks re-fetch *this* entity rather than reading
+        from the tree cursor — important when the user has navigated away from
+        the cursor via a link click.
+        """
+        # Capture a snapshot up-front so the target survives even if `data`
+        # came from a tree node that gets cleared during the next reload.
+        self._detail_target = dict(data)
         switcher = self.query_one("#detail-switcher", ContentSwitcher)
-        if data.get("kind") == "step":
+        kind = data.get("kind")
+        if kind == "step":
             ref = _step_ref(data)
             job = tui_data.load_job(
                 self.roar_dir, self.cwd, ref, session_ref=self.session_ref
@@ -399,7 +408,18 @@ class MainScreen(Screen):
                 return
             self.query_one("#job-detail", JobDetail).update_job(job)
             switcher.current = "job-detail"
-        elif data.get("kind") == "artifact":
+        elif kind == "job_uid":
+            uid = data.get("uid")
+            if not uid:
+                switcher.current = "empty-detail"
+                return
+            job = tui_data.load_job(self.roar_dir, self.cwd, uid)
+            if job is None:
+                switcher.current = "empty-detail"
+                return
+            self.query_one("#job-detail", JobDetail).update_job(job)
+            switcher.current = "job-detail"
+        elif kind == "artifact":
             path = data.get("path")
             ahash = data.get("hash")
             artifact = None

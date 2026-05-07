@@ -287,8 +287,8 @@ class JobDetail(_DetailWithToc):
     ]
 
     def update_job(self, summary) -> None:
+        old_target = self._links[self._link_idx] if 0 <= self._link_idx < len(self._links) else None
         self._summary = summary
-        self._link_idx = -1
         links: list[tuple[str, str, str]] = []
         if summary.command:
             links.append(("command", summary.command, "command"))
@@ -299,6 +299,8 @@ class JobDetail(_DetailWithToc):
             ("artifact_path", a.path, "outputs") for a in summary.outputs if a.path
         )
         self._links = links
+        # Preserve highlight across auto-refreshes if the same target still exists.
+        self._link_idx = links.index(old_target) if old_target in links else -1
         self._render_sections()
 
     def _render_sections(self) -> None:
@@ -462,14 +464,15 @@ class ArtifactDetail(_DetailWithToc):
     ]
 
     def update_artifact(self, summary, current_session_hash: str | None = None) -> None:
+        old_target = self._links[self._link_idx] if 0 <= self._link_idx < len(self._links) else None
         self._summary = summary
         self._current_session_hash = current_session_hash
-        self._link_idx = -1
         self._links = [
             ("job_uid", j.job_uid, "producers") for j in summary.produced_by if j.job_uid
         ] + [
             ("job_uid", j.job_uid, "consumers") for j in summary.consumed_by if j.job_uid
         ]
+        self._link_idx = self._links.index(old_target) if old_target in self._links else -1
         self._render_sections()
 
     def _render_sections(self) -> None:
