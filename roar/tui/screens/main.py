@@ -50,6 +50,7 @@ class MainScreen(Screen):
         Binding("exclamation_mark", "app.open_launcher", "Run"),
         Binding("left_square_bracket", "prev_session", "Prev session"),
         Binding("right_square_bracket", "next_session", "Next session"),
+        Binding("s", "app.open_session_picker", "Sessions"),
         Binding("q", "back", "Back/Quit"),
         Binding("escape", "back", show=False),
         Binding("tab", "toggle_focus", "Focus tree/detail", show=False, priority=True),

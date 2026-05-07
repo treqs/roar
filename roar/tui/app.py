@@ -12,6 +12,7 @@ from .screens.launcher import LauncherScreen
 from .screens.log import LogScreen
 from .screens.main import MainScreen
 from .screens.search import SearchScreen
+from .screens.session_picker import SessionPickerScreen
 
 
 class TuiApp(App):
@@ -54,9 +55,23 @@ class TuiApp(App):
             self.notify(message, markup=True, timeout=8)
             top = self._main_screen()
             if top is not None:
-                top.action_refresh()
+                top._reload_dag()
 
         self.push_screen(LauncherScreen(self.roar_dir, self.cwd), _on_result)
+
+    def action_open_session_picker(self) -> None:
+        def _on_result(listing) -> None:
+            if listing is None:
+                return  # cancelled
+            top = self._main_screen()
+            if top is None:
+                return
+            top.session_ref = None if listing.is_active else listing.hash
+            top._reload_dag()
+
+        top = self._main_screen()
+        current_ref = top.session_ref if top is not None else None
+        self.push_screen(SessionPickerScreen(self.roar_dir, current_ref), _on_result)
 
     def _main_screen(self) -> MainScreen | None:
         for screen in reversed(self.screen_stack):
