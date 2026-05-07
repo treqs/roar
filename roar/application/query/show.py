@@ -374,6 +374,7 @@ def _build_artifact_summary(db_ctx, artifact: dict[str, Any]) -> ShowArtifactSum
             ShowArtifactJobSummary(
                 job_uid=cast(str | None, job_summary.get("job_uid")),
                 command=cast(str | None, job_summary.get("command")),
+                session_hash=cast(str | None, job_summary.get("session_hash")),
             )
             for job_summary in cast(list[dict[str, Any]], jobs.get("produced_by", []))
         ],
@@ -381,6 +382,7 @@ def _build_artifact_summary(db_ctx, artifact: dict[str, Any]) -> ShowArtifactSum
             ShowArtifactJobSummary(
                 job_uid=cast(str | None, job_summary.get("job_uid")),
                 command=cast(str | None, job_summary.get("command")),
+                session_hash=cast(str | None, job_summary.get("session_hash")),
             )
             for job_summary in cast(list[dict[str, Any]], jobs.get("consumed_by", []))
         ],

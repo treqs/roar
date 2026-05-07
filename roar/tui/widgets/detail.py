@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -237,7 +238,18 @@ def _render_artifact_list(artifacts) -> Text:
     for a in artifacts:
         primary = next((h.digest for h in a.hashes if h.algorithm == "blake3"), None)
         t.append("• ", style="cyan")
-        t.append(a.path or "-", style="bold")
+        path_str = a.path or "-"
+        if a.path:
+            t.append(
+                path_str,
+                style=Style(
+                    bold=True,
+                    underline=True,
+                    meta={"@click": f"screen.open_artifact_path({path_str!r})"},
+                ),
+            )
+        else:
+            t.append(path_str, style="bold")
         t.append(f"  {_fmt_size(a.size)}  ", style="dim")
         t.append(_short_hash(primary) + "\n", style="magenta")
     return t
@@ -306,12 +318,16 @@ class ArtifactDetail(_DetailWithToc):
         Binding("l", "jump('labels')", "Labels", show=False),
     ]
 
-    def update_artifact(self, summary) -> None:
+    def update_artifact(self, summary, current_session_hash: str | None = None) -> None:
         self.query_one("#sec-summary", Static).update(_render_artifact_overview(summary))
         self.query_one("#sec-hashes", Static).update(_render_artifact_hashes(summary))
         self.query_one("#sec-locations", Static).update(_render_artifact_locations(summary))
-        self.query_one("#sec-producers", Static).update(_render_artifact_jobs(summary.produced_by))
-        self.query_one("#sec-consumers", Static).update(_render_artifact_jobs(summary.consumed_by))
+        self.query_one("#sec-producers", Static).update(
+            _render_artifact_jobs(summary.produced_by, current_session_hash)
+        )
+        self.query_one("#sec-consumers", Static).update(
+            _render_artifact_jobs(summary.consumed_by, current_session_hash)
+        )
         self.query_one("#sec-labels", Static).update(_render_labels(summary.labels))
 
 
@@ -347,12 +363,30 @@ def _render_artifact_locations(summary) -> Text:
     return t
 
 
-def _render_artifact_jobs(jobs) -> Text:
+def _render_artifact_jobs(jobs, current_session_hash: str | None = None) -> Text:
     if not jobs:
         return Text("(none)", style="dim")
     t = Text()
     for j in jobs:
-        t.append(f"{(j.job_uid or '-')[:8]}", style="magenta")
+        in_session = (
+            current_session_hash is not None
+            and j.session_hash is not None
+            and j.session_hash == current_session_hash
+        )
+        marker = "● " if in_session else "  "  # filled dot = "in this session"
+        t.append(marker, style="green" if in_session else "dim")
+        uid_short = (j.job_uid or "-")[:8]
+        if j.job_uid:
+            t.append(
+                uid_short,
+                style=Style(
+                    color="magenta",
+                    underline=True,
+                    meta={"@click": f"screen.open_job_uid({j.job_uid!r})"},
+                ),
+            )
+        else:
+            t.append(uid_short, style="magenta")
         t.append(f"  {j.command or ''}\n")
     return t
 

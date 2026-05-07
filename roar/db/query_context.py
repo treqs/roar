@@ -554,12 +554,13 @@ class _QueryArtifactRepository(_QueryRepository):
 
     def get_jobs(self, artifact_id: str) -> dict[str, list[dict[str, Any]]]:
         produced_by = [
-            _job_row_to_dict(row)
+            self._job_row_with_session(row)
             for row in self._fetchall(
                 """
-                SELECT j.*
+                SELECT j.*, s.hash AS session_hash
                 FROM jobs AS j
                 JOIN job_outputs AS jo ON j.id = jo.job_id
+                LEFT JOIN sessions AS s ON s.id = j.session_id
                 WHERE jo.artifact_id = ?
                 ORDER BY j.timestamp DESC
                 """,
@@ -567,12 +568,13 @@ class _QueryArtifactRepository(_QueryRepository):
             )
         ]
         consumed_by = [
-            _job_row_to_dict(row)
+            self._job_row_with_session(row)
             for row in self._fetchall(
                 """
-                SELECT j.*
+                SELECT j.*, s.hash AS session_hash
                 FROM jobs AS j
                 JOIN job_inputs AS ji ON j.id = ji.job_id
+                LEFT JOIN sessions AS s ON s.id = j.session_id
                 WHERE ji.artifact_id = ?
                 ORDER BY j.timestamp DESC
                 """,
@@ -583,6 +585,12 @@ class _QueryArtifactRepository(_QueryRepository):
             "produced_by": produced_by,
             "consumed_by": consumed_by,
         }
+
+    @staticmethod
+    def _job_row_with_session(row: Any) -> dict[str, Any]:
+        data = _job_row_to_dict(row)
+        data["session_hash"] = row["session_hash"]
+        return data
 
 
 class _QueryLabelRepository(_QueryRepository):
