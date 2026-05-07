@@ -68,6 +68,13 @@ class MainScreen(Screen):
         self.show_artifacts = True
         self.expanded = False
         self._reloading = False
+        # session_ref is the hash of the session being viewed; None tracks the
+        # active session (the default — most users only ever look at the active
+        # one). Set by the session picker / `[ ]` navigation.
+        self.session_ref: str | None = None
+        # Cached session listing for `[`/`]` navigation; refreshed when the
+        # picker opens or when we paginate past the cached edges.
+        self._session_listing: list[tui_data.SessionListing] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -166,31 +173,19 @@ class MainScreen(Screen):
             else None
         )
         try:
-            session = tui_data.load_active_session(self.roar_dir)
+            session = tui_data.load_session(self.roar_dir, self.session_ref)
             dag = tui_data.load_dag(
                 self.roar_dir,
                 expanded=self.expanded,
                 show_artifacts=self.show_artifacts,
+                session_ref=self.session_ref,
             )
         except ValueError as exc:
             info.update(f"[red]{exc}[/red]")
             tree.clear()
             return
 
-        if session is None:
-            info.update("[yellow]No active session[/yellow]")
-        else:
-            toggles = []
-            if self.expanded:
-                toggles.append("expanded")
-            if self.show_artifacts:
-                toggles.append("artifacts")
-            toggle_str = f"  [{' '.join(toggles)}]" if toggles else ""
-            info.update(
-                f"session [magenta]{session.hash[:12]}[/magenta]  "
-                f"{dag.total_steps} steps, {dag.stale_count} stale"
-                f"{toggle_str}"
-            )
+        info.update(self._format_session_info(session, dag))
 
         self._reloading = True
         try:
@@ -238,6 +233,27 @@ class MainScreen(Screen):
             if cursor is not None and cursor.data:
                 self._populate_detail(cursor.data)
 
+    def _format_session_info(self, session, dag) -> str:
+        if session is None:
+            if self.session_ref is None:
+                return "[yellow]No active session[/yellow]"
+            return f"[yellow]No session matching {self.session_ref}[/yellow]"
+        toggles = []
+        if self.expanded:
+            toggles.append("expanded")
+        if self.show_artifacts:
+            toggles.append("artifacts")
+        toggle_str = f"  [{' '.join(toggles)}]" if toggles else ""
+        # ACTIVE badge when viewing the active session; otherwise show "session"
+        # so it's clear we're browsing history (the cue users will look for
+        # before muscle-memory `!`-launching a tracked run).
+        badge = "[green]ACTIVE[/green]" if self.session_ref is None else "session"
+        return (
+            f"{badge} [magenta]{session.hash[:12]}[/magenta]  "
+            f"{dag.total_steps} steps, {dag.stale_count} stale"
+            f"{toggle_str}"
+        )
+
     def _restore_cursor(self, tree: Tree, saved: dict | None) -> None:
         # `move_cursor` (vs. `select_node`) shifts the cursor without firing
         # NodeSelected — important so reload doesn't auto-open the detail pane.
@@ -253,7 +269,9 @@ class MainScreen(Screen):
 
     def _show_by_ref(self, ref: str) -> None:
         if ref.startswith("@"):
-            job = tui_data.load_job(self.roar_dir, self.cwd, ref)
+            job = tui_data.load_job(
+                self.roar_dir, self.cwd, ref, session_ref=self.session_ref
+            )
             if job:
                 self._populate_detail({"kind": "step", "step_number": int(ref.lstrip("@B"))})
                 return
@@ -269,7 +287,9 @@ class MainScreen(Screen):
         switcher = self.query_one("#detail-switcher", ContentSwitcher)
         if data.get("kind") == "step":
             ref = _step_ref(data)
-            job = tui_data.load_job(self.roar_dir, self.cwd, ref)
+            job = tui_data.load_job(
+                self.roar_dir, self.cwd, ref, session_ref=self.session_ref
+            )
             if job is None:
                 switcher.current = "empty-detail"
                 return
