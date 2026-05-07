@@ -48,6 +48,8 @@ class MainScreen(Screen):
         Binding("l", "app.push_log", "Log"),
         Binding("slash", "app.open_search", "Search"),
         Binding("exclamation_mark", "app.open_launcher", "Run"),
+        Binding("left_square_bracket", "prev_session", "Prev session"),
+        Binding("right_square_bracket", "next_session", "Next session"),
         Binding("q", "back", "Back/Quit"),
         Binding("escape", "back", show=False),
         Binding("tab", "toggle_focus", "Focus tree/detail", show=False, priority=True),
@@ -131,6 +133,46 @@ class MainScreen(Screen):
             self.query_one("#artifact-detail", ArtifactDetail).focus_body()
         elif switcher.current == "job-detail":
             self.query_one("#job-detail", JobDetail).focus_body()
+
+    def action_prev_session(self) -> None:
+        self._step_session(+1)  # newer-first list → +1 means older
+
+    def action_next_session(self) -> None:
+        self._step_session(-1)
+
+    def _step_session(self, delta: int) -> None:
+        listing = self._refresh_session_listing()
+        if not listing:
+            return
+        current_hash = self._current_session_hash(listing)
+        try:
+            current_idx = next(
+                i for i, s in enumerate(listing) if s.hash == current_hash
+            )
+        except StopIteration:
+            current_idx = 0
+        new_idx = current_idx + delta
+        if new_idx < 0 or new_idx >= len(listing):
+            return  # don't wrap — easy to lose your place
+        target = listing[new_idx]
+        # None tracks "the active session" — preserves the ACTIVE badge as the
+        # active session shifts (e.g., a `roar run` in another terminal).
+        self.session_ref = None if target.is_active else target.hash
+        self._reload_dag()
+
+    def _refresh_session_listing(self) -> list[tui_data.SessionListing]:
+        self._session_listing = tui_data.list_sessions(self.roar_dir)
+        return self._session_listing
+
+    def _current_session_hash(self, listing: list[tui_data.SessionListing]) -> str | None:
+        if self.session_ref is None:
+            active = next((s for s in listing if s.is_active), None)
+            return active.hash if active else None
+        # Match by full hash or prefix.
+        for session in listing:
+            if session.hash == self.session_ref or session.hash.startswith(self.session_ref):
+                return session.hash
+        return None
 
     def action_toggle_artifacts(self) -> None:
         self.show_artifacts = not self.show_artifacts
