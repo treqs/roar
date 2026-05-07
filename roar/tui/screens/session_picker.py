@@ -31,6 +31,8 @@ class SessionPickerScreen(ModalScreen["SessionListing | None"]):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "cancel", "Cancel"),
         Binding("q", "cancel", "Cancel", show=False),
+        Binding("home", "jump_first", "First", show=False, priority=True),
+        Binding("end", "jump_last", "Last", show=False, priority=True),
     ]
 
     DEFAULT_CSS = """
@@ -98,3 +100,13 @@ class SessionPickerScreen(ModalScreen["SessionListing | None"]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def action_jump_first(self) -> None:
+        view = self.query_one("#session-list", ListView)
+        if self._listings:
+            view.index = 0
+
+    def action_jump_last(self) -> None:
+        view = self.query_one("#session-list", ListView)
+        if self._listings:
+            view.index = len(self._listings) - 1
