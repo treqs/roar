@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -58,6 +59,15 @@ class MainScreen(Screen):
 
     DEFAULT_CSS = """
     #session-info { padding: 0 1; background: $boost; color: $text; }
+    /* Focus indicator: the panes shift their banner to accent background so
+       it's instantly obvious which side is taking keystrokes. The TOC sidebar
+       on the detail pane swaps to accent for the same reason. */
+    #dag-pane:focus-within > #session-info {
+        background: $accent;
+        color: $background;
+        text-style: bold;
+    }
+    #detail-pane:focus-within .toc { background: $accent-darken-2; }
     Tree { padding: 0 1; }
     #dag-pane { height: 1fr; }
     #detail-pane { display: none; }
@@ -175,6 +185,28 @@ class MainScreen(Screen):
                 return session.hash
         return None
 
+    def action_open_artifact_path(self, path: str) -> None:
+        """Click target for path links rendered inside detail panes."""
+        artifact = tui_data.load_artifact_by_path(self.roar_dir, self.cwd, path)
+        if artifact is None:
+            return
+        self.query_one("#artifact-detail", ArtifactDetail).update_artifact(
+            artifact, current_session_hash=self._current_session_hash_str()
+        )
+        self.query_one("#detail-switcher", ContentSwitcher).current = "artifact-detail"
+        self._reveal_detail()
+        self._focus_detail()
+
+    def action_open_job_uid(self, uid: str) -> None:
+        """Click target for job-uid links (jumps cross-session via uid lookup)."""
+        job = tui_data.load_job(self.roar_dir, self.cwd, uid)
+        if job is None:
+            return
+        self.query_one("#job-detail", JobDetail).update_job(job)
+        self.query_one("#detail-switcher", ContentSwitcher).current = "job-detail"
+        self._reveal_detail()
+        self._focus_detail()
+
     def action_toggle_artifacts(self) -> None:
         self.show_artifacts = not self.show_artifacts
         self._reload_dag()
@@ -291,8 +323,10 @@ class MainScreen(Screen):
         # so it's clear we're browsing history (the cue users will look for
         # before muscle-memory `!`-launching a tracked run).
         badge = "[green]ACTIVE[/green]" if self.session_ref is None else "session"
+        when = _fmt_session_dt(session.created_at)
         return (
             f"{badge} [magenta]{session.hash[:12]}[/magenta]  "
+            f"{when}  "
             f"{dag.total_steps} steps, {dag.stale_count} stale"
             f"{toggle_str}"
         )
@@ -322,9 +356,16 @@ class MainScreen(Screen):
         if artifact is None and ref and not ref.startswith("/") and "/" not in ref:
             artifact = tui_data.load_artifact_by_hash(self.roar_dir, self.cwd, ref)
         if artifact:
-            self.query_one("#artifact-detail", ArtifactDetail).update_artifact(artifact)
+            self.query_one("#artifact-detail", ArtifactDetail).update_artifact(
+                artifact, current_session_hash=self._current_session_hash_str()
+            )
             self.query_one("#detail-switcher", ContentSwitcher).current = "artifact-detail"
             self._reveal_detail()
+
+    def _current_session_hash_str(self) -> str | None:
+        """Hash of the session currently being viewed, for cross-reference markers."""
+        session = tui_data.load_session(self.roar_dir, self.session_ref)
+        return session.hash if session else None
 
     def _populate_detail(self, data: dict) -> None:
         switcher = self.query_one("#detail-switcher", ContentSwitcher)
@@ -349,7 +390,9 @@ class MainScreen(Screen):
             if artifact is None:
                 switcher.current = "empty-detail"
                 return
-            self.query_one("#artifact-detail", ArtifactDetail).update_artifact(artifact)
+            self.query_one("#artifact-detail", ArtifactDetail).update_artifact(
+                artifact, current_session_hash=self._current_session_hash_str()
+            )
             switcher.current = "artifact-detail"
 
     def _reveal_detail(self) -> None:
@@ -377,6 +420,15 @@ class MainScreen(Screen):
         data = event.node.data
         if data:
             self._populate_detail(data)
+
+
+def _fmt_session_dt(ts: float | int | None) -> str:
+    if ts is None or ts == 0:
+        return "-"
+    try:
+        return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError, OSError):
+        return "-"
 
 
 def _step_ref(data: dict) -> str:
