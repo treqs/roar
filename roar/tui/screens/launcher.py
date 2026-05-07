@@ -24,7 +24,14 @@ class LauncherScreen(ModalScreen[str | None]):
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "dismiss_none", "Cancel"),
-        Binding("ctrl+r", "use_history", "Use Highlighted"),
+        # Readline-ish history cycling. Ctrl-R steps through filtered history
+        # (older direction); Ctrl-S goes back. The highlighted match is
+        # mirrored into the input box so Enter submits it.
+        Binding("ctrl+r", "history_step(1)", "Search hist", priority=True),
+        Binding("ctrl+s", "history_step(-1)", show=False, priority=True),
+        # Ctrl-Y aliases paste — readline yank semantics aren't preserved (no
+        # kill ring), but the muscle memory does the right thing here.
+        Binding("ctrl+y", "yank", show=False, priority=True),
         Binding("enter", "submit", "Launch"),
     ]
 
@@ -52,6 +59,10 @@ class LauncherScreen(ModalScreen[str | None]):
         self.cwd = cwd
         self._history: list[str] = []
         self._initial_command = initial_command
+        # Readline-style i-search context: the original query the user typed
+        # before the first Ctrl-R. Cleared when they edit the input manually.
+        self._search_query: str | None = None
+        self._suppress_filter: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="launcher-box"):
@@ -76,20 +87,44 @@ class LauncherScreen(ModalScreen[str | None]):
         input_widget.focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        if self._suppress_filter:
+            # The change came from action_history_step; clear the guard so the
+            # next genuine edit drops the i-search context.
+            self._suppress_filter = False
+            return
+        self._search_query = None
         self._refresh_history(event.value)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.action_submit()
 
-    def action_use_history(self) -> None:
-        hist = self.query_one("#launcher-history", ListView)
-        if hist.index is None:
+    def action_history_step(self, delta: int) -> None:
+        """Cycle highlighted history match by `delta` and copy into input.
+
+        First press captures the current input as the search query so
+        subsequent presses keep cycling against that query rather than
+        narrowing to the just-pasted match.
+        """
+        input_widget = self.query_one("#launcher-input", Input)
+        if self._search_query is None:
+            self._search_query = input_widget.value
+        filtered = self._filtered_history(self._search_query)
+        if not filtered:
             return
-        filtered = self._filtered_history(self.query_one("#launcher-input", Input).value)
-        if 0 <= hist.index < len(filtered):
-            input_widget = self.query_one("#launcher-input", Input)
-            input_widget.value = filtered[hist.index]
-            input_widget.cursor_position = len(input_widget.value)
+        hist = self.query_one("#launcher-history", ListView)
+        cur = hist.index if hist.index is not None else -1
+        new_idx = (cur + delta) % len(filtered)
+        hist.index = new_idx
+        # Flag is cleared on the next on_input_changed dispatch (queued by
+        # the assignment below) — try/finally would clear it before the
+        # event handler runs.
+        self._suppress_filter = True
+        input_widget.value = filtered[new_idx]
+        input_widget.cursor_position = len(input_widget.value)
+
+    def action_yank(self) -> None:
+        """Paste from the system clipboard into the input."""
+        self.query_one("#launcher-input", Input).action_paste()
 
     def action_dismiss_none(self) -> None:
         self.dismiss(None)
