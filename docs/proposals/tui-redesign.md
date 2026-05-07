@@ -139,9 +139,17 @@ Whether clicks register depends on the terminal:
   No app-side fix; switch terminals if mouse interaction matters.
 - **Inside tmux**: needs `set -g mouse on` in `~/.tmux.conf`.
 
-Keyboard traversal works without mouse: with the detail body focused,
-`n` cycles to the next link (reverse-video highlight, body scrolls to
-the link's section), `shift+n` cycles backwards, `Enter` follows.
+Keyboard traversal works without mouse. With the detail body focused:
+
+- `↑` / `↓` walk the TOC (active section moves; body scrolls to it).
+- `←` / `→` cycle through links (reverse-video highlight; body
+  scrolls to the link's section).
+- `PgUp` / `PgDn` / `Home` / `End` page the body.
+- `Enter` follows the active link.
+
+Job detail's Command section is itself a link — `→` `Enter` (or click)
+opens the `!` launcher modal pre-filled with the job's command for a
+two-key relaunch.
 
 ## Tweaks that landed alongside the above
 
