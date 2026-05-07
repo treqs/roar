@@ -114,8 +114,8 @@ beats cycling.
 ## Implementation order
 
 1. ✅ Layout swap + auto-refresh.
-2. `[` / `]` navigation. (Multi-session support landed in `build_dag_visualization` and `tui.data.list_sessions` — UI keys still pending.)
-3. Session picker (`s`).
+2. ✅ `[` / `]` navigation. (Builds on `DagQueryRequest.session_ref` and the matching `ShowQueryRequest.session_ref`. Cursor preservation matches by step number / artifact hash so re-runs of the same pipeline keep your selection aligned.)
+3. ✅ Session picker (`s`). Modal with date / short hash / job count, `●` marker on the active session, lands on whatever session you're currently viewing.
 4. ✅ Job detail as scrollable form with anchors. (Shipped with a sticky TOC sidebar that doubles as a section indicator + click-jump target.)
 5. Command palette (`:`).
 6. Label editor.
