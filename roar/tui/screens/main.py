@@ -1,4 +1,4 @@
-"""Main TUI screen: session DAG on the left, entity detail on the right."""
+"""Main TUI screen: full-width DAG tree on top, collapsible detail pane below."""
 
 from __future__ import annotations
 
@@ -9,20 +9,20 @@ from typing import ClassVar
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import (
     ContentSwitcher,
     Footer,
     Header,
     Static,
-    TabbedContent,
-    TabPane,
     Tree,
 )
 from textual.widgets.tree import TreeNode
 
 from .. import data as tui_data
+
+REFRESH_INTERVAL_SECONDS = 5.0
 
 _STATE_STYLE = {
     "active": "cyan",
@@ -79,35 +79,42 @@ def _short_hash(h: str | None, n: int = 8) -> str:
     return h[:n]
 
 
-class JobDetail(TabbedContent):
-    """Tabbed detail view for a job (Overview/Inputs/Outputs/Labels/Git/Env)."""
+class JobDetail(VerticalScroll):
+    """Single scrollable form for a job: stacked sections with anchored ids."""
 
     DEFAULT_CSS = """
-    JobDetail { height: 1fr; }
-    JobDetail Static.pane { padding: 1 2; }
+    JobDetail { padding: 1 2; height: 1fr; }
+    JobDetail Static.section { margin-bottom: 1; }
+    JobDetail Static.section-heading { color: $accent; text-style: bold; }
     """
 
+    SECTIONS = (
+        ("overview", "Overview"),
+        ("command", "Command"),
+        ("inputs", "Inputs"),
+        ("outputs", "Outputs"),
+        ("labels", "Labels"),
+        ("git", "Git"),
+        ("env", "Env"),
+    )
+
     def compose(self) -> ComposeResult:
-        with TabPane("Overview", id="tab-overview"):
-            yield Static("", classes="pane", id="pane-overview")
-        with TabPane("Inputs", id="tab-inputs"):
-            yield Static("", classes="pane", id="pane-inputs")
-        with TabPane("Outputs", id="tab-outputs"):
-            yield Static("", classes="pane", id="pane-outputs")
-        with TabPane("Labels", id="tab-labels"):
-            yield Static("", classes="pane", id="pane-labels")
-        with TabPane("Git", id="tab-git"):
-            yield Static("", classes="pane", id="pane-git")
-        with TabPane("Env", id="tab-env"):
-            yield Static("", classes="pane", id="pane-env")
+        for key, title in self.SECTIONS:
+            yield Static(f"── {title} ──", classes="section-heading", id=f"head-{key}")
+            yield Static("", classes="section", id=f"sec-{key}")
 
     def update_job(self, summary) -> None:
-        self.query_one("#pane-overview", Static).update(_render_job_overview(summary))
-        self.query_one("#pane-inputs", Static).update(_render_artifact_list(summary.inputs))
-        self.query_one("#pane-outputs", Static).update(_render_artifact_list(summary.outputs))
-        self.query_one("#pane-labels", Static).update(_render_labels(summary.labels))
-        self.query_one("#pane-git", Static).update(_render_git(summary))
-        self.query_one("#pane-env", Static).update(_render_env(summary))
+        self.query_one("#sec-overview", Static).update(_render_job_overview(summary))
+        self.query_one("#sec-command", Static).update(_render_command(summary))
+        self.query_one("#sec-inputs", Static).update(_render_artifact_list(summary.inputs))
+        self.query_one("#sec-outputs", Static).update(_render_artifact_list(summary.outputs))
+        self.query_one("#sec-labels", Static).update(_render_labels(summary.labels))
+        self.query_one("#sec-git", Static).update(_render_git(summary))
+        self.query_one("#sec-env", Static).update(_render_env(summary))
+
+    def scroll_to_section(self, key: str) -> None:
+        head = self.query_one(f"#head-{key}", Static)
+        self.scroll_to_widget(head, top=True)
 
 
 def _render_job_overview(summary) -> Text:
@@ -131,10 +138,11 @@ def _render_job_overview(summary) -> Text:
     t.append(status + "\n", style=status_style)
     if summary.step_name:
         t.append(f"Name:      {summary.step_name}\n")
-    t.append("\nCommand:\n", style="bold")
-    t.append("  ")
-    t.append(summary.command or "(no command)", style="white")
     return t
+
+
+def _render_command(summary) -> Text:
+    return Text(summary.command or "(no command)", style="white")
 
 
 def _render_artifact_list(artifacts) -> Text:
@@ -182,12 +190,15 @@ def _render_env(summary) -> Text:
     return t
 
 
-class ArtifactDetail(Static):
-    """Single-pane artifact detail view."""
+class ArtifactDetail(VerticalScroll):
+    """Single-pane artifact detail view (scrollable)."""
 
     DEFAULT_CSS = """
     ArtifactDetail { padding: 1 2; height: 1fr; }
     """
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="artifact-body")
 
     def update_artifact(self, summary) -> None:
         primary = next((h.digest for h in summary.hashes if h.algorithm == "blake3"), None)
@@ -224,27 +235,29 @@ class ArtifactDetail(Static):
             for k, v in sorted(summary.labels.items()):
                 t.append(f"  {k}", style="cyan")
                 t.append(f" = {v}\n")
-        self.update(t)
+        self.query_one("#artifact-body", Static).update(t)
 
 
 class MainScreen(Screen):
-    """Home screen: DAG tree left, entity detail right."""
+    """Home screen: full-width DAG tree, collapsible detail pane below."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("r", "refresh", "Refresh"),
         Binding("a", "toggle_artifacts", "Artifacts"),
         Binding("e", "toggle_expanded", "Expanded"),
         Binding("l", "app.push_log", "Log"),
         Binding("slash", "app.open_search", "Search"),
         Binding("exclamation_mark", "app.open_launcher", "Run"),
         Binding("q", "app.quit", "Quit"),
+        Binding("tab", "toggle_focus", "Focus tree/detail", show=False, priority=True),
+        Binding("escape", "close_detail", "Close detail", show=False),
     ]
 
     DEFAULT_CSS = """
-    #left-pane { width: 40%; border-right: solid $primary; }
     #session-info { padding: 0 1; background: $boost; color: $text; }
-    #detail-switcher { width: 60%; }
     Tree { padding: 0 1; }
+    #dag-pane { height: 1fr; }
+    #detail-pane { display: none; }
+    #detail-pane.-visible { display: block; height: 1fr; border-top: solid $primary; }
     """
 
     def __init__(self, roar_dir: Path, cwd: Path) -> None:
@@ -253,38 +266,54 @@ class MainScreen(Screen):
         self.cwd = cwd
         self.show_artifacts = True
         self.expanded = False
+        self._reloading = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        yield Horizontal(
-            Vertical(
-                Static("", id="session-info"),
-                Tree("DAG", id="dag-tree"),
-                id="left-pane",
-            ),
-            ContentSwitcher(
-                Static(
-                    "Select a step or artifact on the left to see details.",
-                    id="empty-detail",
-                ),
+        with Vertical(id="dag-pane"):
+            yield Static("", id="session-info")
+            yield Tree("DAG", id="dag-tree")
+        with Vertical(id="detail-pane"):
+            yield ContentSwitcher(
+                Static("", id="empty-detail"),
                 JobDetail(id="job-detail"),
                 ArtifactDetail(id="artifact-detail"),
                 initial="empty-detail",
                 id="detail-switcher",
-            ),
-            id="main-row",
-        )
+            )
         yield Footer()
 
     def on_mount(self) -> None:
         self._reload_dag()
         tree = self.query_one("#dag-tree", Tree)
+        # Enter must reveal the detail pane without collapsing the step's artifact children.
+        tree.auto_expand = False
         tree.focus()
+        self.set_interval(REFRESH_INTERVAL_SECONDS, self._reload_dag)
 
     # --- actions --------------------------------------------------------------
 
-    def action_refresh(self) -> None:
-        self._reload_dag()
+    def action_close_detail(self) -> None:
+        pane = self.query_one("#detail-pane")
+        if pane.has_class("-visible"):
+            pane.remove_class("-visible")
+            self.query_one("#dag-tree", Tree).focus()
+
+    def action_toggle_focus(self) -> None:
+        if not self.query_one("#detail-pane").has_class("-visible"):
+            return
+        tree = self.query_one("#dag-tree", Tree)
+        if tree.has_focus:
+            self._focus_detail()
+        else:
+            tree.focus()
+
+    def _focus_detail(self) -> None:
+        switcher = self.query_one("#detail-switcher", ContentSwitcher)
+        if switcher.current == "artifact-detail":
+            self.query_one("#artifact-detail", ArtifactDetail).focus()
+        elif switcher.current == "job-detail":
+            self.query_one("#job-detail", JobDetail).focus()
 
     def action_toggle_artifacts(self) -> None:
         self.show_artifacts = not self.show_artifacts
@@ -321,6 +350,11 @@ class MainScreen(Screen):
     def _reload_dag(self) -> None:
         info = self.query_one("#session-info", Static)
         tree = self.query_one("#dag-tree", Tree)
+        saved_cursor = (
+            dict(tree.cursor_node.data)
+            if tree.cursor_node is not None and tree.cursor_node.data
+            else None
+        )
         try:
             session = tui_data.load_active_session(self.roar_dir)
             dag = tui_data.load_dag(
@@ -348,59 +382,80 @@ class MainScreen(Screen):
                 f"{toggle_str}"
             )
 
-        tree.clear()
-        tree.show_root = False
-        artifacts_by_producer: dict[int, list] = {}
-        for a in dag.artifacts:
-            if a.producer_step is not None:
-                artifacts_by_producer.setdefault(int(a.producer_step), []).append(a)
+        self._reloading = True
+        try:
+            tree.clear()
+            tree.show_root = False
+            artifacts_by_producer: dict[int, list] = {}
+            for a in dag.artifacts:
+                if a.producer_step is not None:
+                    artifacts_by_producer.setdefault(int(a.producer_step), []).append(a)
 
-        for node in dag.nodes:
-            label = _step_label(node)
-            tree_node = tree.root.add(
-                label,
-                data={
-                    "kind": "step",
-                    "step_number": node.step_number,
-                    "job_type": "build" if node.is_build else "run",
-                    "state": node.state if isinstance(node.state, str) else node.state.value,
-                },
-                expand=self.show_artifacts,
-            )
-            if self.show_artifacts:
-                for artifact in artifacts_by_producer.get(int(node.step_number), []):
-                    tree_node.add_leaf(
-                        _artifact_label(artifact),
-                        data={
-                            "kind": "artifact",
-                            "path": artifact.path,
-                            "hash": artifact.hash,
-                        },
-                    )
+            for node in dag.nodes:
+                label = _step_label(node)
+                tree_node = tree.root.add(
+                    label,
+                    data={
+                        "kind": "step",
+                        "step_number": node.step_number,
+                        "job_type": "build" if node.is_build else "run",
+                        "state": node.state if isinstance(node.state, str) else node.state.value,
+                    },
+                    expand=self.show_artifacts,
+                )
+                if self.show_artifacts:
+                    for artifact in artifacts_by_producer.get(int(node.step_number), []):
+                        tree_node.add_leaf(
+                            _artifact_label(artifact),
+                            data={
+                                "kind": "artifact",
+                                "path": artifact.path,
+                                "hash": artifact.hash,
+                            },
+                        )
 
-        tree.root.expand_all()
+            tree.root.expand_all()
+        finally:
+            self._reloading = False
+
+        # `move_cursor` depends on TreeNode._line which is only assigned after
+        # the tree renders, so defer restoration until the next refresh tick.
+        self.call_after_refresh(self._restore_cursor, tree, saved_cursor)
+
+        # If detail pane is open, refresh its content too.
+        if self.query_one("#detail-pane").has_class("-visible"):
+            cursor = tree.cursor_node
+            if cursor is not None and cursor.data:
+                self._populate_detail(cursor.data)
+
+    def _restore_cursor(self, tree: Tree, saved: dict | None) -> None:
+        # `move_cursor` (vs. `select_node`) shifts the cursor without firing
+        # NodeSelected — important so reload doesn't auto-open the detail pane.
+        if saved is not None:
+            for node in _iter_tree_nodes(tree.root):
+                if node.data and _cursor_matches(node.data, saved):
+                    tree.move_cursor(node)
+                    tree.scroll_to_node(node)
+                    return
+        # No saved cursor (first load) — land on the first step so Enter works immediately.
+        if tree.root.children:
+            tree.move_cursor(tree.root.children[0])
 
     def _show_by_ref(self, ref: str) -> None:
-        switcher = self.query_one("#detail-switcher", ContentSwitcher)
         if ref.startswith("@"):
             job = tui_data.load_job(self.roar_dir, self.cwd, ref)
             if job:
-                self.query_one("#job-detail", JobDetail).update_job(job)
-                switcher.current = "job-detail"
+                self._populate_detail({"kind": "step", "step_number": int(ref.lstrip("@B"))})
                 return
         artifact = tui_data.load_artifact_by_path(self.roar_dir, self.cwd, ref)
         if artifact is None and ref and not ref.startswith("/") and "/" not in ref:
             artifact = tui_data.load_artifact_by_hash(self.roar_dir, self.cwd, ref)
         if artifact:
             self.query_one("#artifact-detail", ArtifactDetail).update_artifact(artifact)
-            switcher.current = "artifact-detail"
+            self.query_one("#detail-switcher", ContentSwitcher).current = "artifact-detail"
+            self._reveal_detail()
 
-    # --- tree events ----------------------------------------------------------
-
-    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
-        data = event.node.data
-        if not data:
-            return
+    def _populate_detail(self, data: dict) -> None:
         switcher = self.query_one("#detail-switcher", ContentSwitcher)
         if data.get("kind") == "step":
             ref = _step_ref(data)
@@ -423,6 +478,31 @@ class MainScreen(Screen):
                 return
             self.query_one("#artifact-detail", ArtifactDetail).update_artifact(artifact)
             switcher.current = "artifact-detail"
+
+    def _reveal_detail(self) -> None:
+        pane = self.query_one("#detail-pane")
+        if not pane.has_class("-visible"):
+            pane.add_class("-visible")
+
+    # --- tree events ----------------------------------------------------------
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        if self._reloading:
+            return
+        data = event.node.data
+        if not data:
+            return
+        self._populate_detail(data)
+        self._reveal_detail()
+
+    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
+        if self._reloading:
+            return
+        if not self.query_one("#detail-pane").has_class("-visible"):
+            return
+        data = event.node.data
+        if data:
+            self._populate_detail(data)
 
 
 def _step_ref(data: dict) -> str:
@@ -465,3 +545,19 @@ def _iter_tree_nodes(node: TreeNode):
     yield node
     for child in node.children:
         yield from _iter_tree_nodes(child)
+
+
+def _cursor_matches(current: dict, saved: dict) -> bool:
+    kind = current.get("kind")
+    if kind != saved.get("kind"):
+        return False
+    if kind == "step":
+        return (
+            current.get("step_number") == saved.get("step_number")
+            and current.get("job_type") == saved.get("job_type")
+        )
+    if kind == "artifact":
+        if saved.get("hash") and current.get("hash") == saved["hash"]:
+            return True
+        return bool(saved.get("path")) and current.get("path") == saved["path"]
+    return False
