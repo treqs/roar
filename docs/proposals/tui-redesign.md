@@ -123,6 +123,27 @@ beats cycling.
 8. Diff viewer.
 9. Context-aware help (`?`).
 
+## Mouse / clickable hashes — terminal compatibility
+
+Job inputs/outputs render artifact paths as `@click=screen.open_artifact_path`
+links, and artifact producer/consumer rows render job uids as
+`@click=screen.open_job_uid` links — Rich `Style(meta={...})` spans that
+Textual hooks for click events. Cross-session jumps work for free because
+both lookups go by uid/path, not session-scoped step refs.
+
+Whether clicks register depends on the terminal:
+
+- **iTerm2 / kitty / Alacritty / WezTerm**: works out of the box.
+- **macOS Terminal.app**: limited mouse-protocol support — clicks may
+  not reach the app even though Textual is requesting mouse events.
+  No app-side fix; switch terminals if mouse interaction matters.
+- **Inside tmux**: needs `set -g mouse on` in `~/.tmux.conf`.
+
+A keyboard alternative (line cursor through links in the body) is
+deferred — requires reworking focus to include a third "TOC" target
+and a per-link traversal model. Until then the cross-session jumps
+are reachable via the session picker (`s`) + tree navigation.
+
 ## Tweaks that landed alongside the above
 
 - `q` is now a context-sensitive Back/Quit (closes the detail pane if open,
