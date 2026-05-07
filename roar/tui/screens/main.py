@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import ClassVar
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import (
     ContentSwitcher,
@@ -23,6 +24,7 @@ from textual.widgets.tree import TreeNode
 from .. import data as tui_data
 
 REFRESH_INTERVAL_SECONDS = 5.0
+TOC_MIN_WIDTH = 90  # below this, hide the sticky TOC and use the full pane width
 
 _STATE_STYLE = {
     "active": "cyan",
@@ -79,29 +81,131 @@ def _short_hash(h: str | None, n: int = 8) -> str:
     return h[:n]
 
 
-class JobDetail(VerticalScroll):
-    """Single scrollable form for a job: stacked sections with anchored ids."""
+class _DetailWithToc(Horizontal):
+    """Base for detail views: sticky TOC on the left + scrollable body on the right.
 
-    DEFAULT_CSS = """
-    JobDetail { padding: 1 2; height: 1fr; }
-    JobDetail Static.section { margin-bottom: 1; }
-    JobDetail Static.section-heading { color: $accent; text-style: bold; }
+    Subclasses define `SECTIONS` as ((key, title, jump_key), ...) and a
+    `body_id` for unique element ids.
     """
 
-    SECTIONS = (
-        ("overview", "Overview"),
-        ("command", "Command"),
-        ("inputs", "Inputs"),
-        ("outputs", "Outputs"),
-        ("labels", "Labels"),
-        ("git", "Git"),
-        ("env", "Env"),
-    )
+    SECTIONS: tuple[tuple[str, str, str], ...] = ()
+    body_id: str = "detail-body"
+    toc_id: str = "detail-toc"
+
+    DEFAULT_CSS = """
+    _DetailWithToc { height: 1fr; }
+    _DetailWithToc .toc {
+        width: 14;
+        padding: 1 0 0 1;
+        background: $boost;
+    }
+    _DetailWithToc .toc.-hidden { display: none; }
+    _DetailWithToc .toc Static {
+        color: $text-muted;
+        padding: 0 1;
+    }
+    _DetailWithToc .toc Static.-active {
+        color: $accent;
+        text-style: bold;
+    }
+    _DetailWithToc .body { padding: 1 2; }
+    _DetailWithToc .body Static.section { margin-bottom: 1; }
+    _DetailWithToc .body Static.section-heading {
+        color: $accent;
+        text-style: bold;
+    }
+    """
 
     def compose(self) -> ComposeResult:
-        for key, title in self.SECTIONS:
-            yield Static(f"── {title} ──", classes="section-heading", id=f"head-{key}")
-            yield Static("", classes="section", id=f"sec-{key}")
+        with Vertical(id=self.toc_id, classes="toc"):
+            for key, title, _ in self.SECTIONS:
+                yield Static(f"  {title}", id=f"toc-{key}")
+        with VerticalScroll(id=self.body_id, classes="body"):
+            for key, title, _ in self.SECTIONS:
+                yield Static(
+                    f"── {title} ──", classes="section-heading", id=f"head-{key}"
+                )
+                yield Static("", classes="section", id=f"sec-{key}")
+
+    def on_mount(self) -> None:
+        body = self.query_one(f"#{self.body_id}", VerticalScroll)
+        # Track scroll position to highlight the visible section in the TOC.
+        self.watch(body, "scroll_y", self._on_body_scroll, init=False)
+        self._set_active_section(self.SECTIONS[0][0])
+
+    def on_resize(self, event: events.Resize) -> None:
+        toc = self.query_one(f"#{self.toc_id}")
+        if event.size.width >= TOC_MIN_WIDTH:
+            toc.remove_class("-hidden")
+        else:
+            toc.add_class("-hidden")
+
+    def on_click(self, event: events.Click) -> None:
+        widget = getattr(event, "widget", None)
+        if widget is None or not widget.id or not widget.id.startswith("toc-"):
+            return
+        self.action_jump(widget.id[len("toc-") :])
+
+    def action_jump(self, key: str) -> None:
+        body = self.query_one(f"#{self.body_id}", VerticalScroll)
+        head = self.query_one(f"#head-{key}", Static)
+        body.scroll_to_widget(head, top=True)
+        body.focus()
+        self._set_active_section(key)
+
+    def focus_body(self) -> None:
+        self.query_one(f"#{self.body_id}", VerticalScroll).focus()
+
+    def _on_body_scroll(self, value: float) -> None:
+        # Compare virtual positions: a head is "at or above the viewport top" iff
+        # its virtual y is at or below the current scroll offset. Avoids reading
+        # screen `region.y` which lags one layout pass behind a scroll change.
+        threshold = value + 1
+        active = self.SECTIONS[0][0]
+        for key, _, _ in self.SECTIONS:
+            head = self.query_one(f"#head-{key}", Static)
+            if head.virtual_region.y <= threshold:
+                active = key
+            else:
+                break
+        self._set_active_section(active)
+
+    def _set_active_section(self, key: str) -> None:
+        for k, title, _ in self.SECTIONS:
+            row = self.query_one(f"#toc-{k}", Static)
+            if k == key:
+                row.add_class("-active")
+                row.update(f"▸ {title}")
+            else:
+                row.remove_class("-active")
+                row.update(f"  {title}")
+
+
+class JobDetail(_DetailWithToc):
+    """Job detail with TOC: overview / command / inputs / outputs / labels / git / env."""
+
+    body_id = "job-body"
+    toc_id = "job-toc"
+
+    SECTIONS = (
+        ("overview", "Overview", "o"),
+        ("command", "Command", "c"),
+        ("inputs", "Inputs", "i"),
+        ("outputs", "Outputs", "O"),
+        ("labels", "Labels", "l"),
+        ("git", "Git", "g"),
+        ("env", "Env", "e"),
+    )
+
+    BINDINGS = [
+        Binding("o", "jump('overview')", "Overview", show=False),
+        Binding("c", "jump('command')", "Command", show=False),
+        Binding("i", "jump('inputs')", "Inputs", show=False),
+        Binding("O", "jump('outputs')", "Outputs", show=False),
+        Binding("l", "jump('labels')", "Labels", show=False),
+        Binding("g", "jump('git')", "Git", show=False),
+        Binding("e", "jump('env')", "Env", show=False),
+    ]
 
     def update_job(self, summary) -> None:
         self.query_one("#sec-overview", Static).update(_render_job_overview(summary))
@@ -111,10 +215,6 @@ class JobDetail(VerticalScroll):
         self.query_one("#sec-labels", Static).update(_render_labels(summary.labels))
         self.query_one("#sec-git", Static).update(_render_git(summary))
         self.query_one("#sec-env", Static).update(_render_env(summary))
-
-    def scroll_to_section(self, key: str) -> None:
-        head = self.query_one(f"#head-{key}", Static)
-        self.scroll_to_widget(head, top=True)
 
 
 def _render_job_overview(summary) -> Text:
@@ -190,52 +290,79 @@ def _render_env(summary) -> Text:
     return t
 
 
-class ArtifactDetail(VerticalScroll):
-    """Single-pane artifact detail view (scrollable)."""
+class ArtifactDetail(_DetailWithToc):
+    """Artifact detail with TOC: overview / hashes / locations / producers / consumers / labels."""
 
-    DEFAULT_CSS = """
-    ArtifactDetail { padding: 1 2; height: 1fr; }
-    """
+    body_id = "artifact-body"
+    toc_id = "artifact-toc"
 
-    def compose(self) -> ComposeResult:
-        yield Static("", id="artifact-body")
+    SECTIONS = (
+        ("overview", "Overview", "o"),
+        ("hashes", "Hashes", "h"),
+        ("locations", "Paths", "p"),
+        ("producers", "Producers", "u"),
+        ("consumers", "Consumers", "d"),
+        ("labels", "Labels", "l"),
+    )
+
+    BINDINGS = [
+        Binding("o", "jump('overview')", "Overview", show=False),
+        Binding("h", "jump('hashes')", "Hashes", show=False),
+        Binding("p", "jump('locations')", "Paths", show=False),
+        Binding("u", "jump('producers')", "Producers", show=False),
+        Binding("d", "jump('consumers')", "Consumers", show=False),
+        Binding("l", "jump('labels')", "Labels", show=False),
+    ]
 
     def update_artifact(self, summary) -> None:
-        primary = next((h.digest for h in summary.hashes if h.algorithm == "blake3"), None)
-        t = Text()
-        t.append("Artifact ", style="bold")
-        t.append(_short_hash(primary, 12) + "\n", style="magenta")
-        t.append(f"Kind:       {summary.kind or '-'}\n")
-        t.append(f"Size:       {_fmt_size(summary.size)}\n")
-        t.append(f"First seen: {_fmt_ts(summary.first_seen_at)}\n")
-        if summary.first_seen_path:
-            t.append(f"Path:       {summary.first_seen_path}\n")
-        t.append("\nHashes:\n", style="bold")
-        for h in summary.hashes:
-            t.append(f"  {h.algorithm}: ", style="cyan")
-            t.append(f"{h.digest}\n")
-        if summary.locations:
-            t.append("\nLocations:\n", style="bold")
-            for loc in summary.locations:
-                t.append(f"  {loc.path}\n")
-        t.append("\nProduced by:\n", style="bold")
-        if summary.produced_by:
-            for j in summary.produced_by:
-                t.append(f"  {(j.job_uid or '-')[:8]}  {j.command or ''}\n")
-        else:
-            t.append("  (none)\n", style="dim")
-        t.append("\nConsumed by:\n", style="bold")
-        if summary.consumed_by:
-            for j in summary.consumed_by:
-                t.append(f"  {(j.job_uid or '-')[:8]}  {j.command or ''}\n")
-        else:
-            t.append("  (none)\n", style="dim")
-        if summary.labels:
-            t.append("\nLabels:\n", style="bold")
-            for k, v in sorted(summary.labels.items()):
-                t.append(f"  {k}", style="cyan")
-                t.append(f" = {v}\n")
-        self.query_one("#artifact-body", Static).update(t)
+        self.query_one("#sec-overview", Static).update(_render_artifact_overview(summary))
+        self.query_one("#sec-hashes", Static).update(_render_artifact_hashes(summary))
+        self.query_one("#sec-locations", Static).update(_render_artifact_locations(summary))
+        self.query_one("#sec-producers", Static).update(_render_artifact_jobs(summary.produced_by))
+        self.query_one("#sec-consumers", Static).update(_render_artifact_jobs(summary.consumed_by))
+        self.query_one("#sec-labels", Static).update(_render_labels(summary.labels))
+
+
+def _render_artifact_overview(summary) -> Text:
+    primary = next((h.digest for h in summary.hashes if h.algorithm == "blake3"), None)
+    t = Text()
+    t.append("Artifact ", style="bold")
+    t.append(_short_hash(primary, 12) + "\n", style="magenta")
+    t.append(f"Kind:       {summary.kind or '-'}\n")
+    t.append(f"Size:       {_fmt_size(summary.size)}\n")
+    t.append(f"First seen: {_fmt_ts(summary.first_seen_at)}\n")
+    if summary.first_seen_path:
+        t.append(f"Path:       {summary.first_seen_path}\n")
+    return t
+
+
+def _render_artifact_hashes(summary) -> Text:
+    if not summary.hashes:
+        return Text("(none)", style="dim")
+    t = Text()
+    for h in summary.hashes:
+        t.append(f"{h.algorithm}: ", style="cyan")
+        t.append(f"{h.digest}\n")
+    return t
+
+
+def _render_artifact_locations(summary) -> Text:
+    if not summary.locations:
+        return Text("(no recorded paths)", style="dim")
+    t = Text()
+    for loc in summary.locations:
+        t.append(f"{loc.path}\n")
+    return t
+
+
+def _render_artifact_jobs(jobs) -> Text:
+    if not jobs:
+        return Text("(none)", style="dim")
+    t = Text()
+    for j in jobs:
+        t.append(f"{(j.job_uid or '-')[:8]}", style="magenta")
+        t.append(f"  {j.command or ''}\n")
+    return t
 
 
 class MainScreen(Screen):
@@ -311,9 +438,9 @@ class MainScreen(Screen):
     def _focus_detail(self) -> None:
         switcher = self.query_one("#detail-switcher", ContentSwitcher)
         if switcher.current == "artifact-detail":
-            self.query_one("#artifact-detail", ArtifactDetail).focus()
+            self.query_one("#artifact-detail", ArtifactDetail).focus_body()
         elif switcher.current == "job-detail":
-            self.query_one("#job-detail", JobDetail).focus()
+            self.query_one("#job-detail", JobDetail).focus_body()
 
     def action_toggle_artifacts(self) -> None:
         self.show_artifacts = not self.show_artifacts
