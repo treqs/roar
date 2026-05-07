@@ -82,8 +82,8 @@ class LabelEditorScreen(ModalScreen[None]):
             yield ListView(id="label-list")
             yield Static(self.INPUT_KEYS, id="label-keys")
 
-    def on_mount(self) -> None:
-        self._refresh()
+    async def on_mount(self) -> None:
+        await self._refresh()
         self.query_one("#label-list", ListView).focus()
 
     # --- list rendering -------------------------------------------------------
@@ -101,34 +101,48 @@ class LabelEditorScreen(ModalScreen[None]):
             rows.append((key, value, is_system))
         return rows
 
-    def _refresh(self) -> None:
+    async def _refresh(self) -> None:
         view = self.query_one("#label-list", ListView)
         prev_idx = view.index
         self._entries = self._load_entries()
-        view.clear()
+        # Both `clear()` and `extend()` are async (return AwaitRemove /
+        # AwaitMount). Awaiting them ensures the DOM has actually flushed
+        # before we try to set `index`, otherwise `index` pointer-arithmetics
+        # against a stale `_nodes` and the highlight goes to the wrong row.
+        await view.clear()
+        items = []
         for key, value, is_system in self._entries:
             item = ListItem(Label(f"{key} = {value}"))
             if is_system:
                 item.add_class("-system")
-            view.append(item)
-        if self._entries:
-            view.index = (
-                min(prev_idx, len(self._entries) - 1) if prev_idx is not None else 0
-            )
+            items.append(item)
+        if items:
+            await view.extend(items)
+        if not self._entries:
+            return
+        target_idx = (
+            min(prev_idx, len(self._entries) - 1) if prev_idx is not None else 0
+        )
+        # `index` is a reactive that only invokes its watcher on a *change*,
+        # so setting it back to the same value as before the rebuild is a
+        # no-op and the new row never gets `-highlight`. Toggle through None
+        # to force the watcher.
+        view.index = None
+        view.index = target_idx
 
     # --- actions --------------------------------------------------------------
 
     def action_close(self) -> None:
         self.dismiss(None)
 
-    def action_toggle_system(self) -> None:
+    async def action_toggle_system(self) -> None:
         self._show_system = not self._show_system
-        self._refresh()
+        await self._refresh()
 
     def action_add(self) -> None:
-        def _on_result(result: tuple[str, str] | None) -> None:
+        async def _on_result(result: tuple[str, str] | None) -> None:
             if result is not None:
-                self._apply_set(*result)
+                await self._apply_set(*result)
 
         self.app.push_screen(LabelEditFormScreen(), _on_result)
 
@@ -141,14 +155,14 @@ class LabelEditorScreen(ModalScreen[None]):
             self.app.notify("System labels are read-only.", severity="warning")
             return
 
-        def _on_result(result: tuple[str, str] | None) -> None:
+        async def _on_result(result: tuple[str, str] | None) -> None:
             if result is not None:
                 # If user changed the key, drop the old one so we don't leave
                 # an orphan; the merge of set_metadata wouldn't remove it.
                 new_key, new_value = result
                 if new_key != key:
-                    self._apply_delete(key)
-                self._apply_set(new_key, new_value)
+                    await self._apply_delete(key)
+                await self._apply_set(new_key, new_value)
 
         self.app.push_screen(LabelEditFormScreen(key, value), _on_result)
 
@@ -161,9 +175,9 @@ class LabelEditorScreen(ModalScreen[None]):
             self.app.notify("System labels are read-only.", severity="warning")
             return
 
-        def _on_result(confirmed: bool | None) -> None:
+        async def _on_result(confirmed: bool | None) -> None:
             if confirmed:
-                self._apply_delete(key)
+                await self._apply_delete(key)
 
         self.app.push_screen(ConfirmScreen(f"Delete label `{key}`?"), _on_result)
 
@@ -184,7 +198,7 @@ class LabelEditorScreen(ModalScreen[None]):
 
     # --- mutations ------------------------------------------------------------
 
-    def _apply_set(self, key: str, value: str) -> None:
+    async def _apply_set(self, key: str, value: str) -> None:
         if is_reserved_system_label_path(key):
             self.app.notify(
                 f"`{key}` is a reserved system path.", severity="error"
@@ -203,9 +217,9 @@ class LabelEditorScreen(ModalScreen[None]):
         except ValueError as exc:
             self.app.notify(str(exc), severity="error")
             return
-        self._refresh()
+        await self._refresh()
 
-    def _apply_delete(self, key: str) -> None:
+    async def _apply_delete(self, key: str) -> None:
         try:
             with create_database_context(self.roar_dir) as db_ctx:
                 service = LabelService(db_ctx, self.cwd)
@@ -214,7 +228,7 @@ class LabelEditorScreen(ModalScreen[None]):
         except ValueError as exc:
             self.app.notify(str(exc), severity="error")
             return
-        self._refresh()
+        await self._refresh()
 
 
 class LabelEditFormScreen(ModalScreen["tuple[str, str] | None"]):
