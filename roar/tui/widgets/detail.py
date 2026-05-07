@@ -69,12 +69,26 @@ class _DetailWithToc(Horizontal):
     """Base for detail views: sticky TOC on the left + scrollable body on the right.
 
     Subclasses define `SECTIONS` as ``((section_id, title, jump_key), ...)`` and a
-    `body_id` / `toc_id` for unique element ids.
+    `body_id` / `toc_id` for unique element ids. Subclasses also override
+    `_collect_links` to expose clickable spans for keyboard traversal.
     """
 
     SECTIONS: tuple[tuple[str, str, str], ...] = ()
     body_id: str = "detail-body"
     toc_id: str = "detail-toc"
+
+    BINDINGS = [
+        Binding("n", "next_link", "Next link", show=False),
+        Binding("shift+n", "prev_link", "Prev link", show=False),
+        Binding("enter", "follow_link", "Follow link", show=False),
+    ]
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        # Each link: (kind, target, section_id). `kind` drives which screen
+        # action follows it; `section_id` is where to scroll on selection.
+        self._links: list[tuple[str, str, str]] = []
+        self._link_idx: int = -1
 
     DEFAULT_CSS = """
     _DetailWithToc { height: 1fr; }
@@ -142,6 +156,53 @@ class _DetailWithToc(Horizontal):
     def focus_body(self) -> None:
         self.query_one(f"#{self.body_id}", VerticalScroll).focus()
 
+    # --- link traversal -------------------------------------------------------
+
+    def action_next_link(self) -> None:
+        if not self._links:
+            self.app.bell()
+            return
+        self._link_idx = (self._link_idx + 1) % len(self._links)
+        self._refresh_link_render()
+        self._scroll_to_active_link()
+
+    def action_prev_link(self) -> None:
+        if not self._links:
+            self.app.bell()
+            return
+        self._link_idx = (self._link_idx - 1) % len(self._links)
+        self._refresh_link_render()
+        self._scroll_to_active_link()
+
+    def action_follow_link(self) -> None:
+        if not (0 <= self._link_idx < len(self._links)):
+            self.app.bell()
+            return
+        kind, target, _ = self._links[self._link_idx]
+        screen = self.screen
+        if kind == "job_uid":
+            screen.action_open_job_uid(target)  # type: ignore[attr-defined]
+        elif kind == "artifact_path":
+            screen.action_open_artifact_path(target)  # type: ignore[attr-defined]
+
+    def _scroll_to_active_link(self) -> None:
+        if not (0 <= self._link_idx < len(self._links)):
+            return
+        _, _, section_id = self._links[self._link_idx]
+        body = self.query_one(f"#{self.body_id}", VerticalScroll)
+        head = self.query_one(f"#head-{section_id}", Static)
+        body.scroll_to_widget(head, top=True)
+        self._set_active_section(section_id)
+
+    def _active_link_target(self) -> str | None:
+        if 0 <= self._link_idx < len(self._links):
+            return self._links[self._link_idx][1]
+        return None
+
+    def _refresh_link_render(self) -> None:  # pragma: no cover - subclass hook
+        """Subclass override: re-render link-bearing sections with the current
+        active link target highlighted."""
+
     def _on_body_scroll(self, value: float) -> None:
         # Compare virtual positions: a head is "at or above the viewport top" iff
         # its virtual y is at or below the current scroll offset. Avoids reading
@@ -194,13 +255,39 @@ class JobDetail(_DetailWithToc):
     ]
 
     def update_job(self, summary) -> None:
-        self.query_one("#sec-summary", Static).update(_render_job_overview(summary))
-        self.query_one("#sec-command", Static).update(_render_command(summary))
-        self.query_one("#sec-inputs", Static).update(_render_artifact_list(summary.inputs))
-        self.query_one("#sec-outputs", Static).update(_render_artifact_list(summary.outputs))
-        self.query_one("#sec-labels", Static).update(_render_labels(summary.labels))
-        self.query_one("#sec-git", Static).update(_render_git(summary))
-        self.query_one("#sec-env", Static).update(_render_env(summary))
+        self._summary = summary
+        self._link_idx = -1
+        self._links = [
+            ("artifact_path", a.path, "inputs") for a in summary.inputs if a.path
+        ] + [
+            ("artifact_path", a.path, "outputs") for a in summary.outputs if a.path
+        ]
+        self._render_sections()
+
+    def _render_sections(self) -> None:
+        target = self._active_link_target()
+        s = self._summary
+        self.query_one("#sec-summary", Static).update(_render_job_overview(s))
+        self.query_one("#sec-command", Static).update(_render_command(s))
+        self.query_one("#sec-inputs", Static).update(
+            _render_artifact_list(s.inputs, active_link_target=target)
+        )
+        self.query_one("#sec-outputs", Static).update(
+            _render_artifact_list(s.outputs, active_link_target=target)
+        )
+        self.query_one("#sec-labels", Static).update(_render_labels(s.labels))
+        self.query_one("#sec-git", Static).update(_render_git(s))
+        self.query_one("#sec-env", Static).update(_render_env(s))
+
+    def _refresh_link_render(self) -> None:
+        target = self._active_link_target()
+        s = self._summary
+        self.query_one("#sec-inputs", Static).update(
+            _render_artifact_list(s.inputs, active_link_target=target)
+        )
+        self.query_one("#sec-outputs", Static).update(
+            _render_artifact_list(s.outputs, active_link_target=target)
+        )
 
 
 def _render_job_overview(summary) -> Text:
@@ -231,7 +318,7 @@ def _render_command(summary) -> Text:
     return Text(summary.command or "(no command)", style="white")
 
 
-def _render_artifact_list(artifacts) -> Text:
+def _render_artifact_list(artifacts, active_link_target: str | None = None) -> Text:
     if not artifacts:
         return Text("(none)", style="dim")
     t = Text()
@@ -240,11 +327,13 @@ def _render_artifact_list(artifacts) -> Text:
         t.append("• ", style="cyan")
         path_str = a.path or "-"
         if a.path:
+            is_active = a.path == active_link_target
             t.append(
                 path_str,
                 style=Style(
                     bold=True,
                     underline=True,
+                    reverse=is_active,
                     meta={"@click": f"screen.open_artifact_path({path_str!r})"},
                 ),
             )
@@ -319,16 +408,47 @@ class ArtifactDetail(_DetailWithToc):
     ]
 
     def update_artifact(self, summary, current_session_hash: str | None = None) -> None:
-        self.query_one("#sec-summary", Static).update(_render_artifact_overview(summary))
-        self.query_one("#sec-hashes", Static).update(_render_artifact_hashes(summary))
-        self.query_one("#sec-locations", Static).update(_render_artifact_locations(summary))
+        self._summary = summary
+        self._current_session_hash = current_session_hash
+        self._link_idx = -1
+        self._links = [
+            ("job_uid", j.job_uid, "producers") for j in summary.produced_by if j.job_uid
+        ] + [
+            ("job_uid", j.job_uid, "consumers") for j in summary.consumed_by if j.job_uid
+        ]
+        self._render_sections()
+
+    def _render_sections(self) -> None:
+        target = self._active_link_target()
+        s = self._summary
+        self.query_one("#sec-summary", Static).update(_render_artifact_overview(s))
+        self.query_one("#sec-hashes", Static).update(_render_artifact_hashes(s))
+        self.query_one("#sec-locations", Static).update(_render_artifact_locations(s))
         self.query_one("#sec-producers", Static).update(
-            _render_artifact_jobs(summary.produced_by, current_session_hash)
+            _render_artifact_jobs(
+                s.produced_by, self._current_session_hash, active_link_target=target
+            )
         )
         self.query_one("#sec-consumers", Static).update(
-            _render_artifact_jobs(summary.consumed_by, current_session_hash)
+            _render_artifact_jobs(
+                s.consumed_by, self._current_session_hash, active_link_target=target
+            )
         )
-        self.query_one("#sec-labels", Static).update(_render_labels(summary.labels))
+        self.query_one("#sec-labels", Static).update(_render_labels(s.labels))
+
+    def _refresh_link_render(self) -> None:
+        target = self._active_link_target()
+        s = self._summary
+        self.query_one("#sec-producers", Static).update(
+            _render_artifact_jobs(
+                s.produced_by, self._current_session_hash, active_link_target=target
+            )
+        )
+        self.query_one("#sec-consumers", Static).update(
+            _render_artifact_jobs(
+                s.consumed_by, self._current_session_hash, active_link_target=target
+            )
+        )
 
 
 def _render_artifact_overview(summary) -> Text:
@@ -363,7 +483,11 @@ def _render_artifact_locations(summary) -> Text:
     return t
 
 
-def _render_artifact_jobs(jobs, current_session_hash: str | None = None) -> Text:
+def _render_artifact_jobs(
+    jobs,
+    current_session_hash: str | None = None,
+    active_link_target: str | None = None,
+) -> Text:
     if not jobs:
         return Text("(none)", style="dim")
     t = Text()
@@ -377,11 +501,13 @@ def _render_artifact_jobs(jobs, current_session_hash: str | None = None) -> Text
         t.append(marker, style="green" if in_session else "dim")
         uid_short = (j.job_uid or "-")[:8]
         if j.job_uid:
+            is_active = j.job_uid == active_link_target
             t.append(
                 uid_short,
                 style=Style(
                     color="magenta",
                     underline=True,
+                    reverse=is_active,
                     meta={"@click": f"screen.open_job_uid({j.job_uid!r})"},
                 ),
             )
