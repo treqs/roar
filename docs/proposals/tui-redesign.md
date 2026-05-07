@@ -134,7 +134,8 @@ beats cycling.
   works without a Tab first); Tab toggles focus tree ↔ detail.
 - TOC rows show their jump key inline (`▸ s Summary`, `  i Producers`,
   …) so shortcuts are visible without consulting a help screen.
-- `i`/`o` are paired across job (Inputs/Outputs) and artifact
-  (Producers/Consumers — same flow direction). `s` is Summary in both.
+- `i`/`o` are paired across job (Inputs/Outputs) and artifact: a
+  producer's `o`utput is this artifact, a consumer takes it as `i`nput.
+  `s` is Summary in both views.
 - Detail widgets live in `roar/tui/widgets/detail.py` so the future
   diff viewer can drop them in.

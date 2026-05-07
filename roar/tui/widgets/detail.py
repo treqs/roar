@@ -281,8 +281,8 @@ def _render_env(summary) -> Text:
 class ArtifactDetail(_DetailWithToc):
     """Artifact detail with TOC: summary / hashes / paths / producers / consumers / labels.
 
-    Producers and consumers borrow `i`/`o` from the job view's inputs/outputs —
-    they're the same flow direction (this artifact's input side / output side).
+    `i`/`o` map by the role this artifact plays in those jobs:
+    a producer's `o`utput is this artifact, a consumer takes it as `i`nput.
     """
 
     body_id = "artifact-body"
@@ -292,8 +292,8 @@ class ArtifactDetail(_DetailWithToc):
         ("summary", "Summary", "s"),
         ("hashes", "Hashes", "h"),
         ("locations", "Paths", "p"),
-        ("producers", "Producers", "i"),
-        ("consumers", "Consumers", "o"),
+        ("producers", "Producers", "o"),
+        ("consumers", "Consumers", "i"),
         ("labels", "Labels", "l"),
     )
 
@@ -301,8 +301,8 @@ class ArtifactDetail(_DetailWithToc):
         Binding("s", "jump('summary')", "Summary", show=False),
         Binding("h", "jump('hashes')", "Hashes", show=False),
         Binding("p", "jump('locations')", "Paths", show=False),
-        Binding("i", "jump('producers')", "Producers", show=False),
-        Binding("o", "jump('consumers')", "Consumers", show=False),
+        Binding("o", "jump('producers')", "Producers", show=False),
+        Binding("i", "jump('consumers')", "Consumers", show=False),
         Binding("l", "jump('labels')", "Labels", show=False),
     ]
 
