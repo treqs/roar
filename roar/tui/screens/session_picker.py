@@ -33,6 +33,8 @@ class SessionPickerScreen(ModalScreen["SessionListing | None"]):
         Binding("q", "cancel", "Cancel", show=False),
         Binding("home", "jump_first", "First", show=False, priority=True),
         Binding("end", "jump_last", "Last", show=False, priority=True),
+        Binding("pagedown", "page_down", "Page Dn", show=False, priority=True),
+        Binding("pageup", "page_up", "Page Up", show=False, priority=True),
     ]
 
     DEFAULT_CSS = """
@@ -110,3 +112,17 @@ class SessionPickerScreen(ModalScreen["SessionListing | None"]):
         view = self.query_one("#session-list", ListView)
         if self._listings:
             view.index = len(self._listings) - 1
+
+    def action_page_down(self) -> None:
+        self._move_page(+1)
+
+    def action_page_up(self) -> None:
+        self._move_page(-1)
+
+    def _move_page(self, direction: int) -> None:
+        if not self._listings:
+            return
+        view = self.query_one("#session-list", ListView)
+        page = max(view.region.height - 1, 1)  # leave one row of overlap
+        new_idx = (view.index or 0) + direction * page
+        view.index = max(0, min(new_idx, len(self._listings) - 1))
