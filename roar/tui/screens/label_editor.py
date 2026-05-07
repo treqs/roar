@@ -73,7 +73,6 @@ class LabelEditorScreen(ModalScreen[None]):
         self.display_name = display_name
         self._show_system: bool = False
         self._entries: list[tuple[str, str, bool]] = []  # (key, value_str, is_system)
-        self._has_system: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="label-box"):
@@ -96,25 +95,24 @@ class LabelEditorScreen(ModalScreen[None]):
             resolved = service.resolve_target(self.entity_type, self.target)
             metadata = service.current_metadata(resolved)
         rows: list[tuple[str, str, bool]] = []
-        has_system = False
         for key, value in flatten_label_metadata(metadata):
             is_system = is_reserved_system_label_path(key)
-            if is_system:
-                has_system = True
             if is_system and not self._show_system:
                 continue
             rows.append((key, value, is_system))
-        self._has_system = has_system
         return rows
 
     def _refresh_hint(self) -> None:
-        """Build the key-hint footer, omitting `t system` when there's nothing
-        for the toggle to reveal — e.g. on artifacts, which don't accumulate
-        system labels — so users aren't left wondering if the key is broken."""
+        """Build the key-hint footer.
+
+        `t` is always shown so the toggle state is discoverable even on
+        entities that happen to have zero system labels right now (artifacts
+        don't accumulate them today, but that's a data state, not a fixed
+        rule — system label production may broaden in future).
+        """
         parts = list(self.BASE_KEYS)
-        if self._has_system:
-            label = "t hide system" if self._show_system else "t show system"
-            parts.append(label)
+        label = "t hide system" if self._show_system else "t show system"
+        parts.append(label)
         parts.extend(self.TAIL_KEYS)
         self.query_one("#label-keys", Static).update(" · ".join(parts))
 
@@ -154,8 +152,6 @@ class LabelEditorScreen(ModalScreen[None]):
         self.dismiss(None)
 
     async def action_toggle_system(self) -> None:
-        if not self._has_system:
-            return  # nothing to reveal/hide; don't churn the list silently
         self._show_system = not self._show_system
         await self._refresh()
 
