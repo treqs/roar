@@ -377,9 +377,9 @@ class MainScreen(Screen):
         Binding("l", "app.push_log", "Log"),
         Binding("slash", "app.open_search", "Search"),
         Binding("exclamation_mark", "app.open_launcher", "Run"),
-        Binding("q", "app.quit", "Quit"),
+        Binding("q", "back", "Back/Quit"),
+        Binding("escape", "back", show=False),
         Binding("tab", "toggle_focus", "Focus tree/detail", show=False, priority=True),
-        Binding("escape", "close_detail", "Close detail", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -423,11 +423,20 @@ class MainScreen(Screen):
 
     # --- actions --------------------------------------------------------------
 
-    def action_close_detail(self) -> None:
+    def action_back(self) -> None:
+        """Close the detail pane if open; otherwise exit the app.
+
+        `q` (and `escape`) drive this. `q` is the snappy choice — pure ASCII,
+        no escape-sequence ambiguity — while `escape` still works for users
+        who reach for it but pays the terminal's ESC-prefix disambiguation
+        delay before firing.
+        """
         pane = self.query_one("#detail-pane")
         if pane.has_class("-visible"):
             pane.remove_class("-visible")
             self.query_one("#dag-tree", Tree).focus()
+        else:
+            self.app.exit()
 
     def action_toggle_focus(self) -> None:
         if not self.query_one("#detail-pane").has_class("-visible"):
