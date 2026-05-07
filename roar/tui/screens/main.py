@@ -61,17 +61,19 @@ class MainScreen(Screen):
     #session-info { padding: 0 1; background: $boost; color: $text; }
     /* Focus indicator. Textual's `:focus-within` selector doesn't reliably
        cascade to descendants in the version we depend on; we toggle the
-       `-focused` class explicitly via `on_descendant_focus` / blur instead. */
+       `-focused` class explicitly via `on_descendant_focus` / blur instead.
+       Indicators stay subtle: tree-focus brightens the session banner
+       background; detail-focus accents the divider line between panes. */
     #session-info.-focused {
         background: $accent;
         color: $background;
         text-style: bold;
     }
-    .toc.-focused { background: $accent-darken-2; }
     Tree { padding: 0 1; }
     #dag-pane { height: 1fr; }
     #detail-pane { display: none; }
     #detail-pane.-visible { display: block; height: 1fr; border-top: solid $primary; }
+    #detail-pane.-visible.-focused { border-top: solid $accent; }
     """
 
     def __init__(self, roar_dir: Path, cwd: Path) -> None:
@@ -125,15 +127,10 @@ class MainScreen(Screen):
         info = self.query_one("#session-info", Static)
         tree_focused = focused is not None and focused.id == "dag-tree"
         info.set_class(tree_focused, "-focused")
-        # Highlight the TOC of whichever detail is currently active when its body
-        # has focus.
-        for toc_id in ("#job-toc", "#artifact-toc"):
-            try:
-                toc = self.query_one(toc_id)
-            except Exception:
-                continue
-            body_id = toc_id.replace("-toc", "-body")
-            toc.set_class(focused is not None and focused.id == body_id.lstrip("#"), "-focused")
+        # Detail-pane focus → accent the border-top divider; subtle, no fill.
+        detail_pane = self.query_one("#detail-pane")
+        body_focused = focused is not None and focused.id in ("job-body", "artifact-body")
+        detail_pane.set_class(body_focused, "-focused")
 
     # --- actions --------------------------------------------------------------
 
