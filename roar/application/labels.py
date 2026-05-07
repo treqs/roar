@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from copy import deepcopy
+
 from ..core.label_origins import LABEL_ORIGIN_USER, build_current_key_origins
 from ..db.context import DatabaseContext
 from .label_rendering import flatten_label_metadata
@@ -236,6 +238,48 @@ class LabelService:
             version=int(created["version"]),
         )
 
+    def delete_keys(
+        self, target: LabelTargetRef, keys: list[str]
+    ) -> LabelWriteResult:
+        """Remove specific dotted-path keys from the current label document.
+
+        Reserved system-origin keys cannot be deleted (same constraint as for
+        `set_metadata`). Empty parent dicts are pruned so deleting `foo.bar`
+        from `{"foo": {"bar": "x"}}` leaves `{}` rather than `{"foo": {}}`.
+        """
+        for key in keys:
+            if is_reserved_system_label_path(key):
+                raise ValueError(
+                    f"Cannot delete reserved label key: {key}"
+                )
+        current = self.current_metadata(target)
+        new_metadata = deepcopy(current)
+        for key in keys:
+            _remove_dotted_path(new_metadata, key.split("."))
+        if new_metadata == current:
+            current_row = self._db.labels.get_current(
+                target.entity_type,
+                session_id=target.session_id,
+                job_id=target.job_id,
+                artifact_id=target.artifact_id,
+            )
+            current_version = int(current_row["version"]) if current_row else None
+            return LabelWriteResult(changed=False, metadata=current, version=current_version)
+
+        created = self._db.labels.create_version(
+            target.entity_type,
+            new_metadata,
+            session_id=target.session_id,
+            job_id=target.job_id,
+            artifact_id=target.artifact_id,
+            write_origin=LABEL_ORIGIN_USER,
+        )
+        return LabelWriteResult(
+            changed=True,
+            metadata=new_metadata,
+            version=int(created["version"]),
+        )
+
     @staticmethod
     def _reject_reserved_keys(metadata: dict[str, Any]) -> None:
         keys = {key for key, _value in flatten_label_metadata(metadata)}
@@ -440,6 +484,23 @@ def _canonical_remote_session_hash(
         lineage=lineage,
     )
     return str(prepared.session_hash)
+
+
+def _remove_dotted_path(root: dict[str, Any], path: list[str]) -> None:
+    """Remove the value at `path` from `root`; prune empty parent dicts."""
+    if not path:
+        return
+    head, *rest = path
+    if head not in root:
+        return
+    if not rest:
+        root.pop(head, None)
+        return
+    child = root[head]
+    if isinstance(child, dict):
+        _remove_dotted_path(child, rest)
+        if not child:
+            root.pop(head, None)
 
 
 def _assign_nested(root: dict[str, Any], path: list[str], value: Any) -> None:

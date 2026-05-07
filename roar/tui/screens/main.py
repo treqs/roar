@@ -52,6 +52,7 @@ class MainScreen(Screen):
         Binding("left_square_bracket", "prev_session", "Prev session"),
         Binding("right_square_bracket", "next_session", "Next session"),
         Binding("s", "app.open_session_picker", "Sessions"),
+        Binding("L", "open_label_editor", "Edit labels", priority=True),
         Binding("q", "back", "Back/Quit"),
         Binding("escape", "back", show=False),
         Binding("tab", "toggle_focus", "Focus tree/detail", show=False, priority=True),
@@ -209,6 +210,72 @@ class MainScreen(Screen):
         for session in listing:
             if session.hash == self.session_ref or session.hash.startswith(self.session_ref):
                 return session.hash
+        return None
+
+    def action_open_label_editor(self) -> None:
+        """`L` from anywhere on the main screen → open the editor for the
+        entity currently displayed in the detail pane (job or artifact)."""
+        if self._detail_target is None:
+            return  # nothing to edit
+        resolved = self._resolve_label_target()
+        if resolved is None:
+            self.app.bell()
+            return
+        from .label_editor import LabelEditorScreen
+
+        entity_type, target_str, display = resolved
+        self.app.push_screen(
+            LabelEditorScreen(
+                self.roar_dir, self.cwd, entity_type, target_str, display
+            )
+        )
+
+    def _resolve_label_target(self) -> tuple[str, str, str] | None:
+        """Map the currently-displayed detail entity to a label target.
+
+        Returns ``(entity_type, target, display)`` where target is a stable
+        global identifier (job uid or artifact hash). Cross-session resolution
+        works because both identifiers are session-independent.
+        """
+        target = self._detail_target
+        if target is None:
+            return None
+        kind = target.get("kind")
+        if kind == "step":
+            ref = _step_ref(target)
+            job = tui_data.load_job(
+                self.roar_dir, self.cwd, ref, session_ref=self.session_ref
+            )
+            if job is None or not job.job_uid:
+                return None
+            return ("job", job.job_uid, f"{ref} ({job.job_uid[:8]})")
+        if kind == "job_uid":
+            uid = target.get("uid")
+            if not uid:
+                return None
+            return ("job", uid, uid[:12])
+        if kind == "artifact":
+            ahash = target.get("hash")
+            path = target.get("path")
+            artifact = None
+            if path:
+                artifact = tui_data.load_artifact_by_path(self.roar_dir, self.cwd, path)
+            if artifact is None and ahash:
+                artifact = tui_data.load_artifact_by_hash(
+                    self.roar_dir, self.cwd, ahash
+                )
+            if artifact is None:
+                return None
+            # `LabelService.resolve_target` expects a content hash or path,
+            # not the artifact's DB id — pass the blake3 digest.
+            primary_hash = next(
+                (h.digest for h in artifact.hashes if h.algorithm == "blake3"),
+                None,
+            )
+            if primary_hash is None:
+                return None
+            display = (path or primary_hash)[-40:]
+            return ("artifact", primary_hash, display)
         return None
 
     def action_open_artifact_path(self, path: str) -> None:
