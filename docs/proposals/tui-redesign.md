@@ -139,10 +139,9 @@ Whether clicks register depends on the terminal:
   No app-side fix; switch terminals if mouse interaction matters.
 - **Inside tmux**: needs `set -g mouse on` in `~/.tmux.conf`.
 
-A keyboard alternative (line cursor through links in the body) is
-deferred — requires reworking focus to include a third "TOC" target
-and a per-link traversal model. Until then the cross-session jumps
-are reachable via the session picker (`s`) + tree navigation.
+Keyboard traversal works without mouse: with the detail body focused,
+`n` cycles to the next link (reverse-video highlight, body scrolls to
+the link's section), `shift+n` cycles backwards, `Enter` follows.
 
 ## Tweaks that landed alongside the above
 
