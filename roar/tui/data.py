@@ -166,19 +166,24 @@ def load_log(roar_dir: Path) -> LogSummary:
     return build_log_summary(LogQueryRequest(roar_dir=roar_dir, use_color=False))
 
 
-def load_command_history(roar_dir: Path, limit: int = 200) -> list[str]:
-    """Return distinct recent `command` strings across all sessions, newest first."""
+def load_command_history(roar_dir: Path, limit: int = 500) -> list[str]:
+    """Distinct recent `command` strings across **all** project sessions, newest first.
+
+    The launcher's history search is most useful when it covers everything the
+    user has ever run — typing `train` at the launcher should turn up training
+    commands from any historical session, not just the active one.
+    """
     commands: list[str] = []
     seen: set[str] = set()
     with create_query_database_context(roar_dir) as db_ctx:
-        session = db_ctx.sessions.get_active()
-        if session is not None:
-            jobs = db_ctx.jobs.get_by_session(int(session["id"]), limit=limit)
-            for job in reversed(jobs):  # newest first
+        for session in db_ctx.sessions.get_all():
+            for job in db_ctx.jobs.get_by_session(int(session["id"]), limit=limit):
                 cmd = job.get("command")
                 if cmd and cmd not in seen:
                     seen.add(cmd)
                     commands.append(cmd)
+                    if len(commands) >= limit:
+                        return commands
     return commands
 
 

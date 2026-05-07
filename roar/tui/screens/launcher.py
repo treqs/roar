@@ -1,13 +1,22 @@
 """Launcher modal — launches `roar run <cmd>` in a detached tmux window.
 
-History source: distinct `command` strings from prior jobs in the active
-session. Type to filter; Enter to launch.
+Two modes share one input field:
+
+- **input** (default): type a command. Enter launches it as
+  ``roar run <cmd>``. The "$ roar run" prefix is shown above the input
+  so it's clear the wrapper is implicit and not user-editable.
+- **search** (Ctrl+R): the input becomes a search query, the history
+  list filters live, ↑/↓ navigate matches, Enter copies the match
+  back into the input (and returns to input mode), Ctrl+G aborts and
+  restores the prior input.
+
+History is sourced from every project session, distinct, newest first.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -18,20 +27,19 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 from .. import data as tui_data
 from ..tmux import TmuxError, launch_roar_run, tmux_available
 
+Mode = Literal["input", "search"]
+
 
 class LauncherScreen(ModalScreen[str | None]):
     """Dismisses with a short status message (success or error) to show in the main footer."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "dismiss_none", "Cancel"),
-        # Readline-ish history cycling. Ctrl-R steps through filtered history
-        # (older direction); Ctrl-S goes back. The highlighted match is
-        # mirrored into the input box so Enter submits it.
-        Binding("ctrl+r", "history_step(1)", "Search hist", priority=True),
-        Binding("ctrl+s", "history_step(-1)", show=False, priority=True),
-        # Ctrl-Y aliases paste — readline yank semantics aren't preserved (no
-        # kill ring), but the muscle memory does the right thing here.
+        Binding("ctrl+r", "enter_search", "Search hist", priority=True),
+        Binding("ctrl+g", "abort_search", "Abort search", show=False, priority=True),
         Binding("ctrl+y", "yank", show=False, priority=True),
+        Binding("up", "history_step(-1)", show=False, priority=True),
+        Binding("down", "history_step(1)", show=False, priority=True),
         Binding("enter", "submit", "Launch"),
     ]
 
@@ -46,10 +54,18 @@ class LauncherScreen(ModalScreen[str | None]):
         padding: 1 2;
     }
     #launcher-title { color: $success; padding-bottom: 1; }
-    #launcher-hint  { color: $text-muted; padding-bottom: 1; }
+    #launcher-prefix { color: $accent; padding-bottom: 0; }
     #launcher-input { margin-bottom: 1; }
     #launcher-history { height: 1fr; }
+    #launcher-keys {
+        color: $text-muted;
+        padding-top: 1;
+        padding-bottom: 0;
+    }
     """
+
+    INPUT_KEYS = "Ctrl+R search · Ctrl+Y paste · Enter launch · Esc cancel"
+    SEARCH_KEYS = "Type to filter · ↑↓ navigate · Enter use · Ctrl+G abort"
 
     def __init__(
         self, roar_dir: Path, cwd: Path, initial_command: str = ""
@@ -59,20 +75,21 @@ class LauncherScreen(ModalScreen[str | None]):
         self.cwd = cwd
         self._history: list[str] = []
         self._initial_command = initial_command
-        # Readline-style i-search context: the original query the user typed
-        # before the first Ctrl-R. Cleared when they edit the input manually.
-        self._search_query: str | None = None
+        self._mode: Mode = "input"
+        # In input mode tracks last user-typed command (for "up" recall);
+        # in search mode tracks the value to restore on Ctrl+G abort.
+        self._stashed_command: str = ""
         self._suppress_filter: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="launcher-box"):
-            yield Static("Launch command (runs in a detached tmux window)", id="launcher-title")
-            yield Static(
-                "Type a command, or filter history below. Enter launches. Ctrl+R copies highlighted history to the input.",
-                id="launcher-hint",
+            yield Static("$ roar run", id="launcher-title")
+            yield Static("(prefix is automatic — type the rest)", id="launcher-prefix")
+            yield Input(
+                placeholder="python train.py --lr 0.001", id="launcher-input"
             )
-            yield Input(placeholder="python train.py --lr 0.001", id="launcher-input")
             yield ListView(id="launcher-history")
+            yield Static(self.INPUT_KEYS, id="launcher-keys")
 
     def on_mount(self) -> None:
         if not tmux_available():
@@ -86,50 +103,97 @@ class LauncherScreen(ModalScreen[str | None]):
             input_widget.cursor_position = len(input_widget.value)
         input_widget.focus()
 
+    # --- events ---------------------------------------------------------------
+
     def on_input_changed(self, event: Input.Changed) -> None:
         if self._suppress_filter:
-            # The change came from action_history_step; clear the guard so the
-            # next genuine edit drops the i-search context.
             self._suppress_filter = False
             return
-        self._search_query = None
+        # Filter live in both modes — the only difference is what Enter does.
         self._refresh_history(event.value)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.action_submit()
 
-    def action_history_step(self, delta: int) -> None:
-        """Cycle highlighted history match by `delta` and copy into input.
+    # --- mode actions ---------------------------------------------------------
 
-        First press captures the current input as the search query so
-        subsequent presses keep cycling against that query rather than
-        narrowing to the just-pasted match.
-        """
+    def action_enter_search(self) -> None:
+        if self._mode == "search":
+            return  # already searching
         input_widget = self.query_one("#launcher-input", Input)
-        if self._search_query is None:
-            self._search_query = input_widget.value
-        filtered = self._filtered_history(self._search_query)
-        if not filtered:
+        self._stashed_command = input_widget.value
+        self._mode = "search"
+        self._set_input_quietly("")
+        self._refresh_chrome()
+
+    def action_abort_search(self) -> None:
+        if self._mode != "search":
             return
+        self._mode = "input"
+        self._set_input_quietly(self._stashed_command)
+        self._refresh_chrome()
+
+    def _accept_search_match(self) -> None:
+        """Search → input mode, with the highlighted match copied to input."""
         hist = self.query_one("#launcher-history", ListView)
-        cur = hist.index if hist.index is not None else -1
-        new_idx = (cur + delta) % len(filtered)
-        hist.index = new_idx
-        # Flag is cleared on the next on_input_changed dispatch (queued by
-        # the assignment below) — try/finally would clear it before the
-        # event handler runs.
+        input_widget = self.query_one("#launcher-input", Input)
+        filtered = self._filtered_history(input_widget.value)
+        idx = hist.index if hist.index is not None else 0
+        chosen = filtered[idx] if 0 <= idx < len(filtered) else self._stashed_command
+        self._mode = "input"
+        self._set_input_quietly(chosen)
+        self._refresh_chrome()
+
+    def _set_input_quietly(self, value: str) -> None:
+        """Update the input without triggering filter reset semantics."""
         self._suppress_filter = True
-        input_widget.value = filtered[new_idx]
-        input_widget.cursor_position = len(input_widget.value)
+        input_widget = self.query_one("#launcher-input", Input)
+        input_widget.value = value
+        input_widget.cursor_position = len(value)
+        self._refresh_history(value)
+
+    def _refresh_chrome(self) -> None:
+        title = self.query_one("#launcher-title", Static)
+        prefix = self.query_one("#launcher-prefix", Static)
+        keys = self.query_one("#launcher-keys", Static)
+        if self._mode == "search":
+            title.update("[$accent]search history:[/]")
+            prefix.update("(↑↓ to navigate matches; Enter to use; Ctrl+G to abort)")
+            keys.update(self.SEARCH_KEYS)
+        else:
+            title.update("$ roar run")
+            prefix.update("(prefix is automatic — type the rest)")
+            keys.update(self.INPUT_KEYS)
+
+    # --- existing actions -----------------------------------------------------
+
+    def action_history_step(self, delta: int) -> None:
+        """↑/↓: in search mode, move the list cursor; in input mode, no-op."""
+        if self._mode == "search":
+            self._move_list(delta)
+
+    def _move_list(self, delta: int) -> None:
+        hist = self.query_one("#launcher-history", ListView)
+        items = self._filtered_history(
+            self.query_one("#launcher-input", Input).value
+        )
+        if not items:
+            return
+        cur = hist.index if hist.index is not None else 0
+        hist.index = max(0, min(len(items) - 1, cur + delta))
 
     def action_yank(self) -> None:
-        """Paste from the system clipboard into the input."""
         self.query_one("#launcher-input", Input).action_paste()
 
     def action_dismiss_none(self) -> None:
         self.dismiss(None)
 
     def action_submit(self) -> None:
+        if self._mode == "search":
+            # Enter in search mode promotes the highlighted match into the
+            # input box and returns to input mode — doesn't launch yet.
+            self._accept_search_match()
+            return
         cmd = self.query_one("#launcher-input", Input).value.strip()
         if not cmd:
             self.app.bell()
@@ -152,7 +216,8 @@ class LauncherScreen(ModalScreen[str | None]):
     def _refresh_history(self, needle: str) -> None:
         hist = self.query_one("#launcher-history", ListView)
         hist.clear()
-        for cmd in self._filtered_history(needle):
+        filtered = self._filtered_history(needle)
+        for cmd in filtered:
             hist.append(ListItem(Label(cmd)))
-        if self._filtered_history(needle):
+        if filtered:
             hist.index = 0
