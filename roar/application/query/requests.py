@@ -28,6 +28,7 @@ class ShowQueryRequest:
     ref: str | None
     selector: ShowQuerySelector = "auto"
     show_all: bool = False
+    session_ref: str | None = None  # full hash or hash prefix; None means active session
 
 
 @dataclass(frozen=True)

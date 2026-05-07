@@ -138,6 +138,32 @@ class _QuerySessionRepository(_QueryRepository):
         )
         return [_session_row_to_dict(row) for row in rows]
 
+    def get_by_hash(self, session_hash: str) -> dict[str, Any] | None:
+        row = self._fetchone(
+            """
+            SELECT id, hash, created_at, source_artifact_hash, current_step, is_active,
+                   git_repo, git_commit_start, git_commit_end, synced_at, metadata
+            FROM sessions
+            WHERE hash = ?
+            LIMIT 1
+            """,
+            (session_hash,),
+        )
+        return _session_row_to_dict(row) if row is not None else None
+
+    def get_by_hash_prefix(self, hash_prefix: str) -> dict[str, Any] | None:
+        row = self._fetchone(
+            """
+            SELECT id, hash, created_at, source_artifact_hash, current_step, is_active,
+                   git_repo, git_commit_start, git_commit_end, synced_at, metadata
+            FROM sessions
+            WHERE hash LIKE ?
+            LIMIT 1
+            """,
+            (f"{hash_prefix}%",),
+        )
+        return _session_row_to_dict(row) if row is not None else None
+
     def get_steps(self, session_id: int) -> list[dict[str, Any]]:
         rows = self._fetchall(
             """
