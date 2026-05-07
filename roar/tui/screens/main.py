@@ -59,15 +59,15 @@ class MainScreen(Screen):
 
     DEFAULT_CSS = """
     #session-info { padding: 0 1; background: $boost; color: $text; }
-    /* Focus indicator: the panes shift their banner to accent background so
-       it's instantly obvious which side is taking keystrokes. The TOC sidebar
-       on the detail pane swaps to accent for the same reason. */
-    #dag-pane:focus-within > #session-info {
+    /* Focus indicator. Textual's `:focus-within` selector doesn't reliably
+       cascade to descendants in the version we depend on; we toggle the
+       `-focused` class explicitly via `on_descendant_focus` / blur instead. */
+    #session-info.-focused {
         background: $accent;
         color: $background;
         text-style: bold;
     }
-    #detail-pane:focus-within .toc { background: $accent-darken-2; }
+    .toc.-focused { background: $accent-darken-2; }
     Tree { padding: 0 1; }
     #dag-pane { height: 1fr; }
     #detail-pane { display: none; }
@@ -111,6 +111,29 @@ class MainScreen(Screen):
         tree.auto_expand = False
         tree.focus()
         self.set_interval(REFRESH_INTERVAL_SECONDS, self._reload_dag)
+        self._update_focus_indicator()
+
+    def on_descendant_focus(self, event) -> None:
+        self._update_focus_indicator()
+
+    def on_descendant_blur(self, event) -> None:
+        # Run on the next tick so we read focus state *after* the new owner takes it.
+        self.call_after_refresh(self._update_focus_indicator)
+
+    def _update_focus_indicator(self) -> None:
+        focused = self.focused
+        info = self.query_one("#session-info", Static)
+        tree_focused = focused is not None and focused.id == "dag-tree"
+        info.set_class(tree_focused, "-focused")
+        # Highlight the TOC of whichever detail is currently active when its body
+        # has focus.
+        for toc_id in ("#job-toc", "#artifact-toc"):
+            try:
+                toc = self.query_one(toc_id)
+            except Exception:
+                continue
+            body_id = toc_id.replace("-toc", "-body")
+            toc.set_class(focused is not None and focused.id == body_id.lstrip("#"), "-focused")
 
     # --- actions --------------------------------------------------------------
 
