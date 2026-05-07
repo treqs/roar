@@ -126,6 +126,18 @@ class _QuerySessionRepository(_QueryRepository):
         )
         return _session_row_to_dict(row) if row is not None else None
 
+    def get_all(self) -> list[dict[str, Any]]:
+        """All sessions, newest first."""
+        rows = self._fetchall(
+            """
+            SELECT id, hash, created_at, source_artifact_hash, current_step, is_active,
+                   git_repo, git_commit_start, git_commit_end, synced_at, metadata
+            FROM sessions
+            ORDER BY created_at DESC, id DESC
+            """
+        )
+        return [_session_row_to_dict(row) for row in rows]
+
     def get_steps(self, session_id: int) -> list[dict[str, Any]]:
         rows = self._fetchall(
             """

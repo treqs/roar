@@ -44,6 +44,13 @@ from ..decorators import require_init
     default=False,
     help="Filter to show only stale steps and artifacts",
 )
+@click.option(
+    "--session",
+    "session_ref",
+    metavar="SESSION",
+    default=None,
+    help="Session hash or hash prefix (default: active session)",
+)
 @click.pass_obj
 @require_init
 def dag(
@@ -53,6 +60,7 @@ def dag(
     no_color: bool,
     show_artifacts: bool,
     stale_only: bool,
+    session_ref: str | None,
 ) -> None:
     """Display the pipeline DAG for the current session.
 
@@ -97,6 +105,7 @@ def dag(
                 use_color=not no_color and sys.stdout.isatty(),
                 show_artifacts=show_artifacts,
                 stale_only=stale_only,
+                session_ref=session_ref,
             )
         )
     except ValueError as exc:
