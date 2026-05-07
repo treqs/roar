@@ -192,16 +192,20 @@ class _DetailWithToc(Horizontal):
         return None
 
     def action_next_link(self) -> None:
-        if not self._links:
+        # Clamp at the last link rather than wrapping — wrap-around made it
+        # easy to lose track of where you were in the link list.
+        if not self._links or self._link_idx >= len(self._links) - 1:
             return
-        self._link_idx = (self._link_idx + 1) % len(self._links)
+        self._link_idx += 1
         self._refresh_link_render()
         self._scroll_to_active_link()
 
     def action_prev_link(self) -> None:
-        if not self._links:
+        # Clamp at the first link. If nothing's selected yet, prev is a no-op
+        # (next is the natural way to start).
+        if not self._links or self._link_idx <= 0:
             return
-        self._link_idx = (self._link_idx - 1) % len(self._links)
+        self._link_idx -= 1
         self._refresh_link_render()
         self._scroll_to_active_link()
 

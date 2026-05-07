@@ -40,7 +40,9 @@ class LauncherScreen(ModalScreen[str | None]):
         Binding("ctrl+y", "yank", show=False, priority=True),
         Binding("up", "history_step(-1)", show=False, priority=True),
         Binding("down", "history_step(1)", show=False, priority=True),
-        Binding("enter", "submit", "Launch"),
+        # Priority so Enter from the focused ListView (which has its own
+        # `select_cursor` binding) routes to our dispatcher.
+        Binding("enter", "submit", "Launch", priority=True),
     ]
 
     DEFAULT_CSS = """
@@ -64,7 +66,7 @@ class LauncherScreen(ModalScreen[str | None]):
     }
     """
 
-    INPUT_KEYS = "Ctrl+R search · Ctrl+Y paste · Enter launch · Esc cancel"
+    INPUT_KEYS = "↓ history · Ctrl+R search · Ctrl+Y paste · Enter launch · Esc cancel"
     SEARCH_KEYS = "Type to filter · ↑↓ navigate · Enter use · Ctrl+G abort"
 
     def __init__(
@@ -168,9 +170,39 @@ class LauncherScreen(ModalScreen[str | None]):
     # --- existing actions -----------------------------------------------------
 
     def action_history_step(self, delta: int) -> None:
-        """↑/↓: in search mode, move the list cursor; in input mode, no-op."""
+        """↑/↓ behavior, dispatched by mode + focus.
+
+        - search mode: move the filtered list cursor.
+        - input mode + input focused: ↓ steps into the history list (cursor
+          at first item); ↑ is a no-op.
+        - input mode + list focused: arrows move the list cursor; ↑ at the
+          top steps back to the input.
+        """
         if self._mode == "search":
             self._move_list(delta)
+            return
+        inp = self.query_one("#launcher-input", Input)
+        hist = self.query_one("#launcher-history", ListView)
+        if inp.has_focus:
+            if delta < 0:
+                return  # up from input: nothing
+            if not self._filtered_history(inp.value):
+                return
+            hist.focus()
+            if hist.index is None:
+                hist.index = 0
+            return
+        if hist.has_focus:
+            items = self._filtered_history(inp.value)
+            if not items:
+                inp.focus()
+                return
+            cur = hist.index if hist.index is not None else 0
+            new_idx = cur + delta
+            if new_idx < 0:
+                inp.focus()
+                return
+            hist.index = max(0, min(len(items) - 1, new_idx))
 
     def _move_list(self, delta: int) -> None:
         hist = self.query_one("#launcher-history", ListView)
@@ -194,7 +226,18 @@ class LauncherScreen(ModalScreen[str | None]):
             # input box and returns to input mode — doesn't launch yet.
             self._accept_search_match()
             return
-        cmd = self.query_one("#launcher-input", Input).value.strip()
+        inp = self.query_one("#launcher-input", Input)
+        hist = self.query_one("#launcher-history", ListView)
+        if hist.has_focus:
+            # Enter on the history list copies the selection into the input
+            # and returns focus there so the user can edit before launching.
+            items = self._filtered_history(inp.value)
+            idx = hist.index if hist.index is not None else 0
+            if 0 <= idx < len(items):
+                self._set_input_quietly(items[idx])
+            inp.focus()
+            return
+        cmd = inp.value.strip()
         if not cmd:
             self.app.bell()
             return
