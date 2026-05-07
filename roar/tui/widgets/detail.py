@@ -78,8 +78,15 @@ class _DetailWithToc(Horizontal):
     toc_id: str = "detail-toc"
 
     BINDINGS = [
-        Binding("n", "next_link", "Next link", show=False),
-        Binding("shift+n", "prev_link", "Prev link", show=False),
+        # Up/Down repurpose the body's default line-scroll into TOC section nav
+        # (vertical TOC ↔ vertical arrows). PgUp/PgDn keep the body's default
+        # paging behavior. priority=True is required because the focused
+        # VerticalScroll has its own up/down bindings we need to outrank.
+        Binding("up", "section_prev", "Prev section", show=False, priority=True),
+        Binding("down", "section_next", "Next section", show=False, priority=True),
+        # Left/Right cycle through clickable links in the body.
+        Binding("left", "prev_link", "Prev link", show=False, priority=True),
+        Binding("right", "next_link", "Next link", show=False, priority=True),
         Binding("enter", "follow_link", "Follow link", show=False),
     ]
 
@@ -158,9 +165,34 @@ class _DetailWithToc(Horizontal):
 
     # --- link traversal -------------------------------------------------------
 
+    def action_section_prev(self) -> None:
+        self._step_section(-1)
+
+    def action_section_next(self) -> None:
+        self._step_section(+1)
+
+    def _step_section(self, delta: int) -> None:
+        keys = [k for k, _, _ in self.SECTIONS]
+        if not keys:
+            return
+        current = self._current_active_section_key() or keys[0]
+        try:
+            idx = keys.index(current)
+        except ValueError:
+            idx = 0
+        new_idx = max(0, min(len(keys) - 1, idx + delta))
+        if new_idx != idx:
+            self.action_jump(keys[new_idx])
+
+    def _current_active_section_key(self) -> str | None:
+        for k, _, _ in self.SECTIONS:
+            row = self.query_one(f"#toc-{k}", Static)
+            if row.has_class("-active"):
+                return k
+        return None
+
     def action_next_link(self) -> None:
         if not self._links:
-            self.app.bell()
             return
         self._link_idx = (self._link_idx + 1) % len(self._links)
         self._refresh_link_render()
@@ -168,7 +200,6 @@ class _DetailWithToc(Horizontal):
 
     def action_prev_link(self) -> None:
         if not self._links:
-            self.app.bell()
             return
         self._link_idx = (self._link_idx - 1) % len(self._links)
         self._refresh_link_render()
@@ -176,7 +207,6 @@ class _DetailWithToc(Horizontal):
 
     def action_follow_link(self) -> None:
         if not (0 <= self._link_idx < len(self._links)):
-            self.app.bell()
             return
         kind, target, _ = self._links[self._link_idx]
         screen = self.screen
