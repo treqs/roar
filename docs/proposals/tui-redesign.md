@@ -113,12 +113,28 @@ beats cycling.
 
 ## Implementation order
 
-1. Layout swap + auto-refresh (this commit).
-2. `[` / `]` navigation + multi-session support in `build_dag_visualization`.
+1. ✅ Layout swap + auto-refresh.
+2. `[` / `]` navigation. (Multi-session support landed in `build_dag_visualization` and `tui.data.list_sessions` — UI keys still pending.)
 3. Session picker (`s`).
-4. Job detail as scrollable form with anchors.
+4. ✅ Job detail as scrollable form with anchors. (Shipped with a sticky TOC sidebar that doubles as a section indicator + click-jump target.)
 5. Command palette (`:`).
 6. Label editor.
 7. Config editor.
 8. Diff viewer.
 9. Context-aware help (`?`).
+
+## Tweaks that landed alongside the above
+
+- `q` is now a context-sensitive Back/Quit (closes the detail pane if open,
+  exits otherwise). Esc still works as an alternative but pays the
+  terminal's ESC-prefix disambiguation delay.
+- ESCDELAY pinned to 25 ms inside the TUI so Esc fires snappily on
+  terminals that don't already have it tuned.
+- Enter on a tree node moves focus to the detail body (so PageDown
+  works without a Tab first); Tab toggles focus tree ↔ detail.
+- TOC rows show their jump key inline (`▸ s Summary`, `  i Producers`,
+  …) so shortcuts are visible without consulting a help screen.
+- `i`/`o` are paired across job (Inputs/Outputs) and artifact
+  (Producers/Consumers — same flow direction). `s` is Summary in both.
+- Detail widgets live in `roar/tui/widgets/detail.py` so the future
+  diff viewer can drop them in.
