@@ -84,11 +84,19 @@ def list_sessions(roar_dir: Path) -> list[SessionListing]:
     return rows
 
 
-def load_active_session(roar_dir: Path) -> ShowSessionSummary | None:
-    """Fetch the active session summary, or None if no session exists."""
+def load_session(
+    roar_dir: Path, session_ref: str | None = None
+) -> ShowSessionSummary | None:
+    """Fetch a session summary by ref (full hash / prefix), or active when None."""
     try:
         summary = build_show_summary(
-            ShowQueryRequest(roar_dir=roar_dir, cwd=roar_dir.parent, ref=None, selector="session")
+            ShowQueryRequest(
+                roar_dir=roar_dir,
+                cwd=roar_dir.parent,
+                ref=None,
+                selector="session",
+                session_ref=session_ref,
+            )
         )
     except ShowQueryError:
         return None
@@ -97,11 +105,28 @@ def load_active_session(roar_dir: Path) -> ShowSessionSummary | None:
     return None
 
 
-def load_job(roar_dir: Path, cwd: Path, ref: str) -> ShowJobSummary | None:
-    """Fetch a job summary by step ref (@N/@BN) or job UID."""
+def load_active_session(roar_dir: Path) -> ShowSessionSummary | None:
+    """Back-compat shim — prefer `load_session(roar_dir)` directly."""
+    return load_session(roar_dir)
+
+
+def load_job(
+    roar_dir: Path, cwd: Path, ref: str, session_ref: str | None = None
+) -> ShowJobSummary | None:
+    """Fetch a job summary by step ref (@N/@BN) or job UID.
+
+    `session_ref` scopes `@N` resolution to a specific session; ignored for
+    job-uid refs (those are unique across sessions).
+    """
     try:
         summary = build_show_summary(
-            ShowQueryRequest(roar_dir=roar_dir, cwd=cwd, ref=ref, selector="job")
+            ShowQueryRequest(
+                roar_dir=roar_dir,
+                cwd=cwd,
+                ref=ref,
+                selector="job",
+                session_ref=session_ref,
+            )
         )
     except ShowQueryError:
         return None
