@@ -44,11 +44,14 @@ class LauncherScreen(ModalScreen[str | None]):
     #launcher-history { height: 1fr; }
     """
 
-    def __init__(self, roar_dir: Path, cwd: Path) -> None:
+    def __init__(
+        self, roar_dir: Path, cwd: Path, initial_command: str = ""
+    ) -> None:
         super().__init__()
         self.roar_dir = roar_dir
         self.cwd = cwd
         self._history: list[str] = []
+        self._initial_command = initial_command
 
     def compose(self) -> ComposeResult:
         with Vertical(id="launcher-box"):
@@ -66,7 +69,11 @@ class LauncherScreen(ModalScreen[str | None]):
             return
         self._history = tui_data.load_command_history(self.roar_dir)
         self._refresh_history("")
-        self.query_one("#launcher-input", Input).focus()
+        input_widget = self.query_one("#launcher-input", Input)
+        if self._initial_command:
+            input_widget.value = self._initial_command
+            input_widget.cursor_position = len(input_widget.value)
+        input_widget.focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self._refresh_history(event.value)

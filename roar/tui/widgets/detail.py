@@ -214,6 +214,8 @@ class _DetailWithToc(Horizontal):
             screen.action_open_job_uid(target)  # type: ignore[attr-defined]
         elif kind == "artifact_path":
             screen.action_open_artifact_path(target)  # type: ignore[attr-defined]
+        elif kind == "command":
+            self.app.action_open_launcher_with_command(target)  # type: ignore[attr-defined]
 
     def _scroll_to_active_link(self) -> None:
         if not (0 <= self._link_idx < len(self._links)):
@@ -287,18 +289,23 @@ class JobDetail(_DetailWithToc):
     def update_job(self, summary) -> None:
         self._summary = summary
         self._link_idx = -1
-        self._links = [
+        links: list[tuple[str, str, str]] = []
+        if summary.command:
+            links.append(("command", summary.command, "command"))
+        links.extend(
             ("artifact_path", a.path, "inputs") for a in summary.inputs if a.path
-        ] + [
+        )
+        links.extend(
             ("artifact_path", a.path, "outputs") for a in summary.outputs if a.path
-        ]
+        )
+        self._links = links
         self._render_sections()
 
     def _render_sections(self) -> None:
         target = self._active_link_target()
         s = self._summary
         self.query_one("#sec-summary", Static).update(_render_job_overview(s))
-        self.query_one("#sec-command", Static).update(_render_command(s))
+        self.query_one("#sec-command", Static).update(_render_command(s, target))
         self.query_one("#sec-inputs", Static).update(
             _render_artifact_list(s.inputs, active_link_target=target)
         )
@@ -312,6 +319,7 @@ class JobDetail(_DetailWithToc):
     def _refresh_link_render(self) -> None:
         target = self._active_link_target()
         s = self._summary
+        self.query_one("#sec-command", Static).update(_render_command(s, target))
         self.query_one("#sec-inputs", Static).update(
             _render_artifact_list(s.inputs, active_link_target=target)
         )
@@ -344,8 +352,24 @@ def _render_job_overview(summary) -> Text:
     return t
 
 
-def _render_command(summary) -> Text:
-    return Text(summary.command or "(no command)", style="white")
+def _render_command(summary, active_link_target: str | None = None) -> Text:
+    cmd = summary.command
+    if not cmd:
+        return Text("(no command)", style="dim")
+    is_active = cmd == active_link_target
+    t = Text()
+    t.append(
+        cmd,
+        style=Style(
+            color="white",
+            underline=True,
+            reverse=is_active,
+            meta={"@click": f"app.open_launcher_with_command({cmd!r})"},
+        ),
+    )
+    t.append("\n\n")
+    t.append("Enter / click → relaunch via tmux", style="dim")
+    return t
 
 
 def _render_artifact_list(artifacts, active_link_target: str | None = None) -> Text:

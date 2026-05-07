@@ -49,6 +49,13 @@ class TuiApp(App):
         self.push_screen(SearchScreen(self.roar_dir), _on_result)
 
     def action_open_launcher(self) -> None:
+        self._open_launcher("")
+
+    def action_open_launcher_with_command(self, command: str) -> None:
+        """Click target for the linked Command section in JobDetail."""
+        self._open_launcher(command)
+
+    def _open_launcher(self, initial_command: str) -> None:
         def _on_result(message: str | None) -> None:
             if not message:
                 return
@@ -57,7 +64,10 @@ class TuiApp(App):
             if top is not None:
                 top._reload_dag()
 
-        self.push_screen(LauncherScreen(self.roar_dir, self.cwd), _on_result)
+        self.push_screen(
+            LauncherScreen(self.roar_dir, self.cwd, initial_command=initial_command),
+            _on_result,
+        )
 
     def action_open_session_picker(self) -> None:
         def _on_result(listing) -> None:
