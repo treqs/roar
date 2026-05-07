@@ -54,7 +54,8 @@ class LabelEditorScreen(ModalScreen[None]):
     #label-keys { color: $text-muted; padding-top: 1; }
     """
 
-    INPUT_KEYS = "Enter edit · a add · d delete · t system · p push · Esc close"
+    BASE_KEYS = ("Enter edit", "a add", "d delete")
+    TAIL_KEYS = ("p push", "Esc close")
 
     def __init__(
         self,
@@ -72,6 +73,7 @@ class LabelEditorScreen(ModalScreen[None]):
         self.display_name = display_name
         self._show_system: bool = False
         self._entries: list[tuple[str, str, bool]] = []  # (key, value_str, is_system)
+        self._has_system: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="label-box"):
@@ -80,7 +82,7 @@ class LabelEditorScreen(ModalScreen[None]):
                 id="label-title",
             )
             yield ListView(id="label-list")
-            yield Static(self.INPUT_KEYS, id="label-keys")
+            yield Static("", id="label-keys")
 
     async def on_mount(self) -> None:
         await self._refresh()
@@ -94,17 +96,33 @@ class LabelEditorScreen(ModalScreen[None]):
             resolved = service.resolve_target(self.entity_type, self.target)
             metadata = service.current_metadata(resolved)
         rows: list[tuple[str, str, bool]] = []
+        has_system = False
         for key, value in flatten_label_metadata(metadata):
             is_system = is_reserved_system_label_path(key)
+            if is_system:
+                has_system = True
             if is_system and not self._show_system:
                 continue
             rows.append((key, value, is_system))
+        self._has_system = has_system
         return rows
+
+    def _refresh_hint(self) -> None:
+        """Build the key-hint footer, omitting `t system` when there's nothing
+        for the toggle to reveal — e.g. on artifacts, which don't accumulate
+        system labels — so users aren't left wondering if the key is broken."""
+        parts = list(self.BASE_KEYS)
+        if self._has_system:
+            label = "t hide system" if self._show_system else "t show system"
+            parts.append(label)
+        parts.extend(self.TAIL_KEYS)
+        self.query_one("#label-keys", Static).update(" · ".join(parts))
 
     async def _refresh(self) -> None:
         view = self.query_one("#label-list", ListView)
         prev_idx = view.index
         self._entries = self._load_entries()
+        self._refresh_hint()
         # Both `clear()` and `extend()` are async (return AwaitRemove /
         # AwaitMount). Awaiting them ensures the DOM has actually flushed
         # before we try to set `index`, otherwise `index` pointer-arithmetics
@@ -136,6 +154,8 @@ class LabelEditorScreen(ModalScreen[None]):
         self.dismiss(None)
 
     async def action_toggle_system(self) -> None:
+        if not self._has_system:
+            return  # nothing to reveal/hide; don't churn the list silently
         self._show_system = not self._show_system
         await self._refresh()
 
