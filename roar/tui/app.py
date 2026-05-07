@@ -69,6 +69,11 @@ class TuiApp(App):
             _on_result,
         )
 
+    def action_open_config_editor(self) -> None:
+        from .screens.config_editor import ConfigEditorScreen
+
+        self.push_screen(ConfigEditorScreen(start_dir=str(self.cwd)))
+
     def action_open_session_picker(self) -> None:
         def _on_result(listing) -> None:
             if listing is None:

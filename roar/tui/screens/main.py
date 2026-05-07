@@ -53,6 +53,7 @@ class MainScreen(Screen):
         Binding("right_square_bracket", "next_session", "Next session"),
         Binding("s", "app.open_session_picker", "Sessions"),
         Binding("L", "open_label_editor", "Edit labels", priority=True),
+        Binding("C", "app.open_config_editor", "Edit config", priority=True),
         Binding("q", "back", "Back/Quit"),
         Binding("escape", "back", show=False),
         Binding("tab", "toggle_focus", "Focus tree/detail", show=False, priority=True),
