@@ -95,15 +95,12 @@ class _DetailWithToc(Horizontal):
     DEFAULT_CSS = """
     _DetailWithToc { height: 1fr; }
     _DetailWithToc .toc {
-        width: 14;
-        padding: 1 0 0 1;
+        width: 13;
+        padding-top: 1;
         background: $boost;
     }
     _DetailWithToc .toc.-hidden { display: none; }
-    _DetailWithToc .toc Static {
-        color: $text-muted;
-        padding: 0 1;
-    }
+    _DetailWithToc .toc Static { color: $text-muted; }
     _DetailWithToc .toc Static.-active {
         color: $accent;
         text-style: bold;
@@ -116,10 +113,15 @@ class _DetailWithToc(Horizontal):
     }
     """
 
+    @staticmethod
+    def _toc_label(active: bool, jump_key: str, title: str) -> str:
+        marker = "▸" if active else " "
+        return f"{marker} {jump_key} {title}"
+
     def compose(self) -> ComposeResult:
         with Vertical(id=self.toc_id, classes="toc"):
-            for key, title, _ in self.SECTIONS:
-                yield Static(f"  {title}", id=f"toc-{key}")
+            for key, title, jump_key in self.SECTIONS:
+                yield Static(self._toc_label(False, jump_key, title), id=f"toc-{key}")
         with VerticalScroll(id=self.body_id, classes="body"):
             for key, title, _ in self.SECTIONS:
                 yield Static(
@@ -171,44 +173,41 @@ class _DetailWithToc(Horizontal):
         self._set_active_section(active)
 
     def _set_active_section(self, key: str) -> None:
-        for k, title, _ in self.SECTIONS:
+        for k, title, jump_key in self.SECTIONS:
             row = self.query_one(f"#toc-{k}", Static)
-            if k == key:
-                row.add_class("-active")
-                row.update(f"▸ {title}")
-            else:
-                row.remove_class("-active")
-                row.update(f"  {title}")
+            is_active = k == key
+            row.set_class(is_active, "-active")
+            row.update(self._toc_label(is_active, jump_key, title))
 
 
 class JobDetail(_DetailWithToc):
-    """Job detail with TOC: overview / command / inputs / outputs / labels / git / env."""
+    """Job detail with TOC: summary / command / inputs / outputs / labels / git / env."""
 
     body_id = "job-body"
     toc_id = "job-toc"
 
     SECTIONS = (
-        ("overview", "Overview", "o"),
+        ("summary", "Summary", "s"),
         ("command", "Command", "c"),
         ("inputs", "Inputs", "i"),
-        ("outputs", "Outputs", "O"),
+        ("outputs", "Outputs", "o"),
         ("labels", "Labels", "l"),
         ("git", "Git", "g"),
         ("env", "Env", "e"),
     )
 
     BINDINGS = [
-        Binding("o", "jump('overview')", "Overview", show=False),
+        Binding("s", "jump('summary')", "Summary", show=False),
         Binding("c", "jump('command')", "Command", show=False),
         Binding("i", "jump('inputs')", "Inputs", show=False),
-        Binding("O", "jump('outputs')", "Outputs", show=False),
+        Binding("o", "jump('outputs')", "Outputs", show=False),
         Binding("l", "jump('labels')", "Labels", show=False),
         Binding("g", "jump('git')", "Git", show=False),
         Binding("e", "jump('env')", "Env", show=False),
     ]
 
     def update_job(self, summary) -> None:
-        self.query_one("#sec-overview", Static).update(_render_job_overview(summary))
+        self.query_one("#sec-summary", Static).update(_render_job_overview(summary))
         self.query_one("#sec-command", Static).update(_render_command(summary))
         self.query_one("#sec-inputs", Static).update(_render_artifact_list(summary.inputs))
         self.query_one("#sec-outputs", Static).update(_render_artifact_list(summary.outputs))
@@ -291,31 +290,35 @@ def _render_env(summary) -> Text:
 
 
 class ArtifactDetail(_DetailWithToc):
-    """Artifact detail with TOC: overview / hashes / locations / producers / consumers / labels."""
+    """Artifact detail with TOC: summary / hashes / paths / producers / consumers / labels.
+
+    Producers and consumers borrow `i`/`o` from the job view's inputs/outputs —
+    they're the same flow direction (this artifact's input side / output side).
+    """
 
     body_id = "artifact-body"
     toc_id = "artifact-toc"
 
     SECTIONS = (
-        ("overview", "Overview", "o"),
+        ("summary", "Summary", "s"),
         ("hashes", "Hashes", "h"),
         ("locations", "Paths", "p"),
-        ("producers", "Producers", "u"),
-        ("consumers", "Consumers", "d"),
+        ("producers", "Producers", "i"),
+        ("consumers", "Consumers", "o"),
         ("labels", "Labels", "l"),
     )
 
     BINDINGS = [
-        Binding("o", "jump('overview')", "Overview", show=False),
+        Binding("s", "jump('summary')", "Summary", show=False),
         Binding("h", "jump('hashes')", "Hashes", show=False),
         Binding("p", "jump('locations')", "Paths", show=False),
-        Binding("u", "jump('producers')", "Producers", show=False),
-        Binding("d", "jump('consumers')", "Consumers", show=False),
+        Binding("i", "jump('producers')", "Producers", show=False),
+        Binding("o", "jump('consumers')", "Consumers", show=False),
         Binding("l", "jump('labels')", "Labels", show=False),
     ]
 
     def update_artifact(self, summary) -> None:
-        self.query_one("#sec-overview", Static).update(_render_artifact_overview(summary))
+        self.query_one("#sec-summary", Static).update(_render_artifact_overview(summary))
         self.query_one("#sec-hashes", Static).update(_render_artifact_hashes(summary))
         self.query_one("#sec-locations", Static).update(_render_artifact_locations(summary))
         self.query_one("#sec-producers", Static).update(_render_artifact_jobs(summary.produced_by))
@@ -621,6 +624,7 @@ class MainScreen(Screen):
             return
         self._populate_detail(data)
         self._reveal_detail()
+        self._focus_detail()
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         if self._reloading:
