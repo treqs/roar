@@ -29,9 +29,9 @@ except Exception:
     __version__ = "0.2.10"
 
 
-# Lazy command registry: maps command name to (module_path, command_name, short_help)
+# Lazy command registry: maps command name to (module_path, command_name, short_help, hidden)
 # Short help is stored here to avoid importing commands just for --help
-LAZY_COMMANDS: dict[str, tuple[str, str, str]] = build_lazy_commands()
+LAZY_COMMANDS: dict[str, tuple[str, str, str, bool]] = build_lazy_commands()
 
 HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = build_help_groups()
 
@@ -64,8 +64,15 @@ def _command_is_available(command_name: str) -> bool:
 class LazyCommand(click.Command):
     """A placeholder command that loads the real implementation on invoke."""
 
-    def __init__(self, name: str, module_path: str, attr_name: str, short_help: str):
-        super().__init__(name=name, callback=None, help=short_help)
+    def __init__(
+        self,
+        name: str,
+        module_path: str,
+        attr_name: str,
+        short_help: str,
+        hidden: bool = False,
+    ):
+        super().__init__(name=name, callback=None, help=short_help, hidden=hidden)
         self._module_path = module_path
         self._attr_name = attr_name
         self._real_command: click.Command | None = None
@@ -121,13 +128,13 @@ class LazyGroup(click.Group):
     """
 
     def __init__(
-        self, *args, lazy_commands: dict[str, tuple[str, str, str]] | None = None, **kwargs
+        self, *args, lazy_commands: dict[str, tuple[str, str, str, bool]] | None = None, **kwargs
     ):
         super().__init__(*args, **kwargs)
         self._lazy_commands = lazy_commands or {}
         # Create placeholder commands for help rendering
-        for name, (module_path, attr_name, short_help) in self._lazy_commands.items():
-            self.add_command(LazyCommand(name, module_path, attr_name, short_help), name)
+        for name, (module_path, attr_name, short_help, hidden) in self._lazy_commands.items():
+            self.add_command(LazyCommand(name, module_path, attr_name, short_help, hidden), name)
 
     def list_commands(self, ctx: click.Context) -> list[str]:
         """List all available commands."""

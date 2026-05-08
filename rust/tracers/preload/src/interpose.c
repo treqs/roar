@@ -15,6 +15,8 @@ extern ssize_t roar_interpose_writev(int fd, const struct iovec *iov, int iovcnt
 extern void *roar_interpose_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 extern int roar_interpose_rename(const char *old_path, const char *new_path);
 extern int roar_interpose_renameat(int old_dirfd, const char *old_path, int new_dirfd, const char *new_path);
+extern int roar_interpose_link(const char *old_path, const char *new_path);
+extern int roar_interpose_linkat(int old_dirfd, const char *old_path, int new_dirfd, const char *new_path, int flags);
 extern int roar_interpose_unlink(const char *path);
 extern int roar_interpose_unlinkat(int dirfd, const char *path, int flags);
 extern int roar_interpose_truncate(const char *path, off_t length);
@@ -41,6 +43,8 @@ DYLD_INTERPOSE(roar_interpose_writev, writev);
 DYLD_INTERPOSE(roar_interpose_mmap, mmap);
 DYLD_INTERPOSE(roar_interpose_rename, rename);
 DYLD_INTERPOSE(roar_interpose_renameat, renameat);
+DYLD_INTERPOSE(roar_interpose_link, link);
+DYLD_INTERPOSE(roar_interpose_linkat, linkat);
 DYLD_INTERPOSE(roar_interpose_unlink, unlink);
 DYLD_INTERPOSE(roar_interpose_unlinkat, unlinkat);
 DYLD_INTERPOSE(roar_interpose_truncate, truncate);

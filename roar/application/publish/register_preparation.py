@@ -10,6 +10,7 @@ from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
 from ...publish_auth import resolve_publish_creator_identity
 from ..git import build_roar_git_tag_name, ensure_clean_git_repo, resolve_roar_git_context
+from .job_preparation import normalize_jobs_for_registration, order_jobs_for_registration
 from .remote_registry import coerce_remote_registry
 from .runtime import PublishRuntime
 from .session import prepare_publish_session
@@ -25,6 +26,8 @@ class PreparedRegisterExecution:
     session_url: str | None
     git_tag_name: str | None
     git_tag_repo_root: Path | None
+    registration_session_id: str | None = None
+    registration_session_mode: str | None = None
 
 
 def prepare_register_execution(
@@ -68,6 +71,17 @@ def prepare_register_execution(
         registration_coordinator=runtime_dict.get("registration_coordinator"),
     )
     creator_identity = resolve_publish_creator_identity(remote_registry.publish_auth)
+    canonical_lineage = None
+    if lineage is not None:
+        canonical_lineage = LineageData(
+            jobs=order_jobs_for_registration(normalize_jobs_for_registration(lineage.jobs)),
+            artifacts=list(lineage.artifacts),
+            artifact_hashes=set(lineage.artifact_hashes),
+            pipeline=dict(lineage.pipeline)
+            if isinstance(lineage.pipeline, dict)
+            else lineage.pipeline,
+        )
+
     publish_session = prepare_publish_session(
         remote_registry=remote_registry,
         roar_dir=roar_dir,
@@ -77,7 +91,7 @@ def prepare_register_execution(
         register_with_glaas=not dry_run,
         configured_error="GLaaS not configured. Run 'roar config set glaas.url <url>' first.",
         session_hash_override=session_hash_override,
-        lineage=lineage,
+        lineage=canonical_lineage,
         creator_identity=creator_identity,
     )
 
@@ -88,4 +102,6 @@ def prepare_register_execution(
         session_url=publish_session.session_url,
         git_tag_name=git_tag_name,
         git_tag_repo_root=git_tag_repo_root,
+        registration_session_id=publish_session.registration_session_id,
+        registration_session_mode=publish_session.registration_session_mode,
     )

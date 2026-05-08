@@ -26,6 +26,33 @@ def _resolve_glaas_web_url(*, start_dir: str | None = None) -> str:
     return get_raw_glaas_web_url(start_dir=start_dir) or "https://glaas.ai"
 
 
+def _resolve_public_flag(public: bool | None, *, start_dir: str | None = None) -> tuple[bool, bool]:
+    """Resolve publish visibility and whether public came from config default."""
+    if public is not None:
+        return public, False
+
+    from ...integrations.config import config_get
+
+    resolved_public = bool(config_get("registration.public_by_default", start_dir=start_dir))
+    return resolved_public, resolved_public
+
+
+def _display_session_url(response_session_url: str | None, web_url: str, session_hash: str) -> str:
+    """Prefer GLaaS' returned URL and fall back to the legacy local URL shape."""
+    if response_session_url:
+        return response_session_url
+    return f"{web_url}/dag/{session_hash}"
+
+
+def _warn_public_default() -> None:
+    """Tell the user when config caused public visibility."""
+    click.echo(
+        "Warning: defaulting to public visibility because "
+        "registration.public_by_default=true in roar config. Pass --private to override.",
+        err=True,
+    )
+
+
 def _confirm_secrets(detected_secrets: list[str]) -> bool:
     """Prompt user to confirm registration with secrets."""
     click.echo("")
@@ -55,12 +82,19 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     help="Upgrade tracked S3 artifacts from ETag-only hashes to BLAKE3 before registration",
 )
 @click.option(
-    "--public",
-    is_flag=True,
+    "--public/--private",
+    "public",
+    default=None,
     help=(
-        "Submit as public lineage. --public allows public+anonymous or public+attributed "
-        "submission; without it, non-public submission must be private+attributed."
+        "Submit as public or private lineage. When omitted, roar uses "
+        "registration.public_by_default from config. Public allows anonymous or "
+        "attributed submission; private requires attributed submission."
     ),
+)
+@click.option(
+    "--anonymous",
+    is_flag=True,
+    help="Force public anonymous registration even when local GLaaS auth is configured.",
 )
 @click.pass_obj
 @require_init
@@ -70,7 +104,8 @@ def register(
     dry_run: bool,
     yes: bool,
     as_blake3: bool,
-    public: bool,
+    public: bool | None,
+    anonymous: bool,
 ) -> None:
     """Register lineage with GLaaS.
 
@@ -83,9 +118,14 @@ def register(
     Artifact paths must refer to files tracked by roar.
 
     Visibility / attribution matrix:
-    - no --public -> private + attributed only
-    - --public -> public + anonymous OR public + attributed
+    - effective private -> private + attributed only
+    - effective public -> public + anonymous OR public + attributed
+    - --anonymous -> public + anonymous, ignoring configured auth
     - private + anonymous is not allowed
+
+    Effective visibility comes from `--public` / `--private` when provided,
+    otherwise from `registration.public_by_default` in roar config. `--anonymous`
+    forces public visibility.
 
     If secrets are detected in the data (API keys, tokens, passwords, etc.),
     you will be prompted to confirm. Use --yes to skip the prompt and
@@ -112,6 +152,16 @@ def register(
 
         roar register outputs/metrics.json  # Register from subdirectory
     """
+    if anonymous and public is False:
+        raise click.ClickException("--anonymous requires public visibility; remove --private.")
+
+    if anonymous:
+        resolved_public, used_public_default = True, False
+    else:
+        resolved_public, used_public_default = _resolve_public_flag(public, start_dir=str(ctx.cwd))
+    if used_public_default:
+        _warn_public_default()
+
     response = register_lineage_target(
         RegisterLineageRequest(
             target=target,
@@ -119,7 +169,8 @@ def register(
             cwd=ctx.cwd,
             dry_run=dry_run,
             as_blake3=as_blake3,
-            public=public,
+            public=resolved_public,
+            anonymous=anonymous,
             skip_confirmation=yes,
             confirm_callback=_confirm_secrets if not yes else None,
         )
@@ -133,6 +184,7 @@ def register(
 
     web_url = _resolve_glaas_web_url(start_dir=str(ctx.cwd))
     session_preview = _preview_hash(response.session_hash) if response.session_hash else ""
+    session_url = _display_session_url(response.session_url, web_url, response.session_hash)
 
     # Format output
     if dry_run:
@@ -145,7 +197,7 @@ def register(
             click.echo(f"  Secrets to redact: {len(response.secrets_detected)} types")
         click.echo("")
         click.echo("GLaaS:")
-        click.echo(f"  Session:  {web_url}/dag/{response.session_hash}")
+        click.echo(f"  Session:  {session_url}")
         if response.artifact_hash:
             click.echo(f"  Artifact: {web_url}/artifact/{response.artifact_hash}")
     else:
@@ -166,7 +218,7 @@ def register(
 
         click.echo("")
         click.echo("GLaaS:")
-        click.echo(f"  Session:  {web_url}/dag/{response.session_hash}")
+        click.echo(f"  Session:  {session_url}")
         if response.artifact_hash:
             click.echo(f"  Artifact: {web_url}/artifact/{response.artifact_hash}")
             click.echo("")

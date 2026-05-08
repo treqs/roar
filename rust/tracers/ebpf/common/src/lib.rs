@@ -42,7 +42,7 @@ pub struct SmallEvent {
     pub arg1: u64, // offset (or out_fd for sendfile, new_fd for dup)
 }
 
-/// Large event (~288 bytes) for open, rename, exec, clone — includes an inline path.
+/// Large event (~288 bytes) for open, path publication, exec, clone — includes an inline path.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct LargeEvent {
@@ -96,9 +96,11 @@ pub mod syscall_nr {
     pub const CLONE: u64 = 56;
     pub const EXECVE: u64 = 59;
     pub const RENAME: u64 = 82;
+    pub const LINK: u64 = 86;
     pub const SENDFILE: u64 = 40;
     pub const OPENAT: u64 = 257;
     pub const RENAMEAT: u64 = 264;
+    pub const LINKAT: u64 = 265;
     pub const DUP3: u64 = 292;
     pub const PREADV: u64 = 295;
     pub const PWRITEV: u64 = 296;

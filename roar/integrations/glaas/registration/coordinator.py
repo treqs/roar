@@ -229,6 +229,97 @@ class RegistrationCoordinator(IRegistrationCoordinator):
             errors=errors,
         )
 
+    def register_lineage_under_registration_session(
+        self,
+        registration_session_id: str,
+        git_context: GitContext,
+        jobs: list[dict],
+    ) -> BatchRegistrationResult:
+        """Stage complete lineage under a remote registration session."""
+        errors: list[str] = []
+        jobs_created = 0
+        jobs_failed = 0
+        artifacts_registered = 0
+        artifacts_failed = 0
+        links_created = 0
+        links_failed = 0
+
+        self._logger.debug(
+            "Starting registration-session lineage staging: registration_session_id=%s, jobs=%d",
+            registration_session_id,
+            len(jobs),
+        )
+
+        job_uids_created: list[str] = []
+        if jobs:
+            batch_results = self.job_service.create_jobs_batch_under_registration_session(
+                jobs=jobs,
+                registration_session_id=registration_session_id,
+                git_context=git_context,
+            )
+            for result in batch_results:
+                if result.success:
+                    jobs_created += 1
+                    job_uids_created.append(result.job_uid)
+                else:
+                    jobs_failed += 1
+                    if result.error:
+                        errors.append(f"Job {result.job_uid}: {result.error}")
+
+        self._logger.debug(
+            "Registration-session job staging complete: %d created, %d failed",
+            jobs_created,
+            jobs_failed,
+        )
+
+        for job in jobs:
+            job_uid = job.get("job_uid")
+            if not job_uid or job_uid not in job_uids_created:
+                continue
+
+            remote_job_uid = job.get("remote_job_uid")
+            if not isinstance(remote_job_uid, str) or not remote_job_uid:
+                remote_job_uid = job_uid
+
+            inputs = self._extract_staged_io_list(job, "_inputs", "_input_hashes")
+            outputs = self._extract_staged_io_list(job, "_outputs", "_output_hashes")
+            if not inputs and not outputs:
+                continue
+
+            link_result = self.job_service.link_job_artifacts_under_registration_session(
+                registration_session_id=registration_session_id,
+                job_uid=remote_job_uid,
+                inputs=inputs,
+                outputs=outputs,
+            )
+            if link_result.success:
+                links_created += link_result.inputs_linked + link_result.outputs_linked
+                artifacts_registered += link_result.artifacts_registered
+            else:
+                links_failed += 1
+                artifacts_failed += link_result.artifacts_registered
+                if link_result.error:
+                    errors.append(f"Link {job_uid}: {link_result.error}")
+
+        self._logger.debug(
+            "Registration-session lineage staging complete: jobs=%d/%d, artifacts=%d, links=%d",
+            jobs_created,
+            jobs_created + jobs_failed,
+            artifacts_registered,
+            links_created,
+        )
+
+        return BatchRegistrationResult(
+            session_registered=True,
+            jobs_created=jobs_created,
+            jobs_failed=jobs_failed,
+            artifacts_registered=artifacts_registered,
+            artifacts_failed=artifacts_failed,
+            links_created=links_created,
+            links_failed=links_failed,
+            errors=errors,
+        )
+
     def _resolve_io_artifact_hashes(
         self,
         items: list[dict[str, Any]],
@@ -321,6 +412,51 @@ class RegistrationCoordinator(IRegistrationCoordinator):
         hash_list = job.get(hash_list_key, [])
         if hash_list:
             return [{"hash": h, "path": ""} for h in hash_list if h]
+
+        return []
+
+    def _extract_staged_io_list(
+        self,
+        job: dict,
+        structured_key: str,
+        hash_list_key: str,
+    ) -> list[dict[str, Any]]:
+        """Extract staged I/O rows with direct artifact hashes for registration-session writes."""
+        structured = job.get(structured_key, [])
+        if structured:
+            result: list[dict[str, Any]] = []
+            for item in structured:
+                artifact_hash = _artifact_ref.extract_digest(item)
+                path = item.get("path")
+                if not artifact_hash or not path:
+                    preview = _artifact_ref.preview(item)
+                    if preview:
+                        self._logger.warning(
+                            "Dropping staged I/O item %s: missing hash or path",
+                            preview,
+                        )
+                    else:
+                        self._logger.warning("Dropping staged I/O item: missing hash or path")
+                    continue
+
+                normalized: dict[str, Any] = {
+                    "artifact_hash": artifact_hash,
+                    "path": path,
+                }
+                if item.get("size") is not None:
+                    normalized["size"] = item["size"]
+                if item.get("source_type") is not None:
+                    normalized["source_type"] = item["source_type"]
+                if item.get("metadata") is not None:
+                    normalized["metadata"] = item["metadata"]
+                if item.get("byte_ranges") is not None:
+                    normalized["byte_ranges"] = item["byte_ranges"]
+                result.append(normalized)
+            return result
+
+        hash_list = job.get(hash_list_key, [])
+        if hash_list:
+            return [{"artifact_hash": h, "path": ""} for h in hash_list if h]
 
         return []
 

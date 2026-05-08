@@ -12,6 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 use tracer_fd::FdTracker;
 use tracer_runtime::{build_tracer_report, capture_process_info, timestamp_now};
 use tracer_schema::{ProcessInfo, TracerReport};
@@ -30,6 +31,63 @@ const PROCESS_PRELOAD_ENV: &str = "LD_PRELOAD";
 const PRELOAD_LIBRARY_EXT: &str = ".dylib";
 #[cfg(not(target_os = "macos"))]
 const PRELOAD_LIBRARY_EXT: &str = ".so";
+
+#[derive(Serialize)]
+struct PreflightCheck {
+    name: String,
+    ok: bool,
+    detail: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PreflightResult {
+    backend: &'static str,
+    ok: bool,
+    summary: String,
+    command_checked: Option<String>,
+    warnings: Vec<String>,
+    checks: Vec<PreflightCheck>,
+}
+
+fn preflight_check(name: &str, ok: bool, detail: impl Into<Option<String>>) -> PreflightCheck {
+    PreflightCheck {
+        name: name.to_string(),
+        ok,
+        detail: detail.into(),
+    }
+}
+
+fn emit_preflight(result: &PreflightResult, json_output: bool) {
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(result).expect("failed to serialize preflight JSON")
+        );
+        return;
+    }
+
+    println!(
+        "preload preflight {}: {}",
+        if result.ok { "passed" } else { "failed" },
+        result.summary
+    );
+    if let Some(command_checked) = &result.command_checked {
+        println!("  command: {command_checked}");
+    }
+    for check in &result.checks {
+        let detail = check
+            .detail
+            .as_ref()
+            .map(|value| format!(" ({value})"))
+            .unwrap_or_default();
+        println!(
+            "  - {}: {}{}",
+            check.name,
+            if check.ok { "ok" } else { "fail" },
+            detail
+        );
+    }
+}
 
 struct CollectorState {
     fd: FdTracker,
@@ -338,6 +396,213 @@ fn is_macos_protected_binary(_path: &Path) -> bool {
     false
 }
 
+fn make_preflight_temp_path(label: &str, suffix: &str) -> PathBuf {
+    let pid = std::process::id();
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    env::temp_dir().join(format!("roar-{label}-{pid}-{nanos}{suffix}"))
+}
+
+fn run_preflight_probe(path: &Path) -> Result<()> {
+    let payload = b"roar-preflight-probe";
+    fs::write(path, payload).with_context(|| format!("failed to write {}", path.display()))?;
+    let got = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    if got != payload {
+        anyhow::bail!("probe payload mismatch");
+    }
+
+    let renamed = path.with_extension("renamed");
+    fs::rename(path, &renamed).with_context(|| {
+        format!(
+            "failed to rename {} -> {}",
+            path.display(),
+            renamed.display()
+        )
+    })?;
+    fs::rename(&renamed, path).with_context(|| {
+        format!(
+            "failed to rename {} -> {}",
+            renamed.display(),
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn run_preflight(json_output: bool, command: Option<&str>) -> i32 {
+    let mut checks = vec![
+        preflight_check("platform", true, Some(env::consts::OS.to_string())),
+        preflight_check("architecture", true, Some(env::consts::ARCH.to_string())),
+    ];
+
+    match resolve_preload_library() {
+        Some(path) => {
+            checks.push(preflight_check(
+                "library",
+                true,
+                Some(path.display().to_string()),
+            ));
+        }
+        None => {
+            let result = PreflightResult {
+                backend: "preload",
+                ok: false,
+                summary: "preload library not found".to_string(),
+                command_checked: None,
+                warnings: Vec::new(),
+                checks: {
+                    checks.push(preflight_check(
+                        "library",
+                        false,
+                        Some("preload library not found".to_string()),
+                    ));
+                    checks
+                },
+            };
+            emit_preflight(&result, json_output);
+            return 1;
+        }
+    };
+
+    let mut command_checked = None;
+    if let Some(command_name) = command {
+        match resolve_command_path(command_name) {
+            Some(path) => {
+                let rendered = path.display().to_string();
+                command_checked = Some(rendered.clone());
+                checks.push(preflight_check("command", true, Some(rendered.clone())));
+                let compatible = !is_macos_protected_binary(&path);
+                checks.push(preflight_check(
+                    "command_compatibility",
+                    compatible,
+                    Some(if compatible {
+                        "compatible".to_string()
+                    } else {
+                        "macOS protected binary blocks preload injection".to_string()
+                    }),
+                ));
+                if !compatible {
+                    let result = PreflightResult {
+                        backend: "preload",
+                        ok: false,
+                        summary: "macOS protected binary blocks preload injection".to_string(),
+                        command_checked,
+                        warnings: Vec::new(),
+                        checks,
+                    };
+                    emit_preflight(&result, json_output);
+                    return 1;
+                }
+            }
+            None => {
+                command_checked = Some(command_name.to_string());
+                checks.push(preflight_check(
+                    "command",
+                    false,
+                    Some(format!("command not found: {command_name}")),
+                ));
+                let result = PreflightResult {
+                    backend: "preload",
+                    ok: false,
+                    summary: format!("command not found: {command_name}"),
+                    command_checked,
+                    warnings: Vec::new(),
+                    checks,
+                };
+                emit_preflight(&result, json_output);
+                return 1;
+            }
+        }
+    }
+
+    let current_exe = match env::current_exe() {
+        Ok(path) => {
+            checks.push(preflight_check(
+                "launcher",
+                true,
+                Some(path.display().to_string()),
+            ));
+            path
+        }
+        Err(err) => {
+            checks.push(preflight_check("launcher", false, Some(err.to_string())));
+            let result = PreflightResult {
+                backend: "preload",
+                ok: false,
+                summary: format!("failed to resolve current executable: {err}"),
+                command_checked,
+                warnings: Vec::new(),
+                checks,
+            };
+            emit_preflight(&result, json_output);
+            return 1;
+        }
+    };
+
+    let report_path = make_preflight_temp_path("preload-report", ".msgpack");
+    let probe_path = make_preflight_temp_path("preload-probe", ".txt");
+    let probe_command = vec![
+        current_exe.display().to_string(),
+        "--preflight-probe".to_string(),
+        probe_path.display().to_string(),
+    ];
+
+    let summary;
+    let ok = match run_tracer(
+        report_path
+            .to_str()
+            .expect("temporary report path contains invalid UTF-8"),
+        &probe_command,
+    ) {
+        Ok(exit_code) if exit_code == 0 && report_path.exists() => {
+            checks.push(preflight_check(
+                "probe_run",
+                true,
+                Some("report produced".to_string()),
+            ));
+            summary = "preload preflight succeeded".to_string();
+            true
+        }
+        Ok(exit_code) => {
+            checks.push(preflight_check(
+                "probe_run",
+                false,
+                Some(format!("probe exit code {exit_code}")),
+            ));
+            summary = format!("preload probe failed with exit code {exit_code}");
+            false
+        }
+        Err(err) => {
+            checks.push(preflight_check(
+                "probe_run",
+                false,
+                Some(format!("{err:#}")),
+            ));
+            summary = format!("preload probe failed: {err:#}");
+            false
+        }
+    };
+
+    let _ = fs::remove_file(&probe_path);
+    let _ = fs::remove_file(&report_path);
+    let result = PreflightResult {
+        backend: "preload",
+        ok,
+        summary,
+        command_checked,
+        warnings: Vec::new(),
+        checks,
+    };
+    emit_preflight(&result, json_output);
+    if result.ok {
+        0
+    } else {
+        1
+    }
+}
+
 fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
     let preload_library = resolve_preload_library()
         .context("preload library not found; set ROAR_PRELOAD_LIB or build roar-tracer-preload")?;
@@ -345,8 +610,7 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
     let socket_path = make_socket_path(output_file);
     // Remove any stale socket file before binding.
     let _ = fs::remove_file(&socket_path);
-    let listener =
-        UnixListener::bind(&socket_path).context("failed to bind Unix domain socket")?;
+    let listener = UnixListener::bind(&socket_path).context("failed to bind Unix domain socket")?;
     listener
         .set_nonblocking(true)
         .context("failed to set listener non-blocking")?;
@@ -387,9 +651,8 @@ fn run_tracer(output_file: &str, command: &[String]) -> Result<i32> {
         }
 
         // Drain each connection, removing those at EOF
-        connections.retain_mut(|(stream, buf)| {
-            drain_stream(stream, buf, &mut state) != DrainResult::Eof
-        });
+        connections
+            .retain_mut(|(stream, buf)| drain_stream(stream, buf, &mut state) != DrainResult::Eof);
 
         if let Some(status) = child.try_wait()? {
             exit_code = status_to_exit_code(status);
@@ -451,8 +714,53 @@ macOS may ignore DYLD_INSERT_LIBRARIES for Apple platform binaries: {}",
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    if args.get(1).map(String::as_str) == Some("--preflight-probe") {
+        let Some(path) = args.get(2) else {
+            eprintln!("usage: roar-tracer-preload --preflight-probe <path>");
+            std::process::exit(2);
+        };
+        match run_preflight_probe(Path::new(path)) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("roar-tracer-preload probe: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if args.get(1).map(String::as_str) == Some("--preflight") {
+        let mut json_output = false;
+        let mut command = None;
+        let mut idx = 2;
+        while idx < args.len() {
+            match args[idx].as_str() {
+                "--json" => {
+                    json_output = true;
+                    idx += 1;
+                }
+                "--command" => {
+                    let Some(value) = args.get(idx + 1) else {
+                        eprintln!(
+                            "usage: roar-tracer-preload --preflight [--json] [--command <cmd>]"
+                        );
+                        std::process::exit(2);
+                    };
+                    command = Some(value.as_str());
+                    idx += 2;
+                }
+                _ => {
+                    eprintln!("usage: roar-tracer-preload --preflight [--json] [--command <cmd>]");
+                    std::process::exit(2);
+                }
+            }
+        }
+        std::process::exit(run_preflight(json_output, command));
+    }
+
     if args.len() < 3 {
         eprintln!("usage: roar-tracer-preload <output-file> <command> [args...]");
+        eprintln!("       roar-tracer-preload --preflight [--json] [--command <cmd>]");
         std::process::exit(2);
     }
 

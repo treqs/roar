@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from roar.application.labels import LabelService, collect_label_sync_payloads
+from roar.application.labels import (
+    LabelService,
+    _apply_published_remote_job_uids,
+    _published_remote_session_hash,
+    build_reconcile_payload_for_current_lineage,
+    collect_label_sync_payloads,
+)
 from roar.core.label_origins import build_current_key_origins
 
 
@@ -183,8 +191,92 @@ def test_collect_label_sync_payloads_includes_current_key_origins() -> None:
         },
         {
             "entity_type": "artifact",
+            "session_hash": "s" * 64,
             "artifact_hash": "a" * 64,
             "metadata": {"generated": {"phase": "profiled"}, "stage": "gold"},
             "key_origins": {"generated.phase": "system", "stage": "user"},
         },
+    ]
+
+
+def test_published_glaas_mapping_reads_session_hash_and_job_uids() -> None:
+    session = {
+        "metadata": json.dumps(
+            {
+                "roar": {
+                    "remote_publication": {
+                        "glaas": {
+                            "schema_version": 1,
+                            "session_hash": "a" * 64,
+                            "prepared_session_hash": "b" * 64,
+                            "jobs": {"local-job-1": "remote-job-1"},
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    assert _published_remote_session_hash(session) == "a" * 64
+    assert _apply_published_remote_job_uids(
+        [{"id": 11, "job_uid": "local-job-1"}, {"id": 12, "job_uid": "local-job-2"}],
+        session,
+    ) == [
+        {"id": 11, "job_uid": "local-job-1", "remote_job_uid": "remote-job-1"},
+        {"id": 12, "job_uid": "local-job-2"},
+    ]
+
+
+def test_build_reconcile_payload_requires_published_glaas_mapping(tmp_path: Path) -> None:
+    local_hash = "c" * 64
+
+    class StubSessions:
+        def get_active(self):
+            return {"id": 7, "hash": local_hash, "metadata": None}
+
+        def get(self, session_id: int):
+            assert session_id == 7
+            return {"id": 7, "hash": local_hash, "metadata": None}
+
+    with pytest.raises(ValueError) as exc_info:
+        build_reconcile_payload_for_current_lineage(
+            SimpleNamespace(sessions=StubSessions()),
+            roar_dir=tmp_path / ".roar",
+        )
+
+    assert str(exc_info.value) == (
+        "Selected lineage has not been registered to GLaaS yet. "
+        f"Run `roar register {local_hash} --yes` or `roar put <artifact> <destination>` "
+        "first, then retry `roar label sync`."
+    )
+
+
+def test_collect_label_sync_payloads_prefers_remote_job_uid_when_present() -> None:
+    class StubLabels:
+        def get_current(self, entity_type: str, **kwargs):
+            if entity_type == "job" and kwargs.get("job_id") == 11:
+                return {"metadata": {"phase": "prep"}, "write_origin": "user"}
+            return None
+
+        def get_history(self, entity_type: str, **kwargs):
+            if entity_type == "job" and kwargs.get("job_id") == 11:
+                return [{"metadata": {"phase": "prep"}, "write_origin": "user"}]
+            return []
+
+    payloads = collect_label_sync_payloads(
+        SimpleNamespace(labels=StubLabels()),
+        session_id=None,
+        session_hash="s" * 64,
+        jobs=[{"id": 11, "job_uid": "local-job-1", "remote_job_uid": "remote-job-1"}],
+        artifacts=[],
+    )
+
+    assert payloads == [
+        {
+            "entity_type": "job",
+            "session_hash": "s" * 64,
+            "job_uid": "remote-job-1",
+            "metadata": {"phase": "prep"},
+            "key_origins": {"phase": "user"},
+        }
     ]

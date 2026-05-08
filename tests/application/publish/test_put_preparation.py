@@ -34,7 +34,12 @@ def test_prepare_put_execution_builds_session_git_and_source_plan(tmp_path: Path
     db_ctx = MagicMock()
     db_ctx.sessions.get_active.return_value = {"id": 7}
     runtime = MagicMock()
-    prepared_session = MagicMock(session_hash="session-hash", session_url="https://glaas/session")
+    prepared_session = MagicMock(
+        session_hash="session-hash",
+        session_url="https://glaas/session",
+        registration_session_id=None,
+        registration_session_mode=None,
+    )
     logger = MagicMock()
     git_context = GitContext(repo="https://github.com/test/repo", branch="main", commit="deadbeef")
 
@@ -92,7 +97,12 @@ def test_prepare_put_execution_propagates_missing_source(tmp_path: Path) -> None
         ),
         patch(
             "roar.application.publish.put_preparation.prepare_publish_session",
-            return_value=MagicMock(session_hash="session-hash", session_url=None),
+            return_value=MagicMock(
+                session_hash="session-hash",
+                session_url=None,
+                registration_session_id=None,
+                registration_session_mode=None,
+            ),
         ),
         pytest.raises(FileNotFoundError, match=r"Source not found: missing.pt"),
     ):

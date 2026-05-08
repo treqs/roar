@@ -35,6 +35,21 @@ def _optional_auth_client() -> GlaasClient:
     )
 
 
+def test_force_anonymous_suppresses_ssh_auth_header_generation() -> None:
+    client = GlaasClient(
+        base_url="http://localhost:9999",
+        publish_auth=PublishAuthContext(access_token="token", scope_request=None),
+        force_anonymous=True,
+    )
+
+    with patch("roar.integrations.glaas.client.make_auth_header") as make_auth_header:
+        assert client._make_auth_header("POST", "/api/v1/labels/sync", b"{}") is None
+
+    make_auth_header.assert_not_called()
+    assert client.publish_auth.access_token is None
+    assert client.publish_auth.ssh_auth_available is False
+
+
 class TestGlaasClientExceptions:
     """Test that GlaasClient raises proper exceptions."""
 
@@ -85,19 +100,20 @@ class TestGlaasClientExceptions:
 
             assert exc_info.value.status_code == 503
 
-    def test_health_check_returns_true_on_success(self):
-        """health_check should return True on success."""
+    def test_health_check_returns_health_payload_on_success(self):
+        """health_check should return the parsed health payload on success."""
         client = _optional_auth_client()
 
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_response = MagicMock()
             mock_response.status = 200
+            mock_response.read.return_value = b'{"status": "healthy"}'
             mock_response.__enter__ = MagicMock(return_value=mock_response)
             mock_response.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_response
 
             result = client.health_check()
-            assert result is True
+            assert result == {"status": "healthy"}
 
     def test_get_artifact_raises_on_not_found(self):
         """get_artifact should raise GlaasApiError on 404."""
@@ -378,6 +394,52 @@ class TestOptionalAuth:
             assert mock_urlopen.call_args_list[2][0][0].full_url.endswith("/api/v1/test-2")
             assert mock_urlopen.call_args_list[2][0][0].get_header("Authorization") is None
             mock_get_logger.return_value.warning.assert_called_once()
+
+    def test_probe_publish_auth_rejection_allows_anonymous_registration_session_create(self):
+        """Rejected SSH auth should not poison anonymous-public registration-session creation."""
+        client = _optional_auth_client()
+
+        unauthorized = urllib.error.HTTPError(
+            url="http://localhost:9999/api/v1/sessions?limit=1",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=None,
+        )
+        unauthorized.read = MagicMock(return_value=b'{"detail":"Unknown key"}')
+
+        with (
+            patch(
+                "roar.integrations.glaas.client.make_auth_header",
+                return_value="SSH-SIG test-signature",
+            ),
+            patch("roar.integrations.glaas.transport._get_logger"),
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_urlopen.side_effect = [
+                unauthorized,
+                self._json_response(
+                    b'{"success": true, "data": {'
+                    b'"registration_session_id": "reg-123", '
+                    b'"registration_session_token": "token-123", '
+                    b'"mode": "anonymous_public"}}'
+                ),
+            ]
+
+            assert client.probe_publish_auth() is False
+            result, error = client.create_registration_session(mode="anonymous_public")
+
+            assert error is None
+            assert result == {
+                "registration_session_id": "reg-123",
+                "registration_session_token": "token-123",
+                "mode": "anonymous_public",
+            }
+            assert mock_urlopen.call_count == 2
+            create_request = mock_urlopen.call_args_list[1][0][0]
+            assert create_request.full_url == "http://localhost:9999/api/v1/registration-sessions"
+            assert create_request.get_header("Authorization") is None
+            assert create_request.data == b'{"mode": "anonymous_public"}'
 
 
 class TestRegisterJobsBatch:

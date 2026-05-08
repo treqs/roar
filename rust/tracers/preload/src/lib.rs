@@ -162,6 +162,35 @@ unsafe fn sys_renameat(
 }
 
 #[cfg(target_os = "macos")]
+unsafe fn sys_link(old_path: *const c_char, new_path: *const c_char) -> c_int {
+    const SYS_LINK: libc::c_int = 9;
+    libc::syscall(
+        SYS_LINK,
+        old_path as usize as libc::c_long,
+        new_path as usize as libc::c_long,
+    ) as c_int
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn sys_linkat(
+    old_dirfd: c_int,
+    old_path: *const c_char,
+    new_dirfd: c_int,
+    new_path: *const c_char,
+    flags: c_int,
+) -> c_int {
+    const SYS_LINKAT: libc::c_int = 470;
+    libc::syscall(
+        SYS_LINKAT,
+        old_dirfd as libc::c_long,
+        old_path as usize as libc::c_long,
+        new_dirfd as libc::c_long,
+        new_path as usize as libc::c_long,
+        flags as libc::c_long,
+    ) as c_int
+}
+
+#[cfg(target_os = "macos")]
 unsafe fn sys_unlink(path: *const c_char) -> c_int {
     const SYS_UNLINK: libc::c_int = 10;
     libc::syscall(SYS_UNLINK, path as usize as libc::c_long) as c_int
@@ -191,11 +220,7 @@ unsafe fn sys_truncate(path: *const c_char, length: off_t) -> c_int {
 #[cfg(target_os = "macos")]
 unsafe fn sys_ftruncate(fd: c_int, length: off_t) -> c_int {
     const SYS_FTRUNCATE: libc::c_int = 201;
-    libc::syscall(
-        SYS_FTRUNCATE,
-        fd as libc::c_long,
-        length as libc::c_long,
-    ) as c_int
+    libc::syscall(SYS_FTRUNCATE, fd as libc::c_long, length as libc::c_long) as c_int
 }
 
 #[cfg(target_os = "macos")]
@@ -278,6 +303,27 @@ pub unsafe extern "C" fn roar_interpose_renameat(
     new_path: *const c_char,
 ) -> c_int {
     renameat(old_dir_fd, old_path, new_dir_fd, new_path)
+}
+
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn roar_interpose_link(
+    old_path: *const c_char,
+    new_path: *const c_char,
+) -> c_int {
+    link(old_path, new_path)
+}
+
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn roar_interpose_linkat(
+    old_dir_fd: c_int,
+    old_path: *const c_char,
+    new_dir_fd: c_int,
+    new_path: *const c_char,
+    flags: c_int,
+) -> c_int {
+    linkat(old_dir_fd, old_path, new_dir_fd, new_path, flags)
 }
 
 #[cfg(target_os = "macos")]
@@ -801,6 +847,10 @@ type RenameFn = unsafe extern "C" fn(*const c_char, *const c_char) -> c_int;
 #[cfg(not(target_os = "macos"))]
 type RenameAtFn = unsafe extern "C" fn(c_int, *const c_char, c_int, *const c_char) -> c_int;
 #[cfg(not(target_os = "macos"))]
+type LinkFn = unsafe extern "C" fn(*const c_char, *const c_char) -> c_int;
+#[cfg(not(target_os = "macos"))]
+type LinkAtFn = unsafe extern "C" fn(c_int, *const c_char, c_int, *const c_char, c_int) -> c_int;
+#[cfg(not(target_os = "macos"))]
 type MmapFn = unsafe extern "C" fn(*mut c_void, size_t, c_int, c_int, c_int, off_t) -> *mut c_void;
 type FOpenFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut libc::FILE;
 type FReadFn = unsafe extern "C" fn(*mut c_void, size_t, size_t, *mut libc::FILE) -> size_t;
@@ -1170,7 +1220,57 @@ pub unsafe extern "C" fn renameat(
     };
     if ret == 0 && !in_hook() {
         with_hook_guard(|| {
+            if let Some(path) = resolve_at_path(new_dir_fd, new_path) {
+                emit_path_write(path);
+            }
+        });
+    }
+    ret
+}
+
+#[cfg_attr(not(target_os = "macos"), no_mangle)]
+pub unsafe extern "C" fn link(old_path: *const c_char, new_path: *const c_char) -> c_int {
+    #[cfg(target_os = "macos")]
+    let ret = sys_link(old_path, new_path);
+    #[cfg(not(target_os = "macos"))]
+    let ret = {
+        let Some(real) = resolve_symbol::<LinkFn>(b"link\0") else {
+            set_errno(libc::ENOSYS);
+            return -1;
+        };
+        real(old_path, new_path)
+    };
+    if ret == 0 && !in_hook() {
+        with_hook_guard(|| {
             if let Some(path) = c_str_to_owned(new_path) {
+                emit_path_write(path);
+            }
+        });
+    }
+    ret
+}
+
+#[cfg_attr(not(target_os = "macos"), no_mangle)]
+pub unsafe extern "C" fn linkat(
+    old_dir_fd: c_int,
+    old_path: *const c_char,
+    new_dir_fd: c_int,
+    new_path: *const c_char,
+    flags: c_int,
+) -> c_int {
+    #[cfg(target_os = "macos")]
+    let ret = sys_linkat(old_dir_fd, old_path, new_dir_fd, new_path, flags);
+    #[cfg(not(target_os = "macos"))]
+    let ret = {
+        let Some(real) = resolve_symbol::<LinkAtFn>(b"linkat\0") else {
+            set_errno(libc::ENOSYS);
+            return -1;
+        };
+        real(old_dir_fd, old_path, new_dir_fd, new_path, flags)
+    };
+    if ret == 0 && !in_hook() {
+        with_hook_guard(|| {
+            if let Some(path) = resolve_at_path(new_dir_fd, new_path) {
                 emit_path_write(path);
             }
         });
@@ -1201,10 +1301,7 @@ pub unsafe extern "C" fn mmap(
     // storage is not available during early dyld init when mmap is called to map shared libraries.
     // A static AtomicBool is safe because it lives in BSS (zero-initialized by the kernel).
     static MMAP_IN_HOOK: AtomicBool = AtomicBool::new(false);
-    if ret != libc::MAP_FAILED
-        && fd >= 0
-        && !MMAP_IN_HOOK.swap(true, Ordering::Relaxed)
-    {
+    if ret != libc::MAP_FAILED && fd >= 0 && !MMAP_IN_HOOK.swap(true, Ordering::Relaxed) {
         if prot & libc::PROT_READ != 0 {
             emit_fd_read(fd);
         }

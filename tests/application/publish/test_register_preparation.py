@@ -34,7 +34,12 @@ def test_prepare_register_execution_builds_session_git_and_tag_plan(tmp_path: Pa
         db_user_id=None,
     )
     logger = MagicMock()
-    prepared_session = MagicMock(session_hash="session-hash", session_url="https://glaas/session")
+    prepared_session = MagicMock(
+        session_hash="session-hash",
+        session_url="https://glaas/session",
+        registration_session_id=None,
+        registration_session_mode=None,
+    )
     git_context = _git_context()
     git_state = MagicMock(repo_root=tmp_path)
 
@@ -104,7 +109,12 @@ def test_prepare_register_execution_passes_lineage_and_creator_identity_to_sessi
         user_sub="treqs-sub-123",
         db_user_id="user-123",
     )
-    prepared_session = MagicMock(session_hash="session-hash", session_url=None)
+    prepared_session = MagicMock(
+        session_hash="session-hash",
+        session_url=None,
+        registration_session_id=None,
+        registration_session_mode=None,
+    )
 
     with (
         patch(
@@ -134,7 +144,12 @@ def test_prepare_register_execution_passes_lineage_and_creator_identity_to_sessi
 
 def test_prepare_register_execution_skips_git_tagging_and_glaas_on_dry_run(tmp_path: Path) -> None:
     runtime = MagicMock()
-    prepared_session = MagicMock(session_hash="session-hash", session_url=None)
+    prepared_session = MagicMock(
+        session_hash="session-hash",
+        session_url=None,
+        registration_session_id=None,
+        registration_session_mode=None,
+    )
     git_context = _git_context()
 
     with (

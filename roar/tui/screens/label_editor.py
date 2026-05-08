@@ -19,14 +19,14 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 
 from ...application.label_rendering import flatten_label_metadata
 from ...application.labels import LabelService, parse_label_pairs
-from ...application.query.label import push_labels
-from ...application.query.requests import LabelPushRequest
+from ...application.query.label import sync_labels
+from ...application.query.requests import LabelSyncRequest
 from ...application.system_labels import is_reserved_system_label_path
 from ...db.context import create_database_context
 
 
 class LabelEditorScreen(ModalScreen[None]):
-    """List labels for an entity. `Enter` edits, `a` adds, `d` deletes, `p` pushes."""
+    """List labels for an entity. `Enter` edits, `a` adds, `d` deletes, `p` syncs."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "close", "Close"),
@@ -34,7 +34,7 @@ class LabelEditorScreen(ModalScreen[None]):
         Binding("a", "add", "Add"),
         Binding("d", "delete", "Delete"),
         Binding("t", "toggle_system", "Toggle system"),
-        Binding("p", "push", "Push to remote"),
+        Binding("p", "sync", "Sync to remote"),
         Binding("enter", "edit_selected", "Edit", priority=True),
     ]
 
@@ -55,7 +55,7 @@ class LabelEditorScreen(ModalScreen[None]):
     """
 
     BASE_KEYS = ("Enter edit", "a add", "d delete")
-    TAIL_KEYS = ("p push", "Esc close")
+    TAIL_KEYS = ("p sync", "Esc close")
 
     def __init__(
         self,
@@ -197,10 +197,10 @@ class LabelEditorScreen(ModalScreen[None]):
 
         self.app.push_screen(ConfirmScreen(f"Delete label `{key}`?"), _on_result)
 
-    def action_push(self) -> None:
+    def action_sync(self) -> None:
         try:
-            push_labels(
-                LabelPushRequest(
+            sync_labels(
+                LabelSyncRequest(
                     roar_dir=self.roar_dir,
                     cwd=self.cwd,
                     entity_type=self.entity_type,
@@ -208,9 +208,9 @@ class LabelEditorScreen(ModalScreen[None]):
                 )
             )
         except Exception as exc:  # noqa: BLE001 — surface any backend failure
-            self.app.notify(f"Push failed: {exc}", severity="error", timeout=8)
+            self.app.notify(f"Sync failed: {exc}", severity="error", timeout=8)
             return
-        self.app.notify("Labels pushed.", severity="information")
+        self.app.notify("Labels synced.", severity="information")
 
     # --- mutations ------------------------------------------------------------
 

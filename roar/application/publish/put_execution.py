@@ -20,11 +20,17 @@ from ...application.publish.lineage import LineageCollector
 from ...application.publish.metadata import build_put_operation_metadata_json
 from ...application.publish.put_preparation import PreparedPutExecution
 from ...application.publish.registration import (
+    normalize_registration_hashes,
     normalize_registration_source_type,
     prepare_batch_registration_artifacts,
     register_publish_lineage,
     sync_publish_labels,
 )
+from ...application.publish.remote_job_uids import (
+    build_remote_publication_job_uid,
+    prepare_jobs_for_remote_publication,
+)
+from ...application.publish.session import build_staged_lineage_counts
 from ...application.system_labels import refresh_job_system_labels
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
@@ -164,6 +170,8 @@ class PutService:
         client = prepared.glaas_client
         session_id = prepared.session_id
         session_hash = prepared.session_hash
+        registration_session_id = prepared.registration_session_id
+        registration_session_mode = prepared.registration_session_mode
         git_context = prepared.git_context
         resolved = prepared.resolved_sources
         destination_type = prepared.destination_type
@@ -263,6 +271,31 @@ class PutService:
 
         # Register lineage with GLaaS (session already registered above)
         coordinator = self._registration_coordinator or RegistrationCoordinator()
+        if registration_session_id:
+            return self._put_prepared_with_registration_session(
+                client=client,
+                coordinator=coordinator,
+                registration_session_id=registration_session_id,
+                registration_session_mode=registration_session_mode,
+                session_id=session_id,
+                fallback_session_hash=session_hash or "",
+                git_context=git_context,
+                sources=sources,
+                message=message,
+                uploads=uploads,
+                uploaded_files=uploaded_files,
+                artifacts_info=artifacts_info,
+                lineage=lineage,
+                resolved=resolved,
+                hashes_by_path=hashes_by_path,
+                destination_type=destination_type,
+                composite_source_type=composite_source_type,
+                dataset_identifiers=dataset_identifiers,
+                additional_composite_roots=additional_composite_roots,
+                git_commit=git_commit,
+                git_tag=git_tag,
+            )
+
         with Spinner("Publishing lineage to GLaaS...") as spin:
             pre_registration_errors: list[str] = []
             spin.update("Registering lineage composites...")
@@ -444,6 +477,7 @@ class PutService:
                     session_hash=session_hash_value,
                     job_id=job_id,
                     job_uid=job_uid,
+                    remote_job_uid=job_uid,
                     registration_errors=registration_result.errors,
                 )
 
@@ -490,6 +524,350 @@ class PutService:
             uploaded_files=uploaded_files,
             composites_registered=composite_result_items,
         )
+
+    def _put_prepared_with_registration_session(
+        self,
+        *,
+        client: Any,
+        coordinator: RegistrationCoordinator,
+        registration_session_id: str,
+        registration_session_mode: str | None,
+        session_id: int,
+        fallback_session_hash: str,
+        git_context: GitContext,
+        sources: list[str],
+        message: str,
+        uploads: list[_UploadedArtifact],
+        uploaded_files: list[PutUploadedFile],
+        artifacts_info: list[tuple[str, str]],
+        lineage: Any,
+        resolved: list[Any],
+        hashes_by_path: dict[str, str],
+        destination_type: str,
+        composite_source_type: str | None,
+        dataset_identifiers: list[dict[str, Any]],
+        additional_composite_roots: dict[Path, list[Any]],
+        git_commit: str | None,
+        git_tag: str | None,
+    ) -> PutResult:
+        """Execute the authenticated Phase 5 publish flow via registration sessions."""
+        session_hash = fallback_session_hash
+        session_url: str | None = None
+        registration_errors: list[str] = []
+        lineage_composite_registrations: list[dict[str, Any]] = []
+        composite_registrations: list[dict[str, Any]] = []
+        source_str = " ".join(sources) if sources else "(session outputs)"
+        command = f'roar put {source_str} -m "{message}"'
+        source_type = normalize_registration_source_type(destination_type)
+
+        provisional_metadata_json = build_put_operation_metadata_json(
+            message=message,
+            destination=self._destination,
+            destination_type=destination_type,
+            artifact_urls={u.artifact_id: u.remote_url for u in uploads},
+            composite_registrations=[],
+            lineage_composite_registrations=[],
+            dataset_identifiers=dataset_identifiers,
+            git_commit=git_commit,
+            git_tag=git_tag,
+            timestamp=time.time(),
+        )
+
+        step_number = self._db.sessions.get_next_step_number(session_id)
+        job_id, job_uid = self._db.jobs.create(
+            command=command,
+            timestamp=time.time(),
+            session_id=session_id,
+            step_number=step_number,
+            metadata=provisional_metadata_json,
+            execution_backend="local",
+            execution_role="host",
+            job_type="put",
+            exit_code=0,
+        )
+        self._logger.debug(
+            "Put job created before registration-session finalize: id=%s, uid=%s, step=%d",
+            job_id,
+            job_uid,
+            step_number,
+        )
+        remote_put_job_uid = build_remote_publication_job_uid(fallback_session_hash, job_uid)
+        remote_lineage_jobs = prepare_jobs_for_remote_publication(
+            lineage.jobs, fallback_session_hash
+        )
+
+        composite_results_for_linking = build_publish_composite_results(
+            resolved_sources=resolved,
+            hashes_by_path=hashes_by_path,
+            session_hash=fallback_session_hash,
+            source_type=composite_source_type,
+            additional_composite_roots=additional_composite_roots,
+            composite_builder=self._composite_builder,
+        )
+
+        put_job_registered = False
+        put_job_links_succeeded = False
+        with Spinner("Publishing lineage to GLaaS...") as spin:
+            spin.update("Staging lineage jobs and artifacts...")
+            registration_result = coordinator.register_lineage_under_registration_session(
+                registration_session_id=registration_session_id,
+                git_context=git_context,
+                jobs=remote_lineage_jobs,
+            )
+            registration_errors.extend(registration_result.errors)
+
+            if registration_result.jobs_failed == 0 and registration_result.links_failed == 0:
+                spin.update("Staging put job...")
+                put_job_result = coordinator.job_service.create_job_under_registration_session(
+                    command=command,
+                    timestamp=time.time(),
+                    registration_session_id=registration_session_id,
+                    job_uid=remote_put_job_uid,
+                    git_commit=git_context.commit or "",
+                    git_branch=git_context.branch or "",
+                    duration_seconds=0.0,
+                    exit_code=0,
+                    job_type="put",
+                    step_number=step_number,
+                    metadata=provisional_metadata_json,
+                )
+                if not put_job_result.success:
+                    if put_job_result.error:
+                        registration_errors.append(f"Put job: {put_job_result.error}")
+                else:
+                    put_job_registered = True
+
+                if put_job_registered:
+                    spin.update("Linking put job artifacts...")
+                    put_inputs = self._build_registration_session_put_job_inputs(
+                        uploads=uploads,
+                        lineage_artifacts=lineage.artifacts,
+                        source_type=source_type,
+                    )
+                    put_outputs = self._build_registration_session_put_job_outputs(
+                        composite_results_for_linking
+                    )
+                    link_result = (
+                        coordinator.job_service.link_job_artifacts_under_registration_session(
+                            registration_session_id=registration_session_id,
+                            job_uid=remote_put_job_uid,
+                            inputs=put_inputs,
+                            outputs=put_outputs,
+                        )
+                    )
+                    put_job_links_succeeded = link_result.success
+                    if not link_result.success and link_result.error:
+                        registration_errors.append(f"Put job links: {link_result.error}")
+
+                if put_job_registered and put_job_links_succeeded:
+                    spin.update("Finalizing lineage...")
+                    expected_counts = None
+                    if registration_session_mode == "anonymous_public":
+                        expected_counts = build_staged_lineage_counts(
+                            [
+                                *remote_lineage_jobs,
+                                {
+                                    "job_uid": remote_put_job_uid,
+                                    "_inputs": put_inputs,
+                                    "_outputs": put_outputs,
+                                },
+                            ]
+                        )
+                    finalize_result = coordinator.session_service.finalize_registration_session(
+                        registration_session_id=registration_session_id,
+                        git_context=git_context,
+                        expected_counts=expected_counts,
+                    )
+                    if not finalize_result.success:
+                        registration_errors.append(
+                            f"Registration session finalize failed: {finalize_result.error}"
+                        )
+                    else:
+                        session_hash = finalize_result.session_hash
+                        session_url = finalize_result.session_url
+
+                        spin.update("Registering lineage composites...")
+                        lineage_composite_registrations = (
+                            preregister_put_lineage_composites_with_glaas(
+                                db_ctx=self._db,
+                                glaas_client=client,
+                                lineage_artifacts=lineage.artifacts,
+                                session_hash=session_hash,
+                                registration_errors=registration_errors,
+                                dataset_identifiers=dataset_identifiers,
+                                composite_builder=self._composite_builder,
+                                logger=self._logger,
+                            )
+                        )
+
+                        composite_results = build_publish_composite_results(
+                            resolved_sources=resolved,
+                            hashes_by_path=hashes_by_path,
+                            session_hash=session_hash,
+                            source_type=composite_source_type,
+                            additional_composite_roots=additional_composite_roots,
+                            composite_builder=self._composite_builder,
+                        )
+                        spin.update("Registering output composites...")
+                        composite_registrations = register_put_composites_with_glaas(
+                            db_ctx=self._db,
+                            glaas_client=client,
+                            composite_results=composite_results,
+                            registration_errors=registration_errors,
+                            dataset_identifiers=dataset_identifiers,
+                            logger=self._logger,
+                        )
+
+        metadata_json = build_put_operation_metadata_json(
+            message=message,
+            destination=self._destination,
+            destination_type=destination_type,
+            artifact_urls={u.artifact_id: u.remote_url for u in uploads},
+            composite_registrations=composite_registrations,
+            lineage_composite_registrations=lineage_composite_registrations,
+            dataset_identifiers=dataset_identifiers,
+            git_commit=git_commit,
+            git_tag=git_tag,
+            timestamp=time.time(),
+        )
+        self._db.jobs.update_metadata(job_id, metadata_json)
+        refresh_job_system_labels(self._db, job_id=job_id)
+        self._link_local_put_job_artifacts(
+            job_id=job_id,
+            artifacts_info=artifacts_info,
+            lineage_artifacts=lineage.artifacts,
+            composite_registrations=composite_registrations,
+        )
+
+        if session_hash and put_job_registered:
+            self._sync_put_job_labels_with_glaas(
+                glaas_client=client,
+                session_hash=session_hash,
+                job_id=job_id,
+                job_uid=job_uid,
+                remote_job_uid=remote_put_job_uid,
+                registration_errors=registration_errors,
+            )
+
+        composite_result_items = [
+            PutCompositeRegistration(
+                root_path=(str(item["root_path"]) if item.get("root_path") is not None else None),
+                hash=str(item["hash"]) if item.get("hash") is not None else None,
+                component_count_stored=(
+                    int(item["component_count_stored"])
+                    if item.get("component_count_stored") is not None
+                    else None
+                ),
+                component_count_total=(
+                    int(item["component_count_total"])
+                    if item.get("component_count_total") is not None
+                    else None
+                ),
+                artifact_id=(
+                    str(item["artifact_id"]) if item.get("artifact_id") is not None else None
+                ),
+                registered=bool(item["registered"]) if item.get("registered") is not None else None,
+                local_persisted=(
+                    bool(item["local_persisted"])
+                    if item.get("local_persisted") is not None
+                    else None
+                ),
+                local_error=(
+                    str(item["local_error"]) if item.get("local_error") is not None else None
+                ),
+            )
+            for item in composite_registrations
+        ]
+
+        registration_error = "; ".join(registration_errors) if registration_errors else None
+        if registration_error:
+            self._logger.debug("Registration errors: %s", registration_error)
+            return PutResult(
+                success=False,
+                job_id=job_id,
+                job_uid=job_uid,
+                session_hash=session_hash,
+                session_url=session_url,
+                uploaded_files=uploaded_files,
+                composites_registered=composite_result_items,
+                error=registration_error,
+            )
+
+        return PutResult(
+            success=True,
+            job_id=job_id,
+            job_uid=job_uid,
+            session_hash=session_hash,
+            session_url=session_url,
+            uploaded_files=uploaded_files,
+            composites_registered=composite_result_items,
+        )
+
+    @staticmethod
+    def _build_registration_session_put_job_inputs(
+        *,
+        uploads: list[_UploadedArtifact],
+        lineage_artifacts: list[dict[str, Any]],
+        source_type: str | None,
+    ) -> list[dict[str, Any]]:
+        """Build direct hash-addressed inputs for a staged put job."""
+        inputs: list[dict[str, Any]] = []
+        seen_rows: set[tuple[str, str]] = set()
+
+        for uploaded in uploads:
+            try:
+                size = max(0, int(Path(uploaded.local_path).stat().st_size))
+            except (OSError, TypeError, ValueError):
+                size = 0
+            row = {
+                "artifact_hash": uploaded.hash,
+                "path": uploaded.local_path,
+                "size": size,
+                "source_type": source_type,
+            }
+            row_key = (uploaded.hash, uploaded.local_path)
+            if row_key not in seen_rows:
+                seen_rows.add(row_key)
+                inputs.append(row)
+
+        for artifact in lineage_artifacts:
+            if artifact.get("kind") != "composite":
+                continue
+            artifact_path = artifact.get("first_seen_path") or artifact.get("path")
+            if not isinstance(artifact_path, str) or not artifact_path:
+                continue
+            hashes = normalize_registration_hashes(artifact)
+            digest = hashes[0]["digest"] if hashes else None
+            if not digest:
+                continue
+            row_key = (digest, artifact_path)
+            if row_key in seen_rows:
+                continue
+            seen_rows.add(row_key)
+            inputs.append({"artifact_hash": digest, "path": artifact_path})
+
+        return inputs
+
+    @staticmethod
+    def _build_registration_session_put_job_outputs(
+        composite_results: list[Any],
+    ) -> list[dict[str, Any]]:
+        """Build direct hash-addressed outputs for a staged put job."""
+        outputs: list[dict[str, Any]] = []
+        seen_rows: set[tuple[str, str]] = set()
+        for result in composite_results:
+            digest = getattr(result, "digest", None)
+            root_path = getattr(result, "root_path", None)
+            if not isinstance(digest, str) or not digest:
+                continue
+            if not isinstance(root_path, str) or not root_path:
+                continue
+            row_key = (digest, root_path)
+            if row_key in seen_rows:
+                continue
+            seen_rows.add(row_key)
+            outputs.append({"artifact_hash": digest, "path": root_path})
+        return outputs
 
     @staticmethod
     def _build_uploaded_artifacts_for_registration(
@@ -594,6 +972,7 @@ class PutService:
         session_hash: str,
         job_id: int,
         job_uid: str,
+        remote_job_uid: str,
         registration_errors: list[str],
     ) -> None:
         """Sync the local current label document for the publish-time put job."""
@@ -602,7 +981,7 @@ class PutService:
             db_ctx=self._db,
             session_id=None,
             session_hash=session_hash,
-            jobs=[{"id": job_id, "job_uid": job_uid}],
+            jobs=[{"id": job_id, "job_uid": job_uid, "remote_job_uid": remote_job_uid}],
             artifacts=[],
             errors=registration_errors,
         )

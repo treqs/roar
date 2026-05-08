@@ -227,6 +227,7 @@ Run `roar config list` to see all available options with descriptions. Common op
 | `filters.ignore_tmp_files`     | true                   | Ignore /tmp files                       |
 | `glaas.url`                    | <https://api.glaas.ai> | GLaaS server URL                        |
 | `glaas.web_url`                | <https://glaas.ai>     | GLaaS web UI URL                        |
+| `registration.public_by_default` | false                | Default `register`/`put` visibility     |
 | `registration.omit.enabled`    | true                   | Enable secret filtering                 |
 | `hash.primary`                 | blake3                 | Primary hash algorithm                  |
 | `logging.level`                | warning                | Log level (debug, info, warning, error) |
@@ -271,6 +272,9 @@ roar label set dag current owner=alice team=ml
 roar label set job @2 phase=train lr=0.001
 roar label set artifact ./outputs/model.pt model.name=resnet50 stage=baseline
 
+# Remove labels
+roar label unset artifact ./outputs/model.pt stage
+
 # Copy labels from one entity to another
 roar label cp job @2 artifact ./outputs/model.pt
 
@@ -283,9 +287,10 @@ roar label show artifact ./outputs/model.pt
 roar label history dag current
 roar label history artifact <artifact-hash>
 
-# Push current local user-managed labels to GLaaS
-roar label push job @2
-roar label push artifact ./outputs/model.pt
+# Sync local user-managed labels to GLaaS
+roar label sync
+roar label sync job @2
+roar label sync artifact ./outputs/model.pt --dry-run
 ```
 
 **Entity targets:**
@@ -294,7 +299,7 @@ roar label push artifact ./outputs/model.pt
 - `job`: step ref (`@N` or `@BN`) or job UID
 - `artifact`: file path or artifact hash
 
-Labels are stored locally by default. You can explicitly push the current local user-managed labels for one target to GLaaS with `roar label push ...`, and labels are also included in lineage registration/publish flows when supported by the configured server.
+Labels are stored locally by default. You can explicitly reconcile current local user-managed labels to GLaaS with `roar label sync ...`, and labels are also included in lineage registration/publish flows when supported by the configured server.
 
 ### `roar register`
 
@@ -322,6 +327,14 @@ roar register s3://bucket/run/out   # Register a tracked remote S3 artifact
 
 For bare 8-character hex targets, `roar register` prefers a matching local job UID before falling back to session-hash-prefix resolution.
 
+To make public publication the default for `roar register` and `roar put`:
+
+```bash
+roar config set registration.public_by_default true
+```
+
+Override per command with `--public` or `--private`. Use `--anonymous` on `roar register` or `roar put` to force public anonymous publication even when local GLaaS auth is configured. When public visibility comes from config rather than an explicit flag, `roar` prints a warning before publishing.
+
 ### `roar put`
 
 Upload artifacts to cloud storage and register lineage with GLaaS.
@@ -337,6 +350,8 @@ roar put @2 s3://bucket/outputs/ -m "Step 2 outputs"
 - `-m, --message` — Description of the upload (required)
 - `--dry-run` — Preview without uploading
 - `--no-tag` — Skip git tagging
+- `--public` / `--private` — Override configured publish visibility
+- `--anonymous` — Force public anonymous registration even when local GLaaS auth is configured
 
 **Source formats:**
 

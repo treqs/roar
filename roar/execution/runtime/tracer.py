@@ -6,10 +6,11 @@ Handles tracer binary discovery and process execution via the tracer.
 
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
-from ...core.exceptions import TracerNotFoundError
+from ...core.exceptions import TracerNotFoundError, TracerPreflightError
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.run import ISignalHandler
 from ...core.models.run import TracerResult
@@ -69,6 +70,30 @@ class TracerService:
         except Exception:
             pass
         return True
+
+    def _runtime_pythonpath_entries(self) -> list[str]:
+        """Return Roar runtime import roots for injected child interpreters."""
+        entries: list[str] = []
+        seen: set[str] = set()
+
+        def add(path: str | Path) -> None:
+            resolved = str(Path(path).resolve())
+            if resolved in seen or not os.path.exists(resolved):
+                return
+            seen.add(resolved)
+            entries.append(resolved)
+
+        # The installed package root, or the source checkout root for editable installs.
+        add(Path(__file__).resolve().parents[3])
+
+        # Editable installs keep dependencies in the parent interpreter's site-packages.
+        for path in sys.path:
+            if not path:
+                continue
+            if "site-packages" in path or "dist-packages" in path:
+                add(path)
+
+        return entries
 
     def _find_ptrace_tracer(self) -> str | None:
         """Find the roar-tracer (ptrace) binary."""
@@ -170,6 +195,132 @@ class TracerService:
                 return "ptrace", ptrace
         return None
 
+    def _build_tracer_not_found_hint(self, mode: str) -> str:
+        """Build the user-facing tracer-not-found hint for a mode."""
+        if mode == "ebpf":
+            return (
+                "roar-tracer-ebpf binary not found. Build it with:\n"
+                "  cd rust && cargo build --release -p roar-tracer-ebpf"
+            )
+        if mode == "preload":
+            return (
+                "roar-tracer-preload or preload library not found. Build it with:\n"
+                "  cd rust && cargo build --release -p roar-tracer-preload"
+            )
+        if mode == "ptrace":
+            return (
+                "roar-tracer binary not found. Build it with:\n"
+                "  cd rust && cargo build --release -p roar-tracer"
+            )
+        return (
+            "No tracer binary found. Build one with:\n"
+            "  cd rust && cargo build --release -p roar-tracer-ebpf\n"
+            "  cd rust && cargo build --release -p roar-tracer-preload\n"
+            "  cd rust && cargo build --release -p roar-tracer"
+        )
+
+    def _preflight_candidate(
+        self,
+        backend: str,
+        command: list[str],
+    ) -> tracer_backends.TracerPreflightResult:
+        """Run strict preflight for one concrete backend."""
+        return tracer_backends.preflight_backend(self._package_path, backend, command=command)
+
+    def resolve_execution_candidates(
+        self,
+        command: list[str],
+        tracer_mode_override: str | None = None,
+        fallback_enabled_override: bool | None = None,
+    ) -> list[tuple[str, str]]:
+        """Resolve concrete tracer candidates that passed strict preflight."""
+        mode = tracer_mode_override or self._get_tracer_mode()
+        fallback_enabled = (
+            fallback_enabled_override
+            if fallback_enabled_override is not None
+            else self._get_fallback_enabled()
+        )
+        self.logger.debug(
+            "Resolving execution candidates: mode=%s fallback_enabled=%s command=%s",
+            mode,
+            fallback_enabled,
+            command,
+        )
+
+        candidates = self._get_tracer_candidates(mode, fallback_enabled)
+        if not candidates:
+            raise TracerNotFoundError(self._build_tracer_not_found_hint(mode))
+
+        approved: list[tuple[str, str]] = []
+        failures: list[tracer_backends.TracerPreflightResult] = []
+        for backend, tracer_path in candidates:
+            result = self._preflight_candidate(backend, command)
+            if result.ok:
+                approved.append((backend, tracer_path))
+                continue
+
+            failures.append(result)
+            self.logger.debug(
+                "Skipping %s tracer after failed preflight: %s", backend, result.summary
+            )
+
+        if approved:
+            if not fallback_enabled:
+                return [approved[0]]
+            return approved
+
+        failure_context = {"failures": [result.to_dict() for result in failures]}
+        if mode == "auto":
+            detail = "; ".join(f"{result.backend}: {result.summary}" for result in failures)
+            raise TracerPreflightError(
+                self._format_preflight_failure_message(
+                    "auto",
+                    failures,
+                    summary=f"No usable tracer passed preflight: {detail or 'no usable tracer found'}",
+                ),
+                backend="auto",
+                context=failure_context,
+            )
+
+        summary = failures[0].summary if failures else "preflight failed"
+        raise TracerPreflightError(
+            self._format_preflight_failure_message(
+                mode,
+                failures,
+                summary=f"Tracer preflight failed for '{mode}': {summary}",
+            ),
+            backend=mode,
+            context=failure_context,
+        )
+
+    def _format_preflight_failure_message(
+        self,
+        mode: str,
+        failures: list[tracer_backends.TracerPreflightResult],
+        *,
+        summary: str,
+    ) -> str:
+        """Build a concise user-facing preflight error with next steps."""
+        if mode == "auto":
+            result: tracer_backends.PreflightResult = tracer_backends.AutoPreflightResult(
+                ok=False,
+                selected_backend=None,
+                summary=summary,
+                results=tuple(failures),
+            )
+        elif failures:
+            result = failures[0]
+        else:
+            return summary
+
+        suggestions = tracer_backends.suggestions_for_preflight_result(result)
+        if not suggestions:
+            return summary
+
+        lines = [summary, "", "Next steps:"]
+        lines.extend(f"  - {suggestion}" for suggestion in suggestions)
+        return "\n".join(lines)
+
     def find_tracer(self) -> str | None:
         """
         Find the tracer binary based on configured mode.
@@ -203,6 +354,7 @@ class TracerService:
         job_id: str | None = None,
         tracer_mode_override: str | None = None,
         fallback_enabled_override: bool | None = None,
+        candidates_override: list[tuple[str, str]] | None = None,
     ) -> TracerResult:
         """
         Execute command with tracing.
@@ -226,32 +378,11 @@ class TracerService:
             if fallback_enabled_override is not None
             else self._get_fallback_enabled()
         )
-        candidates = self._get_tracer_candidates(mode, fallback_enabled)
-        if not candidates:
-            self.logger.debug("Tracer binary not found, raising error")
-            if mode == "ebpf":
-                hint = (
-                    "roar-tracer-ebpf binary not found. Build it with:\n"
-                    "  cd rust && cargo build --release -p roar-tracer-ebpf"
-                )
-            elif mode == "preload":
-                hint = (
-                    "roar-tracer-preload or preload library not found. Build it with:\n"
-                    "  cd rust && cargo build --release -p roar-tracer-preload"
-                )
-            elif mode == "ptrace":
-                hint = (
-                    "roar-tracer binary not found. Build it with:\n"
-                    "  cd rust && cargo build --release -p roar-tracer"
-                )
-            else:
-                hint = (
-                    "No tracer binary found. Build one with:\n"
-                    "  cd rust && cargo build --release -p roar-tracer-ebpf\n"
-                    "  cd rust && cargo build --release -p roar-tracer-preload\n"
-                    "  cd rust && cargo build --release -p roar-tracer"
-                )
-            raise TracerNotFoundError(hint)
+        candidates = candidates_override or self.resolve_execution_candidates(
+            command,
+            tracer_mode_override=mode,
+            fallback_enabled_override=fallback_enabled,
+        )
 
         # Generate log file paths
         pid = os.getpid()
@@ -280,9 +411,14 @@ class TracerService:
         if extra_env:
             env.update(extra_env)
 
-        # inject/ is now in the same directory as this file
-        inject_dir = str(Path(__file__).parent / "inject")
-        env["PYTHONPATH"] = inject_dir + os.pathsep + env.get("PYTHONPATH", "")
+        # Make sitecustomize discoverable while letting the workload's own venv
+        # keep precedence over Roar's runtime dependencies.
+        inject_dir = str(Path(__file__).resolve().parent / "inject")
+        existing_pythonpath = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            f"{inject_dir}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else inject_dir
+        )
+        env["ROAR_RUNTIME_PYTHONPATH"] = os.pathsep.join(self._runtime_pythonpath_entries())
         env["ROAR_LOG_FILE"] = inject_log_file
         env["ROAR_WRAP"] = "1"
         env["ROAR_PROJECT_DIR"] = str(roar_dir.parent)

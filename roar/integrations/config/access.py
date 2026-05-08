@@ -83,6 +83,11 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
         "default": None,
         "description": "Path to SSH private key for GLaaS authentication",
     },
+    "registration.public_by_default": {
+        "type": bool,
+        "default": False,
+        "description": "Default roar register/put to public publication intent unless overridden by --private",
+    },
     "registration.omit.enabled": {
         "type": bool,
         "default": True,

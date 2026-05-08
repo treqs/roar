@@ -447,6 +447,31 @@ class TracerStartupError(RoarExecutionError):
         super().__init__(message, context=ctx, cause=cause)
 
 
+class TracerPreflightError(RoarExecutionError):
+    """
+    The tracer failed strict preflight validation.
+
+    Raised when a backend is found but cannot be used safely before
+    launching the traced workload.
+    """
+
+    exit_code: int = 1
+    recoverable: bool = False
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        backend: str | None = None,
+        context: dict | None = None,
+        cause: Exception | None = None,
+    ) -> None:
+        ctx = context or {}
+        if backend:
+            ctx["backend"] = backend
+        super().__init__(message, context=ctx, cause=cause)
+
+
 class ProcessExecutionError(RoarExecutionError):
     """
     Error during process execution.

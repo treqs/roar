@@ -92,6 +92,58 @@ def reset_auth_mode_cache() -> None:
         _AUTH_MODE_BY_BASE_URL.clear()
 
 
+def get_cached_auth_mode(base_url: str) -> _AuthMode:
+    """Return the cached optional-auth mode for a GLaaS base URL."""
+    return _get_cached_auth_mode(base_url)
+
+
+def probe_auth_header(
+    *,
+    base_url: str,
+    auth_header_factory: Callable[[str, str, bytes | None], str | None],
+) -> _AuthMode:
+    """Probe whether optional SSH auth is accepted for a GLaaS base URL."""
+    auth_mode = _get_cached_auth_mode(base_url)
+    if auth_mode != "unknown":
+        return auth_mode
+
+    auth_header = auth_header_factory("GET", _AUTH_PROBE_PATH, None)
+    if not auth_header:
+        return "anonymous"
+
+    normalized = _normalize_base_url(base_url)
+    request_url = f"{normalized}{_AUTH_PROBE_PATH}"
+    req = urllib.request.Request(request_url, method="GET")
+    req.add_header("Authorization", auth_header)
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            _get_logger().debug(
+                "GLaaS auth probe: GET %s -> HTTP %d",
+                _AUTH_PROBE_PATH,
+                resp.status,
+            )
+            _set_cached_auth_mode(base_url, "authenticated")
+            return "authenticated"
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            _get_logger().debug(
+                "GLaaS auth probe: GET %s -> HTTP 401",
+                _AUTH_PROBE_PATH,
+            )
+            _mark_anonymous(base_url, "The configured SSH key was rejected by the server.")
+            return "anonymous"
+        _get_logger().debug(
+            "GLaaS auth probe for %s was inconclusive: HTTP %d",
+            normalized,
+            exc.code,
+        )
+        return "unknown"
+    except urllib.error.URLError as exc:
+        _get_logger().debug("GLaaS auth probe connection error to %s: %s", request_url, exc)
+        return "unknown"
+
+
 def request_json(
     *,
     base_url: str,
@@ -99,6 +151,8 @@ def request_json(
     path: str,
     body: dict | None,
     auth_header_factory: Callable[[str, str, bytes | None], str | None],
+    auth_header_value: str | None = None,
+    allow_auth_fallback: bool = True,
 ) -> tuple[Any | None, str | None]:
     """
     Make an authenticated JSON request.
@@ -196,12 +250,14 @@ def request_json(
             return None, str(e), None
 
     auth_mode = _get_cached_auth_mode(base_url)
-    auth_header = (
-        None if auth_mode == "anonymous" else auth_header_factory(method, path, body_bytes)
-    )
+    auth_header = auth_header_value
+    if auth_header is None:
+        auth_header = (
+            None if auth_mode == "anonymous" else auth_header_factory(method, path, body_bytes)
+        )
     bearer_auth = bool(auth_header and auth_header.startswith("Bearer "))
 
-    if auth_mode == "unknown" and auth_header and not bearer_auth:
+    if allow_auth_fallback and auth_mode == "unknown" and auth_header and not bearer_auth:
         probe_auth_header = auth_header_factory("GET", _AUTH_PROBE_PATH, None)
         if probe_auth_header:
             _probe_result, probe_error, probe_status = _perform_request(
@@ -233,7 +289,7 @@ def request_json(
     if error is None:
         return result, None
 
-    if auth_header and status_code == 401 and not bearer_auth:
+    if allow_auth_fallback and auth_header and status_code == 401 and not bearer_auth:
         _mark_anonymous(base_url, f"The server returned HTTP 401 for {method} {path}.")
         _get_logger().debug(
             "GLaaS optional-auth fallback: retrying %s %s without Authorization after 401",

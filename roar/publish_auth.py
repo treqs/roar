@@ -27,13 +27,26 @@ class PublishAuthContext:
     user_sub: str | None = None
     db_user_id: str | None = None
     creator_identity: str | None = None
+    ssh_auth_available: bool = False
 
 
 def load_publish_auth_context(
     start_dir: str | Path | None = None,
     *,
     allow_public_without_binding: bool = False,
+    force_anonymous: bool = False,
 ) -> PublishAuthContext:
+    if force_anonymous:
+        return PublishAuthContext(
+            access_token=None,
+            scope_request=None,
+            auth_provider=None,
+            user_sub=None,
+            db_user_id=None,
+            creator_identity=None,
+            ssh_auth_available=False,
+        )
+
     access_token = None
     auth_provider = None
     user_sub = None
@@ -45,8 +58,9 @@ def load_publish_auth_context(
         user_sub = auth_state.user.sub or None
         db_user_id = auth_state.user.db_user_id
 
+    ssh_auth_available = _has_ssh_auth_credentials()
     binding = None if allow_public_without_binding else _load_repo_binding(start_dir)
-    if binding and not access_token:
+    if binding and not access_token and not ssh_auth_available:
         raise PublishAuthError(
             "Repo is linked to GLaaS but no global auth state is available. Run `roar login`."
         )
@@ -79,6 +93,7 @@ def load_publish_auth_context(
         user_sub=user_sub,
         db_user_id=db_user_id,
         creator_identity=creator_identity,
+        ssh_auth_available=ssh_auth_available,
     )
 
 
@@ -138,6 +153,12 @@ def _optional_string(value: Any) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _has_ssh_auth_credentials() -> bool:
+    from .integrations.glaas.auth import find_ssh_private_key, find_ssh_pubkey
+
+    return find_ssh_private_key() is not None and find_ssh_pubkey() is not None
 
 
 def _load_repo_binding(start_dir: str | Path | None = None) -> dict[str, str] | None:

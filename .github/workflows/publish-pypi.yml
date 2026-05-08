@@ -285,6 +285,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-wheel, build-sdist]
     environment: pypi
+    permissions:
+      contents: write
 
     steps:
       - name: Set up Python
@@ -371,4 +373,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+          gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber --repo "${{ github.repository }}"

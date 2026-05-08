@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 
 import pytest
 
+from roar.application.publish.remote_job_uids import build_remote_publication_job_uid
 from tests.live_glaas import test_composite_live as composite_live
 
 pytest_plugins = ("tests.live_glaas.test_composite_live",)
@@ -299,6 +300,7 @@ def test_register_syncs_current_local_labels_only_when_register_called(
     artifact_hash = str(refs["artifact_hash"])
     step_number = int(refs["step_number"])
     job_uid = _local_job_uid(repo, step_number)
+    remote_job_uid = build_remote_publication_job_uid(session_hash, job_uid)
 
     _assert_ok(
         _run_roar(
@@ -317,7 +319,7 @@ def test_register_syncs_current_local_labels_only_when_register_called(
     )
 
     assert _remote_session_label_rows(glaas_url, session_hash) == []
-    assert _remote_job_label_rows(glaas_url, session_hash, job_uid) == []
+    assert _remote_job_label_rows(glaas_url, session_hash, remote_job_uid) == []
     assert _remote_artifact_label_rows(glaas_url, artifact_hash) == []
 
     _assert_ok(_run_roar(repo, "register", "processed.csv"))
@@ -325,7 +327,7 @@ def test_register_syncs_current_local_labels_only_when_register_called(
     assert _remote_session_label_rows(glaas_url, session_hash) == [
         (1, {"experiment": "ablation-7", "project": "forecasting"})
     ]
-    job_rows = _remote_job_label_rows(glaas_url, session_hash, job_uid)
+    job_rows = _remote_job_label_rows(glaas_url, session_hash, remote_job_uid)
     assert len(job_rows) == 1
     version, job_metadata = job_rows[0]
     assert version == 1
@@ -369,6 +371,7 @@ def test_register_exposes_current_labels_via_label_api(
     artifact_hash = str(refs["artifact_hash"])
     step_number = int(refs["step_number"])
     job_uid = _local_job_uid(repo, step_number)
+    remote_job_uid = build_remote_publication_job_uid(session_hash, job_uid)
 
     _assert_ok(
         _run_roar(
@@ -408,7 +411,7 @@ def test_register_exposes_current_labels_via_label_api(
         "/api/v1/labels/current",
         entity_type="job",
         session_hash=session_hash,
-        job_uid=job_uid,
+        job_uid=remote_job_uid,
     )
     assert job_label == {
         "id": job_label["id"],
@@ -417,7 +420,7 @@ def test_register_exposes_current_labels_via_label_api(
         "metadata": job_label["metadata"],
         "createdAt": job_label["createdAt"],
         "sessionHash": session_hash,
-        "jobUid": job_uid,
+        "jobUid": remote_job_uid,
     }
     assert isinstance(job_label["metadata"], dict)
     _assert_synced_run_job_label_metadata(job_label["metadata"], phase="preprocess")

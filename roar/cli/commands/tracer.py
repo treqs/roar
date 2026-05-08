@@ -4,6 +4,7 @@ CLI commands for tracer backend configuration and diagnostics.
 Usage: roar tracer [status|set-default|check|setup ebpf]
 """
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -88,9 +89,15 @@ def _preload_readiness(path: str) -> tuple[bool, str]:
     return readiness.ok, readiness.reason or "ready"
 
 
-def _backend_ready(backend: str) -> tuple[bool, str]:
-    """Check readiness for backend: auto|ptrace|ebpf|preload."""
-    return tracer_backends.backend_readiness(_package_path(), backend).as_tuple()
+def _backend_preflight(
+    backend: str,
+    command: str | None,
+) -> tracer_backends.AutoPreflightResult | tracer_backends.TracerPreflightResult:
+    """Run strict backend preflight."""
+    command_args = (command,) if command else None
+    if backend == "auto":
+        return tracer_backends.preflight_auto_backend(_package_path(), command=command_args)
+    return tracer_backends.preflight_backend(_package_path(), backend, command=command_args)
 
 
 def _print_status() -> None:
@@ -141,6 +148,50 @@ def _print_status() -> None:
     if paranoid is not None:
         status = "ok" if paranoid <= 1 else "too restrictive (needs <= 1)"
         click.echo(f"  perf_event_paranoid: {paranoid} ({status})")
+
+
+def _print_single_preflight_result(
+    target: str,
+    result: tracer_backends.TracerPreflightResult,
+) -> None:
+    err = not result.ok
+    status = "passed" if result.ok else "failed"
+    click.echo(f"Tracer check {status} for '{target}': {result.summary}", err=err)
+    if result.command_checked:
+        click.echo(f"  command: {result.command_checked}", err=err)
+    for check in result.checks:
+        detail = f" ({check.detail})" if check.detail else ""
+        check_status = "ok" if check.ok else "fail"
+        click.echo(f"  - {check.name}: {check_status}{detail}", err=err)
+    for warning in result.warnings:
+        click.echo(f"  ! {warning}", err=err)
+    _print_preflight_suggestions(result, err=err)
+
+
+def _print_auto_preflight_result(target: str, result: tracer_backends.AutoPreflightResult) -> None:
+    err = not result.ok
+    status = "passed" if result.ok else "failed"
+    click.echo(f"Tracer check {status} for '{target}': {result.summary}", err=err)
+    if result.command_checked:
+        click.echo(f"  command: {result.command_checked}", err=err)
+    for backend_result in result.results:
+        backend_status = "ok" if backend_result.ok else backend_result.summary
+        click.echo(f"  {backend_result.backend}: {backend_status}", err=err)
+    _print_preflight_suggestions(result, err=err)
+
+
+def _print_preflight_suggestions(
+    result: tracer_backends.PreflightResult,
+    *,
+    err: bool,
+) -> None:
+    suggestions = tracer_backends.suggestions_for_preflight_result(result)
+    if not suggestions:
+        return
+    click.echo("", err=err)
+    click.echo("Next steps:", err=err)
+    for suggestion in suggestions:
+        click.echo(f"  - {suggestion}", err=err)
 
 
 @click.group("tracer", invoke_without_command=True)
@@ -195,16 +246,32 @@ def tracer_preload() -> None:
     default=None,
     help="Backend policy to validate (defaults to configured default tracer).",
 )
-def tracer_check(backend: str | None) -> None:
-    """Validate tracer backend readiness (non-zero exit if not ready)."""
+@click.option(
+    "--command",
+    default=None,
+    help="Optional command name/path for command-aware compatibility checks.",
+)
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    default=False,
+    help="Emit machine-readable JSON output.",
+)
+def tracer_check(backend: str | None, command: str | None, json_output: bool) -> None:
+    """Validate tracer backend preflight (non-zero exit if not ready)."""
     target = backend or _get_default_mode()
-    ok, detail = _backend_ready(target)
-    if ok:
-        click.echo(f"Tracer check passed for '{target}': {detail}")
-        return
+    result = _backend_preflight(target, command)
 
-    click.echo(f"Tracer check failed for '{target}': {detail}", err=True)
-    raise SystemExit(1)
+    if json_output:
+        click.echo(json.dumps(result.to_dict(), sort_keys=True))
+    elif isinstance(result, tracer_backends.AutoPreflightResult):
+        _print_auto_preflight_result(target, result)
+    else:
+        _print_single_preflight_result(target, result)
+
+    if not result.ok:
+        raise SystemExit(1)
 
 
 @tracer.group("setup", invoke_without_command=True)
