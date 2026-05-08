@@ -84,9 +84,7 @@ def list_sessions(roar_dir: Path) -> list[SessionListing]:
     return rows
 
 
-def load_session(
-    roar_dir: Path, session_ref: str | None = None
-) -> ShowSessionSummary | None:
+def load_session(roar_dir: Path, session_ref: str | None = None) -> ShowSessionSummary | None:
     """Fetch a session summary by ref (full hash / prefix), or active when None."""
     try:
         summary = build_show_summary(

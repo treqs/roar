@@ -84,9 +84,7 @@ class SessionPickerScreen(ModalScreen["SessionListing | None"]):
         for i, listing in enumerate(self._listings):
             if ref is None and listing.is_active:
                 return i
-            if ref is not None and (
-                listing.hash == ref or listing.hash.startswith(ref)
-            ):
+            if ref is not None and (listing.hash == ref or listing.hash.startswith(ref)):
                 return i
         return 0
 

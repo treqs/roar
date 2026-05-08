@@ -136,9 +136,7 @@ class LabelEditorScreen(ModalScreen[None]):
             await view.extend(items)
         if not self._entries:
             return
-        target_idx = (
-            min(prev_idx, len(self._entries) - 1) if prev_idx is not None else 0
-        )
+        target_idx = min(prev_idx, len(self._entries) - 1) if prev_idx is not None else 0
         # `index` is a reactive that only invokes its watcher on a *change*,
         # so setting it back to the same value as before the rebuild is a
         # no-op and the new row never gets `-highlight`. Toggle through None
@@ -216,9 +214,7 @@ class LabelEditorScreen(ModalScreen[None]):
 
     async def _apply_set(self, key: str, value: str) -> None:
         if is_reserved_system_label_path(key):
-            self.app.notify(
-                f"`{key}` is a reserved system path.", severity="error"
-            )
+            self.app.notify(f"`{key}` is a reserved system path.", severity="error")
             return
         try:
             patch = parse_label_pairs((f"{key}={value}",))
@@ -289,9 +285,7 @@ class LabelEditFormScreen(ModalScreen["tuple[str, str] | None"]):
                 placeholder="key (dotted path, e.g. experiment.tag)",
                 id="form-key",
             )
-            yield Input(
-                value=self._initial_value, placeholder="value", id="form-value"
-            )
+            yield Input(value=self._initial_value, placeholder="value", id="form-value")
             yield Static("Enter save · Esc cancel", id="form-keys")
 
     def on_mount(self) -> None:

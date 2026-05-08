@@ -275,9 +275,7 @@ class LabelService:
             version=int(created["version"]),
         )
 
-    def delete_keys(
-        self, target: LabelTargetRef, keys: list[str]
-    ) -> LabelWriteResult:
+    def delete_keys(self, target: LabelTargetRef, keys: list[str]) -> LabelWriteResult:
         """Remove specific dotted-path keys from the current label document.
 
         Reserved system-origin keys cannot be deleted (same constraint as for
@@ -286,9 +284,7 @@ class LabelService:
         """
         for key in keys:
             if is_reserved_system_label_path(key):
-                raise ValueError(
-                    f"Cannot delete reserved label key: {key}"
-                )
+                raise ValueError(f"Cannot delete reserved label key: {key}")
         current = self.current_metadata(target)
         new_metadata = deepcopy(current)
         for key in keys:

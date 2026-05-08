@@ -182,9 +182,7 @@ def _resolve_session(db_ctx, session_ref: str | None) -> dict | None:
     )
 
 
-def _build_session_summary_for_ref(
-    db_ctx, session_ref: str | None
-) -> ShowSessionSummary:
+def _build_session_summary_for_ref(db_ctx, session_ref: str | None) -> ShowSessionSummary:
     session = _resolve_session(db_ctx, session_ref)
     if not session:
         if session_ref is None:
@@ -193,9 +191,7 @@ def _build_session_summary_for_ref(
     return _build_session_summary(db_ctx, session)
 
 
-def _build_job_summary_for_ref(
-    db_ctx, ref: str, session_ref: str | None = None
-) -> ShowJobSummary:
+def _build_job_summary_for_ref(db_ctx, ref: str, session_ref: str | None = None) -> ShowJobSummary:
     if ref.startswith("@"):
         session = _resolve_session(db_ctx, session_ref)
         if not session:

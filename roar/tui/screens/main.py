@@ -185,9 +185,7 @@ class MainScreen(Screen):
             return
         current_hash = self._current_session_hash(listing)
         try:
-            current_idx = next(
-                i for i, s in enumerate(listing) if s.hash == current_hash
-            )
+            current_idx = next(i for i, s in enumerate(listing) if s.hash == current_hash)
         except StopIteration:
             current_idx = 0
         new_idx = current_idx + delta
@@ -226,9 +224,7 @@ class MainScreen(Screen):
 
         entity_type, target_str, display = resolved
         self.app.push_screen(
-            LabelEditorScreen(
-                self.roar_dir, self.cwd, entity_type, target_str, display
-            )
+            LabelEditorScreen(self.roar_dir, self.cwd, entity_type, target_str, display)
         )
 
     def _resolve_label_target(self) -> tuple[str, str, str] | None:
@@ -244,9 +240,7 @@ class MainScreen(Screen):
         kind = target.get("kind")
         if kind == "step":
             ref = _step_ref(target)
-            job = tui_data.load_job(
-                self.roar_dir, self.cwd, ref, session_ref=self.session_ref
-            )
+            job = tui_data.load_job(self.roar_dir, self.cwd, ref, session_ref=self.session_ref)
             if job is None or not job.job_uid:
                 return None
             return ("job", job.job_uid, f"{ref} ({job.job_uid[:8]})")
@@ -262,9 +256,7 @@ class MainScreen(Screen):
             if path:
                 artifact = tui_data.load_artifact_by_path(self.roar_dir, self.cwd, path)
             if artifact is None and ahash:
-                artifact = tui_data.load_artifact_by_hash(
-                    self.roar_dir, self.cwd, ahash
-                )
+                artifact = tui_data.load_artifact_by_hash(self.roar_dir, self.cwd, ahash)
             if artifact is None:
                 return None
             # `LabelService.resolve_target` expects a content hash or path,
@@ -389,10 +381,7 @@ class MainScreen(Screen):
         # If detail pane is open, refresh whatever entity is *displayed* —
         # not whatever the tree cursor currently points at. The user may have
         # navigated to a different entity via a link.
-        if (
-            self.query_one("#detail-pane").has_class("-visible")
-            and self._detail_target is not None
-        ):
+        if self.query_one("#detail-pane").has_class("-visible") and self._detail_target is not None:
             self._populate_detail(self._detail_target)
 
     def _format_session_info(self, session, dag) -> str:
@@ -433,9 +422,7 @@ class MainScreen(Screen):
 
     def _show_by_ref(self, ref: str) -> None:
         if ref.startswith("@"):
-            job = tui_data.load_job(
-                self.roar_dir, self.cwd, ref, session_ref=self.session_ref
-            )
+            job = tui_data.load_job(self.roar_dir, self.cwd, ref, session_ref=self.session_ref)
             if job:
                 self._populate_detail({"kind": "step", "step_number": int(ref.lstrip("@B"))})
                 return
@@ -468,9 +455,7 @@ class MainScreen(Screen):
         kind = data.get("kind")
         if kind == "step":
             ref = _step_ref(data)
-            job = tui_data.load_job(
-                self.roar_dir, self.cwd, ref, session_ref=self.session_ref
-            )
+            job = tui_data.load_job(self.roar_dir, self.cwd, ref, session_ref=self.session_ref)
             if job is None:
                 switcher.current = "empty-detail"
                 return
@@ -586,10 +571,9 @@ def _cursor_matches(current: dict, saved: dict) -> bool:
     if kind != saved.get("kind"):
         return False
     if kind == "step":
-        return (
-            current.get("step_number") == saved.get("step_number")
-            and current.get("job_type") == saved.get("job_type")
-        )
+        return current.get("step_number") == saved.get("step_number") and current.get(
+            "job_type"
+        ) == saved.get("job_type")
     if kind == "artifact":
         if saved.get("hash") and current.get("hash") == saved["hash"]:
             return True

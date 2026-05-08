@@ -69,9 +69,7 @@ class LauncherScreen(ModalScreen[str | None]):
     INPUT_KEYS = "↓ history · Ctrl+R search · Ctrl+Y paste · Enter launch · Esc cancel"
     SEARCH_KEYS = "Type to filter · ↑↓ navigate · Enter use · Ctrl+G abort"
 
-    def __init__(
-        self, roar_dir: Path, cwd: Path, initial_command: str = ""
-    ) -> None:
+    def __init__(self, roar_dir: Path, cwd: Path, initial_command: str = "") -> None:
         super().__init__()
         self.roar_dir = roar_dir
         self.cwd = cwd
@@ -87,9 +85,7 @@ class LauncherScreen(ModalScreen[str | None]):
         with Vertical(id="launcher-box"):
             yield Static("$ roar run", id="launcher-title")
             yield Static("(prefix is automatic — type the rest)", id="launcher-prefix")
-            yield Input(
-                placeholder="python train.py --lr 0.001", id="launcher-input"
-            )
+            yield Input(placeholder="python train.py --lr 0.001", id="launcher-input")
             yield ListView(id="launcher-history")
             yield Static(self.INPUT_KEYS, id="launcher-keys")
 
@@ -206,9 +202,7 @@ class LauncherScreen(ModalScreen[str | None]):
 
     def _move_list(self, delta: int) -> None:
         hist = self.query_one("#launcher-history", ListView)
-        items = self._filtered_history(
-            self.query_one("#launcher-input", Input).value
-        )
+        items = self._filtered_history(self.query_one("#launcher-input", Input).value)
         if not items:
             return
         cur = hist.index if hist.index is not None else 0

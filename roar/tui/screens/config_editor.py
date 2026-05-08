@@ -159,8 +159,7 @@ class ConfigEditorScreen(ModalScreen[None]):
         _key, type_, default, description = visible[idx]
         type_name = getattr(type_, "__name__", str(type_))
         detail.update(
-            f"{description}\n"
-            f"[dim]type: {type_name} · default: {_value_str(default)}[/dim]"
+            f"{description}\n[dim]type: {type_name} · default: {_value_str(default)}[/dim]"
         )
 
     # --- search-mode actions --------------------------------------------------
@@ -308,9 +307,7 @@ class ConfigEditFormScreen(ModalScreen["str | None"]):
     #config-form-keys  { color: $text-muted; padding-top: 1; }
     """
 
-    def __init__(
-        self, key: str, current: str, type_: type, description: str, default
-    ) -> None:
+    def __init__(self, key: str, current: str, type_: type, description: str, default) -> None:
         super().__init__()
         self.key = key
         self.current = current
@@ -327,9 +324,7 @@ class ConfigEditFormScreen(ModalScreen["str | None"]):
                 f"[dim]type: {type_name} · default: {_value_str(self.default)}[/dim]",
                 id="config-form-meta",
             )
-            placeholder = (
-                "comma-separated values" if self.type_ is list else ""
-            )
+            placeholder = "comma-separated values" if self.type_ is list else ""
             yield Input(
                 value=self.current,
                 placeholder=placeholder,
@@ -371,9 +366,7 @@ class ConfigSelectScreen(ModalScreen["str | None"]):
     #select-keys  { color: $text-muted; padding-top: 1; }
     """
 
-    def __init__(
-        self, key: str, current: str, choices: tuple[str, ...], description: str
-    ) -> None:
+    def __init__(self, key: str, current: str, choices: tuple[str, ...], description: str) -> None:
         super().__init__()
         self.key = key
         self.current = current

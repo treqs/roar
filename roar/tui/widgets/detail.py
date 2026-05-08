@@ -130,9 +130,7 @@ class _DetailWithToc(Horizontal):
                 yield Static(self._toc_label(False, jump_key, title), id=f"toc-{key}")
         with VerticalScroll(id=self.body_id, classes="body"):
             for key, title, _ in self.SECTIONS:
-                yield Static(
-                    f"── {title} ──", classes="section-heading", id=f"head-{key}"
-                )
+                yield Static(f"── {title} ──", classes="section-heading", id=f"head-{key}")
                 yield Static("", classes="section", id=f"sec-{key}")
 
     def on_mount(self) -> None:
@@ -297,12 +295,8 @@ class JobDetail(_DetailWithToc):
         links: list[tuple[str, str, str]] = []
         if summary.command:
             links.append(("command", summary.command, "command"))
-        links.extend(
-            ("artifact_path", a.path, "inputs") for a in summary.inputs if a.path
-        )
-        links.extend(
-            ("artifact_path", a.path, "outputs") for a in summary.outputs if a.path
-        )
+        links.extend(("artifact_path", a.path, "inputs") for a in summary.inputs if a.path)
+        links.extend(("artifact_path", a.path, "outputs") for a in summary.outputs if a.path)
         self._links = links
         # Preserve highlight across auto-refreshes if the same target still exists.
         self._link_idx = links.index(old_target) if old_target in links else -1
@@ -474,9 +468,7 @@ class ArtifactDetail(_DetailWithToc):
         self._current_session_hash = current_session_hash
         self._links = [
             ("job_uid", j.job_uid, "producers") for j in summary.produced_by if j.job_uid
-        ] + [
-            ("job_uid", j.job_uid, "consumers") for j in summary.consumed_by if j.job_uid
-        ]
+        ] + [("job_uid", j.job_uid, "consumers") for j in summary.consumed_by if j.job_uid]
         self._link_idx = self._links.index(old_target) if old_target in self._links else -1
         self._render_sections()
 
