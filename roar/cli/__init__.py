@@ -12,7 +12,6 @@ Usage:
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterable
 from importlib import import_module
 
@@ -34,31 +33,6 @@ except Exception:
 LAZY_COMMANDS: dict[str, tuple[str, str, str, bool]] = build_lazy_commands()
 
 HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = build_help_groups()
-
-EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG = "ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS"
-_EXPERIMENTAL_ACCOUNT_COMMANDS = frozenset(
-    {
-        "login",
-        "logout",
-        "whoami",
-        "projects",
-        "workflow",
-    }
-)
-_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes"})
-
-
-def experimental_account_commands_enabled() -> bool:
-    """Return whether unreleased account commands should be exposed."""
-    return (
-        os.environ.get(EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG, "").strip().lower() in _TRUTHY_ENV_VALUES
-    )
-
-
-def _command_is_available(command_name: str) -> bool:
-    if command_name not in _EXPERIMENTAL_ACCOUNT_COMMANDS:
-        return True
-    return experimental_account_commands_enabled()
 
 
 class LazyCommand(click.Command):
@@ -138,12 +112,10 @@ class LazyGroup(click.Group):
 
     def list_commands(self, ctx: click.Context) -> list[str]:
         """List all available commands."""
-        return sorted(name for name in super().list_commands(ctx) if _command_is_available(name))
+        return sorted(super().list_commands(ctx))
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
-        """Resolve commands, hiding unreleased account commands by default."""
-        if not _command_is_available(cmd_name):
-            return None
+        """Resolve commands."""
         return super().get_command(ctx, cmd_name)
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
@@ -236,9 +208,7 @@ def cli(ctx: click.Context) -> None:
 # Export public API
 __all__ = [
     "COMMAND_SPECS",
-    "EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG",
     "LazyGroup",
     "__version__",
     "cli",
-    "experimental_account_commands_enabled",
 ]
