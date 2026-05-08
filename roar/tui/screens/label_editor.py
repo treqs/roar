@@ -26,7 +26,7 @@ from ...db.context import create_database_context
 
 
 class LabelEditorScreen(ModalScreen[None]):
-    """List labels for an entity. `Enter` edits, `a` adds, `d` deletes, `p` syncs."""
+    """List labels for an entity. `Enter` edits, `a` adds, `d` deletes, `s` syncs."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "close", "Close"),
@@ -34,7 +34,7 @@ class LabelEditorScreen(ModalScreen[None]):
         Binding("a", "add", "Add"),
         Binding("d", "delete", "Delete"),
         Binding("t", "toggle_system", "Toggle system"),
-        Binding("p", "sync", "Sync to remote"),
+        Binding("s", "sync", "Sync to remote"),
         Binding("enter", "edit_selected", "Edit", priority=True),
     ]
 
@@ -55,7 +55,7 @@ class LabelEditorScreen(ModalScreen[None]):
     """
 
     BASE_KEYS = ("Enter edit", "a add", "d delete")
-    TAIL_KEYS = ("p sync", "Esc close")
+    TAIL_KEYS = ("s sync", "Esc close")
 
     def __init__(
         self,
