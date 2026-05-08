@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import json
 import os
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
-
-from copy import deepcopy
 
 from ..core.label_origins import LABEL_ORIGIN_USER, build_current_key_origins
 from ..db.context import DatabaseContext

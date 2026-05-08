@@ -207,7 +207,7 @@ class LabelEditorScreen(ModalScreen[None]):
                     target=self.target,
                 )
             )
-        except Exception as exc:  # noqa: BLE001 — surface any backend failure
+        except Exception as exc:  # surface any backend failure
             self.app.notify(f"Sync failed: {exc}", severity="error", timeout=8)
             return
         self.app.notify("Labels synced.", severity="information")

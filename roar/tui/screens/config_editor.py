@@ -145,7 +145,7 @@ class ConfigEditorScreen(ModalScreen[None]):
 
     # --- detail line under the list ------------------------------------------
 
-    def on_list_view_highlighted(self, event) -> None:  # noqa: ARG002
+    def on_list_view_highlighted(self, event) -> None:
         self._update_detail()
 
     def _update_detail(self) -> None:

@@ -7,12 +7,13 @@ diff viewer (per the redesign doc's architectural rules).
 from __future__ import annotations
 
 from datetime import datetime
+from typing import ClassVar
 
 from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Static
 
@@ -77,7 +78,7 @@ class _DetailWithToc(Horizontal):
     body_id: str = "detail-body"
     toc_id: str = "detail-toc"
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         # Up/Down repurpose the body's default line-scroll into TOC section nav
         # (vertical TOC ↔ vertical arrows). PgUp/PgDn keep the body's default
         # paging behavior. priority=True is required because the focused
@@ -280,7 +281,7 @@ class JobDetail(_DetailWithToc):
         ("env", "Env", "e"),
     )
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("s", "jump('summary')", "Summary", show=False),
         Binding("c", "jump('command')", "Command", show=False),
         Binding("i", "jump('inputs')", "Inputs", show=False),
@@ -458,7 +459,7 @@ class ArtifactDetail(_DetailWithToc):
         ("labels", "Labels", "l"),
     )
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("s", "jump('summary')", "Summary", show=False),
         Binding("h", "jump('hashes')", "Hashes", show=False),
         Binding("p", "jump('locations')", "Paths", show=False),
@@ -578,4 +579,4 @@ def _render_artifact_jobs(
     return t
 
 
-__all__ = ["JobDetail", "ArtifactDetail", "TOC_MIN_WIDTH"]
+__all__ = ["TOC_MIN_WIDTH", "ArtifactDetail", "JobDetail"]
