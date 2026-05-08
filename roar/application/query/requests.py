@@ -15,6 +15,7 @@ class DagQueryRequest:
     use_color: bool
     show_artifacts: bool
     stale_only: bool
+    session_ref: str | None = None  # full hash or hash prefix; None means active session
 
 
 ShowQuerySelector = Literal["auto", "session", "path", "job", "artifact"]
@@ -27,6 +28,7 @@ class ShowQueryRequest:
     ref: str | None
     selector: ShowQuerySelector = "auto"
     show_all: bool = False
+    session_ref: str | None = None  # full hash or hash prefix; None means active session
 
 
 @dataclass(frozen=True)

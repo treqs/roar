@@ -4,27 +4,41 @@ from __future__ import annotations
 
 import json
 
+from ...core.models.dag import DagVisualization
 from ...db.context import create_database_context
 from ...presenters.dag_data_builder import DagDataBuilder
 from .requests import DagQueryRequest
 
 
-def render_dag(request: DagQueryRequest) -> str:
-    """Render the current session DAG."""
+def _resolve_session(db_ctx, session_ref: str | None) -> dict | None:
+    """Resolve a session ref to a session row.
+
+    `None` → the active session. Otherwise try a full-hash match, then a
+    hash-prefix match, mirroring how `roar show <session_hash>` resolves.
+    """
+    if session_ref is None:
+        return db_ctx.sessions.get_active()
+    return db_ctx.sessions.get_by_hash(session_ref) or db_ctx.sessions.get_by_hash_prefix(
+        session_ref
+    )
+
+
+def build_dag_visualization(request: DagQueryRequest) -> DagVisualization:
+    """Build a typed DAG visualization for the active session."""
     from ...core.models.dag import (
         DagArtifactInfo,
         DagArtifactState,
         DagNodeInfo,
         DagNodeMetrics,
         DagNodeState,
-        DagVisualization,
     )
-    from ...presenters.dag_renderer import DagRenderer
 
     with create_database_context(request.roar_dir) as db_ctx:
-        session = db_ctx.sessions.get_active()
+        session = _resolve_session(db_ctx, request.session_ref)
         if not session:
-            raise ValueError("No active session. Run 'roar init' or 'roar run' first.")
+            if request.session_ref is None:
+                raise ValueError("No active session. Run 'roar init' or 'roar run' first.")
+            raise ValueError(f"No session found matching: {request.session_ref}")
 
         builder = DagDataBuilder(db_ctx, int(session["id"]))
         dag_data = builder.build(
@@ -64,7 +78,7 @@ def render_dag(request: DagQueryRequest) -> str:
         )
         for artifact in dag_data["artifacts"]
     ]
-    dag_viz = DagVisualization(
+    return DagVisualization(
         nodes=nodes,
         artifacts=artifacts,
         stale_count=dag_data["stale_count"],
@@ -76,6 +90,12 @@ def render_dag(request: DagQueryRequest) -> str:
         labels=dag_data.get("labels", {}),
     )
 
+
+def render_dag(request: DagQueryRequest) -> str:
+    """Render the current session DAG."""
+    from ...presenters.dag_renderer import DagRenderer
+
+    dag_viz = build_dag_visualization(request)
     renderer = DagRenderer(use_color=request.use_color)
     if request.output_json:
         return json.dumps(renderer.render_json(dag_viz), indent=2)

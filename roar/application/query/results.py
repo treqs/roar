@@ -239,6 +239,7 @@ class ShowArtifactLocationSummary:
 class ShowArtifactJobSummary:
     job_uid: str | None
     command: str | None
+    session_hash: str | None = None  # for the TUI "in this session" marker
 
     def to_renderer_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -77,12 +77,12 @@ def build_show_summary(request: ShowQueryRequest) -> ShowSummary:
 
     with create_query_database_context(request.roar_dir) as db_ctx:
         if request.selector == "session":
-            return _build_active_session_summary(db_ctx)
+            return _build_session_summary_for_ref(db_ctx, request.session_ref)
 
         if request.selector == "job":
             if request.ref is None:
                 raise ShowQueryError("Job reference is required.")
-            return _build_job_summary_for_ref(db_ctx, request.ref)
+            return _build_job_summary_for_ref(db_ctx, request.ref, request.session_ref)
 
         if request.selector == "path":
             if request.ref is None:
@@ -101,7 +101,7 @@ def build_show_summary(request: ShowQueryRequest) -> ShowSummary:
             )
 
         if request.ref is None:
-            return _build_active_session_summary(db_ctx)
+            return _build_session_summary_for_ref(db_ctx, request.session_ref)
 
         parsed_ref = parse_ref(request.ref, selector=request.selector)
         if logger:
@@ -169,18 +169,35 @@ def _lookup_artifact_by_path(db_ctx, cwd: Path, ref: str) -> dict[str, Any] | No
     return db_ctx.artifacts.get_by_path(resolved_path)
 
 
-def _build_active_session_summary(db_ctx) -> ShowSessionSummary:
-    session = db_ctx.sessions.get_active()
+def _resolve_session(db_ctx, session_ref: str | None) -> dict | None:
+    """Resolve a session ref to a session row.
+
+    `None` → the active session. Otherwise full-hash match, then hash-prefix
+    match — same precedence as `roar dag --session <ref>`.
+    """
+    if session_ref is None:
+        return db_ctx.sessions.get_active()
+    return db_ctx.sessions.get_by_hash(session_ref) or db_ctx.sessions.get_by_hash_prefix(
+        session_ref
+    )
+
+
+def _build_session_summary_for_ref(db_ctx, session_ref: str | None) -> ShowSessionSummary:
+    session = _resolve_session(db_ctx, session_ref)
     if not session:
-        raise ShowQueryError(_NO_ACTIVE_SESSION_MESSAGE)
+        if session_ref is None:
+            raise ShowQueryError(_NO_ACTIVE_SESSION_MESSAGE)
+        raise ShowQueryError(f"No session found matching: {session_ref}")
     return _build_session_summary(db_ctx, session)
 
 
-def _build_job_summary_for_ref(db_ctx, ref: str) -> ShowJobSummary:
+def _build_job_summary_for_ref(db_ctx, ref: str, session_ref: str | None = None) -> ShowJobSummary:
     if ref.startswith("@"):
-        session = db_ctx.sessions.get_active()
+        session = _resolve_session(db_ctx, session_ref)
         if not session:
-            raise ShowQueryError(_NO_ACTIVE_SESSION_MESSAGE)
+            if session_ref is None:
+                raise ShowQueryError(_NO_ACTIVE_SESSION_MESSAGE)
+            raise ShowQueryError(f"No session found matching: {session_ref}")
         job = _resolve_job_ref(db_ctx, int(session["id"]), ref)
     else:
         job = db_ctx.jobs.get_by_uid(ref)
@@ -353,6 +370,7 @@ def _build_artifact_summary(db_ctx, artifact: dict[str, Any]) -> ShowArtifactSum
             ShowArtifactJobSummary(
                 job_uid=cast(str | None, job_summary.get("job_uid")),
                 command=cast(str | None, job_summary.get("command")),
+                session_hash=cast(str | None, job_summary.get("session_hash")),
             )
             for job_summary in cast(list[dict[str, Any]], jobs.get("produced_by", []))
         ],
@@ -360,6 +378,7 @@ def _build_artifact_summary(db_ctx, artifact: dict[str, Any]) -> ShowArtifactSum
             ShowArtifactJobSummary(
                 job_uid=cast(str | None, job_summary.get("job_uid")),
                 command=cast(str | None, job_summary.get("command")),
+                session_hash=cast(str | None, job_summary.get("session_hash")),
             )
             for job_summary in cast(list[dict[str, Any]], jobs.get("consumed_by", []))
         ],

@@ -126,6 +126,44 @@ class _QuerySessionRepository(_QueryRepository):
         )
         return _session_row_to_dict(row) if row is not None else None
 
+    def get_all(self) -> list[dict[str, Any]]:
+        """All sessions, newest first."""
+        rows = self._fetchall(
+            """
+            SELECT id, hash, created_at, source_artifact_hash, current_step, is_active,
+                   git_repo, git_commit_start, git_commit_end, synced_at, metadata
+            FROM sessions
+            ORDER BY created_at DESC, id DESC
+            """
+        )
+        return [_session_row_to_dict(row) for row in rows]
+
+    def get_by_hash(self, session_hash: str) -> dict[str, Any] | None:
+        row = self._fetchone(
+            """
+            SELECT id, hash, created_at, source_artifact_hash, current_step, is_active,
+                   git_repo, git_commit_start, git_commit_end, synced_at, metadata
+            FROM sessions
+            WHERE hash = ?
+            LIMIT 1
+            """,
+            (session_hash,),
+        )
+        return _session_row_to_dict(row) if row is not None else None
+
+    def get_by_hash_prefix(self, hash_prefix: str) -> dict[str, Any] | None:
+        row = self._fetchone(
+            """
+            SELECT id, hash, created_at, source_artifact_hash, current_step, is_active,
+                   git_repo, git_commit_start, git_commit_end, synced_at, metadata
+            FROM sessions
+            WHERE hash LIKE ?
+            LIMIT 1
+            """,
+            (f"{hash_prefix}%",),
+        )
+        return _session_row_to_dict(row) if row is not None else None
+
     def get_steps(self, session_id: int) -> list[dict[str, Any]]:
         rows = self._fetchall(
             """
@@ -516,12 +554,13 @@ class _QueryArtifactRepository(_QueryRepository):
 
     def get_jobs(self, artifact_id: str) -> dict[str, list[dict[str, Any]]]:
         produced_by = [
-            _job_row_to_dict(row)
+            self._job_row_with_session(row)
             for row in self._fetchall(
                 """
-                SELECT j.*
+                SELECT j.*, s.hash AS session_hash
                 FROM jobs AS j
                 JOIN job_outputs AS jo ON j.id = jo.job_id
+                LEFT JOIN sessions AS s ON s.id = j.session_id
                 WHERE jo.artifact_id = ?
                 ORDER BY j.timestamp DESC
                 """,
@@ -529,12 +568,13 @@ class _QueryArtifactRepository(_QueryRepository):
             )
         ]
         consumed_by = [
-            _job_row_to_dict(row)
+            self._job_row_with_session(row)
             for row in self._fetchall(
                 """
-                SELECT j.*
+                SELECT j.*, s.hash AS session_hash
                 FROM jobs AS j
                 JOIN job_inputs AS ji ON j.id = ji.job_id
+                LEFT JOIN sessions AS s ON s.id = j.session_id
                 WHERE ji.artifact_id = ?
                 ORDER BY j.timestamp DESC
                 """,
@@ -545,6 +585,12 @@ class _QueryArtifactRepository(_QueryRepository):
             "produced_by": produced_by,
             "consumed_by": consumed_by,
         }
+
+    @staticmethod
+    def _job_row_with_session(row: Any) -> dict[str, Any]:
+        data = _job_row_to_dict(row)
+        data["session_hash"] = row["session_hash"]
+        return data
 
 
 class _QueryLabelRepository(_QueryRepository):
