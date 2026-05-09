@@ -160,6 +160,12 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
         "default": True,
         "description": "Allow fallback to another tracer backend when the preferred backend fails",
     },
+    "tracer.banner": {
+        "type": bool,
+        "default": True,
+        "description": "Show a one-time per-machine banner when a tracer backend is "
+        "selected for the first time or via fallback (set to false to suppress)",
+    },
     "logging.level": {
         "type": str,
         "default": "warning",
