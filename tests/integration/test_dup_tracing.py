@@ -12,12 +12,10 @@ invariant separately from the success path.
 
 from __future__ import annotations
 
-import os
 import platform
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 try:
@@ -139,8 +137,7 @@ os.close(100)
     assert target.exists() and target.read_text() == "first second"
     written = _written(report)
     assert str(target.resolve()) in written, (
-        f"expected dst in written_files even after failed dup3 — "
-        f"got: {sorted(written)}"
+        f"expected dst in written_files even after failed dup3 — got: {sorted(written)}"
     )
 
 
@@ -155,8 +152,7 @@ def test_python_workload_still_captured(tmp_path: Path) -> None:
 
     workload_src = tmp_path / "workload.py"
     workload_src.write_text(
-        "import sys; "
-        "open(sys.argv[2],'wb').write(b'pre:'+open(sys.argv[1],'rb').read())\n"
+        "import sys; open(sys.argv[2],'wb').write(b'pre:'+open(sys.argv[1],'rb').read())\n"
     )
     report = _run_under_tracer(
         tracer,
