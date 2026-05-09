@@ -23,6 +23,7 @@ mod imp {
     pub const SYS_PWRITE64: u64 = 18;
     pub const SYS_READV: u64 = 19;
     pub const SYS_WRITEV: u64 = 20;
+    pub const SYS_DUP2: u64 = 33;
     pub const SYS_SENDFILE: u64 = 40;
     pub const SYS_CHDIR: u64 = 80;
     pub const SYS_FCHDIR: u64 = 81;
@@ -31,6 +32,7 @@ mod imp {
     pub const SYS_OPENAT: u64 = 257;
     pub const SYS_RENAMEAT: u64 = 264;
     pub const SYS_LINKAT: u64 = 265;
+    pub const SYS_DUP3: u64 = 292;
     pub const SYS_PREADV: u64 = 295;
     pub const SYS_PWRITEV: u64 = 296;
     pub const SYS_RENAMEAT2: u64 = 316;
@@ -49,6 +51,7 @@ mod imp {
         SYS_PWRITE64,
         SYS_READV,
         SYS_WRITEV,
+        SYS_DUP2,
         SYS_SENDFILE,
         SYS_CHDIR,
         SYS_FCHDIR,
@@ -57,6 +60,7 @@ mod imp {
         SYS_OPENAT,
         SYS_RENAMEAT,
         SYS_LINKAT,
+        SYS_DUP3,
         SYS_PREADV,
         SYS_PWRITEV,
         SYS_RENAMEAT2,
@@ -101,13 +105,15 @@ mod imp {
 mod imp {
 
     // aarch64 uses the asm-generic syscall table (asm-generic/unistd.h).
-    // Syscalls that don't exist on aarch64 (open, rename, link) are mapped to
-    // distinct out-of-range sentinels so shared match arms keyed on them
-    // compile without firing or colliding with one another.
+    // Syscalls that don't exist on aarch64 (open, rename, link, dup2) are
+    // mapped to distinct out-of-range sentinels so shared match arms keyed
+    // on them compile without firing or colliding with one another.
     pub const SYS_OPEN: u64 = u64::MAX;
     pub const SYS_RENAME: u64 = u64::MAX - 1;
     pub const SYS_LINK: u64 = u64::MAX - 2;
+    pub const SYS_DUP2: u64 = u64::MAX - 3;
 
+    pub const SYS_DUP3: u64 = 24;
     pub const SYS_LINKAT: u64 = 37;
     pub const SYS_RENAMEAT: u64 = 38;
     pub const SYS_CHDIR: u64 = 49;
@@ -139,6 +145,7 @@ mod imp {
         SYS_PWRITE64,
         SYS_READV,
         SYS_WRITEV,
+        SYS_DUP3,
         SYS_SENDFILE,
         SYS_CHDIR,
         SYS_FCHDIR,

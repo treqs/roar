@@ -21,10 +21,10 @@ use tracer_runtime::{
 use tracer_schema::ProcessInfo;
 
 use arch::{
-    SYS_CHDIR, SYS_CLOSE, SYS_COPY_FILE_RANGE, SYS_FCHDIR, SYS_LINK, SYS_LINKAT, SYS_MMAP,
-    SYS_OPEN, SYS_OPENAT, SYS_PREAD64, SYS_PREADV, SYS_PREADV2, SYS_PWRITE64, SYS_PWRITEV,
-    SYS_PWRITEV2, SYS_READ, SYS_READV, SYS_RENAME, SYS_RENAMEAT, SYS_RENAMEAT2, SYS_SENDFILE,
-    SYS_WRITE, SYS_WRITEV,
+    SYS_CHDIR, SYS_CLOSE, SYS_COPY_FILE_RANGE, SYS_DUP2, SYS_DUP3, SYS_FCHDIR, SYS_LINK,
+    SYS_LINKAT, SYS_MMAP, SYS_OPEN, SYS_OPENAT, SYS_PREAD64, SYS_PREADV, SYS_PREADV2,
+    SYS_PWRITE64, SYS_PWRITEV, SYS_PWRITEV2, SYS_READ, SYS_READV, SYS_RENAME, SYS_RENAMEAT,
+    SYS_RENAMEAT2, SYS_SENDFILE, SYS_WRITE, SYS_WRITEV,
 };
 
 #[derive(Serialize)]
@@ -93,6 +93,7 @@ struct TracerState {
     pending_writes: HashMap<i32, (String, u32)>, // tid -> (path, thread_id)
     pending_path_writes: HashMap<i32, (String, Option<u32>)>, // pid -> (destination path, thread_id)
     pending_closes: HashMap<i32, i32>, // pid -> fd (close syscalls pending confirmation)
+    pending_dups: HashMap<i32, i32>,   // pid -> old_fd captured at dup{2,3} entry
     pending_chdirs: HashMap<i32, ()>,  // pid -> () (chdir pending confirmation)
     pending_fchdirs: HashMap<i32, ()>, // pid -> () (fchdir pending confirmation)
     active_pids: HashSet<i32>,
@@ -111,6 +112,7 @@ impl TracerState {
             pending_writes: HashMap::new(),
             pending_path_writes: HashMap::new(),
             pending_closes: HashMap::new(),
+            pending_dups: HashMap::new(),
             pending_chdirs: HashMap::new(),
             pending_fchdirs: HashMap::new(),
             active_pids: HashSet::new(),
@@ -206,6 +208,8 @@ fn needs_exit_stop(syscall_num: u64) -> bool {
             | SYS_RENAMEAT2
             | SYS_CHDIR
             | SYS_FCHDIR
+            | SYS_DUP2
+            | SYS_DUP3
     )
 }
 
@@ -239,6 +243,14 @@ fn handle_syscall_entry(
             // Capture the fd argument on entry so we can clean up fd_table on exit
             let fd = arch::arg0(regs) as i32;
             state.pending_closes.insert(pid_raw, fd);
+        }
+        SYS_DUP2 | SYS_DUP3 => {
+            // dup2/dup3(old_fd, new_fd[, flags]): we need old_fd for the
+            // exit-side handle_dup. arg0 holds the same value at exit on
+            // x86_64 (rdi preserved) but on aarch64 x0 is clobbered with
+            // the return value, so capture it now.
+            let old_fd = arch::arg0(regs) as i32;
+            state.pending_dups.insert(pid_raw, old_fd);
         }
         SYS_READ | SYS_PREAD64 | SYS_READV | SYS_PREADV | SYS_PREADV2 => {
             // All read variants have fd in arg0
@@ -397,6 +409,20 @@ fn handle_syscall_exit(
                 if ret_val == 0 {
                     if let Some(pid_u32) = pid_u32 {
                         state.fd_tracker.handle_close(pid_u32, fd);
+                    }
+                }
+            }
+        }
+        SYS_DUP2 | SYS_DUP3 => {
+            // On success the kernel returns the new fd (which may be 0).
+            // On failure ret_val is negative; we must NOT call handle_dup
+            // in that case or we'd corrupt new_fd's path mapping with
+            // old_fd's path even though the dup never happened.
+            if let Some(old_fd) = state.pending_dups.remove(&pid_raw) {
+                if ret_val >= 0 {
+                    if let Some(pid_u32) = pid_u32 {
+                        let new_fd = ret_val as i32;
+                        state.fd_tracker.handle_dup(pid_u32, old_fd, new_fd);
                     }
                 }
             }
@@ -874,6 +900,7 @@ fn trace_loop(state: &mut TracerState) -> i32 {
                 state.pending_chdirs.remove(&pid_raw);
                 state.pending_fchdirs.remove(&pid_raw);
                 state.pending_path_writes.remove(&pid_raw);
+                state.pending_dups.remove(&pid_raw);
                 // Capture exit code of the root process
                 if state
                     .processes
@@ -894,6 +921,7 @@ fn trace_loop(state: &mut TracerState) -> i32 {
                 state.pending_chdirs.remove(&pid_raw);
                 state.pending_fchdirs.remove(&pid_raw);
                 state.pending_path_writes.remove(&pid_raw);
+                state.pending_dups.remove(&pid_raw);
                 // If root process was signaled, reflect that
                 if state
                     .processes
