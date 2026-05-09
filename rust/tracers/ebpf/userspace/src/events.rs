@@ -177,14 +177,14 @@ fn process_large_event(state: &mut TracerState, event: &LargeEvent) {
                 return;
             }
             let raw_path = path_from_bytes(&event.path);
-            let path = resolve_path(pid, &raw_path);
+            let path = resolve_path(pid, &raw_path, &mut state.cwd_cache);
             let flags = event.arg0;
             state.handle_open(pid, fd, path, flags);
         }
         EventType::Rename => {
             // Destination path from a rename/link-style publication is "written".
             let raw_path = path_from_bytes(&event.path);
-            let path = resolve_at_path(pid, event.arg1, &raw_path);
+            let path = resolve_at_path(pid, event.arg1, &raw_path, &mut state.cwd_cache);
             if event.ret_val >= 0 {
                 state.mark_path_written(path);
             }
@@ -192,6 +192,10 @@ fn process_large_event(state: &mut TracerState, event: &LargeEvent) {
         EventType::Clone => {
             let child_pid = event.arg0 as u32;
             state.handle_clone(pid, child_pid);
+
+            // Inherit CWD from parent so the child's relative-path opens
+            // resolve correctly after the child has exited.
+            state.inherit_cwd(pid, child_pid);
 
             // Try to capture process info for the child from /proc.
             // If the child has already exited (common with async event processing),

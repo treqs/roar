@@ -2,8 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use tracer_fd::FdTracker;
 use tracer_runtime::{
-    build_tracer_report, capture_process_info as capture_proc_info,
-    resolve_path as resolve_runtime_path,
+    build_tracer_report, capture_process_info as capture_proc_info, resolve_path_with_cache,
 };
 pub use tracer_schema::ProcessInfo;
 use tracer_schema::TracerReport;
@@ -23,6 +22,12 @@ pub struct TracerState {
     pub processes: HashMap<u32, ProcessInfo>,
     pub active_pids: HashSet<u32>,
 
+    /// Per-PID CWD cache, populated eagerly so relative path resolution
+    /// survives the tracee's exit. Without this, fast workloads like
+    /// `bash -c 'echo > x'` race against `/proc/<pid>/cwd` becoming
+    /// ENOENT after exit and silently fall back to the raw relative path.
+    pub cwd_cache: HashMap<u32, String>,
+
     /// Chunk size for I/O tracking. None = whole-file granularity (no chunk indices).
     pub chunk_size: Option<u64>,
 
@@ -40,10 +45,31 @@ impl TracerState {
             fd: FdTracker::new(chunk_size),
             processes: HashMap::new(),
             active_pids: HashSet::new(),
+            cwd_cache: HashMap::new(),
             chunk_size,
             events_dropped: 0,
             start_time: 0.0,
             end_time: 0.0,
+        }
+    }
+
+    /// Pre-populate the CWD cache for a PID by reading `/proc/<pid>/cwd`.
+    /// Best done while the process is still alive (e.g. at register time
+    /// when the BPF probe pattern SIGSTOPs the child before exec).
+    pub fn cache_cwd(&mut self, pid: u32) {
+        if self.cwd_cache.contains_key(&pid) {
+            return;
+        }
+        if let Ok(cwd) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
+            self.cwd_cache.insert(pid, cwd.to_string_lossy().into_owned());
+        }
+    }
+
+    /// Inherit the parent's cached CWD into the child PID. Called when a
+    /// Clone event is processed.
+    pub fn inherit_cwd(&mut self, parent_pid: u32, child_pid: u32) {
+        if let Some(cwd) = self.cwd_cache.get(&parent_pid).cloned() {
+            self.cwd_cache.insert(child_pid, cwd);
         }
     }
 
@@ -178,16 +204,31 @@ pub fn capture_process_info(pid: u32, parent_pid: Option<u32>) -> Option<Process
     capture_proc_info(pid, parent_pid)
 }
 
-/// Resolve a path from a BPF event. Handles relative paths via /proc/<pid>/cwd.
-pub fn resolve_path(pid: u32, raw_path: &str) -> String {
-    resolve_runtime_path(raw_path, pid)
+/// Resolve a path from a BPF event using a per-PID CWD cache. The cache
+/// must be populated *before* the tracee exits (otherwise `/proc/<pid>/cwd`
+/// returns ENOENT and the path is left unresolved). The daemon registers
+/// the cache entry at register-time when the PID is SIGSTOP'd, and
+/// inherits to children on Clone events.
+pub fn resolve_path(pid: u32, raw_path: &str, cwd_cache: &mut HashMap<u32, String>) -> String {
+    resolve_path_with_cache(raw_path, pid, cwd_cache)
 }
 
 /// Resolve an *at syscall path relative to its dirfd when possible.
-pub fn resolve_at_path(pid: u32, dirfd: u64, raw_path: &str) -> String {
+///
+/// `dirfd` of `AT_FDCWD` (or `u64::MAX`, used as a sentinel) routes through
+/// the CWD cache. Other valid fds are looked up via `/proc/<pid>/fd/<n>`,
+/// which only works while the tracee is alive — relative-to-fd paths
+/// captured this way still race against process exit. Eager fd→path
+/// caching in [`FdTracker`] is what saves us when the tracee has gone.
+pub fn resolve_at_path(
+    pid: u32,
+    dirfd: u64,
+    raw_path: &str,
+    cwd_cache: &mut HashMap<u32, String>,
+) -> String {
     let dirfd_i32 = dirfd as i32;
     if raw_path.starts_with('/') || dirfd == u64::MAX || dirfd_i32 == libc::AT_FDCWD {
-        return resolve_path(pid, raw_path);
+        return resolve_path(pid, raw_path, cwd_cache);
     }
 
     if dirfd_i32 >= 0 {
@@ -201,7 +242,7 @@ pub fn resolve_at_path(pid: u32, dirfd: u64, raw_path: &str) -> String {
         }
     }
 
-    resolve_path(pid, raw_path)
+    resolve_path(pid, raw_path, cwd_cache)
 }
 
 #[cfg(test)]
@@ -452,7 +493,29 @@ mod tests {
 
     #[test]
     fn test_resolve_path_absolute() {
-        assert_eq!(resolve_path(1, "/absolute/path"), "/absolute/path");
+        let mut cache = HashMap::new();
+        assert_eq!(
+            resolve_path(1, "/absolute/path", &mut cache),
+            "/absolute/path"
+        );
+    }
+
+    #[test]
+    fn test_resolve_path_relative_uses_cwd_cache() {
+        let mut cache = HashMap::new();
+        cache.insert(42u32, "/home/user/project".to_string());
+        // canonicalize will fail (path doesn't exist) so we get the
+        // joined form back unchanged.
+        let resolved = resolve_path(42, "data.csv", &mut cache);
+        assert_eq!(resolved, "/home/user/project/data.csv");
+    }
+
+    #[test]
+    fn test_inherit_cwd_propagates_to_child() {
+        let mut state = TracerState::new(None);
+        state.cwd_cache.insert(100, "/work".to_string());
+        state.inherit_cwd(100, 101);
+        assert_eq!(state.cwd_cache.get(&101), Some(&"/work".to_string()));
     }
 
     #[test]
