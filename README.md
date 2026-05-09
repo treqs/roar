@@ -41,11 +41,19 @@ pre-built binaries, so it requires a C toolchain (`gcc` / `clang`), Rust
 git clone https://github.com/treqs/roar.git
 cd roar
 
-# Install in development mode
-uv pip install -e ".[dev]"
-# or without uv
-pip install -e ".[dev]"
+# One-shot dev install: Python package + Rust tracer binaries
+bash scripts/install-dev.sh
 ```
+
+`scripts/install-dev.sh` runs `pip install -e ".[dev]"` (preferring `uv`
+when available) and then builds the Rust tracer binaries
+(`roar-tracer`, `roar-tracer-preload`, `roar-tracer-ebpf`, `roard`,
+`roar-proxy`) and stages them into `roar/bin/`. A bare
+`pip install -e .` does *not* build the tracer binaries because they
+live in separate cargo crates outside the maturin manifest, so
+`roar run` would fail with "No tracer binary found" until the script
+runs. See [Building from source](#building-from-source) below for
+details and the manual flow.
 
 ## Quick Start
 
@@ -543,9 +551,62 @@ roar auth test
 ### Setup
 
 ```bash
-# Install dev dependencies
-uv pip install -e ".[dev]"
+bash scripts/install-dev.sh
 ```
+
+The script handles Python install + Rust tracer builds + staging
+binaries into `roar/bin/`. See [Building from source](#building-from-source)
+for what it does and how to run the steps manually.
+
+### Building from source
+
+`pip install -e .` runs `maturin develop` to build the `artifact-hash-py`
+pyo3 extension, but the tracer binaries (`roar-tracer*`, `roard`,
+`roar-proxy`) are separate cargo packages outside the maturin manifest.
+The PyPI wheels bundle them under `roar/bin/`; an editable install
+does not, and `roar run` fails until they're built and staged.
+
+The fastest path is `scripts/install-dev.sh`, which does this:
+
+```bash
+# 1. Python package (editable, with dev extras)
+uv pip install -e ".[dev]"   # or pip install -e ".[dev]"
+
+# 2. Build the per-platform tracer crates
+cd rust
+# Linux:
+cargo build --release \
+  -p roar-tracer -p roar-tracer-preload -p roar-tracer-ebpf -p roar-proxy
+# macOS:
+cargo build --release -p roar-tracer-preload -p roar-proxy
+
+# 3. Stage the built binaries where the editable install looks for them
+cd ..
+mkdir -p roar/bin
+# Linux: install five binaries + the preload .so
+install -m 0755 rust/target/release/{roar-tracer,roar-tracer-preload,roar-tracer-ebpf,roard,roar-proxy} roar/bin/
+install -m 0755 rust/target/release/libroar_tracer_preload.so roar/bin/
+# macOS: install the launcher + the preload .dylib + roar-proxy
+# install -m 0755 rust/target/release/{roar-tracer-preload,roar-proxy} roar/bin/
+# install -m 0755 rust/target/release/libroar_tracer_preload.dylib roar/bin/
+```
+
+The eBPF tracer (Linux only) needs `bpf-linker` and a Rust nightly
+toolchain with `rust-src` for the BPF probe build:
+
+```bash
+cargo install bpf-linker
+rustup install nightly
+rustup component add rust-src --toolchain nightly
+```
+
+`scripts/install-dev.sh` skips eBPF gracefully when `bpf-linker` is
+absent — the other tracers still work.
+
+Verify the install with `roar tracer status`; every backend listed
+should be `ready` (or have a clear platform-specific reason it isn't,
+like `perf_event_paranoid=4 (needs <= 1)` for eBPF on a hardened
+kernel).
 
 ### Running Quality Checks
 
