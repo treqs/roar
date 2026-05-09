@@ -116,27 +116,64 @@ impl CollectorState {
                 pid,
                 thread_id,
                 path,
-            } => {
-                if path.is_empty() {
-                    return;
-                }
-                self.ensure_process(pid);
-                self.fd.mark_path_open(path.clone());
-                self.fd.mark_path_read_with_thread(path, thread_id);
-            }
+            } => self.record_read(pid, thread_id, path),
             TraceEvent::Write {
                 pid,
                 thread_id,
                 path,
+            } => self.record_write(pid, thread_id, path),
+            TraceEvent::OpenRead {
+                pid,
+                thread_id,
+                path,
             } => {
-                if path.is_empty() {
-                    return;
-                }
-                self.ensure_process(pid);
-                self.fd.mark_path_open(path.clone());
-                self.fd.mark_path_written_with_thread(path, thread_id);
+                // Conflation policy — preload backend: credit the open
+                // for-read as a confirmed read. We need this because
+                // some libc-internal read paths (similar to write) bypass
+                // the PLT and our `read` hook never fires; treating the
+                // open as the signal preserves coverage at the cost of
+                // recording read access for files that may not have
+                // actually been read from. See the corresponding rationale
+                // for OpenWrite below.
+                self.record_read(pid, thread_id, path);
+            }
+            TraceEvent::OpenWrite {
+                pid,
+                thread_id,
+                path,
+            } => {
+                // Conflation policy — preload backend: credit the open
+                // with-write-flags as a confirmed write. This is what
+                // makes shell-redirect lineage work: bash's `echo > x`
+                // emits an OpenWrite via our open hook but never an
+                // actual byte-level Write event, because the underlying
+                // write goes through libc-internal `__write` which
+                // bypasses LD_PRELOAD overrides entirely. Trade-off:
+                // a process that opens with O_TRUNC and then exits
+                // without writing (rare) is still credited as an output.
+                // The ptrace backend, which observes the actual write
+                // syscall, keeps the strict byte-write semantic.
+                self.record_write(pid, thread_id, path);
             }
         }
+    }
+
+    fn record_read(&mut self, pid: u32, thread_id: u32, path: String) {
+        if path.is_empty() {
+            return;
+        }
+        self.ensure_process(pid);
+        self.fd.mark_path_open(path.clone());
+        self.fd.mark_path_read_with_thread(path, thread_id);
+    }
+
+    fn record_write(&mut self, pid: u32, thread_id: u32, path: String) {
+        if path.is_empty() {
+            return;
+        }
+        self.ensure_process(pid);
+        self.fd.mark_path_open(path.clone());
+        self.fd.mark_path_written_with_thread(path, thread_id);
     }
 
     fn ensure_process(&mut self, pid: u32) {
