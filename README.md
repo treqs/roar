@@ -27,7 +27,12 @@ Requires Python 3.10+.
 | macOS         | 🚧 Experimental ([limitations](#macos-tracing-limitations)) |
 | Windows       | Coming soon                                                 |
 
-PyPI wheels are published for Linux and macOS (`x86_64` and `arm64`).
+PyPI wheels are published for Linux (`x86_64`, `aarch64`) and macOS (`x86_64`, `arm64`).
+
+If a matching wheel isn't available, `pip install` falls through to the
+source distribution. The sdist ships the Rust tracer source but no
+pre-built binaries, so it requires a C toolchain (`gcc` / `clang`), Rust
+(`rustup`), and a few minutes to compile the tracers on first install.
 
 ### Development Installation
 

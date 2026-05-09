@@ -92,11 +92,20 @@ include = [
     # Bundling arch-specific ELFs in a source dist meant aarch64 hosts that
     # fell through to sdist installs got x86_64 binaries that failed at exec
     # time with a confusing "Exec format error". sdist users build the
-    # binaries from the rust/ source tree.
+    # binaries from the rust/ source tree (paths below).
     { path = "roar/bin/*", format = "wheel" },
     { path = "roar/cli/templates/**/*", format = "sdist" },
     { path = "roar/cli/templates/**/*", format = "wheel" },
     { path = "roar_inject.pth", format = "wheel" },
+    # Bundle the tracer + proxy crates into the sdist so aarch64 (or any
+    # platform without a published wheel) can `cargo build --release` after
+    # extracting the sdist. cargo's auto-included package list only covers
+    # the artifact-hash-py crate, so the tracer crates need to be listed
+    # explicitly here. See README → Platform Support for the install path.
+    { path = "rust/tracers/**/*", format = "sdist" },
+    { path = "rust/services/**/*", format = "sdist" },
+    { path = "rust/crates/tracer-*/**/*", format = "sdist" },
+    { path = "scripts/sync_packaged_rust_artifacts.py", format = "sdist" },
 ]
 
 [tool.pytest.ini_options]
