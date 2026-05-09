@@ -56,6 +56,14 @@ impl DaemonState {
             tracer.processes.insert(root_pid, info);
         }
 
+        // Pre-populate the CWD cache while the tracee is still alive
+        // (it's SIGSTOP'd at this point). Without this, openat events
+        // arriving after a fast tracee has already exited resolve relative
+        // paths against a now-ENOENT /proc/<pid>/cwd and silently keep the
+        // raw relative path — which is the dominant cause of the
+        // `bash -c 'echo > x'` short-lived-write miss rate.
+        tracer.cache_cwd(root_pid);
+
         self.runs.insert(
             run_id,
             RunState {
@@ -75,25 +83,35 @@ impl DaemonState {
         }
     }
 
-    /// Mark a run as completed. Removes all PIDs for this run from the BPF map.
+    /// Mark a run as completed. Removes all PIDs for this run from the BPF
+    /// map (so the kernel stops emitting new events) but keeps `pid_to_run`
+    /// alive: events that the BPF probe emitted before the map removal may
+    /// still be sitting in the ring buffer, and dropping `pid_to_run` here
+    /// would cause [`process_event`] to drop them at the routing step. The
+    /// `pid_to_run` cleanup runs in [`get_report`] after a synchronous
+    /// drain.
+    ///
     /// Returns the number of remaining active runs.
     pub fn deregister(&mut self, run_id: u64) -> usize {
         if let Some(run) = self.runs.get_mut(&run_id) {
             run.status = RunStatus::Completed;
             run.tracer.end_time = timestamp_now();
-            run.tracer.handle_process_exit(run.root_pid);
+            // handle_process_exit only marks active_pids; deferring it to
+            // get_report keeps in-flight events routable until after drain.
         }
 
-        // Remove all PIDs belonging to this run from the BPF map and pid_to_run
-        let pids_to_remove: Vec<u32> = self
+        // Stop new events for this run by removing the PIDs from the BPF
+        // tracked_pids map. The probe is read-only against this map, so a
+        // removal takes effect for all future syscalls but does not affect
+        // entries already queued in the ring buffer.
+        let pids_for_run: Vec<u32> = self
             .pid_to_run
             .iter()
             .filter(|(_, &rid)| rid == run_id)
             .map(|(&pid, _)| pid)
             .collect();
 
-        for pid in &pids_to_remove {
-            self.pid_to_run.remove(pid);
+        for pid in &pids_for_run {
             if let Some(ref mut map) = self.tracked_pids {
                 let _ = map.remove(pid);
             }
@@ -102,9 +120,32 @@ impl DaemonState {
         self.active_run_count()
     }
 
-    /// Build a real TracerOutput for a completed run and remove the RunState.
+    /// Process every ring-buffer item currently visible to userspace,
+    /// routing each event through [`process_event`]. Callers must already
+    /// hold the daemon-state mutex; this method does not re-lock.
+    pub fn drain_ring_buffer(&mut self, rb: &mut RingBuf<MapData>) {
+        while let Some(item) = rb.next() {
+            self.process_event(&item);
+        }
+    }
+
+    /// Build a real `TracerOutput` for a completed run, drop the RunState,
+    /// and clean up the run's `pid_to_run` entries.
+    ///
+    /// Callers should drain the ring buffer immediately before this so that
+    /// events emitted in the tracee's last microseconds are reflected in
+    /// the report.
     pub fn get_report(&mut self, run_id: u64) -> Option<TracerOutput> {
-        let run = self.runs.remove(&run_id)?;
+        let mut run = self.runs.remove(&run_id)?;
+        run.tracer.handle_process_exit(run.root_pid);
+
+        // Late cleanup of pid_to_run. Done after the run is removed from
+        // `runs` so any event arriving between `runs.remove` and this loop
+        // would `pid_to_run.get(&pid) → run_id` and then `runs.get(&run_id)
+        // → None` — i.e. the existing process_event short-circuit catches
+        // it harmlessly.
+        self.pid_to_run.retain(|_, &mut rid| rid != run_id);
+
         Some(run.tracer.build_report())
     }
 
@@ -121,13 +162,16 @@ impl DaemonState {
             return; // PID not tracked by any run (shouldn't happen with BPF filter)
         };
 
+        // Note: runs in `Completed` status are deliberately NOT filtered
+        // out here — between Deregister and GetReport the run is marked
+        // Completed but events that the BPF probe emitted *before* the
+        // Deregister may still be queued in the ring buffer. Those
+        // late events route correctly to `run.tracer` and end up in the
+        // final report. Once GetReport runs, the run is removed from
+        // `self.runs`, so the lookup below short-circuits.
         let Some(run) = self.runs.get_mut(&run_id) else {
             return;
         };
-
-        if run.status != RunStatus::Active {
-            return;
-        }
 
         // For clone events, we need to update pid_to_run with the child PID.
         // The BPF program already inserted the child into tracked_pids with the
@@ -178,8 +222,14 @@ pub fn run_daemon(socket_path: PathBuf, idle_timeout: Duration) -> Result<()> {
             .context("TRACKED_PIDS map not found")?,
     )?;
 
-    // Extract the ring buffer
-    let ring_buf = RingBuf::try_from(bpf.take_map("EVENTS").context("EVENTS map not found")?)?;
+    // Extract the ring buffer. It's behind an Arc<Mutex<>> so the IPC
+    // threads can drain synchronously at GetReport time — without that,
+    // events emitted by a tracee in its last few microseconds can still
+    // be queued in the ring buffer when we build the report and get
+    // dropped on the floor.
+    let ring_buf = Arc::new(Mutex::new(RingBuf::try_from(
+        bpf.take_map("EVENTS").context("EVENTS map not found")?,
+    )?));
 
     // Set up shared state
     let mut daemon_state = DaemonState::new();
@@ -209,8 +259,9 @@ pub fn run_daemon(socket_path: PathBuf, idle_timeout: Duration) -> Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     let rb_state = Arc::clone(&state);
     let rb_running = Arc::clone(&running);
+    let rb_for_thread = Arc::clone(&ring_buf);
     let rb_thread = std::thread::spawn(move || {
-        drain_events(ring_buf, rb_state, rb_running);
+        drain_events(rb_for_thread, rb_state, rb_running);
     });
 
     let mut idle_deadline = Instant::now() + idle_timeout;
@@ -222,8 +273,9 @@ pub fn run_daemon(socket_path: PathBuf, idle_timeout: Duration) -> Result<()> {
                 idle_deadline = Instant::now() + idle_timeout;
 
                 let state = Arc::clone(&state);
+                let rb = Arc::clone(&ring_buf);
                 let handle = std::thread::spawn(move || {
-                    if let Err(e) = handle_client(stream, state) {
+                    if let Err(e) = handle_client(stream, state, rb) {
                         log::debug!("client disconnected: {e:#}");
                     }
                 });
@@ -266,16 +318,23 @@ pub fn run_daemon(socket_path: PathBuf, idle_timeout: Duration) -> Result<()> {
 }
 
 /// Drain events from the ring buffer, routing each to the correct run.
+///
+/// Lock ordering: this function takes `ring_buf` first, then `state` per
+/// item. The IPC-thread synchronous drain path in [`handle_client`] uses
+/// the same order, so the two cannot deadlock against each other.
 fn drain_events(
-    mut ring_buf: RingBuf<MapData>,
+    ring_buf: Arc<Mutex<RingBuf<MapData>>>,
     state: Arc<Mutex<DaemonState>>,
     running: Arc<AtomicBool>,
 ) {
     while running.load(Ordering::SeqCst) {
         let mut got_event = false;
-        while let Some(item) = ring_buf.next() {
-            state.lock().unwrap().process_event(&item);
-            got_event = true;
+        {
+            let mut rb = ring_buf.lock().unwrap();
+            while let Some(item) = rb.next() {
+                state.lock().unwrap().process_event(&item);
+                got_event = true;
+            }
         }
         if !got_event {
             std::thread::sleep(Duration::from_millis(1));
@@ -283,13 +342,21 @@ fn drain_events(
     }
 
     // Final drain
-    while let Some(item) = ring_buf.next() {
+    let mut rb = ring_buf.lock().unwrap();
+    while let Some(item) = rb.next() {
         state.lock().unwrap().process_event(&item);
     }
 }
 
 /// Handle a single client connection.
-fn handle_client(mut stream: UnixStream, state: Arc<Mutex<DaemonState>>) -> Result<()> {
+///
+/// Lock ordering: when both are taken, `ring_buf` is taken before `state`,
+/// matching [`drain_events`].
+fn handle_client(
+    mut stream: UnixStream,
+    state: Arc<Mutex<DaemonState>>,
+    ring_buf: Arc<Mutex<RingBuf<MapData>>>,
+) -> Result<()> {
     stream.set_nonblocking(false)?;
 
     loop {
@@ -312,7 +379,15 @@ fn handle_client(mut stream: UnixStream, state: Arc<Mutex<DaemonState>>) -> Resu
             }
             ClientMessage::GetReport { run_id } => {
                 info!("get_report: run_id={run_id}");
-                let report = state.lock().unwrap().get_report(run_id);
+                // Synchronously drain any events still in flight for the
+                // (now-deregistered) run before building the report. The
+                // lock ordering matches drain_events: rb before state.
+                let report = {
+                    let mut rb = ring_buf.lock().unwrap();
+                    let mut s = state.lock().unwrap();
+                    s.drain_ring_buffer(&mut rb);
+                    s.get_report(run_id)
+                };
                 match report {
                     Some(data) => {
                         ipc::send_message(&mut stream, &DaemonMessage::Report { run_id, data })?;
@@ -356,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deregister_marks_completed() {
+    fn test_deregister_marks_completed_and_keeps_pid_to_run() {
         let mut state = DaemonState::new();
         state.register(1, 100);
         state.register(2, 200);
@@ -365,8 +440,27 @@ mod tests {
         assert_eq!(remaining, 1);
         assert_eq!(state.runs[&1].status, RunStatus::Completed);
         assert_eq!(state.runs[&2].status, RunStatus::Active);
-        // PIDs for run 1 should be removed from pid_to_run
+        // pid_to_run is intentionally retained past deregister so that
+        // ring-buffer events that landed before the BPF map removal still
+        // route to their run (until get_report drains and cleans up).
+        assert_eq!(state.pid_to_run.get(&100), Some(&1));
+        assert_eq!(state.pid_to_run.get(&200), Some(&2));
+    }
+
+    #[test]
+    fn test_get_report_clears_pid_to_run_for_run() {
+        let mut state = DaemonState::new();
+        state.register(1, 100);
+        state.register(2, 200);
+
+        state.deregister(1);
+        // Still routable until get_report.
+        assert_eq!(state.pid_to_run.get(&100), Some(&1));
+
+        let _ = state.get_report(1);
+        // Now run 1's pid is cleared but run 2's is untouched.
         assert!(!state.pid_to_run.contains_key(&100));
+        assert_eq!(state.pid_to_run.get(&200), Some(&2));
     }
 
     #[test]
@@ -403,6 +497,121 @@ mod tests {
     fn test_get_report_unknown_run_id() {
         let mut state = DaemonState::new();
         assert!(state.get_report(999).is_none());
+    }
+
+    /// Build a synthetic SmallEvent payload with a TAG_SMALL prefix,
+    /// matching the on-the-wire format the BPF probe emits. We construct
+    /// the SmallEvent directly so the implicit alignment padding before
+    /// `ret_val` (i64) is included.
+    fn small_event_bytes(
+        pid: u32,
+        thread_id: u32,
+        event_type: roar_ebpf_common::EventType,
+        ret_val: i64,
+        arg0: u64,
+        arg1: u64,
+    ) -> Vec<u8> {
+        let event = roar_ebpf_common::SmallEvent {
+            pid,
+            thread_id,
+            event_type: event_type as u16,
+            _pad: 0,
+            ret_val,
+            arg0,
+            arg1,
+        };
+        let mut buf =
+            Vec::with_capacity(4 + std::mem::size_of::<roar_ebpf_common::SmallEvent>());
+        buf.extend_from_slice(&roar_ebpf_common::TAG_SMALL.to_ne_bytes());
+        let event_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &event as *const _ as *const u8,
+                std::mem::size_of::<roar_ebpf_common::SmallEvent>(),
+            )
+        };
+        buf.extend_from_slice(event_bytes);
+        buf
+    }
+
+    /// Regression test for the deregister race: an event that lands in the
+    /// ring buffer just before the tracee's Deregister IPC arrives must
+    /// still be attributed to the run when later drained, not dropped at
+    /// the routing step.
+    #[test]
+    fn test_late_event_after_deregister_is_still_routed() {
+        let mut state = DaemonState::new();
+        state.register(1, 100);
+
+        // Register an open so the FD tracker has a path mapping.
+        state
+            .runs
+            .get_mut(&1)
+            .unwrap()
+            .tracer
+            .handle_open(100, 3, "/tmp/late.bin".to_string(), 0);
+
+        // Tracee exits → daemon receives Deregister → marks Completed.
+        state.deregister(1);
+        assert_eq!(state.runs[&1].status, RunStatus::Completed);
+
+        // Late write event lands in the ring buffer for the same PID.
+        // process_event must still find pid_to_run[100] → run 1 and route
+        // the event to the run's tracer.
+        let event = small_event_bytes(
+            100,
+            100,
+            roar_ebpf_common::EventType::Write,
+            16,
+            3, // fd
+            0,
+        );
+        state.process_event(&event);
+
+        // get_report drains its own ring buffer first (in the daemon path),
+        // here we just call it to verify the late event made it into the
+        // tracer state before the report was built.
+        let report = state.get_report(1).expect("report should exist");
+        let written: Vec<_> = report
+            .files
+            .iter()
+            .filter(|f| f.written)
+            .map(|f| f.path.as_str())
+            .collect();
+        assert!(
+            written.contains(&"/tmp/late.bin"),
+            "late write should have been attributed to /tmp/late.bin; got: {written:?}"
+        );
+
+        // After get_report, pid_to_run is cleaned up.
+        assert!(!state.pid_to_run.contains_key(&100));
+    }
+
+    /// Late event arriving AFTER get_report (during shutdown drain) must
+    /// not panic or corrupt state — it just gets dropped at routing.
+    #[test]
+    fn test_event_after_get_report_is_dropped_safely() {
+        let mut state = DaemonState::new();
+        state.register(1, 100);
+        state
+            .runs
+            .get_mut(&1)
+            .unwrap()
+            .tracer
+            .handle_open(100, 3, "/tmp/x.bin".to_string(), 0);
+        state.deregister(1);
+        let _ = state.get_report(1);
+
+        let event = small_event_bytes(
+            100,
+            100,
+            roar_ebpf_common::EventType::Write,
+            16,
+            3,
+            0,
+        );
+        // Should not panic.
+        state.process_event(&event);
+        assert!(state.runs.is_empty());
     }
 
     #[test]
