@@ -89,6 +89,12 @@ def _preload_readiness(path: str) -> tuple[bool, str]:
     return readiness.ok, readiness.reason or "ready"
 
 
+def _ptrace_readiness(path: str) -> tuple[bool, str]:
+    """Check ptrace readiness and return (ok, reason)."""
+    readiness = tracer_backends.ptrace_readiness(path)
+    return readiness.ok, readiness.reason or "ready"
+
+
 def _backend_preflight(
     backend: str,
     command: str | None,
@@ -117,7 +123,9 @@ def _print_status() -> None:
 
     ptrace = _find_ptrace_tracer()
     if ptrace:
-        click.echo(f"  ptrace:  {ptrace}")
+        ok, reason = _ptrace_readiness(ptrace)
+        status = "ready" if ok else reason
+        click.echo(f"  ptrace:  {ptrace} ({status})")
     else:
         click.echo("  ptrace:  not found")
 

@@ -51,8 +51,31 @@ class TestTracerSelection:
             patch.object(svc, "_find_ebpf_tracer", return_value="/bin/roar-tracer-ebpf"),
             patch.object(svc, "_ebpf_is_ready", return_value=(False, "missing capabilities")),
             patch.object(svc, "_find_ptrace_tracer", return_value="/bin/roar-tracer"),
+            # Auto-selection now also exec-checks ptrace before picking it,
+            # to catch wrong-arch ENOEXEC. Mock as ready for this scenario.
+            patch.object(svc, "_ptrace_is_ready", return_value=(True, None)),
         ):
             assert svc.find_tracer() == "/bin/roar-tracer"
+
+    def test_auto_skips_ptrace_when_binary_unexecable(self, tmp_path):
+        """Regression: pre-fix, auto picked ptrace based on file existence
+        alone, even when the binary was a wrong-arch ELF that produced
+        ENOEXEC at exec time. Auto must now skip an unready ptrace just
+        like it does for ebpf and preload."""
+        svc = _make_service(tmp_path)
+        with (
+            patch.object(svc, "_get_tracer_mode", return_value="auto"),
+            patch.object(svc, "_get_fallback_enabled", return_value=True),
+            patch.object(svc, "_find_ebpf_tracer", return_value=None),
+            patch.object(svc, "_find_preload_tracer", return_value=None),
+            patch.object(svc, "_find_ptrace_tracer", return_value="/bin/roar-tracer"),
+            patch.object(
+                svc,
+                "_ptrace_is_ready",
+                return_value=(False, "ptrace tracer failed to exec: Exec format error"),
+            ),
+        ):
+            assert svc.find_tracer() is None
 
     def test_forced_ebpf_ignores_auto_readiness_gate(self, tmp_path):
         svc = _make_service(tmp_path)
