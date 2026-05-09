@@ -4,9 +4,16 @@
 
 Open. Deferred from the bash-race investigation that produced PR #82 (ptrace
 dup3) and PR #83 (eBPF deregister race). The preload tracer's coverage gap
-for shell redirects is real but expensive to close and partial at best;
-recommended path is documentation + a heuristic warning, with selective hook
-expansion only if a concrete workload demands it.
+for shell redirects is real but expensive to close and partial at best.
+
+**Severity bump**: The eval team's P0-5 finding is the same gap with worse
+framing — multi-stage shell pipelines (`tr | sort | head | awk > out`,
+plus chained `*.sh` scripts) produce empty output sets in `roar dag` /
+`roar lineage` when the preload backend is the auto-selected fallback.
+This breaks the headline value-prop ("if it ran, roar saw it") on the
+default backend for every dev machine without `CAP_BPF`. See "Empirical
+matrix" below. There are now two reasonable paths and one preferred one,
+all listed in "What it would take to close the gap."
 
 ## Reproducer
 
@@ -85,6 +92,30 @@ The C `fputs` case captures because glibc routes user `fputs` calls
 through `fwrite` (which libroar exports). Bash's path appears to skip
 `fwrite` entirely.
 
+## Empirical matrix — preload vs other backends on shell pipelines
+
+Reproduction harness: `scripts/test_tracers_sandbox.py` and the ad-hoc
+`p05_test.py` used during the P0-5 investigation. Backends tested at the
+state of PR #82 + #83 applied:
+
+| workload                                                     | ptrace (with PR #82) | preload | eBPF (with PR #83, sudo) |
+| ------------------------------------------------------------ | -------------------- | ------- | ------------------------ |
+| `bash -c 'echo > out'` (single redirect)                     | WRITTEN              | MISSED  | WRITTEN                  |
+| `echo a b c \| tr ' ' '\n' \| sort \| head -n 2 > out`       | WRITTEN              | WRITTEN | WRITTEN                  |
+| `awk '{print toupper($0)}' > out; cat out`                   | WRITTEN              | MISSED  | WRITTEN                  |
+| 3-stage script (echo>corpus, wc\|awk>summary, awk>score)     | all WRITTEN          | corpus/summary READ-only, **score MISSED** | all WRITTEN |
+
+The pipe case (`tr | sort | head > out`) captures under preload because
+`head` writes via `write(2)` directly — that hook is exported and fires.
+The redirect cases miss because `bash`'s redirect emits via `fputs` /
+`__fprintf_chk` which bypass the PLT. `awk` is the bigger problem: it
+uses `printf`-family for its own output, so even `awk > out` (no shell
+redirect) misses.
+
+This is exactly the P0-5 reproduction: `score.txt` ends up classified
+as Read (next stage's `awk` reads it) but never as Written, and
+`roar lineage` returns empty.
+
 ## What it would take to close the gap
 
 ### Option A — keep adding hooks
@@ -140,7 +171,7 @@ libc layer. Two paths:
 Conclusion: if shell coverage matters, the answer is "use the ptrace
 tracer," not "make preload smarter."
 
-### Option D (recommended) — document + warn
+### Option D — document + warn (cheap, partial)
 
 Make the limitation visible at preflight time and in the docs:
 
@@ -154,7 +185,45 @@ Make the limitation visible at preflight time and in the docs:
   that LD_PRELOAD cannot intercept.
 
 Cost: ~50 lines of warning/doc, no architectural change, no event-volume
-risk. Honest about the architectural ceiling.
+risk. Honest about the architectural ceiling. **But** users still hit the
+silent gap by default; the warning only triggers for shells they invoke
+*directly*. If the user runs `roar run python my_script.py` and that
+script in turn calls a shell pipeline, the warning never fires.
+
+### Option E (recommended in light of P0-5) — change the auto-fallback order
+
+Linux `--tracer auto` today is documented as: "prefer eBPF, then preload,
+then ptrace." (`README.md`.) On the majority of dev hosts without
+`CAP_BPF`, this picks **preload**, which is exactly the silent-gap
+backend per the table above. With PR #82 landed, the ptrace tracer
+captures all the same workloads correctly (it follows
+fork/clone/exec via `PTRACE_O_TRACE*` and now handles `dup3`). Under
+ptrace the same 3-stage script captures every read/write. So:
+
+- New auto order on Linux: **eBPF → ptrace → preload**.
+- preload remains the macOS default (no Linux ptrace there) and the
+  documented "I want low overhead and only have simple workloads"
+  fallback.
+- Surface the chosen backend at first-run (already partially done by
+  `roar tracer status`); add a one-liner in `roar run` output when
+  ptrace is selected for the first time per session ("auto-selected
+  ptrace backend; this gives full shell-pipeline coverage at modest
+  syscall overhead").
+
+Cost: a few lines in `roar/execution/runtime/tracer_backends.py` to
+flip the preference order. Plus a doc/README update.
+
+This makes the headline P0-5 issue go away without touching glibc
+internals: instead of trying to make preload track everything, we
+just pick the backend that already does.
+
+The trade-off: ptrace adds per-syscall cost (a stop/cont pair on every
+tracked syscall) which is measurably slower than preload. Real ML
+workloads usually don't care (the tracer overhead is dwarfed by the
+training step), but log-heavy or syscall-heavy workloads see it. The
+ordering above gives users a way to opt in to the cheaper backend
+explicitly (`--tracer preload`) when they want speed and know what
+their workload looks like.
 
 ## What we actually shipped and what's outstanding
 
@@ -168,10 +237,15 @@ Shipped (in #82 / #83):
 Open (this doc):
 
 - Preload backend remains 0% on shell-redirect workloads. Recommended next
-  step: Option D. If a real workload then hits the gap and Option D's
-  redirect to ptrace isn't acceptable, do Option A for the specific
-  symbol(s) that workload uses (don't take the full hook expansion all at
-  once).
+  step in priority order:
+  1. **Option E** (small auto-tracer reorder + doc). Makes P0-5 go away
+     for the default install without touching glibc internals. Pairs
+     well with Option D as a belt-and-suspenders fallback warning.
+  2. Option D (warn-and-document) on its own if Option E is rejected
+     for performance reasons.
+  3. Option A (selective hook expansion) only if a real workload hits
+     the gap *under ptrace* — i.e. when ptrace itself isn't a viable
+     escape hatch.
 
 ## References
 
