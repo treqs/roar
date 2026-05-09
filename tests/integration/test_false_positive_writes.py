@@ -2,7 +2,11 @@
 Integration test for false positive write detection.
 
 Verifies that files opened for writing but with 0 bytes written
-are NOT recorded as outputs.
+are NOT recorded as outputs *under the ptrace backend*. The preload
+backend deliberately treats O_WRONLY|O_TRUNC as a write at open time
+(which is needed to capture shell redirects like `bash -c 'echo > x'`
+where the actual write syscall doesn't go through any of preload's
+hooked symbols) — so these tests pin to ptrace explicitly.
 
 Also verifies that fd reuse after close() does not cause false positive
 write attribution to previously-tracked repo files.
@@ -23,10 +27,9 @@ pytestmark = [
 
 def test_zero_byte_write_not_recorded_as_output(temp_git_repo, roar_cli, git_commit):
     """
-    Opening a file for write but writing 0 bytes should NOT record it as output.
-
-    This tests the false positive write detection fix in the tracer.
-    The tracer should only count a file as "written" if actual bytes were written.
+    Opening a file for write but writing 0 bytes should NOT record it as
+    output under the ptrace backend, which only counts confirmed
+    byte-writes.
     """
     # Create a test file that will be opened but not written to
     test_file = temp_git_repo / "data.txt"
@@ -51,8 +54,9 @@ print("Script completed")
 """)
     git_commit("Add noop write script")
 
-    # Run the script with roar
-    result = roar_cli("run", sys.executable, "noop_write.py", check=False)
+    # Run the script with roar — pin to ptrace so the test asserts the
+    # byte-write semantics (preload treats open-with-O_TRUNC as a write).
+    result = roar_cli("run", "--tracer", "ptrace", sys.executable, "noop_write.py", check=False)
     assert result.returncode == 0, (
         f"roar run failed:\nstdout={result.stdout}\nstderr={result.stderr}"
     )
@@ -137,11 +141,15 @@ print("Script completed")
 
 def test_truncate_without_write_not_recorded(temp_git_repo, roar_cli, git_commit):
     """
-    Opening with 'w' mode truncates the file but if no write() is called,
-    the file should NOT be recorded as an output.
+    Opening with 'w' mode truncates the file but if no write() is
+    called, the file should NOT be recorded as an output under the
+    ptrace backend.
 
     This is a subtle case: the file IS modified (truncated to empty),
-    but no write syscall with bytes > 0 occurred.
+    but no write syscall with bytes > 0 occurred. ptrace gates on the
+    write syscall returning > 0; preload deliberately treats the
+    O_TRUNC at open as a write event so that shell redirects (where
+    no PLT-visible write() ever fires) get captured at all.
     """
     # Create a test file with content
     test_file = temp_git_repo / "truncate_me.txt"
@@ -159,8 +167,8 @@ print("Script completed")
 """)
     git_commit("Add truncate script")
 
-    # Run the script with roar
-    result = roar_cli("run", sys.executable, "truncate_only.py", check=False)
+    # Pin to ptrace — preload deliberately counts O_TRUNC as a write.
+    result = roar_cli("run", "--tracer", "ptrace", sys.executable, "truncate_only.py", check=False)
     assert result.returncode == 0, (
         f"roar run failed:\nstdout={result.stdout}\nstderr={result.stderr}"
     )

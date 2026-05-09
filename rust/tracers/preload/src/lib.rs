@@ -26,14 +26,15 @@ static TRACE_SOCK_PATH: OnceLock<Option<String>> = OnceLock::new();
 #[cfg(not(target_os = "macos"))]
 static REAL_WRITE: OnceLock<Option<WriteFn>> = OnceLock::new();
 
-#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn roar_preload_interpose_keep() -> c_int;
 }
 
-// Ensure the C interpose TU is pulled in from the static archive (it otherwise has only `static`
-// data and the linker may drop it).
-#[cfg(target_os = "macos")]
+// Ensure the C interpose TU is pulled in from the static archive on
+// both macOS (where DYLD_INTERPOSE tables live) and Linux (where the
+// open/openat/creat interposer functions live). Without this reference
+// the Rust linker doesn't pull the .o from the archive at all and
+// `nm -D libroar_tracer_preload.so` shows none of the C-side symbols.
 #[used]
 static _ROAR_PRELOAD_INTERPOSE_KEEP: unsafe extern "C" fn() -> c_int = roar_preload_interpose_keep;
 
@@ -762,6 +763,7 @@ fn emit_path_flags(path: String, flags: c_int) {
     if path.is_empty() {
         return;
     }
+    let path = absolutize_path(&path);
     if flags_imply_read(flags) {
         send_event(&TraceEvent::Read {
             pid: current_pid(),
@@ -776,6 +778,31 @@ fn emit_path_flags(path: String, flags: c_int) {
             path,
         });
     }
+}
+
+/// Resolve a path to its absolute form using the *current* process state
+/// (we're in the tracee's address space, so /proc/self/cwd is always
+/// readable). For paths from open() the file exists, so canonicalize
+/// works; for everything else we fall back to a getcwd-based join,
+/// then to the raw path. Without this, relative paths from `bash -c
+/// 'echo > test.txt'` (where bash calls `openat(AT_FDCWD, "test.txt",
+/// O_WRONLY|O_CREAT|...)`) end up as bare "test.txt" in the report and
+/// downstream consumers can't match them against absolute paths.
+fn absolutize_path(path: &str) -> String {
+    if path.starts_with('/') {
+        return path.to_string();
+    }
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return canonical.to_string_lossy().into_owned();
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let joined = cwd.join(path);
+        if let Ok(canonical) = joined.canonicalize() {
+            return canonical.to_string_lossy().into_owned();
+        }
+        return joined.to_string_lossy().into_owned();
+    }
+    path.to_string()
 }
 
 fn resolve_at_path(dirfd: c_int, path: *const c_char) -> Option<String> {
@@ -1459,4 +1486,90 @@ pub unsafe extern "C" fn fwrite(
     }
     IN_HOOK.with(|flag| flag.set(false));
     ret
+}
+
+// ── Linux LD_PRELOAD interposers for open/openat/creat ──────────────────────
+//
+// Rust's `cdylib` crate type emits a version-script that hides every symbol
+// not declared as `#[no_mangle] pub extern "C"` from a Rust source. The
+// C-side `int open(...)` etc. in `interpose.c` get internalized and don't
+// override libc when LD_PRELOAD'd — observed via `nm -D` showing them as
+// lowercase `t` instead of `T`. Workaround: keep the open/dispatch/varargs
+// logic in C under internal names (`roar_libc_*_impl`), and export the
+// public `open` / `openat` / `open64` / `openat64` / `creat` names from
+// Rust here. rustc's export rules then put these symbols into the .so's
+// dynsym table, and the LD_PRELOAD override actually fires.
+//
+// The shims are non-variadic with a fixed `mode_t`. Both AAPCS64 (Linux)
+// and SysV-x86_64 pass `(path, flags, mode)` in the same registers
+// regardless of variadic-ness, so callers using the libc.h variadic
+// declaration ABI-match. When the caller invokes the 2-arg form
+// (`open(path, O_RDONLY)`), the third register holds garbage that we
+// never read because `flags & O_CREAT` is false — exactly the open(2)
+// contract.
+#[cfg(not(target_os = "macos"))]
+unsafe extern "C" {
+    fn roar_libc_open_impl(path: *const c_char, flags: c_int, mode: libc::mode_t) -> c_int;
+    fn roar_libc_open64_impl(path: *const c_char, flags: c_int, mode: libc::mode_t) -> c_int;
+    fn roar_libc_openat_impl(
+        dirfd: c_int,
+        path: *const c_char,
+        flags: c_int,
+        mode: libc::mode_t,
+    ) -> c_int;
+    fn roar_libc_openat64_impl(
+        dirfd: c_int,
+        path: *const c_char,
+        flags: c_int,
+        mode: libc::mode_t,
+    ) -> c_int;
+    fn roar_libc_creat_impl(path: *const c_char, mode: libc::mode_t) -> c_int;
+}
+
+#[cfg(not(target_os = "macos"))]
+#[no_mangle]
+pub unsafe extern "C" fn open(
+    path: *const c_char,
+    flags: c_int,
+    mode: libc::mode_t,
+) -> c_int {
+    roar_libc_open_impl(path, flags, mode)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[no_mangle]
+pub unsafe extern "C" fn open64(
+    path: *const c_char,
+    flags: c_int,
+    mode: libc::mode_t,
+) -> c_int {
+    roar_libc_open64_impl(path, flags, mode)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[no_mangle]
+pub unsafe extern "C" fn openat(
+    dirfd: c_int,
+    path: *const c_char,
+    flags: c_int,
+    mode: libc::mode_t,
+) -> c_int {
+    roar_libc_openat_impl(dirfd, path, flags, mode)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[no_mangle]
+pub unsafe extern "C" fn openat64(
+    dirfd: c_int,
+    path: *const c_char,
+    flags: c_int,
+    mode: libc::mode_t,
+) -> c_int {
+    roar_libc_openat64_impl(dirfd, path, flags, mode)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[no_mangle]
+pub unsafe extern "C" fn creat(path: *const c_char, mode: libc::mode_t) -> c_int {
+    roar_libc_creat_impl(path, mode)
 }
