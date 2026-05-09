@@ -162,6 +162,22 @@ class RunCoordinator:
             )
 
         resolved_mode = resolved_candidates[0][0] if resolved_candidates else ctx.tracer_mode
+
+        # Surface the selected tracer + any fallback to the user. Fires
+        # once per backend per machine, plus on every fallback selection
+        # (auto mode picking something other than eBPF). Suppressible
+        # via `roar config set tracer.banner false`.
+        if resolved_candidates:
+            from .tracer_banner import emit_banner_if_needed
+
+            try:
+                emit_banner_if_needed(
+                    selected_backend=resolved_candidates[0][0],
+                    requested_mode=ctx.tracer_mode,
+                )
+            except Exception as exc:  # pragma: no cover - belt + suspenders
+                self.logger.debug("Banner emission failed: %s", exc)
+
         run_presenter.trace_starting(resolved_mode, proxy_active)
 
         self.logger.debug("Starting tracer execution")
