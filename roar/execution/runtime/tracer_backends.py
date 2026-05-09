@@ -302,6 +302,28 @@ def ebpf_is_ready(path: str) -> tuple[bool, str | None]:
     return ebpf_readiness(path).as_tuple()
 
 
+def ptrace_readiness(path: str) -> TracerReadiness:
+    """
+    Verify the ptrace tracer binary is actually executable on this host.
+
+    Earlier versions only checked file existence (`find_ptrace_tracer` ->
+    `Path.exists()`), which silently passed when a wrong-arch binary
+    shipped — e.g. an x86_64 ELF in an aarch64 wheel produces ENOEXEC at
+    runtime, after `roar run` has already committed to ptrace as the
+    selected backend. Now we exec the binary's `--preflight --json` and
+    surface the failure up front.
+
+    The check is `@cache`d: callers in the same process pay at most one
+    subprocess invocation per binary path.
+    """
+    return _probe_ptrace_binary(path)
+
+
+def ptrace_is_ready(path: str) -> tuple[bool, str | None]:
+    """Backward-compatible tuple wrapper for ptrace readiness."""
+    return ptrace_readiness(path).as_tuple()
+
+
 def preload_readiness(package_path: Path, launcher_path: str | None = None) -> TracerReadiness:
     """
     Check whether preload tracer launcher + library are available.
@@ -567,11 +589,10 @@ def _preflight_ptrace(
 def _backend_ready_non_auto(package_path: Path, backend: str) -> BackendReadiness:
     if backend == "ptrace":
         ptrace = find_ptrace_tracer(package_path)
-        return (
-            BackendReadiness(ok=True, detail=ptrace)
-            if ptrace
-            else BackendReadiness(ok=False, detail="ptrace tracer not found")
-        )
+        if not ptrace:
+            return BackendReadiness(ok=False, detail="ptrace tracer not found")
+        ok, reason = ptrace_is_ready(ptrace)
+        return BackendReadiness(ok=ok, detail=reason or ptrace)
 
     if backend == "ebpf":
         ebpf = find_ebpf_tracer(package_path)
@@ -683,6 +704,44 @@ def _run_json_binary_preflight(
         summary="preflight produced no JSON output",
         checks=(PreflightCheck("binary_preflight", False, "no JSON output"),),
     )
+
+
+@cache
+def _probe_ptrace_binary(path: str) -> TracerReadiness:
+    """Execute `<binary> --preflight --json` and surface exec/probe failures.
+
+    Catches the wrong-arch / not-an-ELF case (subprocess raises OSError
+    with errno=ENOEXEC), which the existence-only check used to pass.
+    """
+    try:
+        result = subprocess.run(
+            [path, "--preflight", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=_PREFLIGHT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except OSError as exc:
+        return TracerReadiness(ok=False, reason=f"ptrace tracer failed to exec: {exc}")
+    except subprocess.TimeoutExpired:
+        return TracerReadiness(ok=False, reason="ptrace tracer probe timed out")
+
+    payload = _parse_json_payload(result.stdout)
+    if payload is not None:
+        if payload.get("ok") is True:
+            return TracerReadiness(ok=True, reason=None)
+        summary = payload.get("summary")
+        if isinstance(summary, str) and summary:
+            return TracerReadiness(ok=False, reason=summary)
+        return TracerReadiness(ok=False, reason="ptrace preflight failed")
+
+    detail = _first_nonempty_line(result.stderr) or _first_nonempty_line(result.stdout)
+    if result.returncode != 0:
+        return TracerReadiness(
+            ok=False,
+            reason=detail or f"ptrace preflight failed with exit code {result.returncode}",
+        )
+    return TracerReadiness(ok=False, reason="ptrace preflight produced no JSON output")
 
 
 @cache

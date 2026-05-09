@@ -45,6 +45,94 @@ def test_preload_is_ready_probes_launcher_execution(tmp_path: Path) -> None:
     assert reason is None
 
 
+def test_ptrace_is_ready_runs_preflight_and_passes_when_ok(tmp_path: Path) -> None:
+    """Happy path: binary's `--preflight --json` returns ok=True."""
+    binary = tmp_path / "roar-tracer"
+    binary.write_text("")
+
+    payload = json.dumps({"backend": "ptrace", "ok": True, "summary": "ptrace preflight ok"})
+    tracer_backends._probe_ptrace_binary.cache_clear()
+    with patch.object(
+        tracer_backends.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess([str(binary)], 0, payload, ""),
+    ):
+        ok, reason = tracer_backends.ptrace_is_ready(str(binary))
+
+    assert ok
+    assert reason is None
+
+
+def test_ptrace_is_ready_catches_wrong_arch_enoexec(tmp_path: Path) -> None:
+    """The headline P0-3 case: a wrong-arch ELF in the wheel raises
+    OSError(ENOEXEC) when subprocess.run tries to exec it. The
+    existence-only check used to silently pass; ptrace_readiness now
+    surfaces it."""
+    binary = tmp_path / "roar-tracer"
+    binary.write_text("not an elf\n")
+
+    tracer_backends._probe_ptrace_binary.cache_clear()
+    with patch.object(
+        tracer_backends.subprocess,
+        "run",
+        side_effect=OSError(8, "Exec format error"),
+    ):
+        ok, reason = tracer_backends.ptrace_is_ready(str(binary))
+
+    assert not ok
+    assert reason is not None
+    assert "Exec format error" in reason
+
+
+def test_ptrace_is_ready_reports_preflight_failure_summary(tmp_path: Path) -> None:
+    """When the binary execs but its preflight reports a problem (e.g.
+    ptrace tracer detecting an unsupported host arch), surface the
+    binary's own summary instead of a generic 'failed' message."""
+    binary = tmp_path / "roar-tracer"
+    binary.write_text("")
+
+    payload = json.dumps(
+        {
+            "backend": "ptrace",
+            "ok": False,
+            "summary": "ptrace tracer supports x86_64 and aarch64 (got riscv64)",
+        }
+    )
+    tracer_backends._probe_ptrace_binary.cache_clear()
+    with patch.object(
+        tracer_backends.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess([str(binary)], 1, payload, ""),
+    ):
+        ok, reason = tracer_backends.ptrace_is_ready(str(binary))
+
+    assert not ok
+    assert reason == "ptrace tracer supports x86_64 and aarch64 (got riscv64)"
+
+
+def test_backend_ready_auto_skips_ptrace_when_binary_unexecable(tmp_path: Path) -> None:
+    """If the ptrace binary exists but can't exec, auto must NOT pick
+    it. Pre-fix, `find_ptrace_tracer` returning a path was treated as
+    sufficient and ptrace was selected even when ENOEXEC awaited."""
+    package_path = tmp_path / "roar"
+    package_path.mkdir()
+
+    with (
+        patch.object(tracer_backends, "find_ebpf_tracer", return_value=None),
+        patch.object(tracer_backends, "find_preload_tracer", return_value=None),
+        patch.object(tracer_backends, "find_ptrace_tracer", return_value="/bin/roar-tracer"),
+        patch.object(
+            tracer_backends,
+            "ptrace_is_ready",
+            return_value=(False, "ptrace tracer failed to exec: Exec format error"),
+        ),
+    ):
+        ok, detail = tracer_backends.backend_ready(package_path, "auto")
+
+    assert not ok
+    assert "no usable tracer" in detail
+
+
 def test_preload_is_ready_reports_probe_failure(tmp_path: Path) -> None:
     package_path = tmp_path / "roar"
     package_path.mkdir()
