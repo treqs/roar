@@ -1,10 +1,29 @@
 use anyhow::{Context, Result};
 use aya::programs::TracePoint;
 use aya::Ebpf;
-use log::info;
+use log::{info, warn};
+use std::path::Path;
 
-/// Attach a tracepoint program.
-fn attach_tp(bpf: &mut Ebpf, fn_name: &str, category: &str, tp: &str) -> Result<()> {
+/// Locations tracefs may be mounted under.
+const TRACEFS_ROOTS: &[&str] = &["/sys/kernel/tracing", "/sys/kernel/debug/tracing"];
+
+/// Whether `/sys/kernel/{tracing,debug/tracing}/events/<category>/<tp>/id` is
+/// readable. Used to skip syscall tracepoints that aren't exposed by the
+/// running kernel (e.g. `sys_enter_open` on aarch64, which has no `open()`
+/// syscall — only `openat()`).
+fn tracepoint_available(category: &str, tp: &str) -> bool {
+    TRACEFS_ROOTS
+        .iter()
+        .any(|root| Path::new(root).join("events").join(category).join(tp).join("id").exists())
+}
+
+/// Attach a tracepoint program. Returns `Ok(true)` if attached, `Ok(false)` if
+/// the kernel doesn't expose this tracepoint (logged + skipped).
+fn attach_tp(bpf: &mut Ebpf, fn_name: &str, category: &str, tp: &str) -> Result<bool> {
+    if !tracepoint_available(category, tp) {
+        warn!("kernel does not expose {category}/{tp}; skipping {fn_name}");
+        return Ok(false);
+    }
     let prog: &mut TracePoint = bpf
         .program_mut(fn_name)
         .context(format!("BPF program '{fn_name}' not found"))?
@@ -14,7 +33,7 @@ fn attach_tp(bpf: &mut Ebpf, fn_name: &str, category: &str, tp: &str) -> Result<
     prog.attach(category, tp)
         .context(format!("failed to attach '{fn_name}' to {category}/{tp}"))?;
     info!("attached {fn_name} to {category}/{tp}");
-    Ok(())
+    Ok(true)
 }
 
 /// Attach all tracepoints used by the eBPF tracer.
