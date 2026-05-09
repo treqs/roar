@@ -1,6 +1,5 @@
 use std::cell::Cell;
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
-#[cfg(not(target_os = "macos"))]
 use std::fs;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::OnceLock;
