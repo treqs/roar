@@ -12,7 +12,7 @@ struct SockFprog {
     filter: *const SockFilter,
 }
 
-fn build_seccomp_filter(tracked_syscalls: &[u64], audit_arch_x86_64: u32) -> Vec<SockFilter> {
+fn build_seccomp_filter(tracked_syscalls: &[u64], audit_arch: u32) -> Vec<SockFilter> {
     const BPF_LD: u16 = 0x00;
     const BPF_W: u16 = 0x00;
     const BPF_ABS: u16 = 0x20;
@@ -42,7 +42,7 @@ fn build_seccomp_filter(tracked_syscalls: &[u64], audit_arch_x86_64: u32) -> Vec
         code: BPF_JMP | BPF_JEQ | BPF_K,
         jt: 0,
         jf: 0,
-        k: audit_arch_x86_64,
+        k: audit_arch,
     });
 
     filter.push(SockFilter {
@@ -80,8 +80,8 @@ fn build_seccomp_filter(tracked_syscalls: &[u64], audit_arch_x86_64: u32) -> Vec
     filter
 }
 
-pub fn install_seccomp_filter(tracked_syscalls: &[u64], audit_arch_x86_64: u32) {
-    let filter = build_seccomp_filter(tracked_syscalls, audit_arch_x86_64);
+pub fn install_seccomp_filter(tracked_syscalls: &[u64], audit_arch: u32) {
+    let filter = build_seccomp_filter(tracked_syscalls, audit_arch);
     let prog = SockFprog {
         len: filter.len() as u16,
         filter: filter.as_ptr(),
