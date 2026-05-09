@@ -64,9 +64,7 @@ def _import_msgpack():
     try:
         import msgpack  # type: ignore[import-not-found]
     except ImportError:
-        sys.stderr.write(
-            "msgpack not installed. Install it with: pip install msgpack\n"
-        )
+        sys.stderr.write("msgpack not installed. Install it with: pip install msgpack\n")
         sys.exit(2)
     return msgpack
 

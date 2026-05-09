@@ -4,14 +4,33 @@ from __future__ import annotations
 import argparse
 import filecmp
 import os
+import platform
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-LINUX_PORTABLE_TARGET = "x86_64-unknown-linux-gnu.2.17"
-LINUX_PORTABLE_TARGET_DIR = "x86_64-unknown-linux-gnu"
+# Glibc floor that matches manylinux2014 (CentOS 7 era) for both x86_64 and
+# aarch64. cargo-zigbuild encodes the floor in the target triple suffix.
+LINUX_GLIBC_FLOOR = "2.17"
+
+# Map host arch (platform.machine()) to the LLVM/cargo target triple base.
+_LINUX_ARCH_TARGETS = {
+    "x86_64": "x86_64-unknown-linux-gnu",
+    "amd64": "x86_64-unknown-linux-gnu",
+    "aarch64": "aarch64-unknown-linux-gnu",
+    "arm64": "aarch64-unknown-linux-gnu",
+}
+
+
+def _linux_portable_target() -> tuple[str, str]:
+    """Return (full target triple with glibc suffix, target directory name)."""
+    arch = platform.machine().lower()
+    base = _LINUX_ARCH_TARGETS.get(arch)
+    if base is None:
+        raise SystemExit(f"unsupported Linux host arch {arch!r}; add it to _LINUX_ARCH_TARGETS")
+    return f"{base}.{LINUX_GLIBC_FLOOR}", base
 
 
 @dataclass(frozen=True)
@@ -53,9 +72,9 @@ def _default_layout() -> SyncLayout:
     portable_target = None
 
     if sys.platform.startswith("linux"):
-        release_dir = root_dir / "rust" / "target" / LINUX_PORTABLE_TARGET_DIR / "release"
+        portable_target, target_dir = _linux_portable_target()
+        release_dir = root_dir / "rust" / "target" / target_dir / "release"
         fallback_release_dirs = (host_release_dir,)
-        portable_target = LINUX_PORTABLE_TARGET
 
     artifacts = [
         ArtifactSpec(

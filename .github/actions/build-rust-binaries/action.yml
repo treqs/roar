@@ -9,6 +9,10 @@ inputs:
     description: Directory to place built binaries
     required: false
     default: rust-bin
+  target:
+    description: cargo-zigbuild target triple (with optional .X.Y glibc suffix)
+    required: false
+    default: x86_64-unknown-linux-gnu.2.17
 runs:
   using: composite
   steps:
@@ -18,29 +22,33 @@ runs:
         cargo install cargo-zigbuild
         pip install ziglang
 
-    - name: Build proxy (glibc 2.17 minimum)
+    - name: Build proxy
       shell: bash
-      run: cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-proxy --target x86_64-unknown-linux-gnu.2.17
+      run: cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-proxy --target "${{ inputs.target }}"
 
-    - name: Build ptrace tracer (glibc 2.17 minimum)
+    - name: Build ptrace tracer
       shell: bash
-      run: cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer --target x86_64-unknown-linux-gnu.2.17
+      run: cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer --target "${{ inputs.target }}"
 
-    - name: Build eBPF tracer (glibc 2.17 minimum)
+    - name: Build eBPF tracer
       shell: bash
-      run: cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer-ebpf --target x86_64-unknown-linux-gnu.2.17
+      run: cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer-ebpf --target "${{ inputs.target }}"
 
-    - name: Build preload tracer (glibc 2.17 minimum)
+    - name: Build preload tracer
       shell: bash
-      run: cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer-preload --target x86_64-unknown-linux-gnu.2.17
+      run: cargo zigbuild --release --manifest-path "${{ inputs.manifest-path }}" -p roar-tracer-preload --target "${{ inputs.target }}"
 
     - name: Stage Rust binaries
       shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
       run: |
         mkdir -p "${{ inputs.output-dir }}"
 
-        # zigbuild outputs to x86_64-unknown-linux-gnu/release/ regardless of the .2.17 suffix
-        RELEASE_DIR="rust/target/x86_64-unknown-linux-gnu/release"
+        # Strip any trailing glibc suffix (".2.17" etc.) to get the cargo
+        # target directory name.
+        TARGET_DIR="${TARGET%%.*}"
+        RELEASE_DIR="rust/target/${TARGET_DIR}/release"
 
         for bin in roar-tracer roar-proxy roar-tracer-ebpf roard roar-tracer-preload; do
           [ -f "$RELEASE_DIR/$bin" ] && cp "$RELEASE_DIR/$bin" "${{ inputs.output-dir }}/"
@@ -60,11 +68,6 @@ runs:
         for f in "${{ inputs.output-dir }}"/*; do
           echo "--- $f ---"
           file "$f"
-          if [[ "$f" == *.so ]]; then
-            objdump -p "$f" | grep NEEDED || true
-            objdump -p "$f" | grep GLIBC | sort -V | tail -1 || echo "(no glibc symbols)"
-          else
-            objdump -p "$f" | grep NEEDED || true
-            objdump -p "$f" | grep GLIBC | sort -V | tail -1 || echo "(no glibc symbols)"
-          fi
+          objdump -p "$f" | grep NEEDED || true
+          objdump -p "$f" | grep GLIBC | sort -V | tail -1 || echo "(no glibc symbols)"
         done
