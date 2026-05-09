@@ -739,18 +739,21 @@ fn flags_imply_write(flags: c_int) -> bool {
 
 #[cfg(target_os = "macos")]
 fn emit_path_mode(path: String, mode: &str) {
+    // `fopen` succeeded — that's *intent* to read/write, not a confirmed
+    // byte transfer. Emit Open{Read,Write} so the daemon's conflation
+    // policy decides whether to credit the file as actually read/written.
     if path.is_empty() {
         return;
     }
     if mode_implies_read(mode) {
-        send_event(&TraceEvent::Read {
+        send_event(&TraceEvent::OpenRead {
             pid: current_pid(),
             thread_id: current_thread_id(),
             path: path.clone(),
         });
     }
     if mode_implies_write(mode) {
-        send_event(&TraceEvent::Write {
+        send_event(&TraceEvent::OpenWrite {
             pid: current_pid(),
             thread_id: current_thread_id(),
             path,
@@ -759,19 +762,21 @@ fn emit_path_mode(path: String, mode: &str) {
 }
 
 fn emit_path_flags(path: String, flags: c_int) {
+    // `open`/`openat` succeeded — see the OpenRead/OpenWrite docstrings
+    // in `tracer-schema`. The daemon decides what to do with intent.
     if path.is_empty() {
         return;
     }
     let path = absolutize_path(&path);
     if flags_imply_read(flags) {
-        send_event(&TraceEvent::Read {
+        send_event(&TraceEvent::OpenRead {
             pid: current_pid(),
             thread_id: current_thread_id(),
             path: path.clone(),
         });
     }
     if flags_imply_write(flags) {
-        send_event(&TraceEvent::Write {
+        send_event(&TraceEvent::OpenWrite {
             pid: current_pid(),
             thread_id: current_thread_id(),
             path,
