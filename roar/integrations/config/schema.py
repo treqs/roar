@@ -172,6 +172,7 @@ class TracerConfig(ConfigBaseModel):
 
     default: TracerMode = "auto"
     fallback_enabled: bool = True
+    banner: bool = True
 
 
 class LoggingConfig(ConfigBaseModel):
