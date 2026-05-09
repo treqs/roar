@@ -119,6 +119,12 @@ class TracerService:
         """Read Linux capabilities from a binary via getcap."""
         return tracer_backends.get_binary_caps(path)
 
+    def _ptrace_is_ready(self, path: str) -> tuple[bool, str | None]:
+        """Check whether the ptrace tracer binary is exec'able and its
+        preflight passes. Catches the wrong-arch ENOEXEC case that the
+        old existence-only check let through."""
+        return tracer_backends.ptrace_readiness(path).as_tuple()
+
     def _ebpf_is_ready(self, path: str) -> tuple[bool, str | None]:
         """
         Check whether eBPF tracer is likely to start.
@@ -191,8 +197,14 @@ class TracerService:
 
         if backend == "ptrace":
             ptrace = self._find_ptrace_tracer()
-            if ptrace:
-                return "ptrace", ptrace
+            if not ptrace:
+                return None
+            if require_ready:
+                ready, reason = self._ptrace_is_ready(ptrace)
+                if not ready:
+                    self.logger.debug("Skipping ptrace tracer in auto mode: %s", reason)
+                    return None
+            return "ptrace", ptrace
         return None
 
     def _build_tracer_not_found_hint(self, mode: str) -> str:
