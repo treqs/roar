@@ -88,7 +88,11 @@ bindings = "pyo3"
 include = [
     { path = "LICENSE", format = "sdist" },
     { path = "LICENSE", format = "wheel" },
-    { path = "roar/bin/*", format = "sdist" },
+    # Pre-built tracer binaries ship in the wheel only, never the sdist.
+    # Bundling arch-specific ELFs in a source dist meant aarch64 hosts that
+    # fell through to sdist installs got x86_64 binaries that failed at exec
+    # time with a confusing "Exec format error". sdist users build the
+    # binaries from the rust/ source tree.
     { path = "roar/bin/*", format = "wheel" },
     { path = "roar/cli/templates/**/*", format = "sdist" },
     { path = "roar/cli/templates/**/*", format = "wheel" },
