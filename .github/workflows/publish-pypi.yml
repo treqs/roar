@@ -13,7 +13,17 @@ on:
 
 jobs:
   build-rust-binaries-linux:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu.2.17
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            target: aarch64-unknown-linux-gnu.2.17
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +45,7 @@ jobs:
         run: cargo install bpf-linker
 
       - name: Verify version matches release tag
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' && matrix.arch == 'x86_64'
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
@@ -65,11 +75,12 @@ jobs:
         with:
           manifest-path: rust/Cargo.toml
           output-dir: rust-bin
+          target: ${{ matrix.target }}
 
       - name: Upload Rust binaries artifact
         uses: actions/upload-artifact@v4
         with:
-          name: roar-rust-binaries-linux-x86_64
+          name: roar-rust-binaries-linux-${{ matrix.arch }}
           path: rust-bin/*
 
   build-rust-binaries-macos:
@@ -131,6 +142,31 @@ jobs:
             artifact-name: roar-rust-binaries-linux-x86_64
             platform: linux
             platform-tag: linux-x86_64
+          # Linux aarch64
+          - python-version: "3.10"
+            py-tag: "cp310"
+            runner: ubuntu-24.04-arm
+            artifact-name: roar-rust-binaries-linux-aarch64
+            platform: linux
+            platform-tag: linux-aarch64
+          - python-version: "3.11"
+            py-tag: "cp311"
+            runner: ubuntu-24.04-arm
+            artifact-name: roar-rust-binaries-linux-aarch64
+            platform: linux
+            platform-tag: linux-aarch64
+          - python-version: "3.12"
+            py-tag: "cp312"
+            runner: ubuntu-24.04-arm
+            artifact-name: roar-rust-binaries-linux-aarch64
+            platform: linux
+            platform-tag: linux-aarch64
+          - python-version: "3.13"
+            py-tag: "cp313"
+            runner: ubuntu-24.04-arm
+            artifact-name: roar-rust-binaries-linux-aarch64
+            platform: linux
+            platform-tag: linux-aarch64
           # macOS ARM64
           - python-version: "3.10"
             py-tag: "cp310"
@@ -242,7 +278,6 @@ jobs:
 
   build-sdist:
     runs-on: ubuntu-latest
-    needs: build-rust-binaries-linux
 
     steps:
       - uses: actions/checkout@v4
@@ -260,18 +295,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install maturin
 
-      - name: Download Rust binaries artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: roar-rust-binaries-linux-x86_64
-          path: rust-bin/
-
-      - name: Copy binaries to roar/bin
-        uses: ./.github/actions/copy-rust-binaries
-        with:
-          source-dir: rust-bin
-          destination-dir: roar/bin
-
+      # No pre-built binaries are bundled into the sdist (see [tool.maturin]
+      # `include` in pyproject.toml). sdist installs build the tracer
+      # binaries from the rust/ source tree.
       - name: Build sdist via maturin
         run: maturin sdist --manifest-path rust/crates/artifact-hash-py/Cargo.toml --out dist
 
@@ -319,7 +345,7 @@ jobs:
           import os
 
           wheels = sorted(glob.glob("dist/*.whl"))
-          expected_count = 12
+          expected_count = 16
           expected_py_tags = {"cp310", "cp311", "cp312", "cp313"}
 
           print("Found wheels:")
@@ -336,14 +362,17 @@ jobs:
                   f"found {sorted(found_py_tags)}"
               )
 
-          # Verify we have wheels for all 3 platform tags
+          # Verify we have wheels for all 4 platform tags
           wheel_basenames = [os.path.basename(w) for w in wheels]
-          has_linux = any("linux" in w for w in wheel_basenames)
+          has_linux_x86 = any("linux" in w and "x86_64" in w for w in wheel_basenames)
+          has_linux_arm = any("linux" in w and "aarch64" in w for w in wheel_basenames)
           has_macos_arm = any("macosx" in w and "arm64" in w for w in wheel_basenames)
           has_macos_x86 = any("macosx" in w and "x86_64" in w for w in wheel_basenames)
 
-          if not has_linux:
-              raise SystemExit("Missing Linux wheels")
+          if not has_linux_x86:
+              raise SystemExit("Missing Linux x86_64 wheels")
+          if not has_linux_arm:
+              raise SystemExit("Missing Linux aarch64 wheels")
           if not has_macos_arm:
               raise SystemExit("Missing macOS ARM64 wheels")
           if not has_macos_x86:
