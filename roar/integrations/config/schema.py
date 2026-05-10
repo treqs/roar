@@ -17,6 +17,7 @@ from ...core.tracer_modes import TracerMode
 # Type aliases
 HashAlgorithm = Literal["blake3", "sha256", "sha512", "md5"]
 LogLevel = Literal["debug", "info", "warning", "error"]
+Verbosity = Literal["quiet", "normal", "verbose", "debug"]
 
 
 class ConfigBaseModel(RoarBaseModel):
@@ -36,7 +37,11 @@ class OutputConfig(ConfigBaseModel):
     """Output configuration section."""
 
     track_repo_files: bool = False
+    # Deprecated. `verbosity` is the canonical knob. `quiet=true` maps to
+    # `verbosity="quiet"`. Kept for backward compatibility; will be removed
+    # in a future release.
     quiet: bool = False
+    verbosity: Verbosity = "normal"
 
 
 class AnalyzersConfig(ConfigBaseModel):

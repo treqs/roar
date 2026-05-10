@@ -61,28 +61,21 @@ def validate_git_clean() -> str:
 
 
 def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
-    """Get quiet setting from CLI flag or config."""
-    if quiet_flag is not None:
-        return quiet_flag
+    """Get quiet setting from CLI flag or config (legacy helper).
 
-    try:
-        try:
-            import tomllib as _tomllib
-        except ImportError:
-            import tomli as _tomllib  # type: ignore[no-redef]
+    Prefer `resolve_verbosity()` from `verbosity.py` for new code; this
+    helper remains for callers that haven't migrated yet.
+    """
+    from .verbosity import resolve_verbosity
 
-        config_toml = Path(repo_root) / ".roar" / "config.toml" if repo_root else None
-        if config_toml is not None and config_toml.exists():
-            data = _tomllib.loads(config_toml.read_text())
-            return bool(data.get("output", {}).get("quiet", False))
-        return False
-    except Exception:
-        pass
-
-    from ...integrations.config import load_config
-
-    config = load_config(start_dir=str(repo_root) if repo_root else None)
-    return config.get("output", {}).get("quiet", False)
+    return (
+        resolve_verbosity(
+            cli_quiet=bool(quiet_flag),
+            cli_verbose=0,
+            repo_root=repo_root,
+        )
+        == "quiet"
+    )
 
 
 def get_hash_algorithms(cli_algorithms: list[str] | None = None) -> list[str]:
@@ -104,7 +97,7 @@ def execute_and_report(
     command: list[str],
     job_type: str | None,
     step_name: str | None,
-    quiet: bool,
+    verbosity: str = "normal",
     hash_algorithms: list[str],
     repo_root: str,
     tracer_mode: str | None = None,
@@ -113,6 +106,7 @@ def execute_and_report(
     """Execute command via selected backend and show the run report."""
     hash_algos = cast(list[Literal["blake3", "sha256", "sha512", "md5"]], hash_algorithms)
     job_type_literal = cast(Literal["run", "build"] | None, job_type)
+    quiet = verbosity == "quiet"
     run_ctx = RunContext(
         roar_dir=roar_dir,
         repo_root=repo_root,
@@ -122,6 +116,7 @@ def execute_and_report(
         job_type=job_type_literal,
         step_name=step_name,
         quiet=quiet,
+        verbosity=verbosity,  # type: ignore[arg-type]
         hash_algorithms=hash_algos,
         tracer_mode=tracer_mode,  # type: ignore[arg-type]
         tracer_fallback=tracer_fallback,
@@ -135,7 +130,7 @@ def execute_and_report(
         return 1
 
     presenter = ConsolePresenter()
-    report = RunReportPresenter(presenter, quiet=quiet)
+    report = RunReportPresenter(presenter, verbosity=verbosity)  # type: ignore[arg-type]
 
     # The coordinator already emitted the lifecycle lines (trace start/end,
     # hashing spinner, lineage captured). Here we emit the summary block and
