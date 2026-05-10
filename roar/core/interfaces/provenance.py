@@ -41,6 +41,8 @@ class IFileFilterService(Protocol):
         tracer_data: TracerData,
         python_data: PythonInjectData,
         config: dict[str, Any],
+        *,
+        collect_dropped_paths: bool = False,
     ) -> FilteredFiles:
         """Apply filters to file lists."""
         ...

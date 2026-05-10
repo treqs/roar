@@ -15,10 +15,10 @@ from .dag_references import DAGReferenceResolver
 from .execution import (
     execute_and_report,
     get_hash_algorithms,
-    get_quiet_setting,
     validate_git_clean,
 )
 from .requests import BuildRequest, RunRequest
+from .verbosity import resolve_verbosity
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,11 @@ class _FinalizerContext:
 def run_command(request: RunRequest) -> int:
     """Execute the `roar run` application workflow."""
     repo_root = validate_git_clean()
-    quiet_setting = get_quiet_setting(request.quiet, repo_root)
+    verbosity = resolve_verbosity(
+        cli_quiet=bool(request.quiet),
+        cli_verbose=request.cli_verbose,
+        repo_root=repo_root,
+    )
     algorithms = get_hash_algorithms(
         list(request.hash_algorithms) if request.hash_algorithms else None
     )
@@ -48,7 +52,7 @@ def run_command(request: RunRequest) -> int:
         command=execution_inputs.command,
         job_type=execution_inputs.job_type,
         step_name=request.step_name,
-        quiet=quiet_setting,
+        verbosity=verbosity,
         hash_algorithms=algorithms,
         tracer_mode=request.tracer_mode,
         tracer_fallback=request.tracer_fallback,
@@ -58,7 +62,11 @@ def run_command(request: RunRequest) -> int:
 def build_command(request: BuildRequest) -> int:
     """Execute the `roar build` application workflow."""
     repo_root = validate_git_clean()
-    quiet_setting = get_quiet_setting(request.quiet, repo_root)
+    verbosity = resolve_verbosity(
+        cli_quiet=bool(request.quiet),
+        cli_verbose=request.cli_verbose,
+        repo_root=repo_root,
+    )
     algorithms = get_hash_algorithms(
         list(request.hash_algorithms) if request.hash_algorithms else None
     )
@@ -71,7 +79,7 @@ def build_command(request: BuildRequest) -> int:
         command=command,
         job_type="build",
         step_name=request.step_name,
-        quiet=quiet_setting,
+        verbosity=verbosity,
         hash_algorithms=algorithms,
         tracer_mode=request.tracer_mode,
         tracer_fallback=request.tracer_fallback,
@@ -85,7 +93,7 @@ def _execute_tracked_command(
     command: list[str],
     job_type: str | None,
     step_name: str | None,
-    quiet: bool,
+    verbosity: str,
     hash_algorithms: list[str],
     tracer_mode: str | None,
     tracer_fallback: bool | None,
@@ -103,7 +111,7 @@ def _execute_tracked_command(
         command=planned.command,
         job_type=job_type,
         step_name=step_name,
-        quiet=quiet,
+        verbosity=verbosity,
         hash_algorithms=hash_algorithms,
         repo_root=repo_root,
         tracer_mode=tracer_mode,

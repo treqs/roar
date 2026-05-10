@@ -24,8 +24,9 @@ _CORE_CONFIG_TEMPLATE_PREFIX = """\
 [output]
 # Include list of repo files read in provenance output
 track_repo_files = false
-# Suppress written files report after run
-quiet = false
+# Output level: "quiet" (silent), "normal" (status quo + filter counts),
+# "verbose" (also list read/written files), "debug" (also list filtered files).
+verbosity = "normal"
 
 [analyzers]
 # Detect experiment trackers (W&B, MLflow, Neptune)

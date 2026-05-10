@@ -12,6 +12,7 @@ class RunRequest:
     cwd: Path
     args: tuple[str, ...] = field(default_factory=tuple)
     quiet: bool | None = None
+    cli_verbose: int = 0  # number of -v flags (0, 1, 2+)
     step_name: str | None = None
     tracer_mode: str | None = None
     tracer_fallback: bool | None = None
@@ -24,6 +25,7 @@ class BuildRequest:
     cwd: Path
     args: tuple[str, ...] = field(default_factory=tuple)
     quiet: bool | None = None
+    cli_verbose: int = 0
     step_name: str | None = None
     tracer_mode: str | None = None
     tracer_fallback: bool | None = None
