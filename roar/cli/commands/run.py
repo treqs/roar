@@ -69,6 +69,11 @@ def run(
     command exit code, duration, and git commit.
 
     \b
+    Requires a clean git working tree. Every run is tagged with the
+    current commit SHA so artifacts can be traced back to the exact
+    code that produced them. Commit your changes before running.
+
+    \b
     Examples:
         roar run python train.py
         roar run ./scripts/preprocess.sh
@@ -123,6 +128,9 @@ Options:
   -n, --name <name>       Set the name label for this step
 
 Hash algorithms: blake3 (default), sha256, sha512, md5
+
+Note: `roar run` requires a clean git working tree. Each run is tagged
+with the current commit SHA so artifacts can be traced to specific code.
 
 Examples:
   roar run python train.py
