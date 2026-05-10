@@ -46,7 +46,7 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
 
     with (
         patch("roar.application.run.service.validate_git_clean", return_value="/tmp/repo"),
-        patch("roar.application.run.service.get_quiet_setting", return_value=False),
+        patch("roar.application.run.service.resolve_verbosity", return_value="normal"),
         patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
         patch(
             "roar.application.run.service.plan_execution_command",
@@ -72,7 +72,7 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
 def test_run_with_non_ray_command_does_not_call_rewrite() -> None:
     with (
         patch("roar.application.run.service.validate_git_clean", return_value="/tmp/repo"),
-        patch("roar.application.run.service.get_quiet_setting", return_value=False),
+        patch("roar.application.run.service.resolve_verbosity", return_value="normal"),
         patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
         patch(
             "roar.application.run.service.plan_execution_command",
@@ -127,7 +127,7 @@ def test_run_with_ray_job_submit_triggers_post_run_finalizer() -> None:
 
     with (
         patch("roar.application.run.service.validate_git_clean", return_value="/tmp/repo"),
-        patch("roar.application.run.service.get_quiet_setting", return_value=False),
+        patch("roar.application.run.service.resolve_verbosity", return_value="normal"),
         patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
         patch(
             "roar.application.run.service.plan_execution_command",
