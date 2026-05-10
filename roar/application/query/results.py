@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .diff_graph import JobMatch, JobNode
+    from .git_readiness import GitReadinessSummary
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,10 @@ class StatusSummary:
     build_steps: int
     run_steps: int
     artifacts: list[StatusArtifactSummary] = field(default_factory=list)
+    # Optional so existing test fixtures and JSON consumers that build a
+    # StatusSummary without git info keep working. None means "not
+    # collected"; callers should render no Git: line in that case.
+    git: GitReadinessSummary | None = None
 
 
 @dataclass(frozen=True)
