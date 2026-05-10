@@ -87,6 +87,8 @@ class ProvenanceService:
         tracer_log_path: str,
         python_log_path: str | None = None,
         config: dict[str, Any] | None = None,
+        *,
+        collect_dropped_paths: bool = False,
     ) -> dict[str, Any]:
         """
         Collect provenance from tracer output and optional Python-specific log.
@@ -96,6 +98,10 @@ class ProvenanceService:
             tracer_log_path: Path to the Rust tracer's JSON output
             python_log_path: Optional path to Python sitecustomize.py output
             config: Optional configuration dict (from .roar.toml)
+            collect_dropped_paths: When True, the file filter additionally
+                returns the per-category list of paths it dropped, for
+                `verbosity="debug"` rendering. Off by default to keep
+                memory bounded on large runs.
 
         Returns:
             Complete provenance dict
@@ -124,7 +130,12 @@ class ProvenanceService:
 
         # 2. Filter files
         self.logger.debug("Filtering files")
-        filtered_files = self._file_filter.filter_files(tracer_data, python_data, config)
+        filtered_files = self._file_filter.filter_files(
+            tracer_data,
+            python_data,
+            config,
+            collect_dropped_paths=collect_dropped_paths,
+        )
         self.logger.debug(
             "Files filtered: read=%d, written=%d, opened=%d",
             len(filtered_files.read_files),
