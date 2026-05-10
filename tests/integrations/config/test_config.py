@@ -410,7 +410,7 @@ class TestConfigSaveLoad:
 
         content = config_path.read_text(encoding="utf-8")
         assert "# roar configuration file" in content
-        assert "# Suppress written files report after run" in content
+        assert "# Output level:" in content
         assert "track_repo_files = false" in content
         assert "quiet = true" in content
         assert 'primary = "blake3"' in content
