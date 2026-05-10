@@ -15,8 +15,15 @@ from ...presenters.console import ConsolePresenter
 from ...presenters.run_report import RunReportPresenter
 
 
-def validate_git_clean() -> str:
-    """Validate git repository is clean and return repo root."""
+def validate_git_clean(*, verb: str = "run", args: list[str] | None = None) -> str:
+    """Validate git repository is clean and return repo root.
+
+    On a dirty tree, raises `ValueError` with a teaching message: the
+    principle behind the rule, the exact remediation commands using the
+    user's own filenames and original CLI args, and a docs link. The
+    `verb`/`args` parameters customize the recovery line so users see
+    the exact `roar run python …` (or `roar build …`) they typed.
+    """
     import subprocess
 
     cwd = os.getcwd()
@@ -47,15 +54,16 @@ def validate_git_clean() -> str:
         status_output = ""
 
     if status_output:
-        changes = status_output.split("\n")
-        lines = ["Git repo has uncommitted changes:"]
-        for change in changes[:5]:
-            lines.append(f"  {change}")
-        if len(changes) > 5:
-            lines.append(f"  ... and {len(changes) - 5} more")
-        lines.append("")
-        lines.append("Commit your changes before running this command.")
-        raise ValueError("\n".join(lines))
+        from .dirty_tree_error import format_dirty_tree_error
+
+        raise ValueError(
+            format_dirty_tree_error(
+                status_output=status_output,
+                repo_root=repo_root,
+                verb=verb,
+                args=args,
+            )
+        )
 
     return repo_root
 

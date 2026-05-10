@@ -34,7 +34,7 @@ class _FinalizerContext:
 
 def run_command(request: RunRequest) -> int:
     """Execute the `roar run` application workflow."""
-    repo_root = validate_git_clean()
+    repo_root = validate_git_clean(verb="run", args=list(request.args))
     verbosity = resolve_verbosity(
         cli_quiet=bool(request.quiet),
         cli_verbose=request.cli_verbose,
@@ -61,7 +61,7 @@ def run_command(request: RunRequest) -> int:
 
 def build_command(request: BuildRequest) -> int:
     """Execute the `roar build` application workflow."""
-    repo_root = validate_git_clean()
+    repo_root = validate_git_clean(verb="build", args=list(request.args))
     verbosity = resolve_verbosity(
         cli_quiet=bool(request.quiet),
         cli_verbose=request.cli_verbose,
