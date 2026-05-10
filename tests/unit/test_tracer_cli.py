@@ -9,6 +9,45 @@ from click.testing import CliRunner
 tracer_cli_module = importlib.import_module("roar.cli.commands.tracer")
 
 
+class TestTracerStatusParanoidHint:
+    """P1-14: `roar tracer status` must show the sysctl fix when
+    perf_event_paranoid is too restrictive (and stay silent when ok)."""
+
+    def test_too_restrictive_emits_both_fix_lines(self):
+        runner = CliRunner()
+        with patch.object(tracer_cli_module, "_get_perf_event_paranoid", return_value=4):
+            result = runner.invoke(tracer_cli_module.tracer, ["status"])
+        assert result.exit_code == 0
+        assert "perf_event_paranoid: 4 (too restrictive (needs <= 1))" in result.output
+        assert "sudo sysctl -w kernel.perf_event_paranoid=1" in result.output
+        assert "(this boot; host-wide; security tradeoff)" in result.output
+        assert "/etc/sysctl.d/99-ebpf-tracer.conf" in result.output
+        assert "(persistent)" in result.output
+
+    def test_ok_value_emits_no_fix(self):
+        runner = CliRunner()
+        with patch.object(tracer_cli_module, "_get_perf_event_paranoid", return_value=1):
+            result = runner.invoke(tracer_cli_module.tracer, ["status"])
+        assert result.exit_code == 0
+        assert "perf_event_paranoid: 1 (ok)" in result.output
+        assert "sysctl" not in result.output
+        assert "/etc/sysctl.d" not in result.output
+
+    def test_unavailable_value_emits_no_paranoid_row(self):
+        """Non-Linux hosts return None — the dedicated paranoid row is
+        omitted entirely. (The eBPF readiness probe may still mention
+        perf_event_paranoid as part of its own reason string; that's a
+        different code path.)"""
+        runner = CliRunner()
+        with patch.object(tracer_cli_module, "_get_perf_event_paranoid", return_value=None):
+            result = runner.invoke(tracer_cli_module.tracer, ["status"])
+        assert result.exit_code == 0
+        # No standalone "  perf_event_paranoid: <value>" row at indent 2.
+        assert "  perf_event_paranoid:" not in result.output
+        # And no fix hints either.
+        assert "sysctl -w kernel.perf_event_paranoid" not in result.output
+
+
 class TestTracerCli:
     def test_set_default_writes_tracer_default_key(self):
         runner = CliRunner()
