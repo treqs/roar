@@ -15,12 +15,26 @@ from __future__ import annotations
 
 import sys
 from contextlib import contextmanager
-from typing import IO
+from typing import IO, Literal
 
 from ..core.interfaces.presenter import IPresenter
 from ..core.models.run import RunResult
 from .spinner import BRAILLE_FRAMES, CLOCK_FRAMES, Spinner
 from .terminal import TerminalCaps, detect, style
+
+Verbosity = Literal["quiet", "normal", "verbose", "debug"]
+
+# Pretty labels for each filter category in normal-mode summary line and
+# debug-mode listings. Order matters: this is the display order.
+_FILTER_LABELS: tuple[tuple[str, str], ...] = (
+    ("system_reads", "system"),
+    ("package_reads", "pkg"),
+    ("torch_cache", "torch-cache"),
+    ("tmp_files", "tmp"),
+    ("write_noise", "write-noise"),
+    ("git_metadata", "git-meta"),
+    ("roar_internal", "roar-internal"),
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -64,11 +78,20 @@ class RunReportPresenter:
         stream: IO | None = None,
         caps: TerminalCaps | None = None,
         quiet: bool = False,
+        verbosity: Verbosity | None = None,
     ) -> None:
         self._out = presenter
         self._stream = stream if stream is not None else sys.stderr
         self._caps = caps if caps is not None else detect(self._stream)
-        self._quiet = quiet
+        # `quiet=True` is a back-compat alias for verbosity="quiet" so old
+        # callers still get the silent behavior. New callers should pass
+        # verbosity directly.
+        if verbosity is None:
+            verbosity = "quiet" if quiet else "normal"
+        self._verbosity: Verbosity = verbosity
+        self._quiet = verbosity == "quiet"
+        self._show_io_lists = verbosity in ("verbose", "debug")
+        self._show_dropped_lists = verbosity == "debug"
 
     # ---- lifecycle events -------------------------------------------------
 
@@ -127,7 +150,12 @@ class RunReportPresenter:
         self._trex("lineage captured:")
 
     def summary(self, result: RunResult, command: list[str]) -> None:
-        if self._quiet or self._caps.pipe_mode:
+        if self._quiet:
+            return
+        # Pipe mode normally suppresses the decorative summary block, but
+        # verbose/debug users explicitly asked for the file lists — those
+        # are most useful in CI logs and redirected output, so honor them.
+        if self._caps.pipe_mode and not self._show_io_lists:
             return
         self._render_summary(result)
 
@@ -155,7 +183,7 @@ class RunReportPresenter:
     def show_report(self, result: RunResult, command: list[str], quiet: bool = False) -> None:
         if quiet or self._quiet:
             return
-        if self._caps.pipe_mode:
+        if self._caps.pipe_mode and not self._show_io_lists:
             self.done(
                 exit_code=result.exit_code,
                 trace_duration=result.duration,
@@ -289,6 +317,17 @@ class RunReportPresenter:
                 dag_parts.append(f"depth {result.dag_depth}")
             self._detail("dag", f" {self._dim_sep()}".join(dag_parts))
 
+        # Filter-counts line ("flt"). Only shown if counts were collected
+        # for this run (older runs / short-circuit paths leave it empty)
+        # and at least one file was filtered.
+        self._render_filter_counts(result)
+
+        # Verbose/debug lists.
+        if self._show_io_lists:
+            self._render_io_lists(result)
+        if self._show_dropped_lists:
+            self._render_dropped_lists(result)
+
         # Blank separator + suggested command.
         self._detail_blank()
         cmd_text = style(f"roar show --job {result.job_uid}", "command_blue", enabled=c)
@@ -296,3 +335,49 @@ class RunReportPresenter:
         self._print(
             f"{style('·', 'dim', enabled=c)}  {style('$', 'dim', enabled=c)} {cmd_text}    {comment}"
         )
+
+    # ---- verbosity-driven blocks ----------------------------------------
+
+    def _render_filter_counts(self, result: RunResult) -> None:
+        counts = result.filter_counts or {}
+        if not counts:
+            return
+        parts = []
+        for key, label in _FILTER_LABELS:
+            n = int(counts.get(key, 0) or 0)
+            if n:
+                parts.append(f"{n} {label}")
+        if not parts:
+            return
+        self._detail("flt", f" {self._dim_sep()}".join(parts))
+
+    def _render_io_lists(self, result: RunResult) -> None:
+        c = self._caps.can_color
+        if result.inputs:
+            self._detail_blank()
+            self._detail("in", style(f"{len(result.inputs)} read", "dim", enabled=c))
+            for entry in result.inputs:
+                path = entry.get("path") if isinstance(entry, dict) else None
+                if path:
+                    self._print(f"    {path}")
+        if result.outputs:
+            self._detail_blank()
+            self._detail("out", style(f"{len(result.outputs)} written", "dim", enabled=c))
+            for entry in result.outputs:
+                path = entry.get("path") if isinstance(entry, dict) else None
+                if path:
+                    self._print(f"    {path}")
+
+    def _render_dropped_lists(self, result: RunResult) -> None:
+        dropped = result.dropped_paths or {}
+        if not dropped:
+            return
+        c = self._caps.can_color
+        for key, label in _FILTER_LABELS:
+            paths = dropped.get(key, [])
+            if not paths:
+                continue
+            self._detail_blank()
+            self._detail("flt", style(f"{len(paths)} {label} (filtered)", "dim", enabled=c))
+            for p in paths:
+                self._print(f"    {p}")

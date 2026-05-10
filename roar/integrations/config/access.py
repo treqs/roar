@@ -56,7 +56,20 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
     "output.quiet": {
         "type": bool,
         "default": False,
-        "description": "Suppress written files report after run",
+        "description": (
+            "Deprecated alias for output.verbosity. true → 'quiet'. Use output.verbosity instead."
+        ),
+    },
+    "output.verbosity": {
+        "type": str,
+        "default": "normal",
+        "valid_values": ("quiet", "normal", "verbose", "debug"),
+        "description": (
+            "Output level for `roar run`: "
+            "quiet (silent), normal (status quo + filter counts), "
+            "verbose (also list read/written files), "
+            "debug (also list filtered files; can be large)"
+        ),
     },
     "cleanup.delete_tmp_writes": {
         "type": bool,
@@ -757,6 +770,11 @@ def config_set(key: str, value: str, start_dir: str | None = None) -> ConfigSetR
                 f"Invalid tracer mode: {value}. "
                 f"Valid modes: {', '.join(sorted(VALID_TRACER_MODES))}"
             )
+        typed_value = value
+    elif key == "output.verbosity":
+        valid = key_info.get("valid_values", ())
+        if value not in valid:
+            raise ValueError(f"Invalid verbosity: {value}. Valid values: {', '.join(valid)}")
         typed_value = value
     else:
         typed_value = value
