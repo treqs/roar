@@ -48,7 +48,7 @@ def test_run_command_forwards_tracer_flags_and_execution_inputs(tmp_path: Path) 
 
     with (
         patch("roar.application.run.service.validate_git_clean", return_value=str(tmp_path)),
-        patch("roar.application.run.service.get_quiet_setting", return_value=False),
+        patch("roar.application.run.service.resolve_verbosity", return_value="normal"),
         patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
         patch("roar.application.run.service.plan_execution_command", return_value=planned),
         patch("roar.application.run.service.execute_and_report", return_value=0) as mock_exec,
@@ -76,7 +76,7 @@ def test_build_command_forwards_tracer_flags_and_execution_inputs(tmp_path: Path
 
     with (
         patch("roar.application.run.service.validate_git_clean", return_value=str(tmp_path)),
-        patch("roar.application.run.service.get_quiet_setting", return_value=False),
+        patch("roar.application.run.service.resolve_verbosity", return_value="normal"),
         patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
         patch("roar.application.run.service.plan_execution_command", return_value=planned),
         patch("roar.application.run.service.execute_and_report", return_value=0) as mock_exec,
@@ -112,7 +112,7 @@ def test_run_command_resolves_dag_reference_and_can_abort_on_stale_upstream(
 
     with (
         patch("roar.application.run.service.validate_git_clean", return_value=str(tmp_path)),
-        patch("roar.application.run.service.get_quiet_setting", return_value=False),
+        patch("roar.application.run.service.resolve_verbosity", return_value="normal"),
         patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
         patch("roar.application.run.service.create_database_context", return_value=db_ctx),
         patch("roar.application.run.service.DAGReferenceResolver") as resolver_cls,
@@ -139,7 +139,7 @@ def test_run_command_raises_when_backend_does_not_provide_execution_role(tmp_pat
 
     with (
         patch("roar.application.run.service.validate_git_clean", return_value=str(tmp_path)),
-        patch("roar.application.run.service.get_quiet_setting", return_value=False),
+        patch("roar.application.run.service.resolve_verbosity", return_value="normal"),
         patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
         patch("roar.application.run.service.plan_execution_command", return_value=planned),
         pytest.raises(ValueError, match="did not provide an execution role"),
