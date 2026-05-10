@@ -98,6 +98,8 @@ class ProvenanceAssemblerService:
             "data": {
                 "read_files": filtered_read_files,
                 "written_files": sorted(ctx.filtered_files.written_files),
+                "filter_counts": ctx.filtered_files.counts.model_dump(),
+                "dropped_paths": ctx.filtered_files.dropped_paths,
             },
             "processes": ctx.process_summary,
             "runtime": self._runtime_to_dict(ctx.runtime_info),
