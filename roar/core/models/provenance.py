@@ -73,6 +73,33 @@ class PythonInjectData(RoarBaseModel):
         return self.sys_prefix != self.sys_base_prefix
 
 
+class FilterCounts(ImmutableModel):
+    """Per-category counts of files dropped by the noise filter.
+
+    Always populated. Cheap (one int per category).
+    """
+
+    system_reads: Annotated[int, Field(ge=0)] = 0
+    package_reads: Annotated[int, Field(ge=0)] = 0
+    torch_cache: Annotated[int, Field(ge=0)] = 0
+    tmp_files: Annotated[int, Field(ge=0)] = 0
+    roar_internal: Annotated[int, Field(ge=0)] = 0
+    git_metadata: Annotated[int, Field(ge=0)] = 0
+    write_noise: Annotated[int, Field(ge=0)] = 0
+
+    @property
+    def total(self) -> int:
+        return (
+            self.system_reads
+            + self.package_reads
+            + self.torch_cache
+            + self.tmp_files
+            + self.roar_internal
+            + self.git_metadata
+            + self.write_noise
+        )
+
+
 class FilteredFiles(ImmutableModel):
     """Result of file filtering.
 
@@ -84,6 +111,11 @@ class FilteredFiles(ImmutableModel):
     opened_files: list[str] = Field(default_factory=list)
     modules_files: list[str] = Field(default_factory=list)
     tmp_files_deleted: Annotated[int, Field(ge=0)] = 0
+    counts: FilterCounts = Field(default_factory=FilterCounts)
+    # Per-category list of dropped paths. Only populated when the caller
+    # of FileFilterService requests it (verbosity="debug"); otherwise left
+    # empty to keep memory bounded on huge runs (e.g. all package reads).
+    dropped_paths: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class HardwareInfo(RoarBaseModel):
