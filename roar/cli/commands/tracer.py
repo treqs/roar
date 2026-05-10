@@ -156,6 +156,15 @@ def _print_status() -> None:
     if paranoid is not None:
         status = "ok" if paranoid <= 1 else "too restrictive (needs <= 1)"
         click.echo(f"  perf_event_paranoid: {paranoid} ({status})")
+        if paranoid > 1:
+            click.echo(
+                "    → sudo sysctl -w kernel.perf_event_paranoid=1  "
+                "(this boot; host-wide; security tradeoff)"
+            )
+            click.echo(
+                "    → echo 'kernel.perf_event_paranoid=1' | sudo tee "
+                "/etc/sysctl.d/99-ebpf-tracer.conf  (persistent)"
+            )
 
 
 def _print_single_preflight_result(
