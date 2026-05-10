@@ -300,6 +300,12 @@ def init(click_ctx: click.Context, yes: bool, no_gitignore: bool, init_path: Pat
         click.echo("roar records file hashes, commands, and dependency metadata.")
         click.echo("It does not upload file contents to GLaaS.")
         click.echo("")
+        click.echo(
+            "Note: `roar run` requires a clean git working tree — every run is "
+            "tagged with the current commit SHA so artifacts can be traced back "
+            "to the exact code that produced them."
+        )
+        click.echo("")
         click.echo(f"Created {roar_dir / 'config.toml'}")
 
     if target_repo_root is None:
