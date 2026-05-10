@@ -11,7 +11,22 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from ...core.interfaces.logger import ILogger
-from ...core.models.provenance import FilteredFiles, PythonInjectData, TracerData
+from ...core.models.provenance import (
+    FilterCounts,
+    FilteredFiles,
+    PythonInjectData,
+    TracerData,
+)
+
+_FILTER_CATEGORIES: tuple[str, ...] = (
+    "roar_internal",
+    "git_metadata",
+    "system_reads",
+    "package_reads",
+    "torch_cache",
+    "tmp_files",
+    "write_noise",
+)
 
 
 def _get_editable_install_dirs() -> frozenset[str]:
@@ -116,6 +131,8 @@ class FileFilterService:
         tracer_data: TracerData,
         python_data: PythonInjectData,
         config: dict[str, Any],
+        *,
+        collect_dropped_paths: bool = False,
     ) -> FilteredFiles:
         """
         Apply filters to file lists.
@@ -124,6 +141,10 @@ class FileFilterService:
             tracer_data: Loaded tracer data
             python_data: Loaded Python inject data
             config: Configuration dict (from .roar.toml)
+            collect_dropped_paths: If True, also keep the per-category lists
+                of paths that were filtered out, for `verbosity="debug"`
+                rendering. Off by default — these lists can be very large
+                (e.g. every package file an interpreter touches).
 
         Returns:
             FilteredFiles with filtered lists
@@ -163,36 +184,53 @@ class FileFilterService:
         roar_inject_dir = python_data.roar_inject_dir
         editable_dirs = _get_editable_install_dirs()
 
-        def should_include_read(path: str) -> bool:
-            # Always filter roar's inject directory (sitecustomize.py, etc.)
-            if roar_inject_dir and path.startswith(roar_inject_dir):
-                return False
-            # Internal worker runtime_env bundle staging path is always noise.
-            if "/roar-worker-env-" in path:
-                return False
-            # roar's own runtime/config/database files are infrastructure, not inputs.
-            if self._is_roar_internal(path):
-                return False
-            # Git metadata reads are used for run context capture, not pipeline data.
-            if self._is_git_metadata(path):
-                return False
-            if ignore_system_reads and self._is_system_read(path):
-                return False
-            if ignore_torch_cache and self._is_torch_cache(path):
-                return False
-            if ignore_package_reads and self._is_package_file(
-                path,
-                sys_prefix,
-                sys_base_prefix,
-                editable_dirs=editable_dirs,
-            ):
-                return False
-            return not (ignore_tmp_files and self._is_tmp_path(path))
+        # Per-category drop counts. Always tracked. Per-category dropped
+        # path lists are only built when collect_dropped_paths=True.
+        counts: dict[str, int] = dict.fromkeys(_FILTER_CATEGORIES, 0)
+        dropped: dict[str, list[str]] = (
+            {cat: [] for cat in _FILTER_CATEGORIES} if collect_dropped_paths else {}
+        )
 
-        # Apply filters to reads
-        opened_files = [f for f in tracer_data.opened_files if should_include_read(f)]
-        read_files = [f for f in tracer_data.read_files if should_include_read(f)]
-        modules_files = [f for f in python_data.modules_files if should_include_read(f)]
+        def _record_drop(category: str, path: str) -> None:
+            counts[category] += 1
+            if collect_dropped_paths:
+                dropped[category].append(path)
+
+        def categorize_read(path: str) -> str | None:
+            """Return the filter category that drops this path, or None to keep."""
+            if roar_inject_dir and path.startswith(roar_inject_dir):
+                return "roar_internal"
+            if "/roar-worker-env-" in path:
+                return "roar_internal"
+            if self._is_roar_internal(path):
+                return "roar_internal"
+            if self._is_git_metadata(path):
+                return "git_metadata"
+            if ignore_system_reads and self._is_system_read(path):
+                return "system_reads"
+            if ignore_torch_cache and self._is_torch_cache(path):
+                return "torch_cache"
+            if ignore_package_reads and self._is_package_file(
+                path, sys_prefix, sys_base_prefix, editable_dirs=editable_dirs
+            ):
+                return "package_reads"
+            if ignore_tmp_files and self._is_tmp_path(path):
+                return "tmp_files"
+            return None
+
+        def filter_reads(paths: list[str]) -> list[str]:
+            kept: list[str] = []
+            for p in paths:
+                cat = categorize_read(p)
+                if cat is None:
+                    kept.append(p)
+                else:
+                    _record_drop(cat, p)
+            return kept
+
+        opened_files = filter_reads(tracer_data.opened_files)
+        read_files = filter_reads(tracer_data.read_files)
+        modules_files = filter_reads(python_data.modules_files)
         self.logger.debug(
             "After read filtering: opened=%d->%d, read=%d->%d, modules=%d->%d",
             len(tracer_data.opened_files),
@@ -209,21 +247,19 @@ class FileFilterService:
         filtered_written_files: list[str] = []
 
         for f in tracer_data.written_files:
-            # Skip roar's inject directory (sitecustomize.py output, etc.)
             if roar_inject_dir and f.startswith(roar_inject_dir):
+                _record_drop("roar_internal", f)
                 continue
-            # Skip noise (device files, proc, sys, etc.)
             if self._is_write_noise(f):
+                _record_drop("write_noise", f)
                 continue
-            # Skip torch cache from output (but don't delete - it's a persistent cache)
             if ignore_torch_cache and self._is_torch_cache(f):
+                _record_drop("torch_cache", f)
                 continue
-            # Handle tmp files (Linux /tmp/ and macOS /private/var/folders/)
             if self._is_tmp_path(f):
                 if ignore_tmp_files:
-                    # Skip /tmp files entirely (unless strict mode)
+                    _record_drop("tmp_files", f)
                     continue
-                # Track /tmp files that were written (not read) for potential deletion
                 if f not in read_files_set and delete_tmp_writes:
                     tmp_files_to_delete.append(f)
             filtered_written_files.append(f)
@@ -243,6 +279,8 @@ class FileFilterService:
             opened_files=opened_files,
             modules_files=modules_files,
             tmp_files_deleted=deleted_count,
+            counts=FilterCounts(**counts),
+            dropped_paths=dropped,
         )
 
     @staticmethod
