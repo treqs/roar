@@ -83,6 +83,10 @@ class RunContext(RoarBaseModel):
     job_type: JobType | None = None
     step_name: str | None = None
     quiet: bool = False
+    # Effective output verbosity for this run. Resolved upstream from CLI
+    # flags + config. The legacy `quiet` bool above is kept in sync via a
+    # validator below; new code should read `verbosity` directly.
+    verbosity: Literal["quiet", "normal", "verbose", "debug"] = "normal"
     hash_algorithms: list[HashAlgorithm] = Field(default_factory=lambda: ["blake3"])  # type: ignore[arg-type]
     tracer_mode: TracerMode | None = None
     tracer_fallback: bool | None = None
@@ -95,6 +99,14 @@ class RunContext(RoarBaseModel):
     def ensure_path(cls, v: Any) -> Path:
         """Ensure roar_dir is a Path."""
         return Path(v) if not isinstance(v, Path) else v
+
+    @model_validator(mode="after")
+    def _sync_quiet_and_verbosity(self) -> RunContext:
+        """If a caller passed only the legacy `quiet=True`, treat it as
+        `verbosity="quiet"`. New callers should pass verbosity directly."""
+        if self.quiet and self.verbosity == "normal":
+            object.__setattr__(self, "verbosity", "quiet")
+        return self
 
 
 class RunResult(ImmutableModel):
@@ -126,6 +138,13 @@ class RunResult(ImmutableModel):
     dag_jobs: int = 0
     dag_artifacts: int = 0
     dag_depth: int = 0
+    # Per-category counts of files dropped by the noise filter. Empty
+    # means counts weren't collected (older code paths or pre-feature
+    # runs); presenters should treat that as "no info" and skip the line.
+    filter_counts: dict[str, int] = Field(default_factory=dict)
+    # Per-category list of dropped paths. Only populated when
+    # verbosity="debug"; empty otherwise to keep memory bounded.
+    dropped_paths: dict[str, list[str]] = Field(default_factory=dict)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
