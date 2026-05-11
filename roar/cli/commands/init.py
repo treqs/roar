@@ -293,50 +293,75 @@ def init(click_ctx: click.Context, yes: bool, no_gitignore: bool, init_path: Pat
 
     if roar_dir_existed:
         click.echo(f".roar directory already exists at {roar_dir}")
-    else:
-        click.echo(f"Created {roar_dir}")
-        click.echo(f"Initialized database at {roar_dir / 'roar.db'}")
-        click.echo("")
-        click.echo("roar records file hashes, commands, and dependency metadata.")
-        click.echo("It does not upload file contents to GLaaS.")
-        click.echo("")
-        click.echo(
-            "Note: `roar run` requires a clean git working tree — every run is "
-            "tagged with the current commit SHA so artifacts can be traced back "
-            "to the exact code that produced them."
-        )
-        click.echo("")
-        click.echo(f"Created {roar_dir / 'config.toml'}")
-
-    if target_repo_root is None:
-        click.echo("Not in a git repository. Done.")
         return
 
-    if no_gitignore:
-        click.echo("Skipped .gitignore update.")
-        click.echo("Done.")
+    # Run the .gitignore step first so we can fold its status into the
+    # single "Initialized roar" summary block instead of trailing prose.
+    gitignore_status: str | None = None
+    gitignore_action: str | None = None
+    if target_repo_root is not None and not no_gitignore:
+        gitignore_action, _ = _ensure_gitignore_excludes_roar(target_repo_root)
+        if gitignore_action == "created":
+            gitignore_status = "created .gitignore with .roar/ entry"
+        elif gitignore_action == "appended":
+            gitignore_status = "added .roar/ entry"
+        else:
+            gitignore_status = "already excluded"
+    elif no_gitignore:
+        gitignore_status = "skipped (--no-gitignore)"
+
+    _print_init_summary(
+        roar_dir=roar_dir,
+        gitignore_status=gitignore_status,
+        in_git_repo=target_repo_root is not None,
+    )
+    _maybe_print_init_hints(
+        in_git_repo=target_repo_root is not None,
+        gitignore_action=gitignore_action,
+    )
+
+
+def _print_init_summary(*, roar_dir: Path, gitignore_status: str | None, in_git_repo: bool) -> None:
+    """One factual, terse block of what was created."""
+    click.echo(f"Initialized roar in {roar_dir.parent}")
+    click.echo(f"  database:   {roar_dir / 'roar.db'}")
+    click.echo(f"  config:     {roar_dir / 'config.toml'}")
+    if gitignore_status:
+        click.echo(f"  gitignore:  {gitignore_status}")
+    if not in_git_repo:
+        click.echo("  git:        (not in a git repo)")
+
+
+def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) -> None:
+    """Print git-style `hint:` lines for next steps. Disabled by
+    `roar config set advice.enabled false`."""
+    from ...integrations.config import config_get
+
+    if config_get("advice.enabled") is False:
         return
 
-    # Always ensure .gitignore excludes .roar/. Without this, the .roar/
-    # directory we just created would dirty the working tree and `roar
-    # run` would refuse to run on the very next invocation.
-    action, gitignore_path = _ensure_gitignore_excludes_roar(target_repo_root)
-    if action == "created":
-        click.echo(f"Created {gitignore_path} with .roar/ entry")
-    elif action == "appended":
-        click.echo("Added .roar/ to .gitignore")
-    else:
-        click.echo(".roar is already in .gitignore.")
-
-    if action in ("created", "appended"):
-        click.echo("")
+    click.echo("")
+    click.echo("hint: Get started:")
+    click.echo("hint:")
+    click.echo("hint:   roar run python train.py     # track inputs, outputs, env, commit")
+    click.echo("hint:   roar dag                      # view the lineage graph")
+    click.echo("hint:   roar register output.csv      # publish to GLaaS for teammates")
+    click.echo("hint:")
+    click.echo(
+        "hint: Tracer auto-selects (eBPF → preload → ptrace). Switch with `roar tracer <backend>`;"
+    )
+    click.echo("hint: see all backends and readiness with `roar tracer`.")
+    if in_git_repo:
         click.echo(
-            "Commit the .gitignore change before your first `roar run` "
-            "(it expects a clean working tree):"
+            "hint: `roar run` requires a clean git tree — runs are tagged with the commit SHA."
         )
-        click.echo("  git add .gitignore && git commit -m 'ignore .roar/'")
-
-    click.echo("Done.")
+    if gitignore_action in ("created", "appended"):
+        click.echo("hint:")
+        click.echo("hint: Commit the .gitignore change before your first `roar run`:")
+        click.echo("hint:   git add .gitignore && git commit -m 'ignore .roar/'")
+    click.echo("hint:")
+    click.echo("hint: Docs: https://glaas.ai/docs")
+    click.echo("hint: Disable these hints with `roar config set advice.enabled false`.")
 
 
 # Register subcommands. Imported here (not at top of file) so the heavier

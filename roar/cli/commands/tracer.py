@@ -76,6 +76,15 @@ def _set_tracer_default(mode: str) -> None:
     except ValueError as e:
         raise click.ClickException(str(e)) from e
 
+    # The explanatory text previously fired on every `roar run`; now it
+    # only fires here, where the user has explicitly asked to switch.
+    from ...execution.runtime.tracer_banner import banner_for
+
+    banner = banner_for(mode)
+    if banner:
+        click.echo("")
+        click.echo(banner)
+
 
 def _ebpf_readiness(path: str) -> tuple[bool, str]:
     """Check eBPF readiness and return (ok, reason)."""
@@ -152,19 +161,22 @@ def _print_status() -> None:
     else:
         click.echo("  roard:   not found")
 
+    # Only surface perf_event_paranoid when it's blocking eBPF. When it's
+    # within the acceptable range we say nothing — its "ok" state was
+    # ambiguous (which backend does it apply to?) and was just noise.
     paranoid = _get_perf_event_paranoid()
-    if paranoid is not None:
-        status = "ok" if paranoid <= 1 else "too restrictive (needs <= 1)"
-        click.echo(f"  perf_event_paranoid: {paranoid} ({status})")
-        if paranoid > 1:
-            click.echo(
-                "    → sudo sysctl -w kernel.perf_event_paranoid=1  "
-                "(this boot; host-wide; security tradeoff)"
-            )
-            click.echo(
-                "    → echo 'kernel.perf_event_paranoid=1' | sudo tee "
-                "/etc/sysctl.d/99-ebpf-tracer.conf  (persistent)"
-            )
+    if paranoid is not None and paranoid > 1:
+        click.echo("")
+        click.echo("eBPF kernel setting:")
+        click.echo(f"  perf_event_paranoid: {paranoid} (too restrictive, needs <= 1)")
+        click.echo(
+            "    → sudo sysctl -w kernel.perf_event_paranoid=1  "
+            "(this boot; host-wide; security tradeoff)"
+        )
+        click.echo(
+            "    → echo 'kernel.perf_event_paranoid=1' | sudo tee "
+            "/etc/sysctl.d/99-ebpf-tracer.conf  (persistent)"
+        )
 
 
 def _print_single_preflight_result(
@@ -185,7 +197,12 @@ def _print_single_preflight_result(
     _print_preflight_suggestions(result, err=err)
 
 
-def _print_auto_preflight_result(target: str, result: tracer_backends.AutoPreflightResult) -> None:
+def _print_auto_preflight_result(
+    target: str,
+    result: tracer_backends.AutoPreflightResult,
+    *,
+    command: str | None = None,
+) -> None:
     err = not result.ok
     status = "passed" if result.ok else "failed"
     click.echo(f"Tracer check {status} for '{target}': {result.summary}", err=err)
@@ -194,6 +211,22 @@ def _print_auto_preflight_result(target: str, result: tracer_backends.AutoPrefli
     for backend_result in result.results:
         backend_status = "ok" if backend_result.ok else backend_result.summary
         click.echo(f"  {backend_result.backend}: {backend_status}", err=err)
+
+    # When auto selects a backend, run that backend's deep preflight so the
+    # output matches what `roar tracer check <backend>` would have shown —
+    # consistency the previous flow lacked.
+    if result.ok and result.results:
+        selected = next((br for br in result.results if br.ok), None)
+        if selected is not None:
+            deep = _backend_preflight(selected.backend, command)
+            if isinstance(deep, tracer_backends.TracerPreflightResult):
+                click.echo("")
+                click.echo(f"Selected backend '{selected.backend}': detail")
+                for check in deep.checks:
+                    detail = f" ({check.detail})" if check.detail else ""
+                    check_status = "ok" if check.ok else "fail"
+                    click.echo(f"  - {check.name}: {check_status}{detail}")
+
     _print_preflight_suggestions(result, err=err)
 
 
@@ -257,6 +290,12 @@ def tracer_preload() -> None:
 
 
 @tracer.command("check")
+@click.argument(
+    "backend_arg",
+    type=click.Choice(list(TRACER_MODE_VALUES)),
+    required=False,
+    default=None,
+)
 @click.option(
     "--backend",
     type=click.Choice(list(TRACER_MODE_VALUES)),
@@ -275,15 +314,29 @@ def tracer_preload() -> None:
     default=False,
     help="Emit machine-readable JSON output.",
 )
-def tracer_check(backend: str | None, command: str | None, json_output: bool) -> None:
-    """Validate tracer backend preflight (non-zero exit if not ready)."""
-    target = backend or _get_default_mode()
+def tracer_check(
+    backend_arg: str | None,
+    backend: str | None,
+    command: str | None,
+    json_output: bool,
+) -> None:
+    """Validate tracer backend preflight (non-zero exit if not ready).
+
+    Accepts the backend as a positional argument (e.g. `roar tracer check ebpf`)
+    or via --backend; the positional form is the discoverable one. With no
+    backend, validates the configured default.
+    """
+    if backend_arg and backend and backend_arg != backend:
+        raise click.UsageError(
+            f"Conflicting backend: positional '{backend_arg}' vs --backend '{backend}'."
+        )
+    target = backend_arg or backend or _get_default_mode()
     result = _backend_preflight(target, command)
 
     if json_output:
         click.echo(json.dumps(result.to_dict(), sort_keys=True))
     elif isinstance(result, tracer_backends.AutoPreflightResult):
-        _print_auto_preflight_result(target, result)
+        _print_auto_preflight_result(target, result, command=command)
     else:
         _print_single_preflight_result(target, result)
 

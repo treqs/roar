@@ -18,19 +18,26 @@ class TestTracerStatusParanoidHint:
         with patch.object(tracer_cli_module, "_get_perf_event_paranoid", return_value=4):
             result = runner.invoke(tracer_cli_module.tracer, ["status"])
         assert result.exit_code == 0
-        assert "perf_event_paranoid: 4 (too restrictive (needs <= 1))" in result.output
+        # New phrasing groups the knob under an "eBPF kernel setting:" header
+        # so the user knows which backend it applies to.
+        assert "eBPF kernel setting:" in result.output
+        assert "perf_event_paranoid: 4 (too restrictive, needs <= 1)" in result.output
         assert "sudo sysctl -w kernel.perf_event_paranoid=1" in result.output
         assert "(this boot; host-wide; security tradeoff)" in result.output
         assert "/etc/sysctl.d/99-ebpf-tracer.conf" in result.output
         assert "(persistent)" in result.output
 
-    def test_ok_value_emits_no_fix(self):
+    def test_ok_value_emits_nothing(self):
+        """When the kernel knob is fine, the status output stays silent
+        about it. The standalone 'ok' row was ambiguous (which backend?)
+        and just noise; the ebpf readiness probe communicates 'ready' on
+        its own line."""
         runner = CliRunner()
         with patch.object(tracer_cli_module, "_get_perf_event_paranoid", return_value=1):
             result = runner.invoke(tracer_cli_module.tracer, ["status"])
         assert result.exit_code == 0
-        assert "perf_event_paranoid: 1 (ok)" in result.output
-        assert "sysctl" not in result.output
+        assert "  perf_event_paranoid:" not in result.output
+        assert "sysctl -w kernel.perf_event_paranoid" not in result.output
         assert "/etc/sysctl.d" not in result.output
 
     def test_unavailable_value_emits_no_paranoid_row(self):
@@ -169,7 +176,11 @@ class TestTracerCli:
             result = runner.invoke(tracer_cli_module.tracer, ["check"])
 
         assert result.exit_code == 0
-        mock_preflight.assert_called_once_with("auto", None)
+        # `auto` is the first call; the new flow then calls back into
+        # _backend_preflight with the selected backend to render the deep
+        # per-check detail consistently with `roar tracer check <backend>`.
+        mock_preflight.assert_any_call("auto", None)
+        mock_preflight.assert_any_call("preload", None)
         assert "Tracer check passed for 'auto': selected backend 'preload'" in result.output
         assert "ebpf: attach failed" in result.output
         assert "preload: ok" in result.output

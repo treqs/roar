@@ -177,7 +177,6 @@ class TracerConfig(ConfigBaseModel):
 
     default: TracerMode = "auto"
     fallback_enabled: bool = True
-    banner: bool = True
 
 
 class GitConfig(ConfigBaseModel):
@@ -192,6 +191,17 @@ class GitConfig(ConfigBaseModel):
     # "never": skip push entirely — GLaaS records will reference tags
     # that exist only on the registering machine.
     push_tags_on_register: Literal["auto", "never"] = "auto"
+
+
+class AdviceConfig(ConfigBaseModel):
+    """Global toggle for hint blocks roar prints during routine commands.
+
+    Mirrors git's `advice.*` family but coarse-grained — one knob silences
+    every advisory output (init hints, etc.). Disable when you know what
+    you're doing; the underlying commands still work.
+    """
+
+    enabled: bool = True
 
 
 class LoggingConfig(ConfigBaseModel):
@@ -234,6 +244,7 @@ class RoarConfig(ConfigBaseModel):
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     tracer: TracerConfig = Field(default_factory=TracerConfig)
     git: GitConfig = Field(default_factory=GitConfig)
+    advice: AdviceConfig = Field(default_factory=AdviceConfig)
     reversible: ReversibleConfig = Field(default_factory=ReversibleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     composites: CompositesConfig = Field(default_factory=CompositesConfig)

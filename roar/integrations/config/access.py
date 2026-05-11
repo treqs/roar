@@ -173,12 +173,6 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
         "default": True,
         "description": "Allow fallback to another tracer backend when the preferred backend fails",
     },
-    "tracer.banner": {
-        "type": bool,
-        "default": True,
-        "description": "Show a one-time per-machine banner when a tracer backend is "
-        "selected for the first time or via fallback (set to false to suppress)",
-    },
     "git.remote": {
         "type": str,
         "default": None,
@@ -195,6 +189,11 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
             "Whether `roar register` pushes roar tags to git.remote. "
             "'auto' pushes and fails-closed; 'never' skips and leaves GLaaS links unresolvable for teammates."
         ),
+    },
+    "advice.enabled": {
+        "type": bool,
+        "default": True,
+        "description": "Show advisory hint blocks (next steps, docs pointers, etc.).",
     },
     "logging.level": {
         "type": str,
