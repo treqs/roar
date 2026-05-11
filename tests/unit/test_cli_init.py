@@ -13,6 +13,146 @@ def _init_git_repo(path: Path) -> None:
     subprocess.run(["git", "init", str(path)], check=True, capture_output=True)
 
 
+def _run_init(repo: Path, *args: str) -> object:
+    runner = CliRunner()
+    original_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        return runner.invoke(cli, ["init", *args])
+    finally:
+        os.chdir(original_cwd)
+
+
+def test_init_creates_gitignore_when_missing(tmp_path: Path) -> None:
+    """P0-8: with no .gitignore, init must create one. Otherwise the .roar/
+    dir it just made dirties the worktree and the next `roar run` refuses."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    gitignore = repo / ".gitignore"
+    assert not gitignore.exists()
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    assert gitignore.exists()
+    assert ".roar/" in gitignore.read_text().splitlines()
+    assert "Created" in result.output and ".gitignore" in result.output
+
+
+def test_init_appends_to_existing_gitignore_without_roar(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    gitignore = repo / ".gitignore"
+    gitignore.write_text("__pycache__/\n*.pyc\n")
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    lines = gitignore.read_text().splitlines()
+    assert "__pycache__/" in lines
+    assert "*.pyc" in lines
+    assert ".roar/" in lines
+    assert "Added .roar/ to .gitignore" in result.output
+
+
+def test_init_idempotent_when_gitignore_already_has_roar_slash(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    gitignore = repo / ".gitignore"
+    gitignore.write_text("foo\n.roar/\nbar\n")
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    assert gitignore.read_text() == "foo\n.roar/\nbar\n"
+    assert "already in .gitignore" in result.output
+
+
+def test_init_idempotent_when_gitignore_already_has_roar_unslashed(tmp_path: Path) -> None:
+    """`.roar` (no slash) is also a valid gitignore entry covering the dir."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    gitignore = repo / ".gitignore"
+    gitignore.write_text(".roar\n")
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    assert gitignore.read_text() == ".roar\n"
+    assert "already in .gitignore" in result.output
+
+
+def test_init_no_gitignore_flag_skips(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    result = _run_init(repo, "--no-gitignore")
+
+    assert result.exit_code == 0, result.output
+    assert not (repo / ".gitignore").exists()
+    assert "Skipped .gitignore update" in result.output
+
+
+def test_init_short_no_flag_still_skips(tmp_path: Path) -> None:
+    """Back-compat: -n / --no remain aliases for --no-gitignore."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    result = _run_init(repo, "-n")
+
+    assert result.exit_code == 0, result.output
+    assert not (repo / ".gitignore").exists()
+
+
+def test_init_substring_match_does_not_count_as_already_present(tmp_path: Path) -> None:
+    """A .gitignore entry like `not.roar` shares a substring with `.roar`
+    but is a different path. The check must be per-line, not substring."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    gitignore = repo / ".gitignore"
+    gitignore.write_text("not.roar\n")
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    lines = gitignore.read_text().splitlines()
+    assert "not.roar" in lines
+    assert ".roar/" in lines
+    assert "Added .roar/ to .gitignore" in result.output
+
+
+def test_init_appends_when_gitignore_missing_trailing_newline(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    gitignore = repo / ".gitignore"
+    gitignore.write_text("foo")  # no trailing newline
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    assert gitignore.read_text() == "foo\n.roar/\n"
+
+
+def test_init_outside_git_repo_does_not_touch_gitignore(tmp_path: Path) -> None:
+    """If we're not inside a git repo, there's no shared root to write to."""
+    plain_dir = tmp_path / "plain"
+    plain_dir.mkdir()
+
+    result = _run_init(plain_dir)
+
+    assert result.exit_code == 0, result.output
+    assert not (plain_dir / ".gitignore").exists()
+    assert "Not in a git repository" in result.output
+
+
 def test_init_path_uses_target_repo_for_gitignore_updates(tmp_path: Path) -> None:
     caller_repo = tmp_path / "caller-repo"
     target_repo = tmp_path / "target-repo"

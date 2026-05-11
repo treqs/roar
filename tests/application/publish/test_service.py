@@ -174,7 +174,11 @@ def test_register_lineage_target_returns_preparation_error(tmp_path: Path) -> No
     mock_cls.return_value.register_prepared_lineage.assert_not_called()
 
 
-def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -> None:
+def test_register_lineage_target_pushes_tags_before_glaas_write(tmp_path: Path) -> None:
+    """P1-23: tag push runs BEFORE the GLaaS write so any failure means
+    no record is created; success means the response carries a tag summary."""
+    from roar.application.publish.results import RegisterTagSummary
+
     expected = RegisterResult(
         success=True,
         session_hash="a" * 64,
@@ -189,11 +193,80 @@ def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -
     collected.session_id = 7
     collected.artifact_hash = "a" * 64
     collected.session_hash_override = None
+    git_context = MagicMock(commit="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
     prepared = PreparedRegisterExecution(
-        git_context=MagicMock(),
+        git_context=git_context,
         session_id=7,
         session_hash="a" * 64,
         session_url="https://glaas.local/dag/session",
+        git_tag_name="roar/deadbeef",
+        git_tag_repo_root=tmp_path,
+    )
+    tag_summary = RegisterTagSummary(session_tag="roar/deadbeef", remote="origin")
+
+    with (
+        patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
+        patch("roar.application.publish.service.get_logger", return_value=logger),
+        patch(
+            "roar.application.publish.service.resolve_register_lineage_target",
+            return_value=ResolvedRegisterTarget(kind="artifact_path", value="model.pt"),
+        ),
+        patch(
+            "roar.application.publish.service.collect_register_lineage",
+            return_value=(collected, None),
+        ),
+        patch(
+            "roar.application.publish.service.prepare_register_execution",
+            return_value=prepared,
+        ),
+        patch(
+            "roar.application.publish.register_tag_push.ensure_roar_tags_pushed",
+            return_value=tag_summary,
+        ) as ensure_push,
+        patch("roar.application.publish.service.RegisterService") as mock_cls,
+    ):
+        mock_cls.return_value.register_prepared_lineage.return_value = expected
+
+        response = register_lineage_target(
+            RegisterLineageRequest(
+                target="model.pt",
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+            )
+        )
+
+    # Tag push ran exactly once, with the prepared session-tag name.
+    ensure_push.assert_called_once()
+    kwargs = ensure_push.call_args.kwargs
+    assert kwargs["session_tag_name"] == "roar/deadbeef"
+    assert kwargs["session_commit"] == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    assert kwargs["dry_run"] is False
+    assert kwargs["tagging_enabled"] is True
+
+    assert response.success is True
+    assert response.session_hash == "a" * 64
+    assert response.tag_summary == tag_summary
+
+
+def test_register_lineage_target_aborts_on_tag_push_failure(tmp_path: Path) -> None:
+    """P1-23 fail-closed: if the push fails, no GLaaS write happens and the
+    response carries the error message verbatim."""
+    from roar.application.publish.register_tag_push import TagPushError
+
+    runtime = MagicMock()
+    logger = MagicMock()
+    collected = MagicMock()
+    collected.lineage = LineageData(
+        jobs=[], artifacts=[], artifact_hashes=set(), pipeline={"id": 7}
+    )
+    collected.session_id = 7
+    collected.artifact_hash = "a" * 64
+    collected.session_hash_override = None
+    prepared = PreparedRegisterExecution(
+        git_context=MagicMock(commit="deadbeef"),
+        session_id=7,
+        session_hash="a" * 64,
+        session_url=None,
         git_tag_name="roar/deadbeef",
         git_tag_repo_root=tmp_path,
     )
@@ -213,11 +286,13 @@ def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -
             "roar.application.publish.service.prepare_register_execution",
             return_value=prepared,
         ),
-        patch("roar.application.publish.service.finalize_register_git") as finalize_register,
+        patch(
+            "roar.application.publish.register_tag_push.ensure_roar_tags_pushed",
+            side_effect=TagPushError("auth failed pushing to origin"),
+        ),
         patch("roar.application.publish.service.RegisterService") as mock_cls,
     ):
-        mock_cls.return_value.register_prepared_lineage.return_value = expected
-
+        register_service = mock_cls.return_value
         response = register_lineage_target(
             RegisterLineageRequest(
                 target="model.pt",
@@ -226,18 +301,10 @@ def test_register_lineage_target_creates_git_tag_after_success(tmp_path: Path) -
             )
         )
 
-    assert response == RegisterLineageResponse(
-        success=True,
-        session_hash="a" * 64,
-        session_url="https://glaas.local/sessions/published",
-    )
-    finalize_register.assert_called_once_with(
-        result_success=True,
-        dry_run=False,
-        git_tag_name="roar/deadbeef",
-        git_tag_repo_root=tmp_path,
-        logger=logger,
-    )
+    # GLaaS write never happened.
+    register_service.register_prepared_lineage.assert_not_called()
+    assert response.success is False
+    assert "auth failed pushing to origin" in (response.error or "")
 
 
 def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) -> None:

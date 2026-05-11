@@ -22,7 +22,20 @@ from ..decorators import require_init
     },
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
-@click.option("-q", "--quiet", is_flag=True, default=None, help="Suppress output summary")
+@click.option(
+    "-q",
+    "--quiet",
+    is_flag=True,
+    default=None,
+    help="Silent mode (only program output + exit code).",
+)
+@click.option(
+    "-v",
+    "--verbose",
+    "verbose",
+    count=True,
+    help="Increase verbosity. -v lists read/written files; -vv also lists filtered files.",
+)
 @click.option("-n", "--name", "step_name", help="Set the name label for this step")
 @click.option(
     "--tracer",
@@ -44,6 +57,7 @@ def run(
     ctx: RoarContext,
     args: tuple[str, ...],
     quiet: bool | None,
+    verbose: int,
     step_name: str | None,
     tracer_mode: str | None,
     tracer_fallback: bool | None,
@@ -53,6 +67,11 @@ def run(
 
     Automatically tracks input files (read), output files (written),
     command exit code, duration, and git commit.
+
+    \b
+    Requires a clean git working tree. Every run is tagged with the
+    current commit SHA so artifacts can be traced back to the exact
+    code that produced them. Commit your changes before running.
 
     \b
     Examples:
@@ -75,6 +94,7 @@ def run(
                 cwd=ctx.cwd,
                 args=tuple(args_list),
                 quiet=quiet,
+                cli_verbose=verbose,
                 step_name=step_name,
                 tracer_mode=tracer_mode,
                 tracer_fallback=tracer_fallback,
@@ -99,7 +119,8 @@ def _get_help_text() -> str:
 Run a command with provenance tracking.
 
 Options:
-  --quiet, -q             Suppress output summary
+  --quiet, -q             Silent mode (only program output + exit code)
+  -v, -vv                 Verbose / debug output (-v lists I/O; -vv also lists filtered files)
   --tracer <mode>         Tracer policy: auto, ebpf, preload, ptrace
   --tracer-fallback       Enable runtime tracer fallback
   --no-tracer-fallback    Disable runtime tracer fallback
@@ -107,6 +128,9 @@ Options:
   -n, --name <name>       Set the name label for this step
 
 Hash algorithms: blake3 (default), sha256, sha512, md5
+
+Note: `roar run` requires a clean git working tree. Each run is tagged
+with the current commit SHA so artifacts can be traced to specific code.
 
 Examples:
   roar run python train.py

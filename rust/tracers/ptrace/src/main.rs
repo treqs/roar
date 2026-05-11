@@ -1,3 +1,4 @@
+mod arch;
 mod seccomp;
 
 use anyhow::{Context, Result};
@@ -19,57 +20,12 @@ use tracer_runtime::{
 };
 use tracer_schema::ProcessInfo;
 
-// Syscall numbers for x86_64
-const SYS_READ: u64 = 0;
-const SYS_WRITE: u64 = 1;
-const SYS_OPEN: u64 = 2;
-const SYS_CLOSE: u64 = 3;
-const SYS_MMAP: u64 = 9;
-const SYS_PREAD64: u64 = 17; // positional read (used by pyarrow, etc.)
-const SYS_PWRITE64: u64 = 18; // positional write
-const SYS_READV: u64 = 19; // scatter read
-const SYS_WRITEV: u64 = 20; // gather write
-const SYS_SENDFILE: u64 = 40; // zero-copy file-to-file/socket
-const SYS_CHDIR: u64 = 80;
-const SYS_FCHDIR: u64 = 81;
-const SYS_RENAME: u64 = 82; // rename(oldpath, newpath)
-const SYS_LINK: u64 = 86; // link(oldpath, newpath)
-const SYS_OPENAT: u64 = 257;
-const SYS_RENAMEAT: u64 = 264; // renameat(olddirfd, oldpath, newdirfd, newpath)
-const SYS_LINKAT: u64 = 265; // linkat(olddirfd, oldpath, newdirfd, newpath, flags)
-const SYS_PREADV: u64 = 295; // positional scatter read
-const SYS_PWRITEV: u64 = 296; // positional gather write
-const SYS_RENAMEAT2: u64 = 316; // renameat2 with flags
-const SYS_COPY_FILE_RANGE: u64 = 326; // efficient file copy
-const SYS_PREADV2: u64 = 327; // preadv with flags
-const SYS_PWRITEV2: u64 = 328; // pwritev with flags
-
-const AUDIT_ARCH_X86_64: u32 = 0xC000_003E;
-const TRACKED_SYSCALLS: &[u64] = &[
-    SYS_READ,
-    SYS_WRITE,
-    SYS_OPEN,
-    SYS_CLOSE,
-    SYS_MMAP,
-    SYS_PREAD64,
-    SYS_PWRITE64,
-    SYS_READV,
-    SYS_WRITEV,
-    SYS_SENDFILE,
-    SYS_CHDIR,
-    SYS_FCHDIR,
-    SYS_RENAME,
-    SYS_LINK,
-    SYS_OPENAT,
-    SYS_RENAMEAT,
-    SYS_LINKAT,
-    SYS_PREADV,
-    SYS_PWRITEV,
-    SYS_RENAMEAT2,
-    SYS_COPY_FILE_RANGE,
-    SYS_PREADV2,
-    SYS_PWRITEV2,
-];
+use arch::{
+    SYS_CHDIR, SYS_CLOSE, SYS_COPY_FILE_RANGE, SYS_DUP2, SYS_DUP3, SYS_FCHDIR, SYS_LINK,
+    SYS_LINKAT, SYS_MMAP, SYS_OPEN, SYS_OPENAT, SYS_PREAD64, SYS_PREADV, SYS_PREADV2,
+    SYS_PWRITE64, SYS_PWRITEV, SYS_PWRITEV2, SYS_READ, SYS_READV, SYS_RENAME, SYS_RENAMEAT,
+    SYS_RENAMEAT2, SYS_SENDFILE, SYS_WRITE, SYS_WRITEV,
+};
 
 #[derive(Serialize)]
 struct PreflightCheck {
@@ -137,6 +93,7 @@ struct TracerState {
     pending_writes: HashMap<i32, (String, u32)>, // tid -> (path, thread_id)
     pending_path_writes: HashMap<i32, (String, Option<u32>)>, // pid -> (destination path, thread_id)
     pending_closes: HashMap<i32, i32>, // pid -> fd (close syscalls pending confirmation)
+    pending_dups: HashMap<i32, i32>,   // pid -> old_fd captured at dup{2,3} entry
     pending_chdirs: HashMap<i32, ()>,  // pid -> () (chdir pending confirmation)
     pending_fchdirs: HashMap<i32, ()>, // pid -> () (fchdir pending confirmation)
     active_pids: HashSet<i32>,
@@ -155,6 +112,7 @@ impl TracerState {
             pending_writes: HashMap::new(),
             pending_path_writes: HashMap::new(),
             pending_closes: HashMap::new(),
+            pending_dups: HashMap::new(),
             pending_chdirs: HashMap::new(),
             pending_fchdirs: HashMap::new(),
             active_pids: HashSet::new(),
@@ -250,13 +208,15 @@ fn needs_exit_stop(syscall_num: u64) -> bool {
             | SYS_RENAMEAT2
             | SYS_CHDIR
             | SYS_FCHDIR
+            | SYS_DUP2
+            | SYS_DUP3
     )
 }
 
 fn handle_syscall_entry(
     pid: Pid,
     syscall_num: u64,
-    regs: &libc::user_regs_struct,
+    regs: &arch::Regs,
     state: &mut TracerState,
 ) {
     let pid_raw = pid.as_raw();
@@ -264,16 +224,16 @@ fn handle_syscall_entry(
 
     match syscall_num {
         SYS_OPEN => {
-            let path_ptr = regs.rdi;
-            let flags = regs.rsi;
+            let path_ptr = arch::arg0(regs);
+            let flags = arch::arg1(regs);
             if let Some(path) = read_string_from_tracee(pid, path_ptr) {
                 let abs_path = resolve_path(&path, pid_raw, &mut state.cwd_cache);
                 state.pending_opens.insert(pid_raw, (abs_path, flags));
             }
         }
         SYS_OPENAT => {
-            let path_ptr = regs.rsi;
-            let flags = regs.rdx;
+            let path_ptr = arch::arg1(regs);
+            let flags = arch::arg2(regs);
             if let Some(path) = read_string_from_tracee(pid, path_ptr) {
                 let abs_path = resolve_path(&path, pid_raw, &mut state.cwd_cache);
                 state.pending_opens.insert(pid_raw, (abs_path, flags));
@@ -281,20 +241,28 @@ fn handle_syscall_entry(
         }
         SYS_CLOSE => {
             // Capture the fd argument on entry so we can clean up fd_table on exit
-            let fd = regs.rdi as i32;
+            let fd = arch::arg0(regs) as i32;
             state.pending_closes.insert(pid_raw, fd);
         }
+        SYS_DUP2 | SYS_DUP3 => {
+            // dup2/dup3(old_fd, new_fd[, flags]): we need old_fd for the
+            // exit-side handle_dup. arg0 holds the same value at exit on
+            // x86_64 (rdi preserved) but on aarch64 x0 is clobbered with
+            // the return value, so capture it now.
+            let old_fd = arch::arg0(regs) as i32;
+            state.pending_dups.insert(pid_raw, old_fd);
+        }
         SYS_READ | SYS_PREAD64 | SYS_READV | SYS_PREADV | SYS_PREADV2 => {
-            // All read variants have fd in rdi
-            let fd = regs.rdi as i32;
+            // All read variants have fd in arg0
+            let fd = arch::arg0(regs) as i32;
             if let Some(pid_u32) = pid_u32 {
                 state.fd_tracker.mark_read_with_thread(pid_u32, fd, pid_u32);
             }
         }
         SYS_WRITE | SYS_PWRITE64 | SYS_WRITEV | SYS_PWRITEV | SYS_PWRITEV2 => {
-            // All write variants have fd in rdi
+            // All write variants have fd in arg0
             // Track as pending - only confirm at exit if bytes > 0 were written
-            let fd = regs.rdi as i32;
+            let fd = arch::arg0(regs) as i32;
             if let Some(pid_u32) = pid_u32 {
                 if let Some(path) = state.fd_tracker.path_for_fd(pid_u32, fd).cloned() {
                     state.pending_writes.insert(pid_raw, (path, pid_u32));
@@ -302,9 +270,9 @@ fn handle_syscall_entry(
             }
         }
         SYS_SENDFILE => {
-            // sendfile(out_fd, in_fd, ...) - reads from in_fd (rsi), writes to out_fd (rdi)
-            let out_fd = regs.rdi as i32;
-            let in_fd = regs.rsi as i32;
+            // sendfile(out_fd, in_fd, ...) - reads from in_fd (arg1), writes to out_fd (arg0)
+            let out_fd = arch::arg0(regs) as i32;
+            let in_fd = arch::arg1(regs) as i32;
             if let Some(pid_u32) = pid_u32 {
                 state
                     .fd_tracker
@@ -316,9 +284,9 @@ fn handle_syscall_entry(
             }
         }
         SYS_COPY_FILE_RANGE => {
-            // copy_file_range(fd_in, ..., fd_out, ...) - reads from fd_in (rdi), writes to fd_out (r8)
-            let in_fd = regs.rdi as i32;
-            let out_fd = regs.r8 as i32;
+            // copy_file_range(fd_in, ..., fd_out, ...) - reads from fd_in (arg0), writes to fd_out (arg4)
+            let in_fd = arch::arg0(regs) as i32;
+            let out_fd = arch::arg4(regs) as i32;
             if let Some(pid_u32) = pid_u32 {
                 state
                     .fd_tracker
@@ -331,10 +299,10 @@ fn handle_syscall_entry(
         }
         SYS_MMAP => {
             // mmap(addr, len, prot, flags, fd, offset)
-            // Args: rdi=addr, rsi=len, rdx=prot, r10=flags, r8=fd, r9=offset
-            let fd = regs.r8 as i64;
-            let prot = regs.rdx;
-            let flags = regs.r10;
+            // arg0=addr, arg1=len, arg2=prot, arg3=flags, arg4=fd, arg5=offset
+            let fd = arch::arg4(regs) as i64;
+            let prot = arch::arg2(regs);
+            let flags = arch::arg3(regs);
 
             // Only track if mapping a file (fd >= 0)
             if fd >= 0 {
@@ -363,9 +331,9 @@ fn handle_syscall_entry(
             }
         }
         SYS_RENAME => {
-            // rename(oldpath, newpath): rdi=oldpath, rsi=newpath
+            // rename(oldpath, newpath): arg0=oldpath, arg1=newpath
             // The destination (newpath) is written only if the syscall succeeds.
-            if let Some(newpath) = read_string_from_tracee(pid, regs.rsi) {
+            if let Some(newpath) = read_string_from_tracee(pid, arch::arg1(regs)) {
                 let abs_path = resolve_path(&newpath, pid_raw, &mut state.cwd_cache);
                 state
                     .pending_path_writes
@@ -373,9 +341,9 @@ fn handle_syscall_entry(
             }
         }
         SYS_LINK => {
-            // link(oldpath, newpath): rdi=oldpath, rsi=newpath
+            // link(oldpath, newpath): arg0=oldpath, arg1=newpath
             // Do not mark the source as written; the destination is published on success.
-            if let Some(newpath) = read_string_from_tracee(pid, regs.rsi) {
+            if let Some(newpath) = read_string_from_tracee(pid, arch::arg1(regs)) {
                 let abs_path = resolve_path(&newpath, pid_raw, &mut state.cwd_cache);
                 state
                     .pending_path_writes
@@ -383,10 +351,10 @@ fn handle_syscall_entry(
             }
         }
         SYS_RENAMEAT | SYS_RENAMEAT2 => {
-            // renameat(olddirfd, oldpath, newdirfd, newpath): rdx=newdirfd, r10=newpath
-            // renameat2 has the same first four arguments plus flags in r8.
-            if let Some(newpath) = read_string_from_tracee(pid, regs.r10) {
-                let new_dir_fd = regs.rdx as i32;
+            // renameat(olddirfd, oldpath, newdirfd, newpath): arg2=newdirfd, arg3=newpath
+            // renameat2 has the same first four arguments plus flags in arg4.
+            if let Some(newpath) = read_string_from_tracee(pid, arch::arg3(regs)) {
+                let new_dir_fd = arch::arg2(regs) as i32;
                 let abs_path = resolve_at_path(&newpath, new_dir_fd, pid_raw, &mut state.cwd_cache);
                 state
                     .pending_path_writes
@@ -394,9 +362,9 @@ fn handle_syscall_entry(
             }
         }
         SYS_LINKAT => {
-            // linkat(olddirfd, oldpath, newdirfd, newpath, flags): rdx=newdirfd, r10=newpath
-            if let Some(newpath) = read_string_from_tracee(pid, regs.r10) {
-                let new_dir_fd = regs.rdx as i32;
+            // linkat(olddirfd, oldpath, newdirfd, newpath, flags): arg2=newdirfd, arg3=newpath
+            if let Some(newpath) = read_string_from_tracee(pid, arch::arg3(regs)) {
+                let new_dir_fd = arch::arg2(regs) as i32;
                 let abs_path = resolve_at_path(&newpath, new_dir_fd, pid_raw, &mut state.cwd_cache);
                 state
                     .pending_path_writes
@@ -416,12 +384,12 @@ fn handle_syscall_entry(
 fn handle_syscall_exit(
     pid: Pid,
     syscall_num: u64,
-    regs: &libc::user_regs_struct,
+    regs: &arch::Regs,
     state: &mut TracerState,
 ) {
     let pid_raw = pid.as_raw();
     let pid_u32 = u32::try_from(pid_raw).ok();
-    let ret_val = regs.rax as i64;
+    let ret_val = arch::ret_val(regs);
 
     match syscall_num {
         SYS_OPEN | SYS_OPENAT => {
@@ -441,6 +409,20 @@ fn handle_syscall_exit(
                 if ret_val == 0 {
                     if let Some(pid_u32) = pid_u32 {
                         state.fd_tracker.handle_close(pid_u32, fd);
+                    }
+                }
+            }
+        }
+        SYS_DUP2 | SYS_DUP3 => {
+            // On success the kernel returns the new fd (which may be 0).
+            // On failure ret_val is negative; we must NOT call handle_dup
+            // in that case or we'd corrupt new_fd's path mapping with
+            // old_fd's path even though the dup never happened.
+            if let Some(old_fd) = state.pending_dups.remove(&pid_raw) {
+                if ret_val >= 0 {
+                    if let Some(pid_u32) = pid_u32 {
+                        let new_fd = ret_val as i32;
+                        state.fd_tracker.handle_dup(pid_u32, old_fd, new_fd);
                     }
                 }
             }
@@ -627,7 +609,7 @@ fn run_preflight(json_output: bool, command: Option<&str>) -> i32 {
         ),
         preflight_check(
             "architecture",
-            env::consts::ARCH == "x86_64",
+            matches!(env::consts::ARCH, "x86_64" | "aarch64"),
             Some(env::consts::ARCH.to_string()),
         ),
     ];
@@ -674,12 +656,12 @@ fn run_preflight(json_output: bool, command: Option<&str>) -> i32 {
         return 1;
     }
 
-    if env::consts::ARCH != "x86_64" {
+    if !matches!(env::consts::ARCH, "x86_64" | "aarch64") {
         let result = PreflightResult {
             backend: "ptrace",
             ok: false,
             summary: format!(
-                "ptrace tracer only supports x86_64 today (got {})",
+                "ptrace tracer supports x86_64 and aarch64 (got {})",
                 env::consts::ARCH
             ),
             command_checked,
@@ -778,7 +760,7 @@ fn run_tracer(command: Vec<String>, output_file: &str) -> i32 {
 
             // Install seccomp-BPF filter before exec
             // The filter survives exec and is inherited by fork/clone children
-            seccomp::install_seccomp_filter(TRACKED_SYSCALLS, AUDIT_ARCH_X86_64);
+            seccomp::install_seccomp_filter(arch::TRACKED_SYSCALLS, arch::AUDIT_ARCH);
 
             let mut cmd = Command::new(&command[0]);
             if command.len() > 1 {
@@ -863,14 +845,14 @@ fn trace_loop(state: &mut TracerState) -> i32 {
             Ok(WaitStatus::PtraceEvent(pid, _sig, event)) => {
                 if event == libc::PTRACE_EVENT_SECCOMP {
                     // Seccomp event = syscall entry (only for tracked syscalls)
-                    let regs = match ptrace::getregs(pid) {
+                    let regs = match arch::getregs(pid) {
                         Ok(r) => r,
                         Err(_) => {
                             let _ = ptrace::cont(pid, None);
                             continue;
                         }
                     };
-                    let syscall_num = regs.orig_rax;
+                    let syscall_num = arch::syscall_num(&regs);
                     handle_syscall_entry(pid, syscall_num, &regs, state);
 
                     if needs_exit_stop(syscall_num) {
@@ -895,14 +877,14 @@ fn trace_loop(state: &mut TracerState) -> i32 {
                 // Syscall exit stop (only happens for PIDs we resumed with ptrace::syscall)
                 let pid_raw = pid.as_raw();
                 if state.awaiting_exit.remove(&pid_raw) {
-                    let regs = match ptrace::getregs(pid) {
+                    let regs = match arch::getregs(pid) {
                         Ok(r) => r,
                         Err(_) => {
                             let _ = ptrace::cont(pid, None);
                             continue;
                         }
                     };
-                    let syscall_num = regs.orig_rax;
+                    let syscall_num = arch::syscall_num(&regs);
                     handle_syscall_exit(pid, syscall_num, &regs, state);
                 }
                 // Resume with cont — next stop will be a seccomp event
@@ -918,6 +900,7 @@ fn trace_loop(state: &mut TracerState) -> i32 {
                 state.pending_chdirs.remove(&pid_raw);
                 state.pending_fchdirs.remove(&pid_raw);
                 state.pending_path_writes.remove(&pid_raw);
+                state.pending_dups.remove(&pid_raw);
                 // Capture exit code of the root process
                 if state
                     .processes
@@ -938,6 +921,7 @@ fn trace_loop(state: &mut TracerState) -> i32 {
                 state.pending_chdirs.remove(&pid_raw);
                 state.pending_fchdirs.remove(&pid_raw);
                 state.pending_path_writes.remove(&pid_raw);
+                state.pending_dups.remove(&pid_raw);
                 // If root process was signaled, reflect that
                 if state
                     .processes

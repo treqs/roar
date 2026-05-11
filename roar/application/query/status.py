@@ -9,6 +9,7 @@ from ...presenters.formatting import format_size
 from ...publish_auth import load_publish_auth_context, resolve_publish_creator_identity
 from ..publish.lineage import LineageCollector
 from ..publish.session import compute_canonical_lineage_session_hash
+from .git_readiness import collect_git_readiness
 from .requests import StatusQueryRequest
 from .results import StatusArtifactSummary, StatusSummary
 
@@ -22,12 +23,20 @@ class StatusQueryError(RuntimeError):
 def render_status(request: StatusQueryRequest) -> str:
     """Render a summary of the active session."""
     summary = build_status_summary(request)
-    lines = [
-        "DAG:",
-        f"  DAG hash:    {summary.dag_hash}",
-        f"  Build steps: {summary.build_steps}",
-        f"  Run steps:   {summary.run_steps}",
-    ]
+    lines: list[str] = []
+    if summary.git is not None:
+        # Lead with the readiness line so the user can tell at a glance
+        # whether the next `roar run` will be refused.
+        lines.append(f"Git:    {summary.git.render_line()}")
+        lines.append("")
+    lines.extend(
+        [
+            "DAG:",
+            f"  DAG hash:    {summary.dag_hash}",
+            f"  Build steps: {summary.build_steps}",
+            f"  Run steps:   {summary.run_steps}",
+        ]
+    )
 
     if not summary.artifacts:
         return "\n".join(lines)
@@ -105,9 +114,11 @@ def build_status_summary(request: StatusQueryRequest) -> StatusSummary:
             creator_identity=creator_identity,
         )
 
+    git_readiness = collect_git_readiness(request.roar_dir.parent)
     return StatusSummary(
         dag_hash=dag_hash,
         build_steps=len(build_steps),
         run_steps=len(run_steps),
         artifacts=artifacts,
+        git=git_readiness,
     )

@@ -24,8 +24,9 @@ _CORE_CONFIG_TEMPLATE_PREFIX = """\
 [output]
 # Include list of repo files read in provenance output
 track_repo_files = false
-# Suppress written files report after run
-quiet = false
+# Output level: "quiet" (silent), "normal" (status quo + filter counts),
+# "verbose" (also list read/written files), "debug" (also list filtered files).
+verbosity = "normal"
 
 [analyzers]
 # Detect experiment trackers (W&B, MLflow, Neptune)
@@ -164,12 +165,40 @@ def build_default_config_template() -> str:
 DEFAULT_CONFIG_TEMPLATE = build_default_config_template()
 
 
-def _add_to_gitignore(gitignore_path: Path, gitignore_content: str) -> None:
-    """Append .roar/ to .gitignore file."""
-    with open(gitignore_path, "a") as f:
-        if not gitignore_content.endswith("\n"):
+def _gitignore_already_excludes_roar(content: str) -> bool:
+    """Whether a .gitignore content string already lists `.roar` or `.roar/`.
+
+    Per-line check (not substring) so entries like `not.roar` or commented
+    lines don't fool us into thinking `.roar/` is already ignored.
+    """
+    for raw in content.splitlines():
+        line = raw.strip()
+        if line in {".roar", ".roar/"}:
+            return True
+    return False
+
+
+def _ensure_gitignore_excludes_roar(repo_root: Path) -> tuple[str, Path]:
+    """Make sure repo_root/.gitignore lists `.roar/`.
+
+    Creates the file if missing, appends the entry if absent, otherwise
+    leaves it alone. Returns (action, gitignore_path) where action is one
+    of 'created', 'appended', or 'already_present'.
+    """
+    gitignore_path = repo_root / ".gitignore"
+    if not gitignore_path.exists():
+        gitignore_path.write_text(".roar/\n")
+        return ("created", gitignore_path)
+
+    content = gitignore_path.read_text()
+    if _gitignore_already_excludes_roar(content):
+        return ("already_present", gitignore_path)
+
+    with gitignore_path.open("a") as f:
+        if content and not content.endswith("\n"):
             f.write("\n")
         f.write(".roar/\n")
+    return ("appended", gitignore_path)
 
 
 def _ensure_active_session(roar_dir: Path) -> None:
@@ -213,14 +242,16 @@ def init_project(cwd: Path) -> Path:
     "-y",
     is_flag=True,
     default=False,
-    help="Automatically add .roar/ to .gitignore without prompting.",
+    help="No-op: .gitignore is updated by default. Kept for backward compatibility.",
 )
 @click.option(
     "--no",
     "-n",
+    "--no-gitignore",
+    "no_gitignore",
     is_flag=True,
     default=False,
-    help="Skip adding .roar/ to .gitignore without prompting.",
+    help="Don't touch .gitignore.",
 )
 @click.option(
     "--path",
@@ -230,25 +261,24 @@ def init_project(cwd: Path) -> Path:
     help="Initialize roar in the given directory instead of the current directory.",
 )
 @click.pass_context
-def init(click_ctx: click.Context, yes: bool, no: bool, init_path: Path | None) -> None:
+def init(click_ctx: click.Context, yes: bool, no_gitignore: bool, init_path: Path | None) -> None:
     """Initialize roar in current directory.
 
     Creates a .roar directory for storing tracking data, a config.toml
-    with default settings, and optionally adds .roar/ to .gitignore.
+    with default settings, and updates .gitignore to exclude .roar/.
 
     \b
     Examples:
 
-        roar init       # Initialize roar, prompt for gitignore
+        roar init                  # Initialize roar, ensure .gitignore excludes .roar/
 
-        roar init -y    # Initialize and auto-add to gitignore
+        roar init --no-gitignore   # Initialize but leave .gitignore alone
 
-        roar init -n    # Initialize without modifying gitignore
+        roar init --path /some/dir # Initialize in a specific directory
 
-        roar init --path /some/dir  # Initialize in a specific directory
-
-        roar init agents            # Install agent-facing guidance (skill + AGENTS.md)
+        roar init agents           # Install agent-facing guidance (skill + AGENTS.md)
     """
+    del yes  # accepted for backward compatibility; default behavior matches it
     if click_ctx.invoked_subcommand is not None:
         return
 
@@ -256,63 +286,55 @@ def init(click_ctx: click.Context, yes: bool, no: bool, init_path: Path | None) 
     cwd = init_path if init_path is not None else ctx.cwd
     target_repo_root = RoarContext._get_repo_root(cwd)
 
-    # Check if .roar already exists
     roar_dir = cwd / ".roar"
-    if roar_dir.exists():
-        init_project(cwd)
-        click.echo(f".roar directory already exists at {roar_dir}")
-        return
+    roar_dir_existed = roar_dir.exists()
 
     init_project(cwd)
 
-    click.echo(f"Created {roar_dir}")
-    click.echo(f"Initialized database at {roar_dir / 'roar.db'}")
+    if roar_dir_existed:
+        click.echo(f".roar directory already exists at {roar_dir}")
+    else:
+        click.echo(f"Created {roar_dir}")
+        click.echo(f"Initialized database at {roar_dir / 'roar.db'}")
+        click.echo("")
+        click.echo("roar records file hashes, commands, and dependency metadata.")
+        click.echo("It does not upload file contents to GLaaS.")
+        click.echo("")
+        click.echo(
+            "Note: `roar run` requires a clean git working tree — every run is "
+            "tagged with the current commit SHA so artifacts can be traced back "
+            "to the exact code that produced them."
+        )
+        click.echo("")
+        click.echo(f"Created {roar_dir / 'config.toml'}")
 
-    # Add privacy/data collection notice
-    click.echo("")
-    click.echo("roar records file hashes, commands, and dependency metadata.")
-    click.echo("It does not upload file contents to GLaaS.")
-    click.echo("")
-
-    click.echo(f"Created {roar_dir / 'config.toml'}")
-
-    # Check if we're in a git repo
     if target_repo_root is None:
         click.echo("Not in a git repository. Done.")
         return
 
-    # Check if .gitignore exists
-    gitignore_path = target_repo_root / ".gitignore"
-    if not gitignore_path.exists():
-        click.echo("No .gitignore found. Done.")
-        return
-
-    # Check if .roar is already in .gitignore
-    gitignore_content = gitignore_path.read_text()
-    if ".roar" in gitignore_content or ".roar/" in gitignore_content:
-        click.echo(".roar is already in .gitignore. Done.")
-        return
-
-    # Handle gitignore update
-    click.echo("")
-    if yes:
-        # Auto-confirm with --yes flag
-        _add_to_gitignore(gitignore_path, gitignore_content)
-        click.echo("Added .roar/ to .gitignore")
-    elif no:
-        # Skip with --no flag
+    if no_gitignore:
         click.echo("Skipped .gitignore update.")
-    else:
-        import sys as _sys
+        click.echo("Done.")
+        return
 
-        if not _sys.stdin.isatty():
-            # Non-interactive: skip to avoid blocking
-            click.echo("Skipped .gitignore update (non-interactive).")
-        elif click.confirm("Add .roar/ to .gitignore?", default=True):
-            _add_to_gitignore(gitignore_path, gitignore_content)
-            click.echo("Added .roar/ to .gitignore")
-        else:
-            click.echo("Skipped .gitignore update.")
+    # Always ensure .gitignore excludes .roar/. Without this, the .roar/
+    # directory we just created would dirty the working tree and `roar
+    # run` would refuse to run on the very next invocation.
+    action, gitignore_path = _ensure_gitignore_excludes_roar(target_repo_root)
+    if action == "created":
+        click.echo(f"Created {gitignore_path} with .roar/ entry")
+    elif action == "appended":
+        click.echo("Added .roar/ to .gitignore")
+    else:
+        click.echo(".roar is already in .gitignore.")
+
+    if action in ("created", "appended"):
+        click.echo("")
+        click.echo(
+            "Commit the .gitignore change before your first `roar run` "
+            "(it expects a clean working tree):"
+        )
+        click.echo("  git add .gitignore && git commit -m 'ignore .roar/'")
 
     click.echo("Done.")
 

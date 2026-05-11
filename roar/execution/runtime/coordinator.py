@@ -119,7 +119,10 @@ class RunCoordinator:
         # IPresenter for any legacy print_error calls.
         from ...presenters.run_report import RunReportPresenter
 
-        run_presenter = RunReportPresenter(self.presenter, quiet=ctx.quiet)
+        run_presenter = RunReportPresenter(
+            self.presenter,
+            verbosity=ctx.verbosity,  # type: ignore[arg-type]
+        )
 
         extra_env: dict[str, str] = {
             ROAR_EXECUTION_BACKEND_ENV: str(ctx.execution_backend),
@@ -162,6 +165,22 @@ class RunCoordinator:
             )
 
         resolved_mode = resolved_candidates[0][0] if resolved_candidates else ctx.tracer_mode
+
+        # Surface the selected tracer + any fallback to the user. Fires
+        # once per backend per machine, plus on every fallback selection
+        # (auto mode picking something other than eBPF). Suppressible
+        # via `roar config set tracer.banner false`.
+        if resolved_candidates:
+            from .tracer_banner import emit_banner_if_needed
+
+            try:
+                emit_banner_if_needed(
+                    selected_backend=resolved_candidates[0][0],
+                    requested_mode=ctx.tracer_mode,
+                )
+            except Exception as exc:  # pragma: no cover - belt + suspenders
+                self.logger.debug("Banner emission failed: %s", exc)
+
         run_presenter.trace_starting(resolved_mode, proxy_active)
 
         self.logger.debug("Starting tracer execution")
@@ -252,6 +271,7 @@ class RunCoordinator:
             tracer_result.tracer_log_path,
             inject_log,
             config,
+            collect_dropped_paths=(ctx.verbosity == "debug"),
         )
         t_prov_end = time.perf_counter()
         n_read = len(prov.get("data", {}).get("read_files", []))
@@ -402,6 +422,9 @@ class RunCoordinator:
         except Exception:
             pass
 
+        prov_data = prov.get("data", {}) if isinstance(prov, dict) else {}
+        filter_counts = prov_data.get("filter_counts") or {}
+        dropped_paths = prov_data.get("dropped_paths") or {}
         return RunResult(
             exit_code=tracer_result.exit_code,
             job_id=job_id,
@@ -427,6 +450,8 @@ class RunCoordinator:
             dag_jobs=dag_jobs,
             dag_artifacts=dag_artifacts,
             dag_depth=dag_depth,
+            filter_counts=filter_counts if isinstance(filter_counts, dict) else {},
+            dropped_paths=dropped_paths if isinstance(dropped_paths, dict) else {},
         )
 
     def _record_job(

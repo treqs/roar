@@ -7,8 +7,20 @@ OUT_DIR="${1:-$ROOT_DIR/dist}"
 RUST_MANIFEST="$ROOT_DIR/rust/Cargo.toml"
 BIN_DIR="$ROOT_DIR/roar/bin"
 HOST_RELEASE_DIR="$ROOT_DIR/rust/target/release"
-LINUX_PORTABLE_RELEASE_DIR="$ROOT_DIR/rust/target/x86_64-unknown-linux-gnu/release"
 LINUX_GLIBC_FLOOR="2.17"
+
+# Linux portable target picks up the host arch so aarch64 hosts produce
+# aarch64 binaries instead of (silently broken) x86_64 ones.
+case "$(uname -m)" in
+  x86_64|amd64) LINUX_PORTABLE_TARGET_BASE="x86_64-unknown-linux-gnu" ;;
+  aarch64|arm64) LINUX_PORTABLE_TARGET_BASE="aarch64-unknown-linux-gnu" ;;
+  *)
+    echo "error: unsupported Linux host arch $(uname -m); add a target mapping" >&2
+    exit 1
+    ;;
+esac
+LINUX_PORTABLE_RELEASE_DIR="$ROOT_DIR/rust/target/${LINUX_PORTABLE_TARGET_BASE}/release"
+LINUX_PORTABLE_TARGET="${LINUX_PORTABLE_TARGET_BASE}.${LINUX_GLIBC_FLOOR}"
 
 mkdir -p "$OUT_DIR" "$BIN_DIR"
 
@@ -190,7 +202,7 @@ if ((${#packages_to_build[@]} > 0)); then
       cargo zigbuild
       --release
       --manifest-path "$RUST_MANIFEST"
-      --target x86_64-unknown-linux-gnu.2.17
+      --target "$LINUX_PORTABLE_TARGET"
     )
   else
     build_cmd=(cargo build --release --manifest-path "$RUST_MANIFEST")
