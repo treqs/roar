@@ -52,8 +52,17 @@ def _status_session_hash(repo: Path, roar_cli) -> str:
 
 
 def _configure_register_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[str, str]:
+    # P1-23: register now pushes roar tags to the canonical remote before
+    # writing the GLaaS record. Point origin at a local bare repo so the
+    # push actually succeeds in tests.
+    bare_remote = repo.parent / f"{repo.name}-remote.git"
     subprocess.run(
-        ["git", "remote", "add", "origin", "https://github.com/test/repo.git"],
+        ["git", "init", "--bare", "-q", str(bare_remote)],
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(bare_remote)],
         cwd=repo,
         capture_output=True,
         check=True,

@@ -205,7 +205,11 @@ class GitVCSProvider(BaseVCSProvider):
             return None
 
     def create_tag(
-        self, repo_root: str, tag_name: str, message: str | None = None
+        self,
+        repo_root: str,
+        tag_name: str,
+        message: str | None = None,
+        target: str | None = None,
     ) -> tuple[bool, str | None]:
         """Create a lightweight or annotated git tag.
 
@@ -213,6 +217,10 @@ class GitVCSProvider(BaseVCSProvider):
             repo_root: Path to the git repository root
             tag_name: Name of the tag to create
             message: Optional message for annotated tag. If None, creates lightweight tag.
+            target: Optional commit-ish to tag. Defaults to HEAD when omitted.
+                Pass an explicit SHA when the call site cares about WHICH
+                commit gets tagged (e.g. tagging a historical job commit
+                that may differ from HEAD).
 
         Returns:
             Tuple of (success, error_message). error_message is None on success.
@@ -223,6 +231,8 @@ class GitVCSProvider(BaseVCSProvider):
                 cmd.extend(["-a", tag_name, "-m", message])
             else:
                 cmd.append(tag_name)
+            if target:
+                cmd.append(target)
 
             subprocess.check_output(cmd, cwd=repo_root, stderr=subprocess.STDOUT)
             return True, None
