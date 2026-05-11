@@ -474,6 +474,31 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
                 confirm_callback=request.confirm_callback,
             )
 
+        # P1-23: push roar tags BEFORE writing the GLaaS record so the
+        # record never references a tag that doesn't yet exist on the
+        # canonical remote. Fail-closed.
+        from ...integrations.config import config_get
+        from .register_tag_push import TagPushError, ensure_roar_tags_pushed
+
+        try:
+            tag_summary = ensure_roar_tags_pushed(
+                repo_root=prepared.git_tag_repo_root or request.cwd,
+                session_commit=prepared.git_context.commit or "",
+                session_tag_name=prepared.git_tag_name,
+                lineage=collected_lineage.lineage,
+                dry_run=False,
+                tagging_enabled=prepared.git_tag_name is not None,
+                configured_remote=config_get("git.remote"),
+                push_mode=str(config_get("git.push_tags_on_register") or "auto"),
+                logger=logger,
+            )
+        except TagPushError as exc:
+            return RegisterLineageResponse(
+                success=False,
+                artifact_hash=collected_lineage.artifact_hash,
+                error=str(exc),
+            )
+
         service = RegisterService(
             glaas_client=runtime.glaas_client,
             coordinator=runtime.registration_coordinator,
@@ -489,14 +514,6 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             prepared=prepared,
         )
 
-        finalize_register_git(
-            result_success=result.success,
-            dry_run=request.dry_run,
-            git_tag_name=prepared.git_tag_name,
-            git_tag_repo_root=prepared.git_tag_repo_root,
-            logger=logger,
-        )
-
         return RegisterLineageResponse(
             success=result.success,
             session_hash=result.session_hash,
@@ -509,6 +526,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             secrets_detected=list(result.secrets_detected),
             secrets_redacted=result.secrets_redacted,
             aborted_by_user=result.aborted_by_user,
+            tag_summary=tag_summary,
         )
     except PublishAuthError as exc:
         return RegisterLineageResponse(success=False, error=str(exc))
