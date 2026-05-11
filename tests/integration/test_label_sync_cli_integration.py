@@ -22,8 +22,15 @@ def fake_glaas_publish_server() -> FakeGlaasServer:
 
 
 def _configure_label_sync_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[str, str]:
+    # P1-23: tag push runs before GLaaS write — local bare remote suffices.
+    bare_remote = repo.parent / f"{repo.name}-remote.git"
     subprocess.run(
-        ["git", "remote", "add", "origin", "https://github.com/test/repo.git"],
+        ["git", "init", "--bare", "-q", str(bare_remote)],
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(bare_remote)],
         cwd=repo,
         capture_output=True,
         check=True,
