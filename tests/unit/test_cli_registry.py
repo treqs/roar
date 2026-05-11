@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from roar.cli import COMMAND_SPECS, EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG, LAZY_COMMANDS, cli
+from roar.cli import COMMAND_SPECS, LAZY_COMMANDS, cli
 from roar.cli.command_registry import build_help_groups
 
 
@@ -53,7 +53,7 @@ def test_help_hides_internal_export_registration_package_command() -> None:
     assert "export-registration-package" in LAZY_COMMANDS
 
 
-def test_help_hides_experimental_account_commands_by_default() -> None:
+def test_help_shows_account_commands_by_default() -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["--help"])
 
@@ -62,26 +62,12 @@ def test_help_hides_experimental_account_commands_by_default() -> None:
     assert "Inspect Local Lineage:" in result.output
     assert "Share and Publish:" in result.output
     assert "Setup and Admin:" in result.output
-    assert "GLaaS / TReqs Account:" not in result.output
-    assert "Store global GLaaS/TReqs auth state" not in result.output
-    assert "Generate TReqs workflow YAML from local sessions" not in result.output
-    assert "Track a command with provenance" in result.output
-    assert "Publish artifacts and register lineage" in result.output
-
-
-def test_help_shows_experimental_account_commands_with_feature_flag() -> None:
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        ["--help"],
-        env={EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG: "1"},
-    )
-
-    assert result.exit_code == 0, result.output
     assert "GLaaS / TReqs Account:" in result.output
     assert "Store global GLaaS/TReqs auth state" in result.output
     assert "Show current GLaaS/TReqs login and repo binding" in result.output
     assert "Generate TReqs workflow YAML from local sessions" in result.output
+    assert "Track a command with provenance" in result.output
+    assert "Publish artifacts and register lineage" in result.output
     assert (
         result.output.index("Setup and Admin:")
         < result.output.index("GLaaS / TReqs Account:")
@@ -97,34 +83,15 @@ def test_cli_rejects_removed_composite_command() -> None:
     assert "No such command 'composite'" in result.output
 
 
-def test_cli_rejects_experimental_account_commands_by_default() -> None:
+def test_cli_allows_account_commands_by_default() -> None:
     runner = CliRunner()
 
-    login_result = runner.invoke(cli, ["login"])
-    assert login_result.exit_code == 2
-    assert "No such command 'login'" in login_result.output
-
-    workflow_result = runner.invoke(cli, ["workflow"])
-    assert workflow_result.exit_code == 2
-    assert "No such command 'workflow'" in workflow_result.output
-
-
-def test_cli_allows_experimental_account_commands_with_feature_flag() -> None:
-    runner = CliRunner()
-    login_result = runner.invoke(
-        cli,
-        ["login", "--help"],
-        env={EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG: "1"},
-    )
+    login_result = runner.invoke(cli, ["login", "--help"])
 
     assert login_result.exit_code == 0, login_result.output
     assert "Store global GLaaS auth state." in login_result.output
 
-    workflow_result = runner.invoke(
-        cli,
-        ["workflow", "--help"],
-        env={EXPERIMENTAL_ACCOUNT_COMMANDS_FLAG: "1"},
-    )
+    workflow_result = runner.invoke(cli, ["workflow", "--help"])
 
     assert workflow_result.exit_code == 0, workflow_result.output
     assert "Generate TReqs workflow YAML from local roar sessions." in workflow_result.output

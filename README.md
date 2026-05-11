@@ -427,13 +427,10 @@ roar status
 
 Generate TReqs workflow YAML from a local session.
 
-> Currently hidden behind the experimental TReqs account/platform flag:
-> `ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS=1`
-
 ```bash
-ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS=1 roar workflow generate
-ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS=1 roar workflow generate .treqs/workflows/train.yaml
-ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS=1 roar workflow generate --session 8d7a1f2c --name train
+roar workflow generate
+roar workflow generate .treqs/workflows/train.yaml
+roar workflow generate --session 8d7a1f2c --name train
 ```
 
 Generated workflows follow the TReqs workflow format: `name`, optional

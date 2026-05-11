@@ -56,7 +56,6 @@ def _configure_label_sync_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dic
     env = {
         "XDG_CONFIG_HOME": str(xdg_config_home),
         "GLAAS_API_URL": fake_glaas_url,
-        "ROAR_ENABLE_EXPERIMENTAL_ACCOUNT_COMMANDS": "1",
     }
     roar_cli("login", "--token-file", str(token_file), env_overrides=env)
     roar_cli("projects", "link", "proj-test", env_overrides=env)
