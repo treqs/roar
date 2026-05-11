@@ -179,6 +179,23 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
         "description": "Show a one-time per-machine banner when a tracer backend is "
         "selected for the first time or via fallback (set to false to suppress)",
     },
+    "git.remote": {
+        "type": str,
+        "default": None,
+        "description": (
+            "Canonical git remote roar pushes registration tags to. "
+            "Falls back to the single remote when unset; required when multiple remotes exist."
+        ),
+    },
+    "git.push_tags_on_register": {
+        "type": str,
+        "default": "auto",
+        "valid_values": ("auto", "never"),
+        "description": (
+            "Whether `roar register` pushes roar tags to git.remote. "
+            "'auto' pushes and fails-closed; 'never' skips and leaves GLaaS links unresolvable for teammates."
+        ),
+    },
     "logging.level": {
         "type": str,
         "default": "warning",
@@ -775,6 +792,13 @@ def config_set(key: str, value: str, start_dir: str | None = None) -> ConfigSetR
         valid = key_info.get("valid_values", ())
         if value not in valid:
             raise ValueError(f"Invalid verbosity: {value}. Valid values: {', '.join(valid)}")
+        typed_value = value
+    elif key == "git.push_tags_on_register":
+        valid = key_info.get("valid_values", ())
+        if value not in valid:
+            raise ValueError(
+                f"Invalid git.push_tags_on_register: {value}. Valid values: {', '.join(valid)}"
+            )
         typed_value = value
     else:
         typed_value = value
