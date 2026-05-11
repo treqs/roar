@@ -344,14 +344,15 @@ def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) 
     click.echo("hint: Get started:")
     click.echo("hint:")
     click.echo("hint:   roar run python train.py     # track inputs, outputs, env, commit")
-    click.echo("hint:   roar dag                      # view the lineage graph")
-    click.echo("hint:   roar register output.csv      # publish to GLaaS for teammates")
+    click.echo("hint:   roar dag                     # view the lineage graph")
+    click.echo("hint:   roar register output.csv     # publish to GLaaS for teammates")
     click.echo("hint:")
     click.echo(
         "hint: Tracer auto-selects (eBPF → preload → ptrace). Switch with `roar tracer <backend>`;"
     )
     click.echo("hint: see all backends and readiness with `roar tracer`.")
     if in_git_repo:
+        click.echo("hint:")
         click.echo(
             "hint: `roar run` requires a clean git tree — runs are tagged with the commit SHA."
         )
