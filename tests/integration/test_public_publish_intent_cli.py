@@ -35,13 +35,27 @@ def ssh_keypair(tmp_path: Path) -> Path:
     return key_path
 
 
-def _configure_unbound_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[str, str]:
+def _ensure_local_remote(repo: Path) -> None:
+    """P1-23: register pushes roar tags before writing to GLaaS. Point
+    `origin` at a local bare repo so the push succeeds without touching
+    the network."""
+    bare_remote = repo.parent / f"{repo.name}-remote.git"
+    if not bare_remote.exists():
+        subprocess.run(
+            ["git", "init", "--bare", "-q", str(bare_remote)],
+            capture_output=True,
+            check=True,
+        )
     subprocess.run(
-        ["git", "remote", "add", "origin", "https://github.com/test/repo.git"],
+        ["git", "remote", "add", "origin", str(bare_remote)],
         cwd=repo,
         capture_output=True,
         check=True,
     )
+
+
+def _configure_unbound_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[str, str]:
+    _ensure_local_remote(repo)
     xdg_config_home = repo / ".xdg"
     token_file = repo / "token-file.json"
     token_file.write_text(
@@ -72,12 +86,7 @@ def _configure_unbound_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[s
 
 
 def _configure_public_only_repo(repo: Path, roar_cli, fake_glaas_url: str) -> dict[str, str]:
-    subprocess.run(
-        ["git", "remote", "add", "origin", "https://github.com/test/repo.git"],
-        cwd=repo,
-        capture_output=True,
-        check=True,
-    )
+    _ensure_local_remote(repo)
     xdg_config_home = repo / ".xdg"
     home_dir = repo / ".home"
     home_dir.mkdir(exist_ok=True)
@@ -97,12 +106,7 @@ def _configure_unbound_repo_for_ssh_only(
     fake_glaas_url: str,
     ssh_keypair: Path,
 ) -> dict[str, str]:
-    subprocess.run(
-        ["git", "remote", "add", "origin", "https://github.com/test/repo.git"],
-        cwd=repo,
-        capture_output=True,
-        check=True,
-    )
+    _ensure_local_remote(repo)
     xdg_config_home = repo / ".xdg"
     home_dir = repo / ".home"
     home_dir.mkdir(exist_ok=True)
