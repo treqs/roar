@@ -9,6 +9,7 @@ Registers artifact, job, step, or session lineage with GLaaS.
 import click
 
 from ...application.publish.requests import RegisterLineageRequest
+from ...application.publish.results import RegisterTagSummary
 from ...application.publish.service import register_lineage_target
 from ..context import RoarContext
 from ..decorators import require_init
@@ -42,6 +43,45 @@ def _display_session_url(response_session_url: str | None, web_url: str, session
     if response_session_url:
         return response_session_url
     return f"{web_url}/dag/{session_hash}"
+
+
+def _render_tag_summary(summary: RegisterTagSummary | None) -> None:
+    """Render the P1-23 tag-push block above the main register output.
+
+    Tells the user exactly which commits got tagged and where the tags
+    were pushed (or why the push was skipped). Stays silent if there's
+    nothing to say (tagging was disabled for the whole flow).
+    """
+    if summary is None:
+        return
+    if summary.session_tag is None and not summary.job_tags:
+        return  # tagging disabled / no commits — nothing to show
+
+    if summary.session_tag:
+        click.echo(f"Tagged session commit as {summary.session_tag}")
+    if summary.job_tags:
+        # Make multi-commit obvious — both that there are more, and
+        # exactly which ones.
+        click.echo(
+            f"Tagged {len(summary.job_tags)} additional job "
+            f"commit{'s' if len(summary.job_tags) != 1 else ''}: "
+            f"{', '.join(summary.job_tags)}"
+        )
+
+    pushed_count = (1 if summary.session_tag else 0) + len(summary.job_tags)
+    if summary.remote:
+        word = "tag" if pushed_count == 1 else "tags"
+        click.echo(f"Pushed {pushed_count} {word} to {summary.remote}")
+    elif summary.push_skipped_reason == "never_config":
+        click.echo(
+            "Note: roar tags NOT pushed (git.push_tags_on_register=never).",
+            err=True,
+        )
+        click.echo(
+            "GLaaS links to these tags will not resolve for teammates.",
+            err=True,
+        )
+    click.echo("")
 
 
 def _warn_public_default() -> None:
@@ -201,6 +241,7 @@ def register(
         if response.artifact_hash:
             click.echo(f"  Artifact: {web_url}/artifact/{response.artifact_hash}")
     else:
+        _render_tag_summary(response.tag_summary)
         click.echo(f"Registered lineage for: {target}")
         click.echo(f"  Session: {session_preview}")
         click.echo(f"  Jobs: {response.jobs_registered}")

@@ -6,6 +6,21 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class RegisterTagSummary:
+    """Outcome of the roar-tag push that precedes a GLaaS register.
+
+    Populated by `ensure_roar_tags_pushed`. The CLI renders this so the
+    user can see exactly which commits were tagged and where they were
+    pushed (or why the push was skipped).
+    """
+
+    session_tag: str | None = None
+    job_tags: tuple[str, ...] = ()
+    remote: str | None = None
+    push_skipped_reason: str | None = None
+
+
+@dataclass(frozen=True)
 class RegisterLineageResponse:
     """Application response for `roar register`."""
 
@@ -20,6 +35,7 @@ class RegisterLineageResponse:
     secrets_detected: list[str] = field(default_factory=list)
     secrets_redacted: bool = False
     aborted_by_user: bool = False
+    tag_summary: RegisterTagSummary | None = None
 
 
 @dataclass(frozen=True)

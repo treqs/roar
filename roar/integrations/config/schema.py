@@ -180,6 +180,20 @@ class TracerConfig(ConfigBaseModel):
     banner: bool = True
 
 
+class GitConfig(ConfigBaseModel):
+    """Git integration configuration section."""
+
+    # Canonical remote roar pushes tags to during `roar register`. When
+    # unset, roar picks the remote automatically if there's exactly one;
+    # multiple remotes require an explicit value.
+    remote: str | None = None
+    # Whether to push roar-namespaced tags during `roar register`.
+    # "auto" (default): push to git.remote, fail-closed if push fails.
+    # "never": skip push entirely — GLaaS records will reference tags
+    # that exist only on the registering machine.
+    push_tags_on_register: Literal["auto", "never"] = "auto"
+
+
 class LoggingConfig(ConfigBaseModel):
     """Logging configuration section."""
 
@@ -219,6 +233,7 @@ class RoarConfig(ConfigBaseModel):
     hash: HashConfig = Field(default_factory=HashConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     tracer: TracerConfig = Field(default_factory=TracerConfig)
+    git: GitConfig = Field(default_factory=GitConfig)
     reversible: ReversibleConfig = Field(default_factory=ReversibleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     composites: CompositesConfig = Field(default_factory=CompositesConfig)
