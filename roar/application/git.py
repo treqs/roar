@@ -174,13 +174,22 @@ def finalize_register_git(
         logger.debug("Failed to create git tag: %s", exc)
 
 
-def create_roar_git_tag(path: Path, tag_name: str) -> tuple[bool, str | None]:
-    """Create a roar tag if it does not already exist."""
+def create_roar_git_tag(
+    path: Path, tag_name: str, target_commit: str | None = None
+) -> tuple[bool, str | None]:
+    """Create a roar tag if it does not already exist.
+
+    `target_commit` lets callers tag a specific historical commit rather
+    than HEAD. Required when tagging job commits whose SHA may not match
+    current HEAD (P1-23 multi-commit-session case). Defaults to HEAD for
+    back-compat with `put`/`get` callers that only ever tag the current
+    commit.
+    """
     state = resolve_git_state(path)
     if _tag_exists(state.repo_root, tag_name):
         return True, None
     vcs = GitVCSProvider()
-    return vcs.create_tag(str(state.repo_root), tag_name)
+    return vcs.create_tag(str(state.repo_root), tag_name, target=target_commit)
 
 
 def _tag_exists(repo_root: Path, tag_name: str) -> bool:
