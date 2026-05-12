@@ -60,12 +60,10 @@ class BackendSpec:
 
 
 _SPECS: tuple[BackendSpec, ...] = (
-    BackendSpec(
-        name="ebpf",
-        short="fastest, low overhead",
-        requirements="needs CAP_BPF + perf_event_paranoid<=1; Linux only",
-        platforms=("linux",),
-    ),
+    # Order chosen for the user, not the auto-pick algorithm: preload is
+    # the row most users will actually land on (no perms, fast, works for
+    # most Python), so it leads. ebpf is the aspirational/fast-path that
+    # often needs setup. ptrace is the bottom-of-stack fallback.
     BackendSpec(
         name="preload",
         short="comparable to eBPF",
@@ -73,6 +71,12 @@ _SPECS: tuple[BackendSpec, ...] = (
         platforms=("linux", "darwin"),
         caveats=("skips statically-linked binaries (Go)",),
         caveats_darwin=("skips Apple-signed binaries (/bin/*)",),
+    ),
+    BackendSpec(
+        name="ebpf",
+        short="fastest, low overhead",
+        requirements="needs CAP_BPF + perf_event_paranoid<=1; Linux only",
+        platforms=("linux",),
     ),
     BackendSpec(
         name="ptrace",
@@ -259,7 +263,7 @@ def _describe_active(
     surface the realized pick via `→`."""
     if mode == "auto":
         if auto_result and auto_result.ok and auto_result.selected_backend:
-            return f"auto → {auto_result.selected_backend}"
+            return f"auto → {auto_result.selected_backend} (ready)"
         return "auto (no tracer ready)"
 
     status = statuses.get(mode)
@@ -336,13 +340,13 @@ def _print_status_hints(statuses: dict[str, _BackendStatus]) -> None:
     _caps, hint = make_hint_printer()
     click.echo("")
 
+    hint("To pick one explicitly: roar tracer use {auto|ebpf|preload|ptrace}")
+    hint("To probe one:           roar tracer check {auto|ebpf|preload|ptrace}")
     if statuses["ebpf"].state == "fixable":
         hint(
             "To enable eBPF here:    roar tracer enable ebpf       "
             "(applies setcap + sysctl; needs sudo)"
         )
-    hint("To pick one explicitly: roar tracer use {auto|ebpf|preload|ptrace}")
-    hint("To probe one:           roar tracer check {auto|ebpf|preload|ptrace}")
     hint("Docs: https://glaas.ai/docs/tracers")
 
 
