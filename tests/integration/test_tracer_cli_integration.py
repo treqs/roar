@@ -56,14 +56,13 @@ def _expected_ptrace_binary(path_bin_dir: Path | None = None) -> str:
     return str((path_bin_dir / "roar-tracer").resolve())
 
 
-def test_tracer_status_shows_active_line_and_tradeoff_table(
+def test_tracer_status_shows_brand_status_line_and_tradeoff_table(
     temp_git_repo: Path,
     roar_cli,
     tmp_path: Path,
 ) -> None:
-    """`roar tracer` (no args) leads with the brand banner, then the
-    Active line, then a 3-row tradeoff table. Paths live in `check`,
-    not here."""
+    """`roar tracer` (no args) leads with a single brand+active line,
+    then a 3-row tradeoff table. Paths live in `check`, not here."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _write_executable(bin_dir / "roar-tracer")
@@ -72,17 +71,15 @@ def test_tracer_status_shows_active_line_and_tradeoff_table(
     assert set_result.returncode == 0, set_result.stderr
 
     result = _run_roar_tracer(
-        "",
-        cwd=temp_git_repo,
-        env_overrides={"PATH": str(bin_dir)},
-    ) if False else _run_roar_tracer(  # noqa: SIM108 — passing zero args
         cwd=temp_git_repo,
         env_overrides={"PATH": str(bin_dir)},
     )
 
     assert result.returncode == 0, result.stderr
-    assert "roar v" in result.stdout  # brand banner
-    assert "Active: ptrace" in result.stdout
+    first_line = result.stdout.splitlines()[0]
+    # The brand line is "🦖 roar tracer · …" (or "roar: roar tracer · …" without emoji).
+    assert "roar tracer" in first_line
+    assert "ptrace" in first_line
     # 3-row tradeoff table.
     assert "ebpf" in result.stdout
     assert "preload" in result.stdout

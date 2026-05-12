@@ -28,7 +28,7 @@ from ...core.tracer_modes import TRACER_MODE_VALUES, is_valid_tracer_mode
 from ...execution.runtime import tracer_backends
 from ...integrations.config import config_get, config_set
 from ...presenters.terminal import detect, style
-from .._format import hints_should_print, make_hint_printer, print_brand_header
+from .._format import hints_should_print, make_hint_printer
 
 REQUIRED_CAPS = "cap_bpf,cap_perfmon,cap_sys_resource,cap_sys_ptrace,cap_dac_read_search+ep"
 EXPECTED_CAP_NAMES = tracer_backends.EXPECTED_EBPF_CAP_NAMES
@@ -64,13 +64,13 @@ _SPECS: tuple[BackendSpec, ...] = (
     BackendSpec(
         name="preload",
         short="near-eBPF speed",
-        requirements="no perms; skips statically-linked binaries (Go); some shell pipelines unreliable",
+        requirements="no extra perms; good for Python; can't trace statically-linked (Go) or Apple-signed (MacOS /bin/*) binaries",
         platforms=("linux", "darwin"),
     ),
     BackendSpec(
         name="ptrace",
         short="slow but correct",
-        requirements="no perms; works on every binary",
+        requirements="no extra perms; works on every binary",
         platforms=("linux",),
     ),
 )
@@ -198,53 +198,69 @@ def _backend_preflight(
 
 
 def _print_status() -> None:
-    print_brand_header()
-    click.echo("")
-
     statuses = {name: _CLASSIFIERS[name]() for name in _CLASSIFIERS}
     mode = _get_default_mode()
 
-    _print_active_line(mode, statuses)
+    # Auto mode: compute the live pick once and reuse below.
+    auto_result = (
+        tracer_backends.preflight_auto_backend(_package_path(), command=None)
+        if mode == "auto"
+        else None
+    )
+
+    _print_brand_status_line(mode, statuses, auto_result)
+    if auto_result is not None and auto_result.ok and auto_result.selected_backend:
+        chosen = auto_result.selected_backend
+        for br in auto_result.results:
+            if br.backend != chosen and not br.ok:
+                click.echo(f"  (skipped {br.backend}: {br.summary})")
     click.echo("")
     _print_backend_table(statuses)
 
     _print_status_hints(statuses)
 
 
-def _print_active_line(mode: str, statuses: dict[str, _BackendStatus]) -> None:
-    """The 'what would happen on my next `roar run`' line.
+def _print_brand_status_line(
+    mode: str,
+    statuses: dict[str, _BackendStatus],
+    auto_result: tracer_backends.AutoPreflightResult | None,
+) -> None:
+    """`🦖 roar tracer · <active> [· fallback: off]` — the home-screen
+    headline. Packs the most decision-relevant facts into one line so the
+    persona doesn't have to scan the table to answer "what'll happen on
+    my next run?"."""
+    caps = detect(sys.stdout)
+    active = _describe_active(mode, statuses, auto_result)
 
-    For `auto`, runs the auto preflight live so the user sees exactly
-    which backend would be selected next — including the per-backend
-    skip reasons that led there.
-    """
+    fallback = config_get("tracer.fallback_enabled")
+    if fallback is None:
+        fallback = True
+    fallback_suffix = "" if fallback else "  ·  fallback: off"
+
+    prefix = "🦖" if caps.can_emoji else "roar:"
+    line = f"{prefix} roar tracer  ·  {active}{fallback_suffix}"
+    click.echo(style(line, "status_green", enabled=caps.can_color))
+
+
+def _describe_active(
+    mode: str,
+    statuses: dict[str, _BackendStatus],
+    auto_result: tracer_backends.AutoPreflightResult | None,
+) -> str:
+    """One-liner describing what `roar run` will actually do."""
     if mode == "auto":
-        result = tracer_backends.preflight_auto_backend(_package_path(), command=None)
-        if result.ok and getattr(result, "selected_backend", None):
-            chosen = result.selected_backend
-            click.echo(f"  Active: auto → would pick {chosen}")
-            skipped = [
-                f"{br.backend}: {br.summary}"
-                for br in result.results
-                if br.backend != chosen and not br.ok
-            ]
-            if skipped:
-                for entry in skipped:
-                    click.echo(f"          (skipped {entry})")
-        else:
-            click.echo("  Active: auto → no backend ready")
-        return
+        if auto_result and auto_result.ok and auto_result.selected_backend:
+            return f"auto → {auto_result.selected_backend}"
+        return "auto → no backend ready"
 
     status = statuses.get(mode)
     if status is None:
-        click.echo(f"  Active: {mode}")
-        return
+        return mode
     if status.state == "ready":
-        click.echo(f"  Active: {mode}  (ready)")
-    elif status.state == "fixable":
-        click.echo(f"  Active: {mode}  (NOT READY: {status.reason})")
-    else:
-        click.echo(f"  Active: {mode}  (unavailable: {status.reason})")
+        return f"{mode} (ready)"
+    if status.state == "fixable":
+        return f"{mode} NOT READY: {status.reason}"
+    return f"{mode} unavailable: {status.reason}"
 
 
 def _print_backend_table(statuses: dict[str, _BackendStatus]) -> None:
@@ -308,15 +324,20 @@ def _set_tracer_default(mode: str) -> None:
     click.echo(f"Default tracer set to: {mode}  (saved to {config_path})")
 
     # If the user picked something not actually available, tell them now
-    # (better here than at the next `roar run`).
-    if mode != "auto":
-        status = _CLASSIFIERS[mode]()
-        if status.state == "fixable":
-            click.echo(f"  Note: {mode} is not ready right now ({status.reason}).")
-            if mode == "ebpf":
-                click.echo("  Fix it with: roar tracer enable ebpf")
-        elif status.state == "unavailable":
-            click.echo(f"  Warning: {mode} is unavailable on this host ({status.reason}).")
+    # (better here than at the next `roar run`). The cause is a fact; the
+    # fix is rendered in the `hint:` amber style — directly actionable,
+    # not background education, so we show it regardless of the hints
+    # gate.
+    if mode == "auto":
+        return
+    status = _CLASSIFIERS[mode]()
+    if status.state == "fixable":
+        click.echo(f"  Note: {mode} is not ready right now ({status.reason}).")
+        if mode == "ebpf":
+            _caps, hint = make_hint_printer()
+            hint(f"Fix with: roar tracer enable {mode}")
+    elif status.state == "unavailable":
+        click.echo(f"  Warning: {mode} is unavailable on this host ({status.reason}).")
 
 
 # ---------------------------------------------------------------------------
