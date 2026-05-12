@@ -205,9 +205,15 @@ def test_init_hints_suppressed_when_hints_disabled(
     assert "hint:" not in result.output
 
 
-def test_init_version_header_printed(tmp_path: Path) -> None:
-    """First line of init output is the brand banner: `roar:` (no emoji
-    in non-TTY) + `roar vX.Y.Z`."""
+def test_init_brand_header_visible_when_gate_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the brand/hint gate forced on (TTY), the first line is the
+    subcommand-form brand banner: `🦖 roar init` (or `roar: roar init`
+    when emoji is unavailable). The version is no longer in the banner."""
+    from roar.cli import _format
+
+    monkeypatch.setattr(_format, "hints_should_print", lambda: True)
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_git_repo(repo)
@@ -216,8 +222,25 @@ def test_init_version_header_printed(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     first = result.output.splitlines()[0]
-    assert "roar v" in first  # version present
+    assert "roar init" in first
     assert first.startswith(("roar:", "🦖"))
+    # Version moved to `roar --version`; brand banner no longer carries it.
+    assert "roar v" not in first
+
+
+def test_init_brand_header_suppressed_in_non_tty(tmp_path: Path) -> None:
+    """CliRunner runs non-TTY — brand banner is suppressed alongside the
+    hints. First line is the actual init summary."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    assert "🦖" not in result.output
+    assert "roar: roar init" not in result.output
+    assert "Initialized roar in" in result.output
 
 
 def test_init_path_uses_target_repo_for_gitignore_updates(tmp_path: Path) -> None:
