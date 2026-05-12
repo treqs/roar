@@ -243,7 +243,7 @@ def _print_brand_status_line(
     fallback_suffix = "" if fallback else "  ·  fallback: off"
 
     prefix = "🦖" if caps.can_emoji else "roar:"
-    line = f"{prefix} roar tracer  ·  {active}{fallback_suffix}"
+    line = f"{prefix} roar tracer  ·  active: {active}{fallback_suffix}"
     click.echo(style(line, "status_green", enabled=caps.can_color))
 
 
@@ -323,7 +323,7 @@ def _print_backend_table(statuses: dict[str, _BackendStatus]) -> None:
             f"{short:<{short_w}}{sep}{requirements}"
         )
         for note in row_notes:
-            click.echo(f"{cont_indent}↳ {note}")
+            click.echo(style(f"{cont_indent}↳ {note}", "dim", enabled=caps.can_color))
 
 
 def _print_status_hints(statuses: dict[str, _BackendStatus]) -> None:
