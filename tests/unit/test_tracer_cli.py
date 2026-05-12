@@ -99,7 +99,7 @@ class TestTracerCli:
             "_backend_preflight",
             return_value=preflight,
         ) as mock_preflight:
-            result = runner.invoke(tracer_cli_module.tracer, ["check", "--backend", "ptrace"])
+            result = runner.invoke(tracer_cli_module.tracer, ["check", "ptrace"])
 
         assert result.exit_code == 0
         mock_preflight.assert_called_once_with("ptrace", None)
@@ -121,15 +121,18 @@ class TestTracerCli:
         with patch.object(tracer_cli_module, "_backend_preflight", return_value=preflight):
             result = runner.invoke(
                 tracer_cli_module.tracer,
-                ["check", "--backend", "ebpf", "--json"],
+                ["check", "ebpf", "--json"],
             )
 
         assert result.exit_code == 1
         payload = json.loads(result.output)
-        assert payload["backend"] == "ebpf"
+        assert payload["tracer"] == "ebpf"
         assert payload["ok"] is False
         assert payload["summary"] == "attach failed"
+        # JSON output shouldn't carry the user-facing "Next steps" prose.
         assert "Next steps" not in result.output
+        # And shouldn't carry the old "backend" key.
+        assert "backend" not in payload
 
     def test_check_failure_prints_actionable_next_steps_without_traceback(self):
         runner = CliRunner()
@@ -144,12 +147,14 @@ class TestTracerCli:
             ),
         )
         with patch.object(tracer_cli_module, "_backend_preflight", return_value=preflight):
-            result = runner.invoke(tracer_cli_module.tracer, ["check", "--backend", "ebpf"])
+            result = runner.invoke(tracer_cli_module.tracer, ["check", "ebpf"])
 
         assert result.exit_code == 1
         assert "Tracer check failed for 'ebpf'" in result.output
         assert "Next steps:" in result.output
-        assert "roar tracer check --backend preload" in result.output
+        # Suggestions use the positional form, matching the surface.
+        assert "roar tracer check preload" in result.output
+        assert "--backend" not in result.output
         assert "Traceback" not in result.output
 
     def test_check_uses_auto_preflight_when_backend_unspecified(self):

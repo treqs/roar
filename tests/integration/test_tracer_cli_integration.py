@@ -106,8 +106,8 @@ def test_tracer_check_uses_configured_default_backend_and_repo_local_binary(
 
     assert result.returncode == 0, result.stderr
     assert "Tracer check passed for 'ptrace': ptrace preflight succeeded" in result.stdout
-    # `check` now surfaces the binary path on its own "  binary:" line.
-    assert f"binary: {expected_ptrace}" in result.stdout
+    # Paths now appear inline in per-check rows, not in a separate header
+    # block (the header block was redundant — same path printed twice).
     assert f"binary: ok ({expected_ptrace})" in result.stdout
 
 
@@ -128,7 +128,6 @@ def test_tracer_check_prefers_repo_local_binary_over_path_override(
 
     result = _run_roar_tracer(
         "check",
-        "--backend",
         "ptrace",
         cwd=temp_git_repo,
         env_overrides={"PATH": str(bin_dir)},
@@ -140,9 +139,18 @@ def test_tracer_check_prefers_repo_local_binary_over_path_override(
     assert str(fake_path_ptrace) not in result.stdout
 
 
-def test_tracer_enable_unknown_backend_rejected(temp_git_repo: Path) -> None:
-    """The redesigned surface drops the `setup` group; `enable` only
-    accepts `ebpf` today. preload/ptrace need no host setup."""
+def test_tracer_enable_non_ebpf_gives_friendly_message(temp_git_repo: Path) -> None:
+    """`enable` accepts any tracer name so we can produce a clearer
+    message than click's raw choice error. preload/ptrace work out of
+    the box; the user gets a one-liner pointing at `check` to verify."""
     result = _run_roar_tracer("enable", "preload", cwd=temp_git_repo)
     assert result.returncode != 0
-    assert "Invalid value for" in result.stderr or "Usage" in result.stderr
+    assert "works out of the box" in result.stderr
+    assert "roar tracer check preload" in result.stderr
+
+
+def test_tracer_check_no_backend_flag_anymore(temp_git_repo: Path) -> None:
+    """The `--backend` option is gone; positional is the only form."""
+    result = _run_roar_tracer("check", "--backend", "ptrace", cwd=temp_git_repo)
+    assert result.returncode != 0
+    assert "No such option: --backend" in result.stderr
