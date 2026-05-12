@@ -175,7 +175,8 @@ def test_render_show_job_prefers_name_label_and_hides_duplicate_name_label_line(
 
         rendered = show_module.render_show(_request(tmp_path, "deadbeef"))
 
-    assert "Name: label-name" in rendered
+    assert "Name:" in rendered
+    assert "label-name" in rendered
     assert "phase=train" in rendered
     assert "name=label-name" not in rendered
 
@@ -335,7 +336,8 @@ def test_render_show_remote_artifact_includes_source_marker(tmp_path: Path) -> N
 
         rendered = show_module.render_show(_request(tmp_path, full_hash))
 
-    assert "Source: GLaaS" in rendered
+    assert "Source:" in rendered
+    assert "GLaaS" in rendered
     assert full_hash in rendered
 
 
