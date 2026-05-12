@@ -44,14 +44,19 @@ class BackendSpec:
     """User-facing description of a single tracer backend.
 
     `short` is the 1-line tradeoff column. `requirements` summarizes
-    permissions and host caveats. `platforms` gates whether the row is
-    even relevant on this OS.
+    permissions. `platforms` gates whether the row is relevant.
+
+    `caveats` and `caveats_darwin` are surfaced as `↳` continuation
+    lines under the row — split off from requirements so column 4 stays
+    skinny and the heavy preload caveats don't dominate the table.
     """
 
     name: str
     short: str
     requirements: str
     platforms: tuple[str, ...]
+    caveats: tuple[str, ...] = ()
+    caveats_darwin: tuple[str, ...] = ()
 
 
 _SPECS: tuple[BackendSpec, ...] = (
@@ -63,9 +68,11 @@ _SPECS: tuple[BackendSpec, ...] = (
     ),
     BackendSpec(
         name="preload",
-        short="near-eBPF speed",
-        requirements="no extra perms; good for Python; can't trace statically-linked (Go) or Apple-signed (MacOS /bin/*) binaries",
+        short="comparable to eBPF",
+        requirements="no extra perms",
         platforms=("linux", "darwin"),
+        caveats=("skips statically-linked binaries (Go)",),
+        caveats_darwin=("skips Apple-signed binaries (/bin/*)",),
     ),
     BackendSpec(
         name="ptrace",
@@ -209,11 +216,9 @@ def _print_status() -> None:
     )
 
     _print_brand_status_line(mode, statuses, auto_result)
-    if auto_result is not None and auto_result.ok and auto_result.selected_backend:
-        chosen = auto_result.selected_backend
-        for br in auto_result.results:
-            if br.backend != chosen and not br.ok:
-                click.echo(f"  (skipped {br.backend}: {br.summary})")
+    # The per-backend skip reasons that auto saw appear as `↳`
+    # continuations inside the table itself, so we don't repeat them
+    # here.
     click.echo("")
     _print_backend_table(statuses)
 
@@ -264,34 +269,61 @@ def _describe_active(
 
 
 def _print_backend_table(statuses: dict[str, _BackendStatus]) -> None:
-    """Three-row tradeoff table. Backends unavailable on this OS are
-    still shown — the user needs to know why."""
+    """4-column tradeoff table with a dim header row. `↳` continuations
+    carry per-row caveats and not-ready reasons so the four data columns
+    stay scannable."""
     caps = detect(sys.stdout)
-    name_w = max(len(s.name) for s in _SPECS)
-    state_w = 11  # "unavailable"
-    short_w = max(len(s.short) for s in _SPECS)
+    headers = ("Backend", "Status", "Tradeoff", "Requirements")
 
+    # Pre-render row state labels and gather caveats. Build BEFORE
+    # measuring widths so the header is included in the max.
+    rendered: list[tuple[str, str, str, str, str, tuple[str, ...]]] = []
     for spec in _SPECS:
         status = statuses[spec.name]
         if status.state == "ready":
-            state_txt = style("ready", "status_green", enabled=caps.can_color)
-            state_pad = " " * (state_w - len("ready"))
+            state_label, state_color = "ready", "status_green"
         elif status.state == "fixable":
-            state_txt = style("not ready", "warn_amber", enabled=caps.can_color)
-            state_pad = " " * (state_w - len("not ready"))
+            state_label, state_color = "not ready", "warn_amber"
         else:
-            state_txt = style("unavailable", "dim", enabled=caps.can_color)
-            state_pad = " " * (state_w - len("unavailable"))
-        click.echo(
-            f"  {spec.name:<{name_w}}  {state_txt}{state_pad}  "
-            f"{spec.short:<{short_w}}  {spec.requirements}"
-        )
-        # When a row is fixable or unavailable, surface the cause on a
-        # continuation line so the user can see what's blocking it
-        # without having to run `roar tracer check`.
+            state_label, state_color = "unavailable", "dim"
+
+        notes: list[str] = []
         if status.reason and status.state != "ready":
-            indent = " " * (2 + name_w + 2)
-            click.echo(f"{indent}↳ {status.reason}")
+            notes.append(status.reason)
+        notes.extend(spec.caveats)
+        if sys.platform == "darwin":
+            notes.extend(spec.caveats_darwin)
+
+        rendered.append(
+            (spec.name, state_label, state_color, spec.short, spec.requirements, tuple(notes))
+        )
+
+    name_w = max(len(headers[0]), max(len(r[0]) for r in rendered))
+    state_w = max(len(headers[1]), max(len(r[1]) for r in rendered))
+    short_w = max(len(headers[2]), max(len(r[3]) for r in rendered))
+    sep = "  "
+    leading = "  "
+
+    # Header row (dim).
+    header_line = (
+        f"{leading}{headers[0]:<{name_w}}{sep}{headers[1]:<{state_w}}{sep}"
+        f"{headers[2]:<{short_w}}{sep}{headers[3]}"
+    )
+    click.echo(style(header_line, "dim", enabled=caps.can_color))
+
+    # `↳` continuations line up under the Status column — same convention
+    # the existing surface used; visually reads as "more about this row".
+    cont_indent = leading + " " * name_w + sep
+
+    for name, state_label, state_color, short, requirements, row_notes in rendered:
+        state_text = style(state_label, state_color, enabled=caps.can_color)
+        state_pad = " " * (state_w - len(state_label))
+        click.echo(
+            f"{leading}{name:<{name_w}}{sep}{state_text}{state_pad}{sep}"
+            f"{short:<{short_w}}{sep}{requirements}"
+        )
+        for note in row_notes:
+            click.echo(f"{cont_indent}↳ {note}")
 
 
 def _print_status_hints(statuses: dict[str, _BackendStatus]) -> None:
