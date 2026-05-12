@@ -291,6 +291,8 @@ def init(click_ctx: click.Context, yes: bool, no_gitignore: bool, init_path: Pat
 
     init_project(cwd)
 
+    _print_version_header()
+
     if roar_dir_existed:
         click.echo(f".roar directory already exists at {roar_dir}")
         return
@@ -332,37 +334,84 @@ def _print_init_summary(*, roar_dir: Path, gitignore_status: str | None, in_git_
         click.echo("  git:        (not in a git repo)")
 
 
-def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) -> None:
-    """Print git-style `hint:` lines for next steps. Disabled by
-    `roar config set advice.enabled false`."""
+def _print_version_header() -> None:
+    """`🦖 roar v<version>` in the same green as `roar run` lifecycle lines.
+
+    Matches the run-time presenter's _trex prefix so the brand surfaces
+    are consistent across commands.
+    """
+    import sys
+
+    from ...presenters.terminal import detect, style
+
+    try:
+        from .. import __version__
+    except Exception:
+        __version__ = "unknown"
+
+    caps = detect(sys.stdout)
+    prefix = "🦖" if caps.can_emoji else "roar:"
+    line = f"{prefix} roar v{__version__}"
+    click.echo(style(line, "status_green", enabled=caps.can_color))
+
+
+def _hints_should_print() -> bool:
+    """Hints are advisory — auto-suppressed in quiet mode and non-TTY.
+
+    Sources, in order:
+      - `hints.enabled = false` in config → off.
+      - `output.verbosity = "quiet"` in config → off.
+      - stdout is not a TTY (CI, redirected output, piped) → off.
+      - otherwise → on.
+    """
+    import sys
+
     from ...integrations.config import config_get
 
-    if config_get("advice.enabled") is False:
+    if config_get("hints.enabled") is False:
+        return False
+    if config_get("output.verbosity") == "quiet":
+        return False
+    if not sys.stdout.isatty():
+        return False
+    return True
+
+
+def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) -> None:
+    """Print git-style `hint:` lines for next steps. Amber-colored to
+    match git's hint convention. Suppressed by `_hints_should_print()`."""
+    if not _hints_should_print():
         return
 
+    import sys
+
+    from ...presenters.terminal import detect, style
+
+    caps = detect(sys.stdout)
+
+    def hint(text: str = "") -> None:
+        line = f"hint: {text}" if text else "hint:"
+        click.echo(style(line, "warn_amber", enabled=caps.can_color))
+
     click.echo("")
-    click.echo("hint: Get started:")
-    click.echo("hint:")
-    click.echo("hint:   roar run python train.py     # track inputs, outputs, env, commit")
-    click.echo("hint:   roar dag                     # view the lineage graph")
-    click.echo("hint:   roar register output.csv     # publish to GLaaS for teammates")
-    click.echo("hint:")
-    click.echo(
-        "hint: Tracer auto-selects (eBPF → preload → ptrace). Switch with `roar tracer <backend>`;"
-    )
-    click.echo("hint: see all backends and readiness with `roar tracer`.")
+    hint("Get started:")
+    hint()
+    hint("  roar run python train.py     # track inputs, outputs, env, commit")
+    hint("  roar dag                     # view the lineage graph")
+    hint("  roar register output.csv     # publish to GLaaS for teammates")
+    hint()
+    hint("Tracer auto-selects (eBPF → preload → ptrace). Switch with `roar tracer <backend>`;")
+    hint("see all backends and readiness with `roar tracer`.")
     if in_git_repo:
-        click.echo("hint:")
-        click.echo(
-            "hint: `roar run` requires a clean git tree — runs are tagged with the commit SHA."
-        )
+        hint()
+        hint("`roar run` requires a clean git tree — runs are tagged with the commit SHA.")
     if gitignore_action in ("created", "appended"):
-        click.echo("hint:")
-        click.echo("hint: Commit the .gitignore change before your first `roar run`:")
-        click.echo("hint:   git add .gitignore && git commit -m 'ignore .roar/'")
-    click.echo("hint:")
-    click.echo("hint: Docs: https://glaas.ai/docs")
-    click.echo("hint: Disable these hints with `roar config set advice.enabled false`.")
+        hint()
+        hint("Commit the .gitignore change before your first `roar run`:")
+        hint("  git add .gitignore && git commit -m 'ignore .roar/'")
+    hint()
+    hint("Docs: https://glaas.ai/docs")
+    hint("Disable these hints with `roar config set hints.enabled false`.")
 
 
 # Register subcommands. Imported here (not at top of file) so the heavier

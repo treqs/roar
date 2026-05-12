@@ -190,10 +190,14 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
             "'auto' pushes and fails-closed; 'never' skips and leaves GLaaS links unresolvable for teammates."
         ),
     },
-    "advice.enabled": {
+    "hints.enabled": {
         "type": bool,
         "default": True,
-        "description": "Show advisory hint blocks (next steps, docs pointers, etc.).",
+        "description": (
+            "Show advisory hint blocks (next steps, docs pointers, etc.). "
+            "Hints are also auto-suppressed in quiet output mode and when "
+            "stdout is not a TTY (CI/redirected output)."
+        ),
     },
     "logging.level": {
         "type": str,

@@ -4,6 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from roar.cli import cli
@@ -153,8 +154,13 @@ def test_init_outside_git_repo_does_not_touch_gitignore(tmp_path: Path) -> None:
     assert "(not in a git repo)" in result.output
 
 
-def test_init_hints_visible_by_default(tmp_path: Path) -> None:
-    """Git-style `hint:` lines appear after the summary block."""
+def test_init_hints_visible_when_gate_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the hint gate forced on (simulating TTY), `hint:` lines appear."""
+    import roar.cli.commands.init as init_mod
+
+    monkeypatch.setattr(init_mod, "_hints_should_print", lambda: True)
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_git_repo(repo)
@@ -167,25 +173,55 @@ def test_init_hints_visible_by_default(tmp_path: Path) -> None:
     assert "roar dag" in result.output
     assert "roar register" in result.output
     assert "https://glaas.ai/docs" in result.output
-    assert "roar config set advice.enabled false" in result.output
+    assert "roar config set hints.enabled false" in result.output
 
 
-def test_init_hints_suppressed_when_advice_disabled(tmp_path: Path) -> None:
+def test_init_hints_suppressed_in_non_tty(tmp_path: Path) -> None:
+    """CliRunner runs as non-TTY — hints must be suppressed (CI scenario)."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_git_repo(repo)
-    (repo / ".roar").mkdir()
-    (repo / ".roar" / "config.toml").write_text("[advice]\nenabled = false\n")
 
     result = _run_init(repo)
 
     assert result.exit_code == 0, result.output
-    # Summary block still appears.
-    assert (
-        "Initialized roar in" in result.output or ".roar directory already exists" in result.output
-    )
-    # No hints.
+    assert "Initialized roar in" in result.output
     assert "hint:" not in result.output
+
+
+def test_init_hints_suppressed_when_hints_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even with the TTY gate forced on, hints.enabled=false silences."""
+    import roar.cli.commands.init as init_mod
+
+    # Force TTY-on at the gate level so we exercise the config check.
+    monkeypatch.setattr(init_mod, "_hints_should_print", init_mod._hints_should_print)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    (repo / ".roar").mkdir()
+    (repo / ".roar" / "config.toml").write_text("[hints]\nenabled = false\n")
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    assert "hint:" not in result.output
+
+
+def test_init_version_header_printed(tmp_path: Path) -> None:
+    """First line of init output is the brand banner: `roar:` (no emoji
+    in non-TTY) + `roar vX.Y.Z`."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    first = result.output.splitlines()[0]
+    assert "roar v" in first  # version present
+    assert first.startswith(("roar:", "🦖"))
 
 
 def test_init_path_uses_target_repo_for_gitignore_updates(tmp_path: Path) -> None:

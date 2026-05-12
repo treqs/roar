@@ -193,12 +193,15 @@ class GitConfig(ConfigBaseModel):
     push_tags_on_register: Literal["auto", "never"] = "auto"
 
 
-class AdviceConfig(ConfigBaseModel):
+class HintsConfig(ConfigBaseModel):
     """Global toggle for hint blocks roar prints during routine commands.
 
-    Mirrors git's `advice.*` family but coarse-grained — one knob silences
-    every advisory output (init hints, etc.). Disable when you know what
-    you're doing; the underlying commands still work.
+    Inspired by git's `advice.*` family but coarse-grained — one knob
+    silences every advisory output (init hints, etc.). Disable when you
+    know what you're doing; the underlying commands still work.
+
+    Hints are also auto-suppressed in quiet output mode and when stdout
+    isn't a TTY (so CI logs stay terse).
     """
 
     enabled: bool = True
@@ -244,7 +247,7 @@ class RoarConfig(ConfigBaseModel):
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     tracer: TracerConfig = Field(default_factory=TracerConfig)
     git: GitConfig = Field(default_factory=GitConfig)
-    advice: AdviceConfig = Field(default_factory=AdviceConfig)
+    hints: HintsConfig = Field(default_factory=HintsConfig)
     reversible: ReversibleConfig = Field(default_factory=ReversibleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     composites: CompositesConfig = Field(default_factory=CompositesConfig)
