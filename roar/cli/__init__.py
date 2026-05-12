@@ -178,10 +178,15 @@ def cli(ctx: click.Context) -> None:
         roar run <command>     Run a command with provenance tracking
 
     \b
-    Inspect Local Lineage:
+    Sessions:
         roar status            Show the active session summary
-        roar show @1           Inspect a specific step, job, or artifact
         roar dag               See the full local execution graph
+        roar pop               Undo the last job in the active session
+        roar reset             Start a fresh session (between pipelines)
+
+    \b
+    Inspect Local Lineage:
+        roar show @1           Inspect a specific step, job, or artifact
 
     \b
     Share and Publish:

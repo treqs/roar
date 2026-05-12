@@ -23,17 +23,22 @@ from ..decorators import require_init
 @click.pass_obj
 @require_init
 def reset(ctx: RoarContext, yes: bool) -> None:
-    """Start a fresh session.
+    """Start a fresh session — your session-boundary between pipeline runs.
 
-    Deactivates the current active session and creates a new one.
-    The previous session data is preserved in the database.
+    Use this between pipelines when you want a clean slate: the next
+    `roar run` becomes step 1 of a new session, `roar dag` shows just
+    the new session, and prior steps stay queryable as historic
+    sessions via `roar log`.
+
+    The previous session data is preserved in the database; only the
+    "active" marker moves.
 
     \b
     Examples:
 
-        roar reset              # Reset with confirmation prompt
+        roar reset              # Confirm, then start a new session
 
-        roar reset -y           # Reset without confirmation
+        roar reset -y           # No confirmation prompt
     """
     with create_database_context(ctx.roar_dir) as db_ctx:
         active_session = db_ctx.sessions.get_active()
