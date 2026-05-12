@@ -343,7 +343,9 @@ def _print_status_hints(statuses: dict[str, _BackendStatus]) -> None:
     hint("To pick one explicitly: roar tracer use {auto|ebpf|preload|ptrace}")
     hint("To probe one:           roar tracer check {auto|ebpf|preload|ptrace}")
     if statuses["ebpf"].state == "fixable":
-        hint("To enable eBPF here:    roar tracer enable ebpf       (sets capabilities + walks the sysctl step)")
+        hint(
+            "To enable eBPF here:    roar tracer enable ebpf       (sets capabilities + walks the sysctl step)"
+        )
     hint("Docs: https://glaas.ai/docs/tracers")
 
 
@@ -647,8 +649,7 @@ def _enable_ebpf(*, binary_path: str | None) -> None:
         click.echo("        (this boot only; reverts on reboot)")
         click.echo("")
         click.echo(
-            "      echo 'kernel.perf_event_paranoid=1' "
-            "| sudo tee /etc/sysctl.d/99-ebpf-tracer.conf"
+            "      echo 'kernel.perf_event_paranoid=1' | sudo tee /etc/sysctl.d/99-ebpf-tracer.conf"
         )
         click.echo("      sudo sysctl --system")
         click.echo("        (persistent across reboots)")
