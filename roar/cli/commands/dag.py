@@ -96,6 +96,13 @@ def dag(
 
         roar dag --stale-only     # Filter to only stale steps/artifacts
     """
+    # Banner is dashboard chrome; `--json` is a single machine-parseable
+    # blob, so skip the banner there. TTY/quiet/hints gates apply too.
+    if not output_json:
+        from .._format import print_brand_header
+
+        print_brand_header("dag")
+
     try:
         output = render_dag(
             DagQueryRequest(
