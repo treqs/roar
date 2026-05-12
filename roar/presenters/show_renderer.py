@@ -208,14 +208,17 @@ class ShowRenderer:
 
     def _render_job_artifact_rows(self, artifacts: list[dict]) -> list[str]:
         """One line per artifact: `algo:hash…  SIZE  /path` plus a
-        `(composite, N components)` annotation when non-primitive."""
+        `(composite, N components)` annotation when non-primitive.
+        Files that no longer exist on disk get a `(missing)` suffix —
+        same convention as `roar status`."""
         out: list[str] = []
         for art in artifacts:
             hashes = art.get("hashes") or []
             hash_label = _short_hash_label(hashes)
             size = format_size(art.get("size"))
             path = art.get("path") or "?"
-            out.append(f"  {hash_label:<22} {size:>9}  {path}")
+            missing = "  (missing)" if art.get("present") is False else ""
+            out.append(f"  {hash_label:<22} {size:>9}  {path}{missing}")
             kind = art.get("kind")
             component_count = art.get("component_count")
             if isinstance(kind, str) and kind != "primitive":
@@ -384,7 +387,13 @@ class ShowRenderer:
                 lines.append(f"Kind:       {kind}")
         lines.append(f"Size:       {format_size(artifact['size'])}")
         if first_seen_path:
-            lines.append(f"Path:       {first_seen_path}")
+            # Surface filesystem presence — same `(missing)` convention
+            # as `roar status` so the user knows the file is gone even
+            # though roar still tracks it.
+            missing = ""
+            if artifact.get("first_seen_present") is False:
+                missing = "  (missing)"
+            lines.append(f"Path:       {first_seen_path}{missing}")
         lines.append(f"First seen: {format_timestamp(artifact['first_seen_at'])}")
 
         self._render_labels(lines, labels)
@@ -397,7 +406,8 @@ class ShowRenderer:
             lines.append("")
             lines.append(f"Also located at ({len(extra_locations)}):")
             for loc in extra_locations:
-                lines.append(f"  {loc['path']}")
+                missing = "  (missing)" if loc.get("present") is False else ""
+                lines.append(f"  {loc['path']}{missing}")
 
         # ---- jobs: producers / consumers -------------------------------------
         for label, key in (("Produced by", "produced_by"), ("Consumed by", "consumed_by")):

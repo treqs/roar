@@ -194,6 +194,10 @@ class ShowJobArtifactSummary:
     kind: str | None = None
     component_count: int | None = None
     hashes: list[ShowHashSummary] = field(default_factory=list)
+    # Whether the file exists on disk *now*. None means presence wasn't
+    # checked — e.g. remote artifacts where the local path doesn't apply.
+    # Renderer marks `(missing)` only when this is explicitly False.
+    present: bool | None = None
 
     def to_renderer_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -249,6 +253,9 @@ class ShowJobSummary:
 @dataclass(frozen=True)
 class ShowArtifactLocationSummary:
     path: str
+    # Whether this location currently exists on disk. See note on
+    # `ShowJobArtifactSummary.present` for the None semantics.
+    present: bool | None = None
 
     def to_renderer_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -283,6 +290,10 @@ class ShowArtifactSummary:
     kind: str | None = None
     component_count: int | None = None
     first_seen_path: str | None = None
+    # Whether `first_seen_path` currently exists on disk. None means the
+    # check wasn't performed (remote-only artifact, etc.). Same None
+    # semantics as `ShowArtifactLocationSummary.present`.
+    first_seen_present: bool | None = None
     labels: dict[str, Any] | None = None
     composite_summary: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
@@ -310,6 +321,7 @@ class ShowArtifactSummary:
             "size": self.size,
             "first_seen_at": self.first_seen_at,
             "first_seen_path": self.first_seen_path,
+            "first_seen_present": self.first_seen_present,
             "metadata": self.metadata,
             "hashes": [asdict(hash_summary) for hash_summary in self.hashes],
         }
