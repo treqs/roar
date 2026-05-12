@@ -46,20 +46,27 @@ class ShowQueryError(RuntimeError):
 
 def render_show(request: ShowQueryRequest) -> str:
     """Render session, job, or artifact details."""
+    text, _summary = render_show_with_summary(request)
+    return text
+
+
+def render_show_with_summary(request: ShowQueryRequest) -> tuple[str, ShowSummary]:
+    """Render and also return the typed summary so callers can act on
+    its kind (e.g. emit an artifact-specific hint after the output)."""
     summary = build_show_summary(request)
 
     renderer = ShowRenderer(show_all=request.show_all)
     if isinstance(summary, ShowSessionSummary):
         session, jobs, labels = summary.to_renderer_args()
-        return renderer.render_session(session, jobs, labels=labels)
+        return renderer.render_session(session, jobs, labels=labels), summary
     if isinstance(summary, ShowJobSummary):
         job, inputs, outputs, labels = summary.to_renderer_args()
-        return renderer.render_job(job, inputs, outputs, labels=labels)
+        return renderer.render_job(job, inputs, outputs, labels=labels), summary
 
     artifact, locations, related_jobs, labels, composite_summary, components = (
         summary.to_renderer_args()
     )
-    return renderer.render_artifact(
+    text = renderer.render_artifact(
         artifact,
         locations,
         related_jobs,
@@ -67,6 +74,7 @@ def render_show(request: ShowQueryRequest) -> str:
         composite_summary=composite_summary,
         components=components,
     )
+    return text, summary
 
 
 def build_show_summary(request: ShowQueryRequest) -> ShowSummary:
