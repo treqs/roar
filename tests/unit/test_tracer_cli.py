@@ -9,75 +9,79 @@ from click.testing import CliRunner
 tracer_cli_module = importlib.import_module("roar.cli.commands.tracer")
 
 
-class TestTracerStatusParanoidHint:
-    """P1-14: `roar tracer status` must show the sysctl fix when
-    perf_event_paranoid is too restrictive (and stay silent when ok)."""
+class TestTracerStatusEbpfRow:
+    """`roar tracer` should surface the cause-of-not-ready inline under
+    the ebpf row — not a separate trailing block."""
 
-    def test_too_restrictive_emits_both_fix_lines(self):
+    def test_too_restrictive_paranoid_shows_under_ebpf(self):
         runner = CliRunner()
-        with patch.object(tracer_cli_module, "_get_perf_event_paranoid", return_value=4):
-            result = runner.invoke(tracer_cli_module.tracer, ["status"])
-        assert result.exit_code == 0
-        # New phrasing groups the knob under an "eBPF kernel setting:" header
-        # so the user knows which backend it applies to.
-        assert "eBPF kernel setting:" in result.output
-        assert "perf_event_paranoid: 4 (too restrictive, needs <= 1)" in result.output
-        assert "sudo sysctl -w kernel.perf_event_paranoid=1" in result.output
-        assert "(this boot; host-wide; security tradeoff)" in result.output
-        assert "/etc/sysctl.d/99-ebpf-tracer.conf" in result.output
-        assert "(persistent)" in result.output
-
-    def test_ok_value_emits_nothing(self):
-        """When the kernel knob is fine, the status output stays silent
-        about it. The standalone 'ok' row was ambiguous (which backend?)
-        and just noise; the ebpf readiness probe communicates 'ready' on
-        its own line."""
-        runner = CliRunner()
-        with patch.object(tracer_cli_module, "_get_perf_event_paranoid", return_value=1):
-            result = runner.invoke(tracer_cli_module.tracer, ["status"])
-        assert result.exit_code == 0
-        assert "  perf_event_paranoid:" not in result.output
-        assert "sysctl -w kernel.perf_event_paranoid" not in result.output
-        assert "/etc/sysctl.d" not in result.output
-
-    def test_unavailable_value_emits_no_paranoid_row(self):
-        """Non-Linux hosts return None — the dedicated paranoid row is
-        omitted entirely. (The eBPF readiness probe may still mention
-        perf_event_paranoid as part of its own reason string; that's a
-        different code path.)"""
-        runner = CliRunner()
-        with patch.object(tracer_cli_module, "_get_perf_event_paranoid", return_value=None):
-            result = runner.invoke(tracer_cli_module.tracer, ["status"])
-        assert result.exit_code == 0
-        # No standalone "  perf_event_paranoid: <value>" row at indent 2.
-        assert "  perf_event_paranoid:" not in result.output
-        # And no fix hints either.
-        assert "sysctl -w kernel.perf_event_paranoid" not in result.output
+        # Force fixable-eBPF state by stubbing the classifier.
+        fixable = tracer_cli_module._BackendStatus("fixable", "perf_event_paranoid=4 (needs <= 1)")
+        with patch.dict(
+            tracer_cli_module._CLASSIFIERS,
+            {
+                "ebpf": lambda: fixable,
+                "preload": lambda: tracer_cli_module._BackendStatus("ready", None),
+                "ptrace": lambda: tracer_cli_module._BackendStatus("ready", None),
+            },
+        ):
+            result = runner.invoke(tracer_cli_module.tracer)
+        assert result.exit_code == 0, result.output
+        assert "ebpf" in result.output
+        assert "not ready" in result.output
+        # Cause shows as a `↳` continuation under the ebpf row.
+        assert "↳ perf_event_paranoid=4 (needs <= 1)" in result.output
 
 
-class TestTracerCli:
-    def test_set_default_writes_tracer_default_key(self):
+class TestTracerUseVerb:
+    def test_use_writes_tracer_default_key(self):
         runner = CliRunner()
         with patch.object(
             tracer_cli_module, "config_set", return_value=("/tmp/config.toml", "ebpf")
         ) as mock_set:
-            result = runner.invoke(tracer_cli_module.tracer, ["set-default", "ebpf"])
+            result = runner.invoke(tracer_cli_module.tracer, ["use", "ebpf"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         mock_set.assert_called_once_with("tracer.default", "ebpf")
         assert "Default tracer set to: ebpf" in result.output
 
-    def test_set_default_preload_via_alias(self):
+    def test_use_preload(self):
         runner = CliRunner()
         with patch.object(
             tracer_cli_module, "config_set", return_value=("/tmp/config.toml", "preload")
         ) as mock_set:
-            result = runner.invoke(tracer_cli_module.tracer, ["preload"])
+            result = runner.invoke(tracer_cli_module.tracer, ["use", "preload"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         mock_set.assert_called_once_with("tracer.default", "preload")
         assert "Default tracer set to: preload" in result.output
 
+    def test_use_warns_when_picked_backend_is_fixable(self):
+        runner = CliRunner()
+        fixable = tracer_cli_module._BackendStatus("fixable", "perf_event_paranoid=4 (needs <= 1)")
+        with (
+            patch.object(tracer_cli_module, "config_set", return_value=("/tmp/c.toml", "ebpf")),
+            patch.dict(tracer_cli_module._CLASSIFIERS, {"ebpf": lambda: fixable}, clear=False),
+        ):
+            result = runner.invoke(tracer_cli_module.tracer, ["use", "ebpf"])
+        assert result.exit_code == 0, result.output
+        assert "ebpf is not ready" in result.output
+        assert "roar tracer enable ebpf" in result.output
+
+    def test_use_warns_when_picked_backend_unavailable(self):
+        runner = CliRunner()
+        unavail = tracer_cli_module._BackendStatus("unavailable", "darwin (Linux-only)")
+        with (
+            patch.object(tracer_cli_module, "config_set", return_value=("/tmp/c.toml", "ebpf")),
+            patch.dict(tracer_cli_module._CLASSIFIERS, {"ebpf": lambda: unavail}, clear=False),
+        ):
+            result = runner.invoke(tracer_cli_module.tracer, ["use", "ebpf"])
+        assert result.exit_code == 0, result.output
+        assert "unavailable" in result.output
+        assert "darwin" in result.output
+
+
+class TestTracerCli:
     def test_check_uses_strict_backend_preflight(self):
         runner = CliRunner()
         preflight = tracer_cli_module.tracer_backends.TracerPreflightResult(

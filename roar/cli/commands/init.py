@@ -335,63 +335,21 @@ def _print_init_summary(*, roar_dir: Path, gitignore_status: str | None, in_git_
 
 
 def _print_version_header() -> None:
-    """`🦖 roar v<version>` in the same green as `roar run` lifecycle lines.
+    """First line of init: brand banner in green."""
+    from .._format import print_brand_header
 
-    Matches the run-time presenter's _trex prefix so the brand surfaces
-    are consistent across commands.
-    """
-    import sys
-
-    from ...presenters.terminal import detect, style
-
-    try:
-        from .. import __version__
-    except Exception:
-        __version__ = "unknown"
-
-    caps = detect(sys.stdout)
-    prefix = "🦖" if caps.can_emoji else "roar:"
-    line = f"{prefix} roar v{__version__}"
-    click.echo(style(line, "status_green", enabled=caps.can_color))
-
-
-def _hints_should_print() -> bool:
-    """Hints are advisory — auto-suppressed in quiet mode and non-TTY.
-
-    Sources, in order:
-      - `hints.enabled = false` in config → off.
-      - `output.verbosity = "quiet"` in config → off.
-      - stdout is not a TTY (CI, redirected output, piped) → off.
-      - otherwise → on.
-    """
-    import sys
-
-    from ...integrations.config import config_get
-
-    if config_get("hints.enabled") is False:
-        return False
-    if config_get("output.verbosity") == "quiet":
-        return False
-    if not sys.stdout.isatty():
-        return False
-    return True
+    print_brand_header()
 
 
 def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) -> None:
     """Print git-style `hint:` lines for next steps. Amber-colored to
-    match git's hint convention. Suppressed by `_hints_should_print()`."""
-    if not _hints_should_print():
+    match git's hint convention. Suppressed in quiet/non-TTY contexts."""
+    from .._format import hints_should_print, make_hint_printer
+
+    if not hints_should_print():
         return
 
-    import sys
-
-    from ...presenters.terminal import detect, style
-
-    caps = detect(sys.stdout)
-
-    def hint(text: str = "") -> None:
-        line = f"hint: {text}" if text else "hint:"
-        click.echo(style(line, "warn_amber", enabled=caps.can_color))
+    _caps, hint = make_hint_printer()
 
     click.echo("")
     hint("Get started:")

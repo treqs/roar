@@ -1,11 +1,25 @@
 """
 CLI commands for tracer backend configuration and diagnostics.
 
-Usage: roar tracer [status|set-default|check|setup ebpf]
+Three verbs, one home screen:
+
+    roar tracer              — status + tradeoff table + hints
+    roar tracer use <name>   — set the default backend (auto|ebpf|preload|ptrace)
+    roar tracer enable ebpf  — guided setup (setcap + sysctl) for the eBPF tracer
+    roar tracer check [name] — run the deep preflight for a backend (shows paths)
+
+The home screen leads with what `roar run` would actually pick next (the
+live auto resolution), follows with a 3-row table of tradeoffs so the
+user can decide, and ends with suppressible amber hints pointing at the
+right verb. Paths are diagnostic — they only show up in `check`.
 """
+
+from __future__ import annotations
 
 import json
 import subprocess
+import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -13,170 +27,301 @@ import click
 from ...core.tracer_modes import TRACER_MODE_VALUES, is_valid_tracer_mode
 from ...execution.runtime import tracer_backends
 from ...integrations.config import config_get, config_set
+from ...presenters.terminal import detect, style
+from .._format import hints_should_print, make_hint_printer, print_brand_header
 
 REQUIRED_CAPS = "cap_bpf,cap_perfmon,cap_sys_resource,cap_sys_ptrace,cap_dac_read_search+ep"
 EXPECTED_CAP_NAMES = tracer_backends.EXPECTED_EBPF_CAP_NAMES
 
 
+# ---------------------------------------------------------------------------
+# Backend specs — single source of truth for the tradeoff table.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BackendSpec:
+    """User-facing description of a single tracer backend.
+
+    `short` is the 1-line tradeoff column. `requirements` summarizes
+    permissions and host caveats. `platforms` gates whether the row is
+    even relevant on this OS.
+    """
+
+    name: str
+    short: str
+    requirements: str
+    platforms: tuple[str, ...]
+
+
+_SPECS: tuple[BackendSpec, ...] = (
+    BackendSpec(
+        name="ebpf",
+        short="fastest, low overhead",
+        requirements="needs CAP_BPF + perf_event_paranoid<=1; Linux only",
+        platforms=("linux",),
+    ),
+    BackendSpec(
+        name="preload",
+        short="near-eBPF speed",
+        requirements="no perms; skips statically-linked binaries (Go); some shell pipelines unreliable",
+        platforms=("linux", "darwin"),
+    ),
+    BackendSpec(
+        name="ptrace",
+        short="slow but correct",
+        requirements="no perms; works on every binary",
+        platforms=("linux",),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers — discovery + readiness + availability classification.
+# ---------------------------------------------------------------------------
+
+
 def _package_path() -> Path:
-    """Resolve roar package root path."""
     return Path(__file__).parent.parent.parent
 
 
 def _find_ebpf_tracer() -> str | None:
-    """Find the roar-tracer-ebpf binary."""
     return tracer_backends.find_ebpf_tracer(_package_path())
 
 
-def _find_roard() -> str | None:
-    """Find the roard daemon binary."""
-    return tracer_backends.find_roard(_package_path())
-
-
 def _find_ptrace_tracer() -> str | None:
-    """Find the roar-tracer (ptrace) binary."""
     return tracer_backends.find_ptrace_tracer(_package_path())
 
 
 def _find_preload_tracer() -> str | None:
-    """Find the roar-tracer-preload binary."""
     return tracer_backends.find_preload_tracer(_package_path())
 
 
 def _find_preload_library() -> str | None:
-    """Find preload interposer shared library."""
     return tracer_backends.find_preload_library(_package_path())
 
 
+def _find_roard() -> str | None:
+    return tracer_backends.find_roard(_package_path())
+
+
 def _get_current_caps(path: str) -> set[str]:
-    """Get current Linux capabilities set on a binary."""
     caps = tracer_backends.get_binary_caps(path)
     return caps if caps is not None else set()
 
 
 def _get_perf_event_paranoid() -> int | None:
-    """Read current perf_event_paranoid sysctl value."""
     return tracer_backends.get_perf_event_paranoid()
 
 
 def _get_default_mode() -> str:
-    """Get configured default tracer mode."""
     mode = config_get("tracer.default")
     if isinstance(mode, str) and is_valid_tracer_mode(mode):
         return mode
     return "auto"
 
 
-def _set_tracer_default(mode: str) -> None:
-    """Set default tracer mode."""
-    try:
-        config_path, _ = config_set("tracer.default", mode)
-        click.echo(f"Default tracer set to: {mode}")
-        click.echo(f"Saved to {config_path}")
-    except ValueError as e:
-        raise click.ClickException(str(e)) from e
+@dataclass(frozen=True)
+class _BackendStatus:
+    """Three states for a backend: ready / fixable / unavailable.
 
-    # The explanatory text previously fired on every `roar run`; now it
-    # only fires here, where the user has explicitly asked to switch.
-    from ...execution.runtime.tracer_banner import banner_for
+    - ready: works right now.
+    - fixable: the user could enable it locally (caps, sysctl).
+    - unavailable: out of the user's reach on this host (wrong OS,
+      kernel missing BTF, locked-down container, binary missing).
 
-    banner = banner_for(mode)
-    if banner:
-        click.echo("")
-        click.echo(banner)
+    `reason` is human-readable; rendered in the table.
+    """
+
+    state: str  # "ready" | "fixable" | "unavailable"
+    reason: str | None
 
 
-def _ebpf_readiness(path: str) -> tuple[bool, str]:
-    """Check eBPF readiness and return (ok, reason)."""
-    readiness = tracer_backends.ebpf_readiness(path)
-    return readiness.ok, readiness.reason or "ready"
+def _classify_ebpf() -> _BackendStatus:
+    unavail = tracer_backends.ebpf_host_unavailable_reason()
+    if unavail:
+        return _BackendStatus("unavailable", unavail)
+    binary = _find_ebpf_tracer()
+    if not binary:
+        return _BackendStatus("unavailable", "tracer binary not installed")
+    readiness = tracer_backends.ebpf_readiness(binary)
+    if readiness.ok:
+        return _BackendStatus("ready", None)
+    return _BackendStatus("fixable", readiness.reason)
 
 
-def _preload_readiness(path: str) -> tuple[bool, str]:
-    """Check preload readiness and return (ok, reason)."""
-    readiness = tracer_backends.preload_readiness(_package_path(), path)
-    return readiness.ok, readiness.reason or "ready"
+def _classify_preload() -> _BackendStatus:
+    binary = _find_preload_tracer()
+    if not binary:
+        return _BackendStatus("unavailable", "tracer binary not installed")
+    readiness = tracer_backends.preload_readiness(_package_path(), binary)
+    if readiness.ok:
+        return _BackendStatus("ready", None)
+    # Preload failures (missing library, etc.) are install-level — count
+    # as unavailable rather than fixable, since there's nothing the user
+    # can `setcap`/`sysctl` to make it work.
+    return _BackendStatus("unavailable", readiness.reason)
 
 
-def _ptrace_readiness(path: str) -> tuple[bool, str]:
-    """Check ptrace readiness and return (ok, reason)."""
-    readiness = tracer_backends.ptrace_readiness(path)
-    return readiness.ok, readiness.reason or "ready"
+def _classify_ptrace() -> _BackendStatus:
+    if sys.platform != "linux":
+        return _BackendStatus("unavailable", f"{sys.platform} (ptrace is Linux-only)")
+    binary = _find_ptrace_tracer()
+    if not binary:
+        return _BackendStatus("unavailable", "tracer binary not installed")
+    readiness = tracer_backends.ptrace_readiness(binary)
+    if readiness.ok:
+        return _BackendStatus("ready", None)
+    return _BackendStatus("unavailable", readiness.reason)
+
+
+_CLASSIFIERS = {
+    "ebpf": _classify_ebpf,
+    "preload": _classify_preload,
+    "ptrace": _classify_ptrace,
+}
 
 
 def _backend_preflight(
     backend: str,
     command: str | None,
 ) -> tracer_backends.AutoPreflightResult | tracer_backends.TracerPreflightResult:
-    """Run strict backend preflight."""
     command_args = (command,) if command else None
     if backend == "auto":
         return tracer_backends.preflight_auto_backend(_package_path(), command=command_args)
     return tracer_backends.preflight_backend(_package_path(), backend, command=command_args)
 
 
-def _print_status() -> None:
-    """Print tracer status and environment diagnostics."""
-    mode = _get_default_mode()
-    fallback = config_get("tracer.fallback_enabled")
-    proxy_enabled = config_get("proxy.enabled")
-    if fallback is None:
-        fallback = True
-    if proxy_enabled is None:
-        proxy_enabled = False
+# ---------------------------------------------------------------------------
+# Status — the home screen.
+# ---------------------------------------------------------------------------
 
-    click.echo(f"Default tracer: {mode}")
-    click.echo(f"Fallback enabled: {fallback}")
-    click.echo(f"Proxy enabled: {proxy_enabled}")
+
+def _print_status() -> None:
+    print_brand_header()
     click.echo("")
 
-    ptrace = _find_ptrace_tracer()
-    if ptrace:
-        ok, reason = _ptrace_readiness(ptrace)
-        status = "ready" if ok else reason
-        click.echo(f"  ptrace:  {ptrace} ({status})")
-    else:
-        click.echo("  ptrace:  not found")
+    statuses = {name: _CLASSIFIERS[name]() for name in _CLASSIFIERS}
+    mode = _get_default_mode()
 
-    ebpf = _find_ebpf_tracer()
-    if ebpf:
-        ok, reason = _ebpf_readiness(ebpf)
-        status = "ready" if ok else reason
-        click.echo(f"  ebpf:    {ebpf} ({status})")
-    else:
-        click.echo("  ebpf:    not found")
+    _print_active_line(mode, statuses)
+    click.echo("")
+    _print_backend_table(statuses)
 
-    preload = _find_preload_tracer()
-    if preload:
-        ok, reason = _preload_readiness(preload)
-        status = "ready" if ok else reason
-        preload_lib = _find_preload_library() or "library not found"
-        click.echo(f"  preload: {preload} ({status}; lib={preload_lib})")
-    else:
-        click.echo("  preload: not found")
+    _print_status_hints(statuses)
 
-    roard = _find_roard()
-    if roard:
-        click.echo(f"  roard:   {roard}")
-    else:
-        click.echo("  roard:   not found")
 
-    # Only surface perf_event_paranoid when it's blocking eBPF. When it's
-    # within the acceptable range we say nothing — its "ok" state was
-    # ambiguous (which backend does it apply to?) and was just noise.
-    paranoid = _get_perf_event_paranoid()
-    if paranoid is not None and paranoid > 1:
-        click.echo("")
-        click.echo("eBPF kernel setting:")
-        click.echo(f"  perf_event_paranoid: {paranoid} (too restrictive, needs <= 1)")
+def _print_active_line(mode: str, statuses: dict[str, _BackendStatus]) -> None:
+    """The 'what would happen on my next `roar run`' line.
+
+    For `auto`, runs the auto preflight live so the user sees exactly
+    which backend would be selected next — including the per-backend
+    skip reasons that led there.
+    """
+    if mode == "auto":
+        result = tracer_backends.preflight_auto_backend(_package_path(), command=None)
+        if result.ok and getattr(result, "selected_backend", None):
+            chosen = result.selected_backend
+            click.echo(f"  Active: auto → would pick {chosen}")
+            skipped = [
+                f"{br.backend}: {br.summary}"
+                for br in result.results
+                if br.backend != chosen and not br.ok
+            ]
+            if skipped:
+                for entry in skipped:
+                    click.echo(f"          (skipped {entry})")
+        else:
+            click.echo("  Active: auto → no backend ready")
+        return
+
+    status = statuses.get(mode)
+    if status is None:
+        click.echo(f"  Active: {mode}")
+        return
+    if status.state == "ready":
+        click.echo(f"  Active: {mode}  (ready)")
+    elif status.state == "fixable":
+        click.echo(f"  Active: {mode}  (NOT READY: {status.reason})")
+    else:
+        click.echo(f"  Active: {mode}  (unavailable: {status.reason})")
+
+
+def _print_backend_table(statuses: dict[str, _BackendStatus]) -> None:
+    """Three-row tradeoff table. Backends unavailable on this OS are
+    still shown — the user needs to know why."""
+    caps = detect(sys.stdout)
+    name_w = max(len(s.name) for s in _SPECS)
+    state_w = 11  # "unavailable"
+    short_w = max(len(s.short) for s in _SPECS)
+
+    for spec in _SPECS:
+        status = statuses[spec.name]
+        if status.state == "ready":
+            state_txt = style("ready", "status_green", enabled=caps.can_color)
+            state_pad = " " * (state_w - len("ready"))
+        elif status.state == "fixable":
+            state_txt = style("not ready", "warn_amber", enabled=caps.can_color)
+            state_pad = " " * (state_w - len("not ready"))
+        else:
+            state_txt = style("unavailable", "dim", enabled=caps.can_color)
+            state_pad = " " * (state_w - len("unavailable"))
         click.echo(
-            "    → sudo sysctl -w kernel.perf_event_paranoid=1  "
-            "(this boot; host-wide; security tradeoff)"
+            f"  {spec.name:<{name_w}}  {state_txt}{state_pad}  "
+            f"{spec.short:<{short_w}}  {spec.requirements}"
         )
-        click.echo(
-            "    → echo 'kernel.perf_event_paranoid=1' | sudo tee "
-            "/etc/sysctl.d/99-ebpf-tracer.conf  (persistent)"
+        # When a row is fixable or unavailable, surface the cause on a
+        # continuation line so the user can see what's blocking it
+        # without having to run `roar tracer check`.
+        if status.reason and status.state != "ready":
+            indent = " " * (2 + name_w + 2)
+            click.echo(f"{indent}↳ {status.reason}")
+
+
+def _print_status_hints(statuses: dict[str, _BackendStatus]) -> None:
+    if not hints_should_print():
+        return
+    _caps, hint = make_hint_printer()
+    click.echo("")
+
+    if statuses["ebpf"].state == "fixable":
+        hint(
+            "To enable eBPF here:    roar tracer enable ebpf       "
+            "(applies setcap + sysctl; needs sudo)"
         )
+    hint("To pick one explicitly: roar tracer use <backend>     (or `auto`)")
+    hint("To probe one:           roar tracer check <backend>")
+    hint("Docs: https://glaas.ai/docs/tracers")
+
+
+# ---------------------------------------------------------------------------
+# `use` — set default backend.
+# ---------------------------------------------------------------------------
+
+
+def _set_tracer_default(mode: str) -> None:
+    try:
+        config_path, _ = config_set("tracer.default", mode)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"Default tracer set to: {mode}  (saved to {config_path})")
+
+    # If the user picked something not actually available, tell them now
+    # (better here than at the next `roar run`).
+    if mode != "auto":
+        status = _CLASSIFIERS[mode]()
+        if status.state == "fixable":
+            click.echo(f"  Note: {mode} is not ready right now ({status.reason}).")
+            if mode == "ebpf":
+                click.echo("  Fix it with: roar tracer enable ebpf")
+        elif status.state == "unavailable":
+            click.echo(f"  Warning: {mode} is unavailable on this host ({status.reason}).")
+
+
+# ---------------------------------------------------------------------------
+# `check` — preflight diagnostic, where paths live.
+# ---------------------------------------------------------------------------
 
 
 def _print_single_preflight_result(
@@ -186,6 +331,7 @@ def _print_single_preflight_result(
     err = not result.ok
     status = "passed" if result.ok else "failed"
     click.echo(f"Tracer check {status} for '{target}': {result.summary}", err=err)
+    _print_paths_for(target, err=err)
     if result.command_checked:
         click.echo(f"  command: {result.command_checked}", err=err)
     for check in result.checks:
@@ -212,9 +358,6 @@ def _print_auto_preflight_result(
         backend_status = "ok" if backend_result.ok else backend_result.summary
         click.echo(f"  {backend_result.backend}: {backend_status}", err=err)
 
-    # When auto selects a backend, run that backend's deep preflight so the
-    # output matches what `roar tracer check <backend>` would have shown —
-    # consistency the previous flow lacked.
     if result.ok and result.results:
         selected = next((br for br in result.results if br.ok), None)
         if selected is not None:
@@ -222,12 +365,31 @@ def _print_auto_preflight_result(
             if isinstance(deep, tracer_backends.TracerPreflightResult):
                 click.echo("")
                 click.echo(f"Selected backend '{selected.backend}': detail")
+                _print_paths_for(selected.backend, err=False)
                 for check in deep.checks:
                     detail = f" ({check.detail})" if check.detail else ""
                     check_status = "ok" if check.ok else "fail"
                     click.echo(f"  - {check.name}: {check_status}{detail}")
 
     _print_preflight_suggestions(result, err=err)
+
+
+def _print_paths_for(backend: str, *, err: bool) -> None:
+    """The path block — only surfaces inside `check` output (debug-y),
+    not on the home screen."""
+    if backend == "ebpf":
+        bin_path = _find_ebpf_tracer() or "not found"
+        roard = _find_roard() or "not found"
+        click.echo(f"  binary: {bin_path}", err=err)
+        click.echo(f"  daemon: {roard}", err=err)
+    elif backend == "preload":
+        bin_path = _find_preload_tracer() or "not found"
+        lib_path = _find_preload_library() or "not found"
+        click.echo(f"  binary: {bin_path}", err=err)
+        click.echo(f"  library: {lib_path}", err=err)
+    elif backend == "ptrace":
+        bin_path = _find_ptrace_tracer() or "not found"
+        click.echo(f"  binary: {bin_path}", err=err)
 
 
 def _print_preflight_suggestions(
@@ -244,49 +406,24 @@ def _print_preflight_suggestions(
         click.echo(f"  - {suggestion}", err=err)
 
 
+# ---------------------------------------------------------------------------
+# Click command group.
+# ---------------------------------------------------------------------------
+
+
 @click.group("tracer", invoke_without_command=True)
 @click.pass_context
 def tracer(ctx: click.Context) -> None:
-    """Manage tracer backend defaults and diagnostics."""
+    """Show tracer status, pick a backend, or run preflight diagnostics."""
     if ctx.invoked_subcommand is None:
         _print_status()
 
 
-@tracer.command("status")
-def tracer_status() -> None:
-    """Show tracer status."""
-    _print_status()
-
-
-@tracer.command("set-default")
-@click.argument("mode", type=click.Choice(list(TRACER_MODE_VALUES)))
-def tracer_set_default(mode: str) -> None:
-    """Set default tracer backend policy."""
-    _set_tracer_default(mode)
-
-
-@tracer.command("auto")
-def tracer_auto() -> None:
-    """Convenience alias for set-default auto."""
-    _set_tracer_default("auto")
-
-
-@tracer.command("ebpf")
-def tracer_ebpf() -> None:
-    """Convenience alias for set-default ebpf."""
-    _set_tracer_default("ebpf")
-
-
-@tracer.command("ptrace")
-def tracer_ptrace() -> None:
-    """Convenience alias for set-default ptrace."""
-    _set_tracer_default("ptrace")
-
-
-@tracer.command("preload")
-def tracer_preload() -> None:
-    """Convenience alias for set-default preload."""
-    _set_tracer_default("preload")
+@tracer.command("use")
+@click.argument("backend", type=click.Choice(list(TRACER_MODE_VALUES)))
+def tracer_use(backend: str) -> None:
+    """Set the default tracer backend (auto|ebpf|preload|ptrace)."""
+    _set_tracer_default(backend)
 
 
 @tracer.command("check")
@@ -300,7 +437,7 @@ def tracer_preload() -> None:
     "--backend",
     type=click.Choice(list(TRACER_MODE_VALUES)),
     default=None,
-    help="Backend policy to validate (defaults to configured default tracer).",
+    help="Backend to validate (defaults to configured default tracer).",
 )
 @click.option(
     "--command",
@@ -320,11 +457,10 @@ def tracer_check(
     command: str | None,
     json_output: bool,
 ) -> None:
-    """Validate tracer backend preflight (non-zero exit if not ready).
+    """Run the deep preflight for a backend (or the configured default).
 
-    Accepts the backend as a positional argument (e.g. `roar tracer check ebpf`)
-    or via --backend; the positional form is the discoverable one. With no
-    backend, validates the configured default.
+    Includes binary paths, per-step checks, and (for `auto`) the live
+    fallback chain. Non-zero exit if the backend isn't ready.
     """
     if backend_arg and backend and backend_arg != backend:
         raise click.UsageError(
@@ -344,15 +480,8 @@ def tracer_check(
         raise SystemExit(1)
 
 
-@tracer.group("setup", invoke_without_command=True)
-@click.pass_context
-def tracer_setup(ctx: click.Context) -> None:
-    """Set up tracer backends."""
-    if ctx.invoked_subcommand is None:
-        click.echo(ctx.get_help())
-
-
-@tracer_setup.command("ebpf")
+@tracer.command("enable")
+@click.argument("backend", type=click.Choice(["ebpf"]))
 @click.option(
     "--path",
     "binary_path",
@@ -360,8 +489,29 @@ def tracer_setup(ctx: click.Context) -> None:
     type=click.Path(exists=True),
     help="Path to roar-tracer-ebpf binary (overrides auto-detection).",
 )
-def tracer_setup_ebpf(binary_path: str | None) -> None:
-    """Set up eBPF tracer capabilities (needs sudo)."""
+def tracer_enable(backend: str, binary_path: str | None) -> None:
+    """Apply the host config needed for a backend.
+
+    Currently only `ebpf` has a guided enable flow (runs `setcap` and
+    sets `kernel.perf_event_paranoid=1` persistently). preload and
+    ptrace don't need any host setup.
+    """
+    # `backend` is constrained to {"ebpf"} but we keep the verb generic
+    # so future backends can hook in cleanly.
+    if backend == "ebpf":
+        _enable_ebpf(binary_path=binary_path)
+
+
+def _enable_ebpf(*, binary_path: str | None) -> None:
+    unavail = tracer_backends.ebpf_host_unavailable_reason()
+    if unavail:
+        click.echo(
+            f"Error: eBPF is unavailable on this host ({unavail}).",
+            err=True,
+        )
+        click.echo("Use `roar tracer use preload` or `roar tracer use ptrace` instead.", err=True)
+        raise SystemExit(1)
+
     ebpf: str | None
     if binary_path:
         ebpf = str(Path(binary_path).resolve())
@@ -375,7 +525,6 @@ def tracer_setup_ebpf(binary_path: str | None) -> None:
         click.echo("  cd rust && cargo build --release -p roar-tracer-ebpf", err=True)
         raise SystemExit(1)
 
-    assert ebpf is not None
     click.echo(f"Binary: {ebpf}")
     current_caps = _get_current_caps(ebpf)
 
@@ -402,7 +551,7 @@ def tracer_setup_ebpf(binary_path: str | None) -> None:
                 click.echo("Copy the binary to a local path first:", err=True)
                 click.echo(f"  sudo cp {ebpf} /usr/local/bin/roar-tracer-ebpf", err=True)
                 click.echo(
-                    "  roar tracer setup ebpf --path /usr/local/bin/roar-tracer-ebpf",
+                    "  roar tracer enable ebpf --path /usr/local/bin/roar-tracer-ebpf",
                     err=True,
                 )
             else:

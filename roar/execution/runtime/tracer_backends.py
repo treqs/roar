@@ -302,6 +302,29 @@ def ebpf_is_ready(path: str) -> tuple[bool, str | None]:
     return ebpf_readiness(path).as_tuple()
 
 
+def ebpf_host_unavailable_reason() -> str | None:
+    """Why this host can't run roar's eBPF tracer at all, or None if it can.
+
+    Distinguishes "user can't fix this locally" (locked-down container,
+    non-Linux, kernel without BTF, no perf_event subsystem) from
+    "needs a `sudo setcap` or sysctl tweak" — which is what
+    `ebpf_readiness` already reports.
+
+    Returns the human-readable reason string, or None if the host is
+    capable of running eBPF (modulo fixable caps/sysctl).
+    """
+    if sys.platform != "linux":
+        return f"{sys.platform} (eBPF is Linux-only)"
+    # CO-RE programs need /sys/kernel/btf/vmlinux; without it the loader
+    # can't relocate the program against the running kernel's types.
+    if not Path("/sys/kernel/btf/vmlinux").exists():
+        return "kernel built without BTF (no /sys/kernel/btf/vmlinux)"
+    # No perf subsystem = no perf_event_open = no eBPF tracepoints.
+    if not Path("/proc/sys/kernel/perf_event_paranoid").exists():
+        return "kernel has no perf_event subsystem"
+    return None
+
+
 def ptrace_readiness(path: str) -> TracerReadiness:
     """
     Verify the ptrace tracer binary is actually executable on this host.
@@ -381,7 +404,7 @@ def suggestions_for_preflight_result(result: PreflightResult) -> tuple[str, ...]
 
     if isinstance(result, AutoPreflightResult):
         suggestions: list[str] = [
-            "Run `roar tracer status` to see detected tracer binaries and system readiness.",
+            "Run `roar tracer` to see detected tracer binaries and system readiness.",
         ]
         for backend_result in result.results:
             suggestions.extend(suggestions_for_preflight_result(backend_result))
@@ -404,7 +427,7 @@ def suggestions_for_preflight_result(result: PreflightResult) -> tuple[str, ...]
             )
         if "cap" in detail_text or "perf_event_paranoid" in detail_text:
             suggestions.append(
-                "Run `roar tracer setup ebpf` to configure eBPF tracer capabilities and sysctls."
+                "Run `roar tracer enable ebpf` to configure eBPF tracer capabilities and sysctls."
             )
         if "tracepoint" in detail_text or "attach" in detail_text:
             suggestions.append(

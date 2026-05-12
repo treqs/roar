@@ -158,9 +158,9 @@ def test_init_hints_visible_when_gate_passes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """With the hint gate forced on (simulating TTY), `hint:` lines appear."""
-    import roar.cli.commands.init as init_mod
+    from roar.cli import _format
 
-    monkeypatch.setattr(init_mod, "_hints_should_print", lambda: True)
+    monkeypatch.setattr(_format, "hints_should_print", lambda: True)
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_git_repo(repo)
@@ -193,10 +193,6 @@ def test_init_hints_suppressed_when_hints_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Even with the TTY gate forced on, hints.enabled=false silences."""
-    import roar.cli.commands.init as init_mod
-
-    # Force TTY-on at the gate level so we exercise the config check.
-    monkeypatch.setattr(init_mod, "_hints_should_print", init_mod._hints_should_print)
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_git_repo(repo)
