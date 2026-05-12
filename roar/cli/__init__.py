@@ -187,6 +187,7 @@ def cli(ctx: click.Context) -> None:
     \b
     Inspect Local Lineage:
         roar show @1           Inspect a specific step, job, or artifact
+        roar tui               Browse lineage interactively
 
     \b
     Share and Publish:

@@ -16,14 +16,7 @@ def tui(ctx: RoarContext) -> None:
 
     Browse the current session's DAG, inspect jobs and artifacts, search
     lineage, view the job log, and launch tracked commands via tmux.
-
-    Install with the `tui` extra: `pip install 'roar-cli[tui]'`.
     """
-    try:
-        from ...tui.app import run
-    except ImportError as exc:
-        raise click.ClickException(
-            "TUI dependencies are not installed. Install with: pip install 'roar-cli[tui]'"
-        ) from exc
+    from ...tui.app import run
 
     run(roar_dir=ctx.roar_dir, cwd=ctx.cwd)

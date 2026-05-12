@@ -46,6 +46,7 @@ dependencies = [
     "pysqlite3-binary>=0.5.0; sys_platform == 'linux' and platform_machine == 'x86_64'",  # Fallback when stdlib sqlite3 unavailable
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
+    "textual>=0.80",
     "tomli>=2.0.0; python_version < '3.11'",
 ]
 
@@ -66,9 +67,6 @@ dev = [
     "mypy>=1.13.0",
     "boto3>=1.28.0",
     "google-cloud-storage>=2.10.0",
-]
-tui = [
-    "textual>=0.80",
 ]
 
 [project.scripts]
