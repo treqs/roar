@@ -1,6 +1,7 @@
 import importlib
 import json
 
+from roar.backends.ray.env_contract import ROAR_NO_TELEMETRY_ENV
 from roar.backends.ray.submit_context import derive_submit_proxy_port
 
 
@@ -60,6 +61,7 @@ def test_ray_job_submit_injects_pip_with_installed_roar_cli_version(monkeypatch)
         == "roar.execution.runtime.worker_bootstrap.startup"
     )
     assert runtime_env["env_vars"]["ROAR_JOB_INSTRUMENTED"] == "1"
+    assert runtime_env["env_vars"][ROAR_NO_TELEMETRY_ENV] == "1"
     assert rewritten.session_id is None
 
 
@@ -159,6 +161,7 @@ def test_existing_runtime_env_json_env_vars_are_preserved_and_glaas_url_added(mo
     runtime_env = _runtime_env_json(rewritten.command)
     assert runtime_env["env_vars"]["USER_KEY"] == "value"
     assert runtime_env["env_vars"]["GLAAS_URL"] == "https://glaas.example.com"
+    assert runtime_env["env_vars"][ROAR_NO_TELEMETRY_ENV] == "1"
 
 
 def test_existing_roar_run_entrypoint_is_unchanged(monkeypatch) -> None:
@@ -301,6 +304,7 @@ def test_no_glaas_url_configured_only_instrumentation_env_var_is_injected(monkey
     env = runtime_env["env_vars"]
     expected_port = derive_submit_proxy_port(env["ROAR_JOB_ID"])
     assert env["ROAR_JOB_INSTRUMENTED"] == "1"
+    assert env[ROAR_NO_TELEMETRY_ENV] == "1"
     assert env["ROAR_WRAP"] == "1"
     assert env["ROAR_RAY_NODE_AGENTS"] == "1"
     assert env["ROAR_PROXY_PORT"] == str(expected_port)

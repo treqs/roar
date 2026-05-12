@@ -104,10 +104,21 @@ def run(
     except ValueError as exc:
         if str(exc) == "No command specified":
             click.echo(_get_help_text())
+        elif _is_dirty_tree_error(exc):
+            from ...telemetry.hooks import record_run_outcome
+
+            record_run_outcome(success=False, failure_kind="dirty", start_dir=ctx.cwd)
         raise click.ClickException(str(exc)) from exc
 
     if exit_code != 0:
         raise SystemExit(exit_code)
+
+
+def _is_dirty_tree_error(exc: ValueError) -> bool:
+    message = str(exc)
+    return message.startswith("Run blocked:") and (
+        "working tree is dirty" in message or "home directory" in message
+    )
 
 
 def _get_help_text() -> str:

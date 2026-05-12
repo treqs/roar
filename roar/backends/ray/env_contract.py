@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 ROAR_CLUSTER_GLAAS_URL_ENV = "ROAR_CLUSTER_GLAAS_URL"
 ROAR_CLUSTER_AWS_ENDPOINT_URL_ENV = "ROAR_CLUSTER_AWS_ENDPOINT_URL"
+ROAR_NO_TELEMETRY_ENV = "ROAR_NO_TELEMETRY"
 
 _WORKER_PROPAGATED_ENV_KEYS = (
     "AWS_ENDPOINT_URL",
@@ -38,6 +39,7 @@ def merge_worker_bootstrap_env(
 ) -> dict[str, str]:
     env_vars = dict(existing_env_vars or {})
     env_vars["ROAR_JOB_ID"] = job_id
+    env_vars[ROAR_NO_TELEMETRY_ENV] = "1"
 
     if driver_job_uid is not None:
         env_vars["ROAR_DRIVER_JOB_UID"] = str(driver_job_uid)

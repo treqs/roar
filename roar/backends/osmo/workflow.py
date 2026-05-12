@@ -437,6 +437,7 @@ bundle_path="$2"
 shift 2
 
 export ROAR_JOB_INSTRUMENTED=1
+export ROAR_NO_TELEMETRY=1
 export ROAR_EXECUTION_BACKEND=osmo
 export ROAR_PROJECT_DIR="${{ROAR_PROJECT_DIR:-$PWD}}"
 {runtime_setup}

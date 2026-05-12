@@ -128,6 +128,11 @@ enabled = false
 default = "auto"
 # Allow runtime fallback to another tracer backend
 fallback_enabled = true
+
+[telemetry]
+# Enable anonymous product telemetry for this project.
+# Disable globally with `roar telemetry --disable` or use DO_NOT_TRACK=1 / ROAR_NO_TELEMETRY=1.
+enabled = true
 """
 
 _CORE_CONFIG_TEMPLATE_SUFFIX = """\
@@ -205,6 +210,12 @@ def _ensure_active_session(roar_dir: Path) -> None:
     """Guarantee the initialized project has an active session."""
     with create_database_context(roar_dir) as db_ctx:
         db_ctx.sessions.get_or_create_active()
+
+
+def _record_init_telemetry(cwd: Path) -> None:
+    from ...telemetry.hooks import record_action_trigger
+
+    record_action_trigger("init", start_dir=cwd)
 
 
 def init_project(cwd: Path) -> Path:
@@ -321,6 +332,7 @@ def init(click_ctx: click.Context, yes: bool, no_gitignore: bool, init_path: Pat
         in_git_repo=target_repo_root is not None,
         gitignore_action=gitignore_action,
     )
+    _record_init_telemetry(cwd)
 
 
 def _print_init_summary(*, roar_dir: Path, gitignore_status: str | None, in_git_repo: bool) -> None:

@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover
     import tomli as tomllib
 
 from roar.backends.ray.config import load_ray_backend_config
-from roar.backends.ray.env_contract import merge_worker_bootstrap_env
+from roar.backends.ray.env_contract import ROAR_NO_TELEMETRY_ENV, merge_worker_bootstrap_env
 from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV
 from roar.execution.runtime.inject.support import SuppressTracking, warn_runtime
 from roar.execution.runtime.worker_bootstrap import (
@@ -615,6 +615,9 @@ def _prepare_instrumented_job_worker_runtime_env(
 ) -> dict[str, Any]:
     del job_id
     runtime_env_out = dict(runtime_env or {})
+    env_vars = dict(runtime_env_out.get("env_vars", {}) or {})
+    env_vars[ROAR_NO_TELEMETRY_ENV] = "1"
+    runtime_env_out["env_vars"] = env_vars
     runtime_env_out["py_executable"] = WORKER_PY_EXECUTABLE
     return runtime_env_out
 

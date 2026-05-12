@@ -88,6 +88,7 @@ workflow:
     rendered = output_path.read_text(encoding="utf-8")
     assert "path: /tmp/roar-osmo-wrapper.sh" in rendered
     assert "contents: |" in rendered
+    assert "export ROAR_NO_TELEMETRY=1" in rendered
     assert "-m roar run --tracer ptrace --no-tracer-fallback" in rendered
     assert "-m roar osmo export-lineage-bundle" in rendered
     assert "{{output}}/roar-fragments.json" in rendered

@@ -11,6 +11,7 @@ from hashlib import blake2s
 from roar.backends.ray.env_contract import (
     ROAR_CLUSTER_AWS_ENDPOINT_URL_ENV,
     ROAR_CLUSTER_GLAAS_URL_ENV,
+    ROAR_NO_TELEMETRY_ENV,
     resolve_cluster_glaas_url,
 )
 from roar.execution.cluster.proxy_config import DEFAULT_LOCAL_PROXY_PORT, local_proxy_endpoint
@@ -55,6 +56,7 @@ def build_submit_instrumentation_context(
 def build_submit_source_environ(context: RayInstrumentationContext) -> dict[str, str]:
     source_environ = {
         ROAR_JOB_INSTRUMENTED_ENV_VAR: "1",
+        ROAR_NO_TELEMETRY_ENV: "1",
         "ROAR_RAY_NODE_AGENTS": "1",
         "ROAR_PROXY_PORT": str(context.proxy_port),
         "AWS_ENDPOINT_URL": local_proxy_endpoint(context.proxy_port),

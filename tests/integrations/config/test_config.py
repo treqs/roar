@@ -257,6 +257,7 @@ class TestDefaultsMatchPydanticModels:
             "filters",
             "cleanup",
             "hash",
+            "telemetry",
             "reversible",
             "logging",
             "composites",
@@ -300,6 +301,7 @@ class TestConfigLoading:
         assert config["registration"]["omit"]["enabled"] is True
         assert config["hash"]["primary"] == "blake3"
         assert config["composites"]["run"]["enabled"] is True
+        assert config["telemetry"]["enabled"] is True
 
     def test_load_config_merges_with_defaults(self, tmp_path: Path) -> None:
         """load_config merges file values with defaults."""

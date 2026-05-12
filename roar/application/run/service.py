@@ -13,6 +13,7 @@ from ...presenters.console import ConsolePresenter
 from ...presenters.run_report import RunReportPresenter
 from .dag_references import DAGReferenceResolver
 from .execution import (
+    ExecutionReport,
     execute_and_report,
     get_hash_algorithms,
     validate_git_clean,
@@ -98,30 +99,97 @@ def _execute_tracked_command(
     tracer_mode: str | None,
     tracer_fallback: bool | None,
 ) -> int:
-    planned = plan_execution_command(command)
-    backend_name = planned.backend_name
-    execution_role = str(planned.execution_role or "").strip()
-    if not execution_role:
-        raise ValueError(f"Execution backend '{backend_name}' did not provide an execution role.")
+    try:
+        planned = plan_execution_command(command)
+        backend_name = planned.backend_name
+        execution_role = str(planned.execution_role or "").strip()
+        if not execution_role:
+            raise ValueError(f"Execution backend '{backend_name}' did not provide an execution role.")
 
-    exit_code = execute_and_report(
-        roar_dir=roar_dir,
-        backend_name=backend_name,
-        execution_role=execution_role,
-        command=planned.command,
+        report = _coerce_execution_report(
+            execute_and_report(
+                roar_dir=roar_dir,
+                backend_name=backend_name,
+                execution_role=execution_role,
+                command=planned.command,
+                job_type=job_type,
+                step_name=step_name,
+                verbosity=verbosity,
+                hash_algorithms=hash_algorithms,
+                repo_root=repo_root,
+                tracer_mode=tracer_mode,
+                tracer_fallback=tracer_fallback,
+            )
+        )
+    except Exception:
+        _record_run_telemetry(
+            job_type=job_type,
+            report_exit_code=1,
+            tracer_backend=None,
+            failure_kind="internal",
+            repo_root=repo_root,
+        )
+        raise
+
+    try:
+        if planned.finalize_run:
+            planned.finalize_run(cast(Any, _FinalizerContext(roar_dir=roar_dir)))
+    except Exception:
+        _record_run_telemetry(
+            job_type=job_type,
+            report_exit_code=report.exit_code,
+            tracer_backend=report.tracer_backend,
+            failure_kind="internal",
+            repo_root=repo_root,
+        )
+        raise
+
+    _record_run_telemetry(
         job_type=job_type,
-        step_name=step_name,
-        verbosity=verbosity,
-        hash_algorithms=hash_algorithms,
+        report_exit_code=report.exit_code,
+        tracer_backend=report.tracer_backend,
+        failure_kind=_classify_run_failure(report),
         repo_root=repo_root,
-        tracer_mode=tracer_mode,
-        tracer_fallback=tracer_fallback,
     )
 
-    if planned.finalize_run:
-        planned.finalize_run(cast(Any, _FinalizerContext(roar_dir=roar_dir)))
+    return report.exit_code
 
-    return exit_code
+
+def _record_run_telemetry(
+    *,
+    job_type: str | None,
+    report_exit_code: int,
+    tracer_backend: str | None,
+    failure_kind: str | None,
+    repo_root: str,
+) -> None:
+    if job_type is not None:
+        return
+
+    from ...telemetry.hooks import record_run_outcome
+
+    record_run_outcome(
+        success=(report_exit_code == 0 and failure_kind is None),
+        failure_kind=failure_kind,
+        tracer_backend=tracer_backend,
+        start_dir=repo_root,
+    )
+
+
+def _coerce_execution_report(value: ExecutionReport | int) -> ExecutionReport:
+    if isinstance(value, ExecutionReport):
+        return value
+    return ExecutionReport(exit_code=int(value))
+
+
+def _classify_run_failure(report: ExecutionReport) -> str | None:
+    if report.exit_code == 0:
+        return None
+    if report.setup_error:
+        return "tracer_setup"
+    if report.interrupted:
+        return "interrupted"
+    return "user_exit"
 
 
 def _resolve_run_inputs(

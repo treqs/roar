@@ -173,6 +173,20 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
         "default": True,
         "description": "Allow fallback to another tracer backend when the preferred backend fails",
     },
+    "tracer.banner": {
+        "type": bool,
+        "default": True,
+        "description": "Show a one-time per-machine banner when a tracer backend is "
+        "selected for the first time or via fallback (set to false to suppress)",
+    },
+    "telemetry.enabled": {
+        "type": bool,
+        "default": True,
+        "description": (
+            "Enable anonymous product telemetry for this project unless disabled globally "
+            "or by environment"
+        ),
+    },
     "git.remote": {
         "type": str,
         "default": None,

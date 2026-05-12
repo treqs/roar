@@ -179,6 +179,12 @@ class TracerConfig(ConfigBaseModel):
     fallback_enabled: bool = True
 
 
+class TelemetryConfig(ConfigBaseModel):
+    """Anonymous product telemetry configuration section."""
+
+    enabled: bool = True
+
+
 class GitConfig(ConfigBaseModel):
     """Git integration configuration section."""
 
@@ -246,6 +252,7 @@ class RoarConfig(ConfigBaseModel):
     hash: HashConfig = Field(default_factory=HashConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     tracer: TracerConfig = Field(default_factory=TracerConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     git: GitConfig = Field(default_factory=GitConfig)
     hints: HintsConfig = Field(default_factory=HintsConfig)
     reversible: ReversibleConfig = Field(default_factory=ReversibleConfig)

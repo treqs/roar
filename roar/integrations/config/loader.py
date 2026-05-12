@@ -32,6 +32,7 @@ from .schema import (
     ProxyConfig,
     RegisterConfig,
     ReversibleConfig,
+    TelemetryConfig,
     TracerConfig,
 )
 
@@ -202,6 +203,7 @@ class RoarSettings(BaseSettings):
     hash: HashConfig = HashConfig()
     proxy: ProxyConfig = ProxyConfig()
     tracer: TracerConfig = TracerConfig()
+    telemetry: TelemetryConfig = TelemetryConfig()
     reversible: ReversibleConfig = ReversibleConfig()
     logging: LoggingConfig = LoggingConfig()
     composites: CompositesConfig = CompositesConfig()
@@ -298,6 +300,7 @@ class RoarSettings(BaseSettings):
             "hash": self.hash.model_dump(),
             "proxy": self.proxy.model_dump(),
             "tracer": self.tracer.model_dump(),
+            "telemetry": self.telemetry.model_dump(),
             "reversible": self.reversible.model_dump(),
             "logging": self.logging.model_dump(),
             "composites": self.composites.model_dump(),
