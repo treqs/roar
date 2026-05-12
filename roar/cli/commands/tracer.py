@@ -343,10 +343,7 @@ def _print_status_hints(statuses: dict[str, _BackendStatus]) -> None:
     hint("To pick one explicitly: roar tracer use {auto|ebpf|preload|ptrace}")
     hint("To probe one:           roar tracer check {auto|ebpf|preload|ptrace}")
     if statuses["ebpf"].state == "fixable":
-        hint(
-            "To enable eBPF here:    roar tracer enable ebpf       "
-            "(applies setcap + sysctl; needs sudo)"
-        )
+        hint("To enable eBPF here:    roar tracer enable ebpf       (sets capabilities + walks the sysctl step)")
     hint("Docs: https://glaas.ai/docs/tracers")
 
 
@@ -586,20 +583,24 @@ def _enable_ebpf(*, binary_path: str | None) -> None:
         click.echo("  cd rust && cargo build --release -p roar-tracer-ebpf", err=True)
         raise SystemExit(1)
 
-    click.echo(f"Binary: {ebpf}")
+    caps = detect(sys.stdout)
+    done_glyph = "✓" if caps.can_emoji else "[ok]"
+    todo_glyph = "⚠" if caps.can_emoji else "[!]"
+
+    def done(text: str) -> None:
+        click.echo(f"  {style(done_glyph, 'status_green', enabled=caps.can_color)} {text}")
+
+    def todo(text: str) -> None:
+        click.echo(f"  {style(todo_glyph, 'warn_amber', enabled=caps.can_color)} {text}")
+
+    done(f"binary at {ebpf}")
     current_caps = _get_current_caps(ebpf)
 
     if EXPECTED_CAP_NAMES.issubset(current_caps):
-        click.echo("Capabilities: already configured")
+        done("capabilities already configured")
     else:
-        if current_caps:
-            missing = EXPECTED_CAP_NAMES - current_caps
-            click.echo(f"Capabilities: missing {', '.join(sorted(missing))}")
-        else:
-            click.echo("Capabilities: not set")
-
         setcap_cmd = ["sudo", "setcap", REQUIRED_CAPS, ebpf]
-        click.echo(f"Running: {' '.join(setcap_cmd)}")
+        click.echo(f"  running: {' '.join(setcap_cmd)}")
         result = subprocess.run(setcap_cmd, capture_output=True, text=True)
         if result.returncode != 0:
             stderr = result.stderr.strip()
@@ -624,27 +625,35 @@ def _enable_ebpf(*, binary_path: str | None) -> None:
 
         new_caps = _get_current_caps(ebpf)
         if EXPECTED_CAP_NAMES.issubset(new_caps):
-            click.echo("Capabilities: set successfully")
+            done("capabilities set on tracer binary")
         else:
             click.echo("Warning: setcap succeeded but verification failed.", err=True)
             raise SystemExit(1)
 
     paranoid = _get_perf_event_paranoid()
     if paranoid is None:
-        click.echo("perf_event_paranoid: could not read (non-Linux?)")
+        done("perf_event_paranoid: could not read (non-Linux?)")
     elif paranoid <= 1:
-        click.echo(f"perf_event_paranoid: {paranoid} (ok)")
+        done(f"perf_event_paranoid: {paranoid} (ok)")
     else:
-        click.echo(f"perf_event_paranoid: {paranoid} (too restrictive, needs <= 1)")
+        # Roar does NOT auto-apply the sysctl. It's host-wide and a
+        # security tradeoff — the user has to choose transient vs
+        # persistent. Be explicit that this is on them.
+        todo(f"perf_event_paranoid: {paranoid} (eBPF needs <= 1)")
         click.echo("")
-        click.echo("Fix for current session:")
-        click.echo("  sudo sysctl kernel.perf_event_paranoid=1")
+        click.echo("    roar can't change a host-wide sysctl for you. Run one of:")
         click.echo("")
-        click.echo("Fix permanently (survives reboot):")
+        click.echo("      sudo sysctl -w kernel.perf_event_paranoid=1")
+        click.echo("        (this boot only; reverts on reboot)")
+        click.echo("")
         click.echo(
-            '  echo "kernel.perf_event_paranoid=1" | sudo tee /etc/sysctl.d/99-ebpf-tracer.conf'
+            "      echo 'kernel.perf_event_paranoid=1' "
+            "| sudo tee /etc/sysctl.d/99-ebpf-tracer.conf"
         )
-        click.echo("  sudo sysctl --system")
+        click.echo("      sudo sysctl --system")
+        click.echo("        (persistent across reboots)")
+        click.echo("")
+        click.echo("    Re-run `roar tracer check ebpf` to verify.")
         raise SystemExit(1)
 
     click.echo("")
