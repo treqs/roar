@@ -209,12 +209,12 @@ class TestCollect:
 
 
 class TestStatusRendersGitLine:
-    def test_status_includes_git_line_and_dag_section(
+    def test_status_includes_git_line_and_session_line(
         self, tmp_path: Path, fake_home: Path
     ) -> None:
         # Build a StatusSummary directly (avoids the DB integration). We
-        # only care that render_status emits the Git: prefix plus the DAG
-        # section in the right shape.
+        # only care that render_status emits the Git: line and the new
+        # single-line Session: section.
         from unittest.mock import patch
 
         from roar.application.query.git_readiness import GitReadinessSummary
@@ -236,9 +236,9 @@ class TestStatusRendersGitLine:
 
         assert out.startswith("Git:")
         assert "dirty — 3 modified, 1 untracked" in out
-        assert "DAG:" in out
-        # Git: line precedes DAG: heading (order matters — readiness first).
-        assert out.index("Git:") < out.index("DAG:")
+        assert "Session:" in out
+        # Git: line precedes Session: line (readiness first).
+        assert out.index("Git:") < out.index("Session:")
 
     def test_status_omits_git_section_when_unset(self, tmp_path: Path) -> None:
         """Older summaries without a `git` field still render."""
@@ -257,4 +257,4 @@ class TestStatusRendersGitLine:
         ):
             out = render_status(StatusQueryRequest(roar_dir=tmp_path))
         assert not out.startswith("Git:")
-        assert out.startswith("DAG:")
+        assert out.startswith("Session:")

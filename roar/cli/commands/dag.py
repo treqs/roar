@@ -112,13 +112,14 @@ def dag(
         raise click.ClickException(str(exc)) from exc
     click.echo(output)
 
-    # `roar dag` is the natural moment to discover `roar reset` — the
-    # user is staring at the current session's DAG. Suppress for JSON
-    # output (machine-readable) and in non-TTY / quiet / hints-disabled
-    # contexts via the shared gate.
+    # `roar dag` is the natural moment to discover `roar reset` and to
+    # see that the artifact hashes in front of you feed into `roar
+    # reproduce`. Suppress for JSON output (machine-readable) and in
+    # non-TTY / quiet / hints-disabled contexts via the shared gate.
     if not output_json:
         from .._format import hints_should_print, make_hint_printer
 
         if hints_should_print():
             _caps, hint = make_hint_printer()
+            hint("To rebuild an artifact: roar reproduce <artifact-hash>")
             hint("To clear and start fresh: roar reset")

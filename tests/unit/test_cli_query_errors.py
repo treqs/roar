@@ -100,7 +100,9 @@ def test_show_cli_emits_reproduce_hint_for_artifact_only(tmp_path, monkeypatch) 
     assert result.exit_code == 0
     assert "To reproduce this artifact: roar reproduce abc123def456" in result.output
 
-    job_summary = ShowJobSummary(job_uid="abc12345", timestamp=0, duration_seconds=0, exit_code=0, command="x")
+    job_summary = ShowJobSummary(
+        job_uid="abc12345", timestamp=0, duration_seconds=0, exit_code=0, command="x"
+    )
     with patch(
         "roar.cli.commands.show.render_show_with_summary",
         return_value=("job output", job_summary),

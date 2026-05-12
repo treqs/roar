@@ -42,22 +42,13 @@ class TestQueryCommands:
 
         status_result = roar_cli("status")
         assert status_result.returncode == 0
-        dag_hash_line = next(
-            (
-                line
-                for line in status_result.stdout.splitlines()
-                if line.strip().startswith("DAG hash:")
-            ),
-            None,
-        )
-        assert dag_hash_line is not None
-        expected_hash = dag_hash_line.split("DAG hash:", 1)[1].strip()
-        assert len(expected_hash) == 64
-        assert all(char in "0123456789abcdef" for char in expected_hash)
-        assert f"DAG hash:    {expected_hash}" in status_result.stdout
-        assert "Build steps: 0" in status_result.stdout
-        assert "Run steps:   2" in status_result.stdout
-        assert "Tracked artifacts" in status_result.stdout
+        import re
+
+        assert re.search(r"Session:\s+[0-9a-f]{64}", status_result.stdout), status_result.stdout
+        assert "2 run steps" in status_result.stdout
+        assert "Artifacts" in status_result.stdout
+        # Build steps == 0 is omitted from the single-line Session.
+        assert "build step" not in status_result.stdout
 
         log_result = roar_cli("log")
         assert log_result.returncode == 0

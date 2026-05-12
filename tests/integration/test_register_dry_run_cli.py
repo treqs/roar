@@ -46,8 +46,8 @@ def _parse_session_hash(output: str) -> str:
 def _status_session_hash(repo: Path, roar_cli) -> str:
     result = roar_cli("status")
     assert result.returncode == 0, result.stderr or result.stdout
-    match = re.search(r"DAG hash:\s+([0-9a-f]{64})", result.stdout)
-    assert match is not None, f"Missing DAG hash in status output: {result.stdout}"
+    match = re.search(r"Session:\s+([0-9a-f]{64})", result.stdout)
+    assert match is not None, f"Missing session hash in status output: {result.stdout}"
     return match.group(1)
 
 

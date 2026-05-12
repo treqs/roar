@@ -20,6 +20,16 @@ class StatusArtifactSummary:
 
 
 @dataclass(frozen=True)
+class StatusLatestJobSummary:
+    step_number: int | None
+    job_type: str | None
+    command: str | None
+    duration_seconds: float | int | None
+    exit_code: int | None
+    timestamp: float | int | None
+
+
+@dataclass(frozen=True)
 class StatusSummary:
     dag_hash: str
     build_steps: int
@@ -29,6 +39,10 @@ class StatusSummary:
     # StatusSummary without git info keep working. None means "not
     # collected"; callers should render no Git: line in that case.
     git: GitReadinessSummary | None = None
+    # Session created_at and the latest job in the session — used by the
+    # new compact `roar status` layout (single-line Session, Latest line).
+    created_at: float | int | None = None
+    latest_job: StatusLatestJobSummary | None = None
 
 
 @dataclass(frozen=True)
