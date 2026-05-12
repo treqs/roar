@@ -138,6 +138,11 @@ class RunResult(ImmutableModel):
     dag_jobs: int = 0
     dag_artifacts: int = 0
     dag_depth: int = 0
+    # Session step number for this job (1-indexed per session). Optional
+    # so older code paths and synthetic RunResult instances stay valid;
+    # the run-time presenter uses it to surface `@N` step references in
+    # next-step hints when present, falling back to `--job <uid>` form.
+    step_number: int | None = None
     # Per-category counts of files dropped by the noise filter. Empty
     # means counts weren't collected (older code paths or pre-feature
     # runs); presenters should treat that as "no info" and skip the line.

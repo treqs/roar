@@ -149,6 +149,7 @@ def execute_and_report(
         trace_duration=result.duration,
         post_duration=result.post_duration,
     )
+    report.next_steps_hint(result)
 
     if result.stale_upstream or result.stale_downstream:
         report.show_stale_warnings(

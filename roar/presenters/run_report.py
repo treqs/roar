@@ -178,6 +178,50 @@ class RunReportPresenter:
         )
         self._trex(f"done {self._dim_sep()}{timing}")
 
+    def next_steps_hint(self, result: RunResult) -> None:
+        """Amber `hint: next: …` line printed after `done()`.
+
+        Restores the next-step breadcrumb that v0.2.10 had as a Next:
+        block embedded in the summary — but as a single hint line and
+        gated like all other roar hints: silenced in quiet mode, in
+        non-TTY contexts (CI / piped stderr), and when
+        `hints.enabled = false` in config.
+        """
+        if self._quiet:
+            return
+        # `pipe_mode` here is the presenter's own stream's TTY-ness
+        # (stderr in normal use). Same gating semantics the rest of
+        # the presenter uses for decorative lines.
+        if self._caps.pipe_mode:
+            return
+        try:
+            from ..integrations.config import config_get
+
+            if config_get("hints.enabled") is False:
+                return
+        except Exception:
+            # If config can't be read, default to showing the hint —
+            # the run output is dominated by stderr noise on a TTY,
+            # and one extra line is harmless.
+            pass
+
+        c = self._caps.can_color
+        # `roar register` accepts step references (`@N`) and job UIDs.
+        # Prefer the `@N` form when we know the step number — shorter
+        # and more discoverable. Falls back to the bare UID form (which
+        # the resolver also classifies as a job_uid target) when the
+        # step number isn't available on this RunResult.
+        if result.step_number is not None:
+            register_arg = f"@{result.step_number}"
+        else:
+            register_arg = result.job_uid
+        line = (
+            f"hint: next: roar show --job {result.job_uid}"
+            f"  ·  roar dag"
+            f"  ·  roar register {register_arg}"
+        )
+        self._print(style(line, "warn_amber", enabled=c))
+
     # ---- backward-compat one-shot ----------------------------------------
 
     def show_report(self, result: RunResult, command: list[str], quiet: bool = False) -> None:
@@ -198,6 +242,7 @@ class RunReportPresenter:
             trace_duration=result.duration,
             post_duration=result.post_duration,
         )
+        self.next_steps_hint(result)
 
     # ---- stale warnings (unchanged) --------------------------------------
 
@@ -327,14 +372,10 @@ class RunReportPresenter:
             self._render_io_lists(result)
         if self._show_dropped_lists:
             self._render_dropped_lists(result)
-
-        # Blank separator + suggested command.
-        self._detail_blank()
-        cmd_text = style(f"roar show --job {result.job_uid}", "command_blue", enabled=c)
-        comment = style("# details", "dim", enabled=c)
-        self._print(
-            f"{style('·', 'dim', enabled=c)}  {style('$', 'dim', enabled=c)} {cmd_text}    {comment}"
-        )
+        # The "next: …" suggestion used to live here, embedded in the
+        # summary block. It now fires from `next_steps_hint()` after
+        # `done()` so it reads as the hint it is — and so it sits at
+        # the bottom of the run output where the user's eye lands last.
 
     # ---- verbosity-driven blocks ----------------------------------------
 
