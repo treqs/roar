@@ -2,6 +2,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use tracer_schema::FileRecord;
 
+/// `O_TRUNC` bit value on Linux (stable across architectures: 0o1000).
+///
+/// We avoid linking libc into this crate to keep it OS-portable; tracers
+/// that observe non-Linux opens can pass `flags = 0` to opt out of the
+/// truncation-aware classification.
+pub const O_TRUNC_LINUX: u64 = 0o1000;
+
 /// Per-fd I/O tracking state.
 #[derive(Debug, Clone)]
 pub struct FdState {
@@ -9,6 +16,12 @@ pub struct FdState {
     pub cursor: u64,
     pub was_read: bool,
     pub was_written: bool,
+    /// True if this fd was opened with `O_TRUNC` (content destroyed at
+    /// open time). Reads through such an fd cannot reflect an input —
+    /// any bytes returned are post-write output, so we skip read-state
+    /// updates for the lifetime of the fd. The lineage semantics are
+    /// "this file is the job's output", regardless of access mode.
+    pub was_truncated: bool,
     pub read_threads: BTreeSet<u32>,
     pub written_threads: BTreeSet<u32>,
     pub chunks_read: BTreeSet<u64>,
@@ -22,11 +35,18 @@ impl FdState {
             cursor: 0,
             was_read: false,
             was_written: false,
+            was_truncated: false,
             read_threads: BTreeSet::new(),
             written_threads: BTreeSet::new(),
             chunks_read: BTreeSet::new(),
             chunks_written: BTreeSet::new(),
         }
+    }
+
+    pub fn new_with_flags(path: String, flags: u64) -> Self {
+        let mut state = Self::new(path);
+        state.was_truncated = (flags & O_TRUNC_LINUX) != 0;
+        state
     }
 }
 
@@ -77,12 +97,17 @@ impl FdTracker {
     }
 
     /// Handle a successful open.
-    pub fn handle_open(&mut self, pid: u32, fd: i32, path: String, _flags: u64) {
+    ///
+    /// `flags` is the raw open(2) flags value (Linux semantics). When
+    /// `O_TRUNC` is set, the new fd state is flagged so any subsequent
+    /// read events through this fd are dropped — those reads can only
+    /// reflect post-write output, never an upstream input.
+    pub fn handle_open(&mut self, pid: u32, fd: i32, path: String, flags: u64) {
         if let Some(old) = self.fd_state.remove(&(pid, fd)) {
             self.closed_states.push(old);
         }
         self.fd_table.insert((pid, fd), path.clone());
-        self.fd_state.insert((pid, fd), FdState::new(path));
+        self.fd_state.insert((pid, fd), FdState::new_with_flags(path, flags));
     }
 
     /// Handle a successful close.
@@ -104,6 +129,11 @@ impl FdTracker {
 
     fn mark_read_internal(&mut self, pid: u32, fd: i32, thread_id: Option<u32>) {
         if let Some(state) = self.fd_state.get_mut(&(pid, fd)) {
+            // The fd was opened with O_TRUNC, so the original content
+            // is gone; reads here cannot represent an input edge.
+            if state.was_truncated {
+                return;
+            }
             state.was_read = true;
             self.extra_read_paths.insert(state.path.clone());
             if let Some(thread_id) = thread_id {
@@ -209,6 +239,10 @@ impl FdTracker {
             return;
         }
         if let Some(state) = self.fd_state.get_mut(&(pid, fd)) {
+            if state.was_truncated {
+                state.cursor += bytes;
+                return;
+            }
             state.was_read = true;
             self.extra_read_paths.insert(state.path.clone());
             if let Some(thread_id) = thread_id {
@@ -253,6 +287,9 @@ impl FdTracker {
             return;
         }
         if let Some(state) = self.fd_state.get_mut(&(pid, fd)) {
+            if state.was_truncated {
+                return;
+            }
             state.was_read = true;
             self.extra_read_paths.insert(state.path.clone());
             if let Some(thread_id) = thread_id {
@@ -646,5 +683,59 @@ mod tests {
         assert_eq!(summary.files.len(), 1);
         assert_eq!(summary.files[0].path, "/tmp/renamed.txt");
         assert!(summary.files[0].written);
+    }
+
+    /// `O_TRUNC` opens flag the fd state; subsequent `handle_read` /
+    /// `mark_read` calls must not promote the file to `read_files`,
+    /// because the truncate destroyed the prior content and any bytes
+    /// returned through this fd are post-write output, not input.
+    /// This is what unblocks the `np.savez` / `zipfile.ZipFile("w")`
+    /// case where the file is opened `O_RDWR|O_CREAT|O_TRUNC` so the
+    /// central directory can be seek-patched at close.
+    #[test]
+    fn test_o_trunc_open_suppresses_read_classification() {
+        let mut tracker = FdTracker::new(None);
+        tracker.handle_open(1, 3, "/tmp/out.npz".to_string(), O_TRUNC_LINUX);
+        tracker.handle_read(1, 3, 4096);
+        tracker.handle_write(1, 3, 4096);
+
+        let summary = tracker.build_summary();
+        assert_eq!(summary.files.len(), 1);
+        let record = &summary.files[0];
+        assert_eq!(record.path, "/tmp/out.npz");
+        assert!(record.written);
+        assert!(!record.read);
+        assert!(summary.read_files.is_empty());
+        assert_eq!(summary.written_files, vec!["/tmp/out.npz".to_string()]);
+    }
+
+    #[test]
+    fn test_non_trunc_open_keeps_dual_classification() {
+        // Same pattern, no O_TRUNC: a genuine in-place editor or an
+        // mmap-style read/write that preserves prior content. The
+        // tracer must still record both directions here.
+        let mut tracker = FdTracker::new(None);
+        tracker.handle_open(1, 3, "/tmp/inplace.bin".to_string(), 0);
+        tracker.handle_read(1, 3, 4096);
+        tracker.handle_write(1, 3, 4096);
+
+        let summary = tracker.build_summary();
+        let record = &summary.files[0];
+        assert!(record.read);
+        assert!(record.written);
+    }
+
+    #[test]
+    fn test_o_trunc_suppresses_mark_read_too() {
+        // `mark_read` is the fd-level coarse path (used by mmap-style
+        // events that don't carry byte counts). It must respect the
+        // same O_TRUNC policy.
+        let mut tracker = FdTracker::new(None);
+        tracker.handle_open(1, 3, "/tmp/out.bin".to_string(), O_TRUNC_LINUX);
+        tracker.mark_read(1, 3);
+
+        let summary = tracker.build_summary();
+        assert!(summary.read_files.is_empty());
+        assert!(!summary.files[0].read);
     }
 }

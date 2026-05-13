@@ -723,6 +723,18 @@ const O_TMPFILE_FLAG: c_int = 0;
 const O_TMPFILE_FLAG: c_int = libc::O_TMPFILE;
 
 fn flags_imply_read(flags: c_int) -> bool {
+    // O_TRUNC destroys the file's pre-existing content atomically at
+    // open time, so any subsequent read through this fd returns the
+    // post-write output, not an input. Lineage-wise this is a write-
+    // only role even though the access mode permits reads.
+    //
+    // Concrete trigger: `np.savez(path, ...)` → `zipfile.ZipFile(path,
+    // "w")` opens with `O_RDWR|O_CREAT|O_TRUNC` so the central
+    // directory can be seek-patched at close. The access mode is RDWR,
+    // but no input was ever consumed.
+    if (flags & libc::O_TRUNC) != 0 {
+        return false;
+    }
     let access_mode = flags & libc::O_ACCMODE;
     access_mode == libc::O_RDONLY || access_mode == libc::O_RDWR
 }
@@ -735,6 +747,54 @@ fn flags_imply_write(flags: c_int) -> bool {
         || (flags & libc::O_TRUNC) != 0
         || (flags & libc::O_APPEND) != 0
         || (flags & O_TMPFILE_FLAG) != 0
+}
+
+#[cfg(test)]
+mod flags_classification_tests {
+    use super::{flags_imply_read, flags_imply_write};
+
+    /// The actual `zipfile.ZipFile(path, "w")` flag pattern observed
+    /// on Linux. Recording this as a read corrupts lineage; the file
+    /// is purely the job's output even though the access mode permits
+    /// reads (so the zip central directory can be seek-patched).
+    #[test]
+    fn o_rdwr_creat_trunc_does_not_imply_read() {
+        let flags = libc::O_RDWR | libc::O_CREAT | libc::O_TRUNC;
+        assert!(!flags_imply_read(flags));
+        assert!(flags_imply_write(flags));
+    }
+
+    #[test]
+    fn o_wronly_creat_trunc_remains_write_only() {
+        let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
+        assert!(!flags_imply_read(flags));
+        assert!(flags_imply_write(flags));
+    }
+
+    #[test]
+    fn o_rdonly_remains_read_only() {
+        assert!(flags_imply_read(libc::O_RDONLY));
+        assert!(!flags_imply_write(libc::O_RDONLY));
+    }
+
+    #[test]
+    fn o_rdwr_without_trunc_still_implies_read() {
+        // Genuine in-place editor / mmap-style dual-purpose use. The
+        // pre-existing content survives the open; reads are real
+        // input edges.
+        assert!(flags_imply_read(libc::O_RDWR));
+        assert!(flags_imply_write(libc::O_RDWR));
+    }
+
+    #[test]
+    fn o_rdonly_with_trunc_is_degenerate_write_only() {
+        // O_RDONLY|O_TRUNC is unusual but legal; the truncate still
+        // destroys input content, so the read classification drops
+        // regardless of the access bits.
+        let flags = libc::O_RDONLY | libc::O_TRUNC;
+        assert!(!flags_imply_read(flags));
+        assert!(flags_imply_write(flags));
+    }
 }
 
 #[cfg(target_os = "macos")]
