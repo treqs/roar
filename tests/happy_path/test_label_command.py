@@ -445,7 +445,11 @@ class TestLabelCommand:
         assert "name=preprocess" in label_show
 
         show_output = _assert_ok(roar_cli("show", "@1", check=False))
-        assert "Name: preprocess" in show_output
+        # The job-show header pads `Name:` to align with `Identity:`/
+        # `Source:` (so the labels line up visually). Assert presence
+        # rather than exact whitespace.
+        assert "Name:" in show_output
+        assert "preprocess" in show_output
         assert "name=preprocess" not in show_output
 
         dag_output = _assert_ok(roar_cli("dag", "--json", check=False))
