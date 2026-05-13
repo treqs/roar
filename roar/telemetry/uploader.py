@@ -6,8 +6,6 @@ This is the only telemetry module that performs network imports or requests.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -67,23 +65,6 @@ def drain_queue(
                 else:
                     retained += 1
     return UploadSummary(attempted=len(events), accepted=accepted, retained=retained)
-
-
-def spawn_uploader() -> bool:
-    """Start the background uploader best-effort without blocking on network work."""
-
-    try:
-        subprocess.Popen(
-            [sys.executable, "-m", "roar.telemetry.uploader"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-        )
-    except OSError:
-        return False
-    return True
 
 
 def main() -> int:

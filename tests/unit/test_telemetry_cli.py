@@ -112,9 +112,7 @@ def test_telemetry_disable_enable_and_endpoint_write_global_config(tmp_path: Pat
         env=env,
     )
     assert endpoint.exit_code == 0, endpoint.output
-    assert 'endpoint = "https://collector.example/roar"' in config_path.read_text(
-        encoding="utf-8"
-    )
+    assert 'endpoint = "https://collector.example/roar"' in config_path.read_text(encoding="utf-8")
 
 
 def test_init_discloses_telemetry_forbidden_data_categories(tmp_path: Path) -> None:

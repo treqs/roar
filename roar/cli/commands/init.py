@@ -133,6 +133,8 @@ fallback_enabled = true
 # Enable anonymous product telemetry for this project.
 # Disable globally with `roar telemetry --disable` or use DO_NOT_TRACK=1 / ROAR_NO_TELEMETRY=1.
 enabled = true
+# Optional upload endpoint override. When unset, roar derives this from [glaas].url.
+# endpoint = "https://api.glaas.ai/api/v1/telemetry/roar"
 """
 
 _CORE_CONFIG_TEMPLATE_SUFFIX = """\

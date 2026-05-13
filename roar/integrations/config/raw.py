@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -80,16 +81,41 @@ def find_raw_config_file(
 
 def get_raw_glaas_web_url(
     start_dir: str | os.PathLike[str] | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
 ) -> str | None:
     """Resolve the GLaaS web URL for local preview output."""
-    env_value = _normalize_url(os.environ.get("ROAR_GLAAS__WEB_URL"))
+    resolved_env = os.environ if environ is None else environ
+    env_value = _normalize_url(resolved_env.get("ROAR_GLAAS__WEB_URL"))
     if env_value is not None:
         return env_value
 
-    raw_config = _load_raw_config(start_dir=start_dir)
+    raw_config = load_raw_config(start_dir=start_dir)
     glaas_config = raw_config.get("glaas")
     if isinstance(glaas_config, dict):
         return _normalize_url(glaas_config.get("web_url"))
+    return None
+
+
+def get_raw_glaas_api_url(
+    start_dir: str | os.PathLike[str] | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    """Resolve the GLaaS API URL without importing the full settings stack."""
+    resolved_env = os.environ if environ is None else environ
+    env_value = _normalize_url(resolved_env.get("ROAR_GLAAS__URL"))
+    if env_value is not None:
+        return env_value
+
+    legacy_env_value = _normalize_url(resolved_env.get("GLAAS_URL"))
+    if legacy_env_value is not None:
+        return legacy_env_value
+
+    raw_config = load_raw_config(start_dir=start_dir)
+    glaas_config = raw_config.get("glaas")
+    if isinstance(glaas_config, dict):
+        return _normalize_url(glaas_config.get("url"))
     return None
 
 
@@ -98,7 +124,7 @@ def get_raw_registration_omit_config(
 ) -> dict[str, Any]:
     """Resolve preview-only omit config without importing the full config package."""
     resolved = deepcopy(_DEFAULT_REGISTRATION_OMIT)
-    raw_config = _load_raw_config(start_dir=start_dir)
+    raw_config = load_raw_config(start_dir=start_dir)
     registration = raw_config.get("registration")
     if isinstance(registration, dict):
         omit_config = registration.get("omit")
@@ -107,6 +133,14 @@ def get_raw_registration_omit_config(
 
     _apply_registration_omit_env_overrides(resolved)
     return resolved
+
+
+def load_raw_config(
+    *,
+    start_dir: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Load the nearest raw roar config without applying model defaults."""
+    return _load_raw_config(start_dir=start_dir)
 
 
 def _load_raw_config(

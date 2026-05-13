@@ -14,6 +14,12 @@ try:
 except ImportError:
     import tomli as tomllib
 
+from roar.integrations.config.raw import (
+    find_raw_config_file,
+    get_raw_glaas_api_url,
+    load_raw_config,
+)
+
 from .capabilities import DEFAULT_TELEMETRY_ENDPOINT
 from .paths import TelemetryPaths, resolve_paths
 
@@ -40,6 +46,7 @@ BACKEND_JOB_ENV_MARKERS = (
     "OSMO_JOB_ID",
     "OSMO_WORKFLOW_ID",
 )
+TELEMETRY_API_PATH = "/api/v1/telemetry/roar"
 
 
 @dataclass(frozen=True)
@@ -72,7 +79,7 @@ def resolve_config(
 ) -> EffectiveTelemetryConfig:
     """Resolve effective telemetry config.
 
-    Precedence is environment, global config, project config, then defaults.
+    Precedence is environment, global config, project config, derived GLaaS URL, then defaults.
     Project config can opt down from defaults, but cannot beat global or env state.
     """
 
@@ -85,7 +92,13 @@ def resolve_config(
     enabled_source = "default"
     disabled_reason: str | None = None
 
-    project_config_path, project_data = _load_project_config(start_dir)
+    derived_endpoint = _derive_endpoint_from_glaas_url(start_dir, resolved_env)
+    if derived_endpoint is not None:
+        endpoint = derived_endpoint
+        endpoint_source = "glaas"
+
+    project_config_path = find_raw_config_file(start_dir)
+    project_data = load_raw_config(start_dir=start_dir)
     project_telemetry = _telemetry_section(project_data)
     project_enabled = _optional_bool(project_telemetry.get("enabled"))
     if project_enabled is False:
@@ -109,6 +122,9 @@ def resolve_config(
         endpoint = global_endpoint
         endpoint_source = "global"
 
+    if "ROAR_TELEMETRY__ENDPOINT" in resolved_env:
+        endpoint = str(resolved_env.get("ROAR_TELEMETRY__ENDPOINT") or "").strip()
+        endpoint_source = "env"
     if "ROAR_TELEMETRY_ENDPOINT" in resolved_env:
         endpoint = str(resolved_env.get("ROAR_TELEMETRY_ENDPOINT") or "").strip()
         endpoint_source = "env"
@@ -119,9 +135,7 @@ def resolve_config(
     if suppression_reason is not None:
         enabled = False
         enabled_source = (
-            "env"
-            if suppression_reason in {"do_not_track", "roar_no_telemetry"}
-            else "suppression"
+            "env" if suppression_reason in {"do_not_track", "roar_no_telemetry"} else "suppression"
         )
 
     return EffectiveTelemetryConfig(
@@ -177,6 +191,22 @@ def set_global_endpoint(
     return resolved_paths.global_config_file
 
 
+def _derive_endpoint_from_glaas_url(
+    start_dir: str | os.PathLike[str] | None,
+    environ: Mapping[str, str],
+) -> str | None:
+    glaas_url = get_raw_glaas_api_url(start_dir=start_dir, environ=environ)
+    if glaas_url is None:
+        return None
+
+    base_url = glaas_url.rstrip("/")
+    if base_url.endswith(TELEMETRY_API_PATH):
+        return base_url
+    if base_url.endswith("/api/v1"):
+        return f"{base_url}/telemetry/roar"
+    return f"{base_url}{TELEMETRY_API_PATH}"
+
+
 def _execution_backend_job_environment(environ: Mapping[str, str]) -> bool:
     try:
         from roar.execution.framework.registry import is_execution_backend_job_environment
@@ -209,29 +239,6 @@ def _find_project_tree_root(start: Path) -> Path:
         if (parent / ".git").exists():
             return parent
     return start
-
-
-def _load_project_config(
-    start_dir: str | os.PathLike[str] | None,
-) -> tuple[Path | None, dict[str, Any]]:
-    path = _find_project_config_file(start_dir)
-    if path is None:
-        return None, {}
-    return path, _load_config_file(path)
-
-
-def _find_project_config_file(start_dir: str | os.PathLike[str] | None) -> Path | None:
-    start = Path(start_dir) if start_dir is not None else Path.cwd()
-    for parent in [start, *list(start.parents)]:
-        config_path = parent / ".roar" / "config.toml"
-        if config_path.exists():
-            return config_path
-        pyproject_path = parent / "pyproject.toml"
-        if pyproject_path.exists():
-            data = _load_config_file(pyproject_path)
-            if data:
-                return pyproject_path
-    return None
 
 
 def _load_config_file(path: Path) -> dict[str, Any]:

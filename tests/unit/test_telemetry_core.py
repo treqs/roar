@@ -92,6 +92,56 @@ def test_default_config_is_enabled_with_default_endpoint(tmp_path: Path) -> None
     assert effective.endpoint_source == "default"
 
 
+def test_config_resolver_derives_endpoint_from_project_glaas_url(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    project = tmp_path / "project"
+    project_roar = project / ".roar"
+    project_roar.mkdir(parents=True)
+    (project_roar / "config.toml").write_text(
+        """
+[glaas]
+url = "https://api.dev.glaas.ai/"
+
+[telemetry]
+enabled = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    effective = config.resolve_config(
+        start_dir=project, environ=env, paths=paths.resolve_paths(env)
+    )
+
+    assert effective.endpoint == "https://api.dev.glaas.ai/api/v1/telemetry/roar"
+    assert effective.endpoint_source == "glaas"
+
+
+def test_config_resolver_explicit_telemetry_endpoint_overrides_derived_glaas_url(
+    tmp_path: Path,
+) -> None:
+    env = _env(tmp_path)
+    project = tmp_path / "project"
+    project_roar = project / ".roar"
+    project_roar.mkdir(parents=True)
+    (project_roar / "config.toml").write_text(
+        """
+[glaas]
+url = "https://api.dev.glaas.ai"
+
+[telemetry]
+endpoint = "https://collector.example/roar"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    effective = config.resolve_config(
+        start_dir=project, environ=env, paths=paths.resolve_paths(env)
+    )
+
+    assert effective.endpoint == "https://collector.example/roar"
+    assert effective.endpoint_source == "project"
+
+
 def test_suppression_covers_opt_out_ci_and_backend_environments(tmp_path: Path) -> None:
     base_env = _env(tmp_path)
     cases = [
@@ -99,7 +149,11 @@ def test_suppression_covers_opt_out_ci_and_backend_environments(tmp_path: Path) 
         ("ROAR_NO_TELEMETRY", "1", "roar_no_telemetry"),
         ("CI", "true", "ci:CI"),
         ("GITHUB_ACTIONS", "true", "ci:GITHUB_ACTIONS"),
-        ("PYTEST_CURRENT_TEST", "tests/unit/test_example.py::test_example", "ci:PYTEST_CURRENT_TEST"),
+        (
+            "PYTEST_CURRENT_TEST",
+            "tests/unit/test_example.py::test_example",
+            "ci:PYTEST_CURRENT_TEST",
+        ),
         ("ROAR_JOB_INSTRUMENTED", "1", "roar_job_instrumented"),
         ("RAY_JOB_ID", "job-123", "backend_job_environment:RAY_JOB_ID"),
     ]
@@ -151,7 +205,9 @@ def test_suppression_when_default_cache_would_dirty_project_tree(tmp_path: Path)
     assert effective.suppression_reason == "project_local_cache"
 
 
-def test_recording_stats_tracks_identity_version_counters_sequence_and_status(tmp_path: Path) -> None:
+def test_recording_stats_tracks_identity_version_counters_sequence_and_status(
+    tmp_path: Path,
+) -> None:
     env = _env(tmp_path)
     resolved_paths = paths.resolve_paths(env)
 
@@ -176,7 +232,9 @@ def test_recording_stats_tracks_identity_version_counters_sequence_and_status(tm
     )
     assert run_result.triggers == ("first_successful_roar_run",)
 
-    enqueue_result = telemetry.enqueue_trigger("init", environ=env, paths=resolved_paths, version="1.2.3")
+    enqueue_result = telemetry.enqueue_trigger(
+        "init", environ=env, paths=resolved_paths, version="1.2.3"
+    )
     assert enqueue_result.enqueued
     status = telemetry.status_snapshot(environ=env, paths=resolved_paths)
     assert status["enabled"] is True
@@ -192,7 +250,9 @@ def test_empty_endpoint_preserves_local_stats_but_skips_queueing(tmp_path: Path)
     result = telemetry.record_subcommand("init", environ=env, paths=resolved_paths, version="1.2.3")
     assert result.recorded
 
-    enqueue_result = telemetry.enqueue_trigger("init", environ=env, paths=resolved_paths, version="1.2.3")
+    enqueue_result = telemetry.enqueue_trigger(
+        "init", environ=env, paths=resolved_paths, version="1.2.3"
+    )
     assert not enqueue_result.enqueued
     assert enqueue_result.reason == "empty_endpoint"
     assert queue.queued_event_count(resolved_paths) == 0
@@ -227,4 +287,22 @@ def test_print_payload_returns_inspectable_json_without_mutating_stats(tmp_path:
     parsed = json.loads(rendered)
     assert parsed["trigger"] == "preview"
     assert parsed["version"] == "1.2.3"
+    assert stats.read_stats(resolved_paths) is None
+
+
+def test_preview_payload_trigger_is_not_queueable(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    resolved_paths = paths.resolve_paths(env)
+
+    rendered = telemetry.print_payload(environ=env, paths=resolved_paths, version="1.2.3")
+    assert json.loads(rendered)["trigger"] == "preview"
+
+    try:
+        telemetry.enqueue_trigger("preview", environ=env, paths=resolved_paths, version="1.2.3")
+    except ValueError as exc:
+        assert "unknown telemetry upload trigger" in str(exc)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("preview payloads must remain inspect-only")
+
+    assert queue.queued_event_count(resolved_paths) == 0
     assert stats.read_stats(resolved_paths) is None

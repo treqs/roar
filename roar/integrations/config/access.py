@@ -187,6 +187,13 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
             "or by environment"
         ),
     },
+    "telemetry.endpoint": {
+        "type": str,
+        "default": None,
+        "description": (
+            "Optional telemetry upload endpoint. When unset, roar derives it from glaas.url."
+        ),
+    },
     "git.remote": {
         "type": str,
         "default": None,

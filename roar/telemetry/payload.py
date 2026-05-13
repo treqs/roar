@@ -34,6 +34,8 @@ ALLOWED_TRIGGERS = {
     "preview",
 }
 
+UPLOAD_TRIGGERS = ALLOWED_TRIGGERS - {"preview"}
+
 ALLOWED_TOP_LEVEL_FIELDS = (
     "payload_schema_version",
     "stats_schema_version",
@@ -85,7 +87,9 @@ def build_payload(
     timestamp = trigger_ts or utc_now()
     payload = {
         "payload_schema_version": PAYLOAD_SCHEMA_VERSION,
-        "stats_schema_version": int(stats_snapshot.get("stats_schema_version") or STATS_SCHEMA_VERSION),
+        "stats_schema_version": int(
+            stats_snapshot.get("stats_schema_version") or STATS_SCHEMA_VERSION
+        ),
         "event_id": event_id or str(uuid4()),
         "install_id": str(stats_snapshot.get("install_id") or ""),
         "sequence": int(stats_snapshot.get("sequence") or 0),

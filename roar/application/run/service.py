@@ -104,7 +104,9 @@ def _execute_tracked_command(
         backend_name = planned.backend_name
         execution_role = str(planned.execution_role or "").strip()
         if not execution_role:
-            raise ValueError(f"Execution backend '{backend_name}' did not provide an execution role.")
+            raise ValueError(
+                f"Execution backend '{backend_name}' did not provide an execution role."
+            )
 
         report = _coerce_execution_report(
             execute_and_report(

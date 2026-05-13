@@ -94,6 +94,10 @@ roar telemetry --status
 roar telemetry --print
 ```
 
+When `telemetry.endpoint` is unset, roar derives the upload endpoint from the
+configured GLaaS API URL. For example, `glaas.url = "https://api.dev.glaas.ai"`
+uses `https://api.dev.glaas.ai/api/v1/telemetry/roar`.
+
 Disable telemetry globally or for a single project:
 
 ```bash

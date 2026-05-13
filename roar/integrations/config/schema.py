@@ -183,6 +183,22 @@ class TelemetryConfig(ConfigBaseModel):
     """Anonymous product telemetry configuration section."""
 
     enabled: bool = True
+    endpoint: Annotated[str, Field(max_length=2048)] | None = None
+
+    @field_validator("endpoint", mode="before")
+    @classmethod
+    def validate_endpoint(cls, v: str | None) -> str | None:
+        """Validate and normalize an optional telemetry endpoint override."""
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            return v
+        stripped = v.strip()
+        if stripped == "":
+            return ""
+        if not stripped.startswith(("http://", "https://")):
+            raise ValueError("Telemetry endpoint must start with http:// or https://")
+        return stripped.rstrip("/")
 
 
 class GitConfig(ConfigBaseModel):

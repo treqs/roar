@@ -125,8 +125,8 @@ def enqueue_trigger(
     version: str | None = None,
 ) -> QueueResult:
     normalized_trigger = str(trigger or "").strip()
-    if normalized_trigger not in payload.ALLOWED_TRIGGERS:
-        raise ValueError(f"unknown telemetry trigger: {normalized_trigger or '<empty>'}")
+    if normalized_trigger not in payload.UPLOAD_TRIGGERS:
+        raise ValueError(f"unknown telemetry upload trigger: {normalized_trigger or '<empty>'}")
 
     resolved_paths = paths or resolve_paths(environ)
     effective = resolve_config(start_dir=start_dir, environ=environ, paths=resolved_paths)

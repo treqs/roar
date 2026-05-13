@@ -32,3 +32,21 @@ class TestConfigCli:
 
         assert result.exit_code == 0, result.output
         assert "Set telemetry.enabled = False" in result.output
+
+    def test_project_telemetry_endpoint_can_be_set(self, tmp_path):
+        runner = CliRunner()
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(
+                config_cli_module.config,
+                [
+                    "set",
+                    "telemetry.endpoint",
+                    "https://api.dev.glaas.ai/api/v1/telemetry/roar",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert (
+            "Set telemetry.endpoint = https://api.dev.glaas.ai/api/v1/telemetry/roar"
+            in result.output
+        )

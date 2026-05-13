@@ -24,7 +24,9 @@ def detect_installer(environ: Mapping[str, str] | None = None) -> str:
     resolved_env = os.environ if environ is None else environ
     if _truthy(resolved_env.get("PIPX_HOME")) or _truthy(resolved_env.get("PIPX_BIN_DIR")):
         return "pipx"
-    if _truthy(resolved_env.get("UV_TOOL_DIR")) or _truthy(resolved_env.get("UV_PROJECT_ENVIRONMENT")):
+    if _truthy(resolved_env.get("UV_TOOL_DIR")) or _truthy(
+        resolved_env.get("UV_PROJECT_ENVIRONMENT")
+    ):
         return "uv-tool"
     if _truthy(resolved_env.get("CONDA_PREFIX")):
         return "conda"
