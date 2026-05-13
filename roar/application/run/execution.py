@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
@@ -13,6 +14,16 @@ from ...execution.framework.registry import get_execution_backend
 from ...execution.runtime.errors import ExecutionSetupError
 from ...presenters.console import ConsolePresenter
 from ...presenters.run_report import RunReportPresenter
+
+
+@dataclass(frozen=True)
+class ExecutionReport:
+    """Minimal execution outcome used for post-finalizer telemetry."""
+
+    exit_code: int
+    tracer_backend: str | None = None
+    interrupted: bool = False
+    setup_error: bool = False
 
 
 def validate_git_clean(*, verb: str = "run", args: list[str] | None = None) -> str:
@@ -110,7 +121,7 @@ def execute_and_report(
     repo_root: str,
     tracer_mode: str | None = None,
     tracer_fallback: bool | None = None,
-) -> int:
+) -> ExecutionReport:
     """Execute command via selected backend and show the run report."""
     hash_algos = cast(list[Literal["blake3", "sha256", "sha512", "md5"]], hash_algorithms)
     job_type_literal = cast(Literal["run", "build"] | None, job_type)
@@ -135,7 +146,7 @@ def execute_and_report(
         result = backend.host_execution.execute(run_ctx)
     except ExecutionSetupError as exc:
         click.echo(str(exc), err=True)
-        return 1
+        return ExecutionReport(exit_code=1, setup_error=True)
 
     presenter = ConsolePresenter()
     report = RunReportPresenter(presenter, verbosity=verbosity)  # type: ignore[arg-type]
@@ -158,4 +169,10 @@ def execute_and_report(
             is_build=(job_type == "build"),
         )
 
-    return result.exit_code
+    setup_error = bool(result.exit_code and result.job_id == 0)
+    return ExecutionReport(
+        exit_code=result.exit_code,
+        tracer_backend=result.backend,
+        interrupted=result.interrupted,
+        setup_error=setup_error,
+    )

@@ -40,6 +40,7 @@ def test_help_groups_are_built_from_command_specs() -> None:
         "projects",
         "workflow",
     )
+    assert "telemetry" in help_groups["Setup and Admin"]
 
 
 def test_help_does_not_list_composite_command() -> None:

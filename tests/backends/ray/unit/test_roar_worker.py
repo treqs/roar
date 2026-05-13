@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import os
 import sys
 import time
 import types
@@ -789,8 +790,15 @@ def test_run_worker_entrypoint_execs_python_for_non_script(
 
     monkeypatch.setattr(roar_worker.os, "execvp", _fake_execvp)
 
-    with pytest.raises(SystemExit):
-        roar_worker._run_worker_entrypoint(["-u", "worker.py"])
+    try:
+        with pytest.raises(SystemExit):
+            roar_worker._run_worker_entrypoint(["-u", "worker.py"])
+    finally:
+        # The real code immediately execs after preparing LD_PRELOAD. This unit
+        # test fakes exec with an exception, so clean up the parent pytest
+        # process explicitly to avoid contaminating later subprocess tests.
+        os.environ.pop("LD_PRELOAD", None)
+        os.environ.pop("ROAR_PRELOAD_TRACE_SOCK", None)
 
     assert captured["program"] == "python3"
     assert captured["argv"] == ["python3", "-u", "worker.py"]

@@ -172,6 +172,13 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "Setup and Admin",
     ),
     CommandSpec(
+        "telemetry",
+        "roar.cli.commands.telemetry",
+        "telemetry",
+        "Inspect or disable anonymous product telemetry",
+        "Setup and Admin",
+    ),
+    CommandSpec(
         "proxy",
         "roar.cli.commands.proxy",
         "proxy",

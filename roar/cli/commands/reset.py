@@ -64,3 +64,7 @@ def reset(ctx: RoarContext, yes: bool) -> None:
 
             new_session_id = db_ctx.sessions.create(make_active=True)
             click.echo(f"Created new session {new_session_id}.")
+
+    from ...telemetry.hooks import record_action_trigger
+
+    record_action_trigger("reset", start_dir=ctx.cwd)

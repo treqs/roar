@@ -68,6 +68,53 @@ roar run python train.py --data features.parquet --output model.pt
 roar run python evaluate.py --model model.pt --output metrics.json
 ```
 
+## Product Telemetry
+
+`roar` keeps anonymous product telemetry counters by default so maintainers can
+prioritize reliability and platform support work. Telemetry is local-first:
+small counters are stored under the XDG cache directory and uploaded
+opportunistically in a background process. Telemetry never uploads file
+contents, command arguments, file paths, environment variables, repository
+names, hostnames, usernames, lineage payloads, or GLaaS auth tokens.
+
+Uploaded payloads are limited to:
+
+- A random `install_id`, event id, sequence number, and coarse timestamps.
+- The installed `roar` version.
+- Coarse platform values: OS family, CPU architecture, Python major/minor,
+  shell name, installer class, and whether the process appears containerized.
+- Allowlisted command counters such as `run`, `init`, `register`, and
+  successful or failed `roar run` outcomes.
+- Allowlisted tracer selection counters and coarse feature capability flags.
+
+Inspect the current status and exact next payload preview:
+
+```bash
+roar telemetry --status
+roar telemetry --print
+```
+
+When `telemetry.endpoint` is unset, roar derives the upload endpoint from the
+configured GLaaS API URL. For example, `glaas.url = "https://api.dev.glaas.ai"`
+uses `https://api.dev.glaas.ai/api/v1/telemetry/roar`.
+
+Disable telemetry globally or for a single project:
+
+```bash
+roar telemetry --disable
+roar config set telemetry.enabled false
+```
+
+Environment opt-outs always win over saved config:
+
+```bash
+DO_NOT_TRACK=1 roar run python train.py
+ROAR_NO_TELEMETRY=1 roar run python train.py
+```
+
+Telemetry is also suppressed automatically in CI, pytest, and Roar-managed
+backend worker environments such as Ray and OSMO jobs.
+
 ## Tracer Backends
 
 `roar run` relies on a Rust "tracer" binary to observe file I/O. If you see an error like "No tracer binary found", build one of the backends below.

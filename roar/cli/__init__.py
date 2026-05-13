@@ -206,9 +206,11 @@ def cli(ctx: click.Context) -> None:
         ctx.exit(0)
     else:
         # Create RoarContext for subcommands (lazy import)
+        from ..telemetry.hooks import record_cli_subcommand
         from .context import RoarContext
 
         ctx.obj = RoarContext.create()
+        record_cli_subcommand(ctx.invoked_subcommand, start_dir=ctx.obj.cwd)
 
 
 # Export public API

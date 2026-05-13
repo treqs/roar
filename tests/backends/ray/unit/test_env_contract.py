@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from roar.backends.ray.env_contract import (
     ROAR_CLUSTER_GLAAS_URL_ENV,
+    ROAR_NO_TELEMETRY_ENV,
     merge_worker_bootstrap_env,
     resolve_cluster_glaas_url,
 )
@@ -40,6 +41,7 @@ def test_merge_worker_bootstrap_env_preserves_existing_values_by_default() -> No
     assert env_vars["AWS_ENDPOINT_URL"] == "http://user-endpoint:9000"
     assert env_vars["ROAR_PROXY_PORT"] == "24567"
     assert env_vars["ROAR_SESSION_ID"] == "session-123"
+    assert env_vars[ROAR_NO_TELEMETRY_ENV] == "1"
 
 
 def test_merge_worker_bootstrap_env_can_overwrite_existing_values() -> None:
@@ -61,3 +63,18 @@ def test_merge_worker_bootstrap_env_can_overwrite_existing_values() -> None:
     assert env_vars["GLAAS_URL"] == "http://cluster-glaas:3001"
     assert env_vars["AWS_ENDPOINT_URL"] == "http://127.0.0.1:24567"
     assert env_vars["ROAR_PROXY_PORT"] == "24567"
+    assert env_vars[ROAR_NO_TELEMETRY_ENV] == "1"
+
+
+def test_merge_worker_bootstrap_env_forces_telemetry_suppression() -> None:
+    env_vars = merge_worker_bootstrap_env(
+        {
+            "USER_KEY": "value",
+            ROAR_NO_TELEMETRY_ENV: "0",
+        },
+        {},
+        job_id="job-telemetry",
+    )
+
+    assert env_vars["USER_KEY"] == "value"
+    assert env_vars[ROAR_NO_TELEMETRY_ENV] == "1"

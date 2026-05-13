@@ -266,3 +266,8 @@ def register(
             click.echo("Next:")
             click.echo(f"  roar show --artifact {response.artifact_hash}")
             click.echo(f"  roar reproduce {response.artifact_hash}")
+
+    if not dry_run:
+        from ...telemetry.hooks import record_action_trigger
+
+        record_action_trigger("register", start_dir=ctx.cwd)

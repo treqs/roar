@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from roar.backends.ray.env_contract import ROAR_NO_TELEMETRY_ENV
 from roar.backends.ray.submit_context import (
     build_submit_instrumentation_context,
     build_submit_source_environ,
@@ -66,6 +67,7 @@ def test_build_submit_source_environ_uses_cluster_visible_endpoints(tmp_path: Pa
     source = build_submit_source_environ(context)
 
     assert source["ROAR_JOB_INSTRUMENTED"] == "1"
+    assert source[ROAR_NO_TELEMETRY_ENV] == "1"
     assert source["ROAR_RAY_NODE_AGENTS"] == "1"
     assert source["ROAR_PROJECT_DIR"] == str(tmp_path)
     assert source["ROAR_UPSTREAM_S3_ENDPOINT"] == "http://minio:9000"

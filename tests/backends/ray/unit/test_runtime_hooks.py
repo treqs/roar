@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from roar.backends.ray import runtime_hooks
+from roar.backends.ray.env_contract import ROAR_NO_TELEMETRY_ENV
 
 
 @pytest.fixture(autouse=True)
@@ -320,6 +321,7 @@ def test_prepare_worker_env_vars_preserves_existing_cluster_visible_endpoints(
     assert env_vars["ROAR_UPSTREAM_S3_ENDPOINT"] == "http://minio:9000"
     assert env_vars["ROAR_SESSION_ID"] == "session-123"
     assert env_vars["ROAR_FRAGMENT_TOKEN"] == "ab" * 32
+    assert env_vars[ROAR_NO_TELEMETRY_ENV] == "1"
 
 
 def test_patch_ray_init_sets_driver_job_uid_for_workers(
@@ -414,6 +416,7 @@ def test_patch_ray_init_conflicts_inside_preinstrumented_job(
     assert captured_runtime_env["working_dir"] == "/tmp/job-level-working-dir"
     assert captured_runtime_env["py_executable"] == "roar-worker"
     assert captured_runtime_env["env_vars"]["USER_KEY"] == "value"
+    assert captured_runtime_env["env_vars"][ROAR_NO_TELEMETRY_ENV] == "1"
 
 
 def test_patch_ray_init_registers_pre_shutdown_collection_for_instrumented_jobs(

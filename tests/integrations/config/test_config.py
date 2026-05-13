@@ -177,6 +177,12 @@ class TestDefaultConfigTemplate:
         assert raw["registration"]["tagging"]["enabled"] is True
         assert raw["proxy"]["enabled"] is False
 
+    def test_template_exposes_telemetry_endpoint_override(self) -> None:
+        assert "[telemetry]" in DEFAULT_CONFIG_TEMPLATE
+        assert (
+            '# endpoint = "https://api.glaas.ai/api/v1/telemetry/roar"' in DEFAULT_CONFIG_TEMPLATE
+        )
+
     def test_template_hash_defaults(self, tmp_path: Path) -> None:
         """Template has correct hash section defaults."""
         config_path = tmp_path / ".roar" / "config.toml"
@@ -257,6 +263,7 @@ class TestDefaultsMatchPydanticModels:
             "filters",
             "cleanup",
             "hash",
+            "telemetry",
             "reversible",
             "logging",
             "composites",
@@ -300,6 +307,7 @@ class TestConfigLoading:
         assert config["registration"]["omit"]["enabled"] is True
         assert config["hash"]["primary"] == "blake3"
         assert config["composites"]["run"]["enabled"] is True
+        assert config["telemetry"]["enabled"] is True
 
     def test_load_config_merges_with_defaults(self, tmp_path: Path) -> None:
         """load_config merges file values with defaults."""
@@ -463,6 +471,13 @@ class TestConfigSetValidation:
         config_set("registration.public_by_default", "true", start_dir=str(tmp_path))
 
         assert config_get("registration.public_by_default", start_dir=str(tmp_path)) is True
+
+    def test_config_set_telemetry_endpoint(self, tmp_path: Path) -> None:
+        endpoint = "https://api.dev.glaas.ai/api/v1/telemetry/roar"
+
+        config_set("telemetry.endpoint", endpoint, start_dir=str(tmp_path))
+
+        assert config_get("telemetry.endpoint", start_dir=str(tmp_path)) == endpoint
 
 
 class TestTracerConfig:
