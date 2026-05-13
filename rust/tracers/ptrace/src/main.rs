@@ -308,23 +308,25 @@ fn handle_syscall_entry(
             if fd >= 0 {
                 let fd_i32 = fd as i32;
                 if let Some(pid_u32) = pid_u32 {
-                    if let Some(path) = state.fd_tracker.path_for_fd(pid_u32, fd_i32).cloned() {
+                    // Use the fd-keyed mark_* functions (rather than the
+                    // path-keyed mark_path_*) so the O_TRUNC suppression
+                    // on the underlying fd_state applies — a process
+                    // that opens with O_RDWR|O_CREAT|O_TRUNC and then
+                    // mmaps the fd with PROT_READ is still semantically
+                    // a write-only output for lineage purposes.
+                    if state.fd_tracker.path_for_fd(pid_u32, fd_i32).is_some() {
                         // PROT_READ = 1, PROT_WRITE = 2
                         // MAP_SHARED = 1, MAP_PRIVATE = 2
                         let is_shared = flags & 1 != 0;
 
                         // Any file-backed mmap is a read
                         if prot & 1 != 0 {
-                            state
-                                .fd_tracker
-                                .mark_path_read_with_thread(path.clone(), pid_u32);
+                            state.fd_tracker.mark_read_with_thread(pid_u32, fd_i32, pid_u32);
                         }
                         // Only MAP_SHARED + PROT_WRITE is a real write (changes go to disk)
                         // MAP_PRIVATE writes are copy-on-write and don't modify the file
                         if is_shared && (prot & 2 != 0) {
-                            state
-                                .fd_tracker
-                                .mark_path_written_with_thread(path, pid_u32);
+                            state.fd_tracker.mark_written_with_thread(pid_u32, fd_i32, pid_u32);
                         }
                     }
                 }
