@@ -10,6 +10,7 @@ from click.testing import CliRunner
 from roar.application.publish.results import RegisterLineageResponse
 from roar.cli.commands.register import register
 from roar.integrations.config import config_set
+from roar.scope_config import save_repo_scope
 
 
 def _mock_context(tmp_path: Path) -> MagicMock:
@@ -188,6 +189,34 @@ def test_register_cli_anonymous_forces_public_without_default_warning(tmp_path: 
     request = mock_register.call_args.args[0]
     assert request.public is True
     assert request.anonymous is True
+
+
+def test_register_cli_uses_anonymous_scope_as_default_publish_intent(tmp_path: Path) -> None:
+    runner = CliRunner()
+    save_repo_scope("anonymous", start_dir=tmp_path)
+
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        mock_register.return_value = _fake_result()
+        result = runner.invoke(register, ["model.pt", "--yes"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    request = mock_register.call_args.args[0]
+    assert request.public is True
+    assert request.anonymous is True
+
+
+def test_register_cli_uses_private_scope_as_default_publish_intent(tmp_path: Path) -> None:
+    runner = CliRunner()
+    save_repo_scope("private", start_dir=tmp_path)
+
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        mock_register.return_value = _fake_result()
+        result = runner.invoke(register, ["model.pt", "--yes"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    request = mock_register.call_args.args[0]
+    assert request.public is False
+    assert request.anonymous is False
 
 
 def test_register_cli_rejects_anonymous_private(tmp_path: Path) -> None:

@@ -46,8 +46,9 @@ def projects_link(project_id: str, glaas_api_url: str | None) -> None:
         "owner_type": owner_type,
         "project_id": project_id,
     }
+    config["scope"] = {"mode": "project"}
     config_path = get_config_path_for_write()
-    save_config(config, config_path)
+    save_config(config, config_path, preserve_existing=config)
 
     click.echo(f"Resolved project {project_id} to {owner_type} {owner_id}")
     click.echo(f"Linked repo to {owner_type} {owner_id} / project {project_id}")
@@ -115,7 +116,8 @@ def projects_unlink() -> None:
     config = load_config()
     # Keep key present to avoid unknown-section preservation during save.
     config["treqs"] = {}
-    save_config(config, config_path)
+    config["scope"] = {}
+    save_config(config, config_path, preserve_existing=config)
 
     click.echo("Unlinked repo project binding.")
     click.echo(f"Saved to {config_path}")

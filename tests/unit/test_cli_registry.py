@@ -38,6 +38,7 @@ def test_help_groups_are_built_from_command_specs() -> None:
         "logout",
         "whoami",
         "projects",
+        "scope",
         "workflow",
     )
     assert "telemetry" in help_groups["Setup and Admin"]

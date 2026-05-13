@@ -17,6 +17,31 @@ def _get_logger():
     return get_logger()
 
 
+_PRIVATE_PERSONAL_UNSUPPORTED_MESSAGE = (
+    "Private personal scope is not available on this GLaaS server yet. "
+    "Use `roar scope use <owner>/<project>` or `roar register --public`."
+)
+
+
+def _uses_current_user_private_scope(scope_request: dict[str, Any] | None) -> bool:
+    if not isinstance(scope_request, dict):
+        return False
+    return (
+        scope_request.get("owner_resolution") == "current_user"
+        and scope_request.get("owner_type") == "user"
+        and scope_request.get("visibility") == "private"
+    )
+
+
+def _normalize_scope_error(scope_request: dict[str, Any] | None, error: str | None) -> str | None:
+    if error is None or not _uses_current_user_private_scope(scope_request):
+        return error
+    normalized = error.lower()
+    if "owner_resolution" in normalized or "scope_request" in normalized:
+        return _PRIVATE_PERSONAL_UNSUPPORTED_MESSAGE
+    return error
+
+
 def get_glaas_url() -> str | None:
     """Get GLaaS server URL from config or environment."""
     return _auth.get_glaas_url()
@@ -510,7 +535,7 @@ class GlaasClient:
             body["scope_request"] = dict(self._publish_auth.scope_request)
 
         result, error = self._request("POST", "/api/v1/sessions", body)
-        return result, error
+        return result, _normalize_scope_error(self._publish_auth.scope_request, error)
 
     def create_registration_session(
         self,
@@ -566,6 +591,7 @@ class GlaasClient:
             auth_header_value=self._registration_session_auth_header(),
             allow_auth_fallback=False,
         )
+        error = _normalize_scope_error(self._publish_auth.scope_request, error)
         if error is None and self._registration_session_mode == "anonymous_public":
             self._clear_registration_session_auth()
         return result, error

@@ -167,7 +167,7 @@ def _write_repo_binding(repo: Path) -> None:
     )
 
 
-def test_register_requires_explicit_public_flag_when_repo_has_no_binding(
+def test_register_private_without_project_binding_uses_current_user_scope(
     temp_git_repo: Path,
     roar_cli,
     git_commit,
@@ -179,13 +179,43 @@ def test_register_requires_explicit_public_flag_when_repo_has_no_binding(
 
     result = roar_cli("register", "report.txt", "--yes", env_overrides=env, check=False)
 
+    assert result.returncode == 0
+    assert fake_glaas_publish_server.session_registrations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    assert fake_glaas_publish_server.registration_session_finalizations[0]["scope_request"] == {
+        "owner_resolution": "current_user",
+        "owner_type": "user",
+        "visibility": "private",
+    }
+
+
+def test_register_private_without_project_binding_requires_auth(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    env = _configure_public_only_repo(
+        temp_git_repo,
+        roar_cli,
+        fake_glaas_publish_server.base_url,
+    )
+    _create_register_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
+
+    result = roar_cli(
+        "register", "report.txt", "--yes", "--private", env_overrides=env, check=False
+    )
+
     assert result.returncode != 0
     combined = f"{result.stdout}\n{result.stderr}"
-    assert "Error: No GLaaS repo binding found" in combined
+    assert "Private registration requires GLaaS login" in combined
     assert "--public" in combined
     assert "Traceback (most recent call last)" not in combined
     assert "RuntimeError:" not in combined
     assert fake_glaas_publish_server.session_registrations == []
+    assert fake_glaas_publish_server.registration_session_creations == []
 
 
 def test_register_public_succeeds_without_repo_binding_when_public_flag_is_set(
@@ -248,21 +278,22 @@ def test_register_private_flag_overrides_public_default_when_repo_has_no_binding
     roar_cli("config", "set", "registration.public_by_default", "true", env_overrides=env)
     _create_register_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
 
-    result = roar_cli(
-        "register", "report.txt", "--yes", "--private", env_overrides=env, check=False
-    )
+    result = roar_cli("register", "report.txt", "--yes", "--private", env_overrides=env)
 
-    assert result.returncode != 0
+    assert result.returncode == 0
     combined = f"{result.stdout}\n{result.stderr}"
     assert (
         "Warning: defaulting to public visibility because registration.public_by_default=true"
         not in combined
     )
-    assert "Error: No GLaaS repo binding found" in combined
-    assert "--public" in combined
     assert fake_glaas_publish_server.session_registrations == []
-    assert fake_glaas_publish_server.registration_session_creations == []
-    assert fake_glaas_publish_server.registration_session_finalizations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    assert fake_glaas_publish_server.registration_session_finalizations[0]["scope_request"] == {
+        "owner_resolution": "current_user",
+        "owner_type": "user",
+        "visibility": "private",
+    }
 
 
 def test_register_public_with_valid_ssh_uses_authenticated_creator_identity_for_hash_and_registration(
@@ -509,7 +540,7 @@ def test_register_scoped_ssh_only_publish_uses_registration_sessions(
     )
 
 
-def test_put_requires_explicit_public_flag_when_repo_has_no_binding(
+def test_put_private_without_project_binding_uses_current_user_scope(
     temp_git_repo: Path,
     roar_cli,
     git_commit,
@@ -531,11 +562,15 @@ def test_put_requires_explicit_public_flag_when_repo_has_no_binding(
         check=False,
     )
 
-    assert result.returncode != 0
-    combined = f"{result.stdout}\n{result.stderr}"
-    assert "No GLaaS repo binding found" in combined
-    assert "--public" in combined
+    assert result.returncode == 0
     assert fake_glaas_publish_server.session_registrations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    assert fake_glaas_publish_server.registration_session_finalizations[0]["scope_request"] == {
+        "owner_resolution": "current_user",
+        "owner_type": "user",
+        "visibility": "private",
+    }
 
 
 def test_put_public_succeeds_without_repo_binding_when_public_flag_is_set(
@@ -630,17 +665,20 @@ def test_put_private_flag_overrides_public_default_when_repo_has_no_binding(
         check=False,
     )
 
-    assert result.returncode != 0
+    assert result.returncode == 0
     combined = f"{result.stdout}\n{result.stderr}"
     assert (
         "Warning: defaulting to public visibility because registration.public_by_default=true"
         not in combined
     )
-    assert "No GLaaS repo binding found" in combined
-    assert "--public" in combined
     assert fake_glaas_publish_server.session_registrations == []
-    assert fake_glaas_publish_server.registration_session_creations == []
-    assert fake_glaas_publish_server.registration_session_finalizations == []
+    assert len(fake_glaas_publish_server.registration_session_creations) == 1
+    assert len(fake_glaas_publish_server.registration_session_finalizations) == 1
+    assert fake_glaas_publish_server.registration_session_finalizations[0]["scope_request"] == {
+        "owner_resolution": "current_user",
+        "owner_type": "user",
+        "visibility": "private",
+    }
 
 
 def test_put_public_without_auth_uses_anonymous_registration_sessions_when_supported(

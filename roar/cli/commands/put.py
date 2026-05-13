@@ -31,15 +31,34 @@ def _resolve_glaas_web_url() -> str:
     return config_get("glaas.web_url") or "https://glaas.ai"
 
 
-def _resolve_public_flag(public: bool | None, *, start_dir: str | None = None) -> tuple[bool, bool]:
-    """Resolve publish visibility and whether public came from config default."""
+def _resolve_publish_intent(
+    public: bool | None,
+    anonymous: bool,
+    *,
+    start_dir: str | None = None,
+) -> tuple[bool, bool, bool]:
+    """Resolve visibility, anonymity, and whether public came from config default."""
+    if anonymous:
+        return True, True, False
+
     if public is not None:
-        return public, False
+        return public, False, False
+
+    from ...scope_config import load_repo_scope
+
+    scope = load_repo_scope(start_dir)
+    if scope is not None:
+        if scope.mode == "anonymous":
+            return True, True, False
+        if scope.mode == "public":
+            return True, False, False
+        if scope.mode in {"private", "project"}:
+            return False, False, False
 
     from ...integrations.config import config_get
 
     resolved_public = bool(config_get("registration.public_by_default", start_dir=start_dir))
-    return resolved_public, resolved_public
+    return resolved_public, False, resolved_public
 
 
 def _warn_public_default() -> None:
@@ -150,12 +169,11 @@ def put(
     if anonymous and public is False:
         raise click.ClickException("--anonymous requires public visibility; remove --private.")
 
-    if anonymous:
-        resolved_public, used_public_default = True, False
-    else:
-        resolved_public, used_public_default = _resolve_public_flag(
-            public, start_dir=str(ctx.repo_root or ctx.cwd)
-        )
+    resolved_public, resolved_anonymous, used_public_default = _resolve_publish_intent(
+        public,
+        anonymous,
+        start_dir=str(ctx.repo_root or ctx.cwd),
+    )
     if used_public_default:
         _warn_public_default()
 
@@ -170,7 +188,7 @@ def put(
                 message=message,
                 dry_run=dry_run,
                 public=resolved_public,
-                anonymous=anonymous,
+                anonymous=resolved_anonymous,
                 no_tag=no_tag,
             )
         )
