@@ -651,4 +651,36 @@ mod tests {
         let fd_state = state.fd.fd_state.get(&(1, 3)).unwrap();
         assert!(fd_state.was_written);
     }
+
+    /// Cross-crate guard: an O_TRUNC open followed by a read syscall
+    /// (numpy savez / zipfile mode='w' pattern, where the underlying
+    /// open is O_RDWR|O_CREAT|O_TRUNC) must not promote the file to
+    /// the read_files set. The truncate destroyed the prior content,
+    /// so any read through this fd reflects post-write output. The
+    /// suppression lives in `tracer-fd`; this test verifies the ebpf
+    /// path inherits it via `state.handle_open(..., flags)`.
+    #[test]
+    fn test_o_trunc_open_then_read_does_not_classify_as_input() {
+        use tracer_fd::O_TRUNC_LINUX;
+
+        let mut state = TracerState::new(None);
+        state.handle_open(1, 3, "/tmp/out.npz".to_string(), O_TRUNC_LINUX);
+
+        let event = SmallEvent {
+            pid: 1,
+            thread_id: 11,
+            event_type: EventType::Read as u16,
+            _pad: 0,
+            ret_val: 4096,
+            arg0: 3,
+            arg1: 0,
+        };
+        process_small_event(&mut state, &event);
+
+        let fd_state = state.fd.fd_state.get(&(1, 3)).unwrap();
+        assert!(!fd_state.was_read, "O_TRUNC fd should suppress read classification");
+
+        let summary = state.fd.build_summary();
+        assert!(summary.read_files.is_empty());
+    }
 }
