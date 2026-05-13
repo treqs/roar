@@ -24,8 +24,9 @@ def test_run_telemetry_records_after_execution_finalizer(monkeypatch, tmp_path) 
     monkeypatch.setattr(
         service,
         "execute_and_report",
-        lambda **_kwargs: calls.append("execute")
-        or ExecutionReport(exit_code=0, tracer_backend="ptrace"),
+        lambda **_kwargs: (
+            calls.append("execute") or ExecutionReport(exit_code=0, tracer_backend="ptrace")
+        ),
     )
 
     def record_run_outcome(**kwargs: object) -> None:
@@ -118,8 +119,9 @@ def test_finalizer_failure_records_internal_run_failure(monkeypatch, tmp_path) -
     monkeypatch.setattr(
         service,
         "execute_and_report",
-        lambda **_kwargs: calls.append("execute")
-        or ExecutionReport(exit_code=0, tracer_backend="preload"),
+        lambda **_kwargs: (
+            calls.append("execute") or ExecutionReport(exit_code=0, tracer_backend="preload")
+        ),
     )
 
     def record_run_outcome(**kwargs: object) -> None:
