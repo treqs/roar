@@ -65,7 +65,7 @@ def _active_session_id(repo: Path) -> int:
 def _current_status_session_hash(repo: Path, roar_cli) -> str:
     status_result = roar_cli("status")
     assert status_result.returncode == 0, status_result.stderr or status_result.stdout
-    match = re.search(r"DAG hash:\s+([a-f0-9]{64})", status_result.stdout)
+    match = re.search(r"Session:\s+([a-f0-9]{64})", status_result.stdout)
     assert match is not None, status_result.stdout
     return match.group(1)
 

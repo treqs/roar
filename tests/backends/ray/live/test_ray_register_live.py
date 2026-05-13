@@ -250,7 +250,7 @@ def _compute_active_session_hash(repo: Path) -> str:
         capture_output=True,
         text=True,
     )
-    match = re.search(r"DAG hash:\s+([a-f0-9]{64})", result.stdout)
+    match = re.search(r"Session:\s+([a-f0-9]{64})", result.stdout)
     assert match is not None, result.stdout
     return match.group(1)
 

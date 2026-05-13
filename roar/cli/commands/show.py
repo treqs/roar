@@ -74,6 +74,9 @@ def show(
         show_session=show_session,
         show_all=show_all,
     )
+    from .._format import print_brand_header
+
+    print_brand_header("show")
     try:
         output, summary = render_show_with_summary(request)
     except ShowQueryError as exc:

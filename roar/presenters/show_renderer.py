@@ -14,6 +14,21 @@ from ..core.step_name import omit_step_name_label
 from .formatting import format_duration, format_size, format_timestamp
 
 
+def _short_hash_label(hashes: list[dict] | None, *, prefix_len: int = 12) -> str:
+    """Compact `algo:hash…` label for inline use in artifact rows.
+
+    Picks the first recorded hash (blake3 is roar's default, so it
+    almost always leads). Returns just `?` if no hash is recorded —
+    rare, but keeps the column shape consistent.
+    """
+    if not hashes:
+        return "?"
+    first = hashes[0]
+    algo = str(first.get("algorithm") or "?")
+    digest = str(first.get("digest") or "")
+    return f"{algo}:{digest[:prefix_len]}…"
+
+
 class ShowRenderer:
     """
     Renders show command output as plain text strings.
@@ -110,122 +125,78 @@ class ShowRenderer:
         """
         lines: list[str] = []
 
-        lines.append(f"\nJob: {job['job_uid']}")
-
-        step_ref = ""
-        if job["step_number"]:
+        # ---- header block ----------------------------------------------------
+        # One-line summary: step ref · UID · exit · duration · timestamp.
+        # Exit code does the work that the old "Status: Success" row did —
+        # zero is silent, nonzero is loud.
+        step_ref = "@?"
+        if job.get("step_number"):
             prefix = "@B" if job.get("job_type") == "build" else "@"
-            step_ref = f" ({prefix}{job['step_number']})"
-        lines.append(f"Step: {job['step_number'] or '-'}{step_ref}")
+            step_ref = f"{prefix}{job['step_number']}"
+
+        header_parts = [step_ref, str(job.get("job_uid") or "?")]
+        exit_code = job.get("exit_code")
+        if exit_code is None:
+            header_parts.append("exit ?")
+        elif exit_code != 0:
+            header_parts.append(f"exit {exit_code}")
+        else:
+            header_parts.append("exit 0")
+        header_parts.append(format_duration(job.get("duration_seconds")))
+        header_parts.append(format_timestamp(job.get("timestamp")))
+        lines.append("Job:       " + "  ·  ".join(header_parts))
 
         if job.get("step_name"):
-            lines.append(f"Name: {job['step_name']}")
+            lines.append(f"Name:      {job['step_name']}")
         if job.get("step_identity"):
-            lines.append(f"Identity: {job['step_identity']}")
+            lines.append(f"Identity:  {job['step_identity']}")
 
-        lines.append(f"Timestamp: {format_timestamp(job['timestamp'])}")
-        lines.append(f"Duration: {format_duration(job['duration_seconds'])}")
-
-        if job["exit_code"] is None:
-            status = "Unknown"
-        elif job["exit_code"] == 0:
-            status = "Success"
-        else:
-            status = f"Failed (exit {job['exit_code']})"
-        lines.append(f"Status: {status}")
+        source_parts: list[str] = []
+        if job.get("git_branch"):
+            source_parts.append(str(job["git_branch"]))
+        if job.get("git_commit"):
+            commit = str(job["git_commit"])
+            source_parts.append(f"@ {commit[:7]}" if source_parts else commit)
+        if source_parts:
+            lines.append("Source:    " + " ".join(source_parts))
 
         self._render_labels(lines, omit_step_name_label(labels, step_name=job.get("step_name")))
 
-        lines.append(f"\nCommand: {job['command']}")
+        if job.get("command"):
+            lines.append("")
+            lines.append(f"  $ {job['command']}")
 
-        # Git info
-        if job.get("git_commit"):
-            lines.append(f"\nGit commit: {job['git_commit']}")
-        if job.get("git_branch"):
-            lines.append(f"Git branch: {job['git_branch']}")
+        # ---- inputs / outputs ------------------------------------------------
+        if inputs:
+            lines.append("")
+            lines.append(f"Inputs ({len(inputs)}):")
+            lines.extend(self._render_job_artifact_rows(inputs))
 
-        # Metadata (what gets registered with GLaaS)
+        if outputs:
+            lines.append("")
+            lines.append(f"Outputs ({len(outputs)}):")
+            lines.extend(self._render_job_artifact_rows(outputs))
+
+        # ---- environment summary --------------------------------------------
+        # By default we collapse the full metadata block into a 2-line
+        # summary (host facts + package counts). `--all` restores the
+        # exhaustive listing for repro debugging.
         meta = job.get("metadata")
-        if meta and isinstance(meta, dict):
-            lines.append("\nMetadata:")
+        if isinstance(meta, dict):
+            if self.show_all:
+                lines.extend(self._render_full_metadata(meta))
+            else:
+                summary_lines = self._render_environment_summary(meta)
+                if summary_lines:
+                    lines.append("")
+                    lines.append("Environment:")
+                    lines.extend(summary_lines)
 
-            # Working directory
-            if meta.get("cwd"):
-                lines.append(f"  Working dir: {meta['cwd']}")
-
-            # Runtime info
-            runtime = meta.get("runtime", {})
-            if runtime.get("hostname"):
-                lines.append(f"  Hostname: {runtime['hostname']}")
-            if runtime.get("os"):
-                os_info = runtime["os"]
-                lines.append(f"  OS: {os_info.get('system', '')} {os_info.get('release', '')}")
-            if runtime.get("python"):
-                lines.append(f"  Python: {runtime['python'].get('version', '')}")
-
-            # Hardware
-            if runtime.get("gpu"):
-                gpus = runtime["gpu"]
-                for i, gpu in enumerate(gpus):
-                    gpu_str = (
-                        f"  GPU {i}: {gpu.get('name', 'unknown')} ({gpu.get('memory_mb', '?')} MB)"
-                    )
-                    if gpu.get("compute_cap"):
-                        gpu_str += f", compute cap {gpu['compute_cap']}"
-                    lines.append(gpu_str)
-            if runtime.get("cuda"):
-                cuda = runtime["cuda"]
-                cuda_parts = []
-                if cuda.get("cuda_version"):
-                    cuda_parts.append(f"CUDA {cuda['cuda_version']}")
-                if cuda.get("driver_version"):
-                    cuda_parts.append(f"driver {cuda['driver_version']}")
-                if cuda.get("cudnn_version"):
-                    cuda_parts.append(f"cuDNN {cuda['cudnn_version']}")
-                if cuda_parts:
-                    lines.append(f"  CUDA: {', '.join(cuda_parts)}")
-            if runtime.get("cpu"):
-                cpu = runtime["cpu"]
-                lines.append(
-                    f"  CPU: {cpu.get('model', 'unknown')} ({cpu.get('count', '?')} cores)"
-                )
-            if runtime.get("memory"):
-                mem = runtime["memory"]
-                lines.append(f"  Memory: {mem.get('total_mb', '?')} MB")
-
-            # Environment variables
-            env_vars = runtime.get("env_vars", {})
-            if env_vars:
-                lines.append(f"\n  Environment Variables ({len(env_vars)}):")
-                for name, value in sorted(env_vars.items()):
-                    # Truncate long values
-                    if self.show_all:
-                        display_val = value
-                    else:
-                        display_val = value if len(value) <= 60 else value[:57] + "..."
-                    lines.append(f"    {name}={display_val}")
-
-            # Packages
-            packages = meta.get("packages", {})
-            if packages and isinstance(packages, dict):
-                for manager, pkgs in packages.items():
-                    if pkgs and isinstance(pkgs, dict):
-                        lines.append(f"\n  Packages ({manager}, {len(pkgs)}):")
-                        pkg_items = sorted(pkgs.items())
-                        if not self.show_all:
-                            pkg_items = pkg_items[:15]
-                        for name, version in pkg_items:
-                            if version:
-                                lines.append(f"    {name}=={version}")
-                            else:
-                                lines.append(f"    {name}")
-                        if not self.show_all and len(pkgs) > 15:
-                            lines.append(f"    ... and {len(pkgs) - 15} more")
-
-        # Telemetry (external service links)
+        # ---- telemetry (external links) --------------------------------------
         telem = job.get("telemetry")
         if telem and isinstance(telem, dict):
-            lines.append("\nTelemetry:")
+            lines.append("")
+            lines.append("Telemetry:")
             for name, url in telem.items():
                 if isinstance(url, list):
                     for u in url:
@@ -233,41 +204,129 @@ class ShowRenderer:
                 else:
                     lines.append(f"  {name}: {url}")
 
-        # Inputs
-        if inputs:
-            lines.append(f"\nInputs ({len(inputs)}):")
-            for inp in inputs:
-                lines.append(f"  {inp['path']}")
-                lines.append(f"    Artifact: {inp['artifact_id']}")
-                kind = inp.get("kind")
-                component_count = inp.get("component_count")
-                if isinstance(kind, str):
-                    if kind == "composite" and isinstance(component_count, int):
-                        lines.append(f"    Kind: {kind} ({component_count} components)")
-                    else:
-                        lines.append(f"    Kind: {kind}")
-                lines.append(f"    Size: {format_size(inp['size'])}")
-                for h in inp.get("hashes", []):
-                    lines.append(f"    {h['algorithm']}: {h['digest']}")
-
-        # Outputs
-        if outputs:
-            lines.append(f"\nOutputs ({len(outputs)}):")
-            for out in outputs:
-                lines.append(f"  {out['path']}")
-                lines.append(f"    Artifact: {out['artifact_id']}")
-                kind = out.get("kind")
-                component_count = out.get("component_count")
-                if isinstance(kind, str):
-                    if kind == "composite" and isinstance(component_count, int):
-                        lines.append(f"    Kind: {kind} ({component_count} components)")
-                    else:
-                        lines.append(f"    Kind: {kind}")
-                lines.append(f"    Size: {format_size(out['size'])}")
-                for h in out.get("hashes", []):
-                    lines.append(f"    {h['algorithm']}: {h['digest']}")
-
         return "\n".join(lines)
+
+    def _render_job_artifact_rows(self, artifacts: list[dict]) -> list[str]:
+        """One line per artifact: `algo:hash…  SIZE  /path` plus a
+        `(composite, N components)` annotation when non-primitive.
+        Files that no longer exist on disk get a `(missing)` suffix —
+        same convention as `roar status`."""
+        out: list[str] = []
+        for art in artifacts:
+            hashes = art.get("hashes") or []
+            hash_label = _short_hash_label(hashes)
+            size = format_size(art.get("size"))
+            path = art.get("path") or "?"
+            missing = "  (missing)" if art.get("present") is False else ""
+            out.append(f"  {hash_label:<22} {size:>9}  {path}{missing}")
+            kind = art.get("kind")
+            component_count = art.get("component_count")
+            if isinstance(kind, str) and kind != "primitive":
+                if kind == "composite" and isinstance(component_count, int):
+                    out.append(f"    ({kind}, {component_count} components)")
+                else:
+                    out.append(f"    ({kind})")
+        return out
+
+    @staticmethod
+    def _render_environment_summary(meta: dict) -> list[str]:
+        """Two-line summary of the metadata block for the default view."""
+        runtime = meta.get("runtime") or {}
+        host_bits: list[str] = []
+        if runtime.get("hostname"):
+            host_bits.append(str(runtime["hostname"]))
+        os_info = runtime.get("os") or {}
+        if os_info.get("system"):
+            host_bits.append(str(os_info["system"]))
+        python_info = runtime.get("python") or {}
+        if python_info.get("version"):
+            host_bits.append(f"Python {python_info['version']}")
+        cpu = runtime.get("cpu") or {}
+        cpu_count = cpu.get("count")
+        if isinstance(cpu_count, int):
+            host_bits.append(f"{cpu_count} cpu")
+        memory = runtime.get("memory") or {}
+        mem_mb = memory.get("total_mb")
+        if isinstance(mem_mb, (int, float)) and mem_mb > 0:
+            host_bits.append(f"{mem_mb / 1024:.1f} GB")
+
+        pkg_bits: list[str] = []
+        packages = meta.get("packages")
+        if isinstance(packages, dict):
+            for manager, pkgs in packages.items():
+                if isinstance(pkgs, dict) and pkgs:
+                    pkg_bits.append(f"{len(pkgs)} {manager}")
+        env_vars = runtime.get("env_vars")
+        if isinstance(env_vars, dict) and env_vars:
+            pkg_bits.append(f"{len(env_vars)} env vars set")
+
+        out: list[str] = []
+        if host_bits:
+            out.append(f"  host:     {' · '.join(host_bits)}")
+        if pkg_bits:
+            out.append(f"  packages: {' · '.join(pkg_bits)}    (--all for full lists)")
+        return out
+
+    def _render_full_metadata(self, meta: dict) -> list[str]:
+        """Full pre-overhaul metadata block — kept for `--all`."""
+        lines: list[str] = ["", "Metadata:"]
+
+        if meta.get("cwd"):
+            lines.append(f"  Working dir: {meta['cwd']}")
+
+        runtime = meta.get("runtime", {}) or {}
+        if runtime.get("hostname"):
+            lines.append(f"  Hostname: {runtime['hostname']}")
+        if runtime.get("os"):
+            os_info = runtime["os"]
+            lines.append(f"  OS: {os_info.get('system', '')} {os_info.get('release', '')}")
+        if runtime.get("python"):
+            lines.append(f"  Python: {runtime['python'].get('version', '')}")
+
+        if runtime.get("gpu"):
+            for i, gpu in enumerate(runtime["gpu"]):
+                gpu_str = (
+                    f"  GPU {i}: {gpu.get('name', 'unknown')} ({gpu.get('memory_mb', '?')} MB)"
+                )
+                if gpu.get("compute_cap"):
+                    gpu_str += f", compute cap {gpu['compute_cap']}"
+                lines.append(gpu_str)
+        if runtime.get("cuda"):
+            cuda = runtime["cuda"]
+            cuda_parts = []
+            if cuda.get("cuda_version"):
+                cuda_parts.append(f"CUDA {cuda['cuda_version']}")
+            if cuda.get("driver_version"):
+                cuda_parts.append(f"driver {cuda['driver_version']}")
+            if cuda.get("cudnn_version"):
+                cuda_parts.append(f"cuDNN {cuda['cudnn_version']}")
+            if cuda_parts:
+                lines.append(f"  CUDA: {', '.join(cuda_parts)}")
+        if runtime.get("cpu"):
+            cpu = runtime["cpu"]
+            lines.append(f"  CPU: {cpu.get('model', 'unknown')} ({cpu.get('count', '?')} cores)")
+        if runtime.get("memory"):
+            mem = runtime["memory"]
+            lines.append(f"  Memory: {mem.get('total_mb', '?')} MB")
+
+        env_vars = runtime.get("env_vars") or {}
+        if env_vars:
+            lines.append(f"\n  Environment Variables ({len(env_vars)}):")
+            for name, value in sorted(env_vars.items()):
+                lines.append(f"    {name}={value}")
+
+        packages = meta.get("packages")
+        if isinstance(packages, dict):
+            for manager, pkgs in packages.items():
+                if isinstance(pkgs, dict) and pkgs:
+                    lines.append(f"\n  Packages ({manager}, {len(pkgs)}):")
+                    for name, version in sorted(pkgs.items()):
+                        if version:
+                            lines.append(f"    {name}=={version}")
+                        else:
+                            lines.append(f"    {name}")
+
+        return lines
 
     def render_artifact(
         self,
@@ -293,56 +352,83 @@ class ShowRenderer:
         """
         lines: list[str] = []
 
-        lines.append(f"\nArtifact: {artifact['id']}")
-        if artifact.get("source") == "remote":
-            lines.append("Source: GLaaS")
-        kind = artifact.get("kind")
-        if isinstance(kind, str):
-            lines.append(f"Kind: {kind}")
-        component_count = artifact.get("component_count")
-        if isinstance(component_count, int):
-            lines.append(f"Components: {component_count}")
-        lines.append(f"Size: {format_size(artifact['size'])}")
-        lines.append(f"First seen: {format_timestamp(artifact['first_seen_at'])}")
+        # ---- header: hash (with algo label) + b3sum breadcrumb for blake3 ----
+        hashes = artifact.get("hashes") or []
+        first_seen_path = artifact.get("first_seen_path") or ""
+        if len(hashes) == 1:
+            algo = str(hashes[0].get("algorithm") or "?")
+            digest = str(hashes[0].get("digest") or "")
+            lines.append(f"Hash ({algo}):  {digest}")
+            # blake3 specifically matches `b3sum <file>`. Give the user
+            # the breadcrumb so they can verify or look it up later.
+            if algo == "blake3" and first_seen_path:
+                lines.append(f"                ≡ b3sum {first_seen_path}")
+        elif hashes:
+            lines.append("Hashes:")
+            for h in hashes:
+                algo = str(h.get("algorithm") or "?")
+                digest = str(h.get("digest") or "")
+                lines.append(f"  {algo}: {digest}")
+                if algo == "blake3" and first_seen_path:
+                    lines.append(f"    ≡ b3sum {first_seen_path}")
+        else:
+            # Fall back to the internal id only when no content hash is
+            # recorded — that's the only remaining identifier.
+            lines.append(f"Artifact: {artifact.get('id', '?')}")
 
-        if artifact.get("first_seen_path"):
-            lines.append(f"Original path: {artifact['first_seen_path']}")
+        if artifact.get("source") == "remote":
+            lines.append("Source:     GLaaS")
+        kind = artifact.get("kind")
+        component_count = artifact.get("component_count")
+        if isinstance(kind, str) and kind != "primitive":
+            if kind == "composite" and isinstance(component_count, int):
+                lines.append(f"Kind:       {kind} ({component_count} components)")
+            else:
+                lines.append(f"Kind:       {kind}")
+        lines.append(f"Size:       {format_size(artifact['size'])}")
+        if first_seen_path:
+            # Surface filesystem presence — same `(missing)` convention
+            # as `roar status` so the user knows the file is gone even
+            # though roar still tracks it.
+            missing = ""
+            if artifact.get("first_seen_present") is False:
+                missing = "  (missing)"
+            lines.append(f"Path:       {first_seen_path}{missing}")
+        lines.append(f"First seen: {format_timestamp(artifact['first_seen_at'])}")
 
         self._render_labels(lines, labels)
 
-        # Hashes
-        hashes = artifact.get("hashes", [])
-        if hashes:
-            lines.append("\nHashes:")
-            for h in hashes:
-                lines.append(f"  {h['algorithm']}: {h['digest']}")
+        # ---- locations -------------------------------------------------------
+        # Skip when the single location matches the first-seen path —
+        # showing it twice is noise. Surface only the additional ones.
+        extra_locations = [loc for loc in locations if (loc.get("path") or "") != first_seen_path]
+        if extra_locations:
+            lines.append("")
+            lines.append(f"Also located at ({len(extra_locations)}):")
+            for loc in extra_locations:
+                missing = "  (missing)" if loc.get("present") is False else ""
+                lines.append(f"  {loc['path']}{missing}")
 
-        # Locations
-        if locations:
-            lines.append(f"\nLocations ({len(locations)}):")
-            for loc in locations:
-                lines.append(f"  {loc['path']}")
-
-        # Jobs
-        produced_by = jobs.get("produced_by", [])
-        if produced_by:
-            lines.append(f"\nProduced by ({len(produced_by)} job(s)):")
-            visible = produced_by if self.show_all else produced_by[:5]
-            for job in visible:
-                cmd = job.get("command") or "?"
-                if not self.show_all:
-                    cmd = cmd[:47]
-                lines.append(f"  [{job.get('job_uid', '?')}] {cmd}")
-
-        consumed_by = jobs.get("consumed_by", [])
-        if consumed_by:
-            lines.append(f"\nConsumed by ({len(consumed_by)} job(s)):")
-            visible = consumed_by if self.show_all else consumed_by[:5]
-            for job in visible:
-                cmd = job.get("command") or "?"
-                if not self.show_all:
-                    cmd = cmd[:47]
-                lines.append(f"  [{job.get('job_uid', '?')}] {cmd}")
+        # ---- jobs: producers / consumers -------------------------------------
+        for label, key in (("Produced by", "produced_by"), ("Consumed by", "consumed_by")):
+            entries = jobs.get(key) or []
+            if not entries:
+                continue
+            lines.append("")
+            commands = {(entry.get("command") or "") for entry in entries}
+            if len(entries) > 1 and len(commands) == 1:
+                lines.append(f"{label} ({len(entries)} runs of the same step):")
+            else:
+                noun = "job" if len(entries) == 1 else "jobs"
+                lines.append(f"{label} ({len(entries)} {noun}):")
+            visible = entries if self.show_all else entries[:3]
+            for entry in visible:
+                uid = str(entry.get("job_uid") or "?")
+                cmd = entry.get("command") or "?"
+                cmd_short = cmd if len(cmd) <= 60 else cmd[:59] + "…"
+                lines.append(f"  {uid}  {cmd_short}")
+            if not self.show_all and len(entries) > len(visible):
+                lines.append(f"  + {len(entries) - len(visible)} more  (use --all)")
 
         if composite_summary is not None and isinstance(composite_summary, dict):
             membership = composite_summary.get("membership_index")

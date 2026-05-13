@@ -254,6 +254,12 @@ class RunReportPresenter:
     ) -> None:
         if not (stale_upstream or stale_downstream) or self._out is None:
             return
+        # `-q` on `roar run` strips all roar-emitted output so the
+        # wrapped command's stdout/stderr stand alone. Stale warnings
+        # are correctness signals but the user has asked for silence;
+        # they can drop `-q` to see them.
+        if self._quiet:
+            return
         if stale_upstream:
             self._out.print("")
             step_refs = ", ".join(f"@{s}" for s in stale_upstream)

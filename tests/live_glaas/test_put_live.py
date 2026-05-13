@@ -379,7 +379,7 @@ class TestPutLive:
             text=True,
         )
         assert result.returncode == 0
-        assert "Run steps:   2" in result.stdout
+        assert "2 run steps" in result.stdout
 
     def test_put_dry_run_does_not_modify_dag(
         self, repo_with_outputs, skip_upload_env, glaas_available

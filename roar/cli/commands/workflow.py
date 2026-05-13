@@ -34,7 +34,7 @@ def workflow(ctx: click.Context) -> None:
     "session_ref",
     default="current",
     show_default=True,
-    help="Active session or DAG hash prefix shown by roar status/register.",
+    help="Active session or session-hash prefix shown by roar status/register.",
 )
 @click.option(
     "--name",

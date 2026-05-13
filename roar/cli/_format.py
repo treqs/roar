@@ -2,8 +2,10 @@
 
 Two surfaces share these primitives:
 
-  * Brand banner: `🦖 roar v<version>` in `status_green`. First line of
-    long-form commands so the user always sees what version they're on.
+  * Brand banner: `🦖 roar <subcommand>` in `status_green`. First line
+    of long-form commands so the surface always identifies itself.
+    Suppressed in non-TTY / quiet contexts via the same gate hints use,
+    so machine consumers see clean output.
   * Hints: amber `hint: …` lines suppressed in non-interactive contexts
     (config knob, quiet verbosity, non-TTY stdout). Same convention git
     uses for its `advice.*` family.
@@ -23,16 +25,19 @@ import click
 from ..presenters.terminal import TerminalCaps, detect, style
 
 
-def print_brand_header() -> None:
-    """First line of long-form output: `🦖 roar vX.Y.Z` in green."""
-    try:
-        from . import __version__
-    except Exception:
-        __version__ = "unknown"
+def print_brand_header(subcommand: str) -> None:
+    """First line of long-form output: `🦖 roar <subcommand>` in green.
 
+    Shares `hints_should_print()`'s gate — suppressed in CI, redirected
+    pipes, quiet mode, or when `hints.enabled = false`. The version is
+    available via `roar --version` rather than repeated on every
+    invocation.
+    """
+    if not hints_should_print():
+        return
     caps = detect(sys.stdout)
     prefix = "🦖" if caps.can_emoji else "roar:"
-    click.echo(style(f"{prefix} roar v{__version__}", "status_green", enabled=caps.can_color))
+    click.echo(style(f"{prefix} roar {subcommand}", "status_green", enabled=caps.can_color))
 
 
 def hints_should_print() -> bool:

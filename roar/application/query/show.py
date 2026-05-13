@@ -169,6 +169,23 @@ def _safe_json_loads(raw: str, context: str) -> dict | None:
     return parsed
 
 
+def _path_present(path: str | None) -> bool | None:
+    """`Path.exists()` with safe handling.
+
+    Returns None when there's no path to check (so the renderer skips
+    the `(missing)` marker for remote-only artifacts). Returns the
+    actual boolean otherwise; any unexpected error is treated as
+    "couldn't check" (also None) — we don't want a permissions glitch
+    to flag a real file as missing.
+    """
+    if not path:
+        return None
+    try:
+        return Path(path).exists()
+    except OSError:
+        return None
+
+
 def _lookup_artifact_by_path(db_ctx, cwd: Path, ref: str) -> dict[str, Any] | None:
     path_obj = Path(os.path.expanduser(ref))
     if not path_obj.is_absolute():
@@ -320,8 +337,9 @@ def _build_job_summary(db_ctx, job: dict[str, Any]) -> ShowJobSummary:
 
 
 def _build_job_artifact_summary(artifact: dict[str, Any]) -> ShowJobArtifactSummary:
+    path = str(artifact["path"])
     return ShowJobArtifactSummary(
-        path=str(artifact["path"]),
+        path=path,
         artifact_id=str(artifact["artifact_id"]),
         kind=cast(str | None, artifact.get("kind")),
         component_count=cast(int | None, artifact.get("component_count")),
@@ -333,6 +351,7 @@ def _build_job_artifact_summary(artifact: dict[str, Any]) -> ShowJobArtifactSumm
             )
             for hash_entry in cast(list[dict[str, Any]], artifact.get("hashes", []))
         ],
+        present=_path_present(path),
     )
 
 
@@ -354,13 +373,15 @@ def _build_artifact_summary(db_ctx, artifact: dict[str, Any]) -> ShowArtifactSum
     if isinstance(metadata, str):
         metadata = _safe_json_loads(metadata, "artifact metadata")
 
+    first_seen_path = cast(str | None, artifact.get("first_seen_path"))
     return ShowArtifactSummary(
         id=str(artifact["id"]),
         kind=cast(str | None, artifact.get("kind")),
         component_count=cast(int | None, artifact.get("component_count")),
         size=int(artifact["size"]),
         first_seen_at=artifact["first_seen_at"],
-        first_seen_path=cast(str | None, artifact.get("first_seen_path")),
+        first_seen_path=first_seen_path,
+        first_seen_present=_path_present(first_seen_path),
         labels=labels,
         composite_summary=cast(dict[str, Any] | None, composite_summary),
         metadata=metadata,
@@ -372,7 +393,11 @@ def _build_artifact_summary(db_ctx, artifact: dict[str, Any]) -> ShowArtifactSum
             for hash_entry in cast(list[dict[str, Any]], artifact.get("hashes", []))
         ],
         locations=[
-            ShowArtifactLocationSummary(path=str(location["path"])) for location in locations
+            ShowArtifactLocationSummary(
+                path=str(location["path"]),
+                present=_path_present(str(location["path"])),
+            )
+            for location in locations
         ],
         produced_by=[
             ShowArtifactJobSummary(

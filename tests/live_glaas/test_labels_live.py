@@ -175,7 +175,7 @@ def _computed_remote_session_hash(repo: Path) -> str:
     assert row is not None, f"Active local session not found for hash {local_session_hash}"
     status_result = _run_roar(repo, "status")
     assert status_result.returncode == 0, status_result.stderr or status_result.stdout
-    match = re.search(r"DAG hash:\s+([a-f0-9]{64})", status_result.stdout)
+    match = re.search(r"Session:\s+([a-f0-9]{64})", status_result.stdout)
     assert match is not None, status_result.stdout
     return match.group(1)
 

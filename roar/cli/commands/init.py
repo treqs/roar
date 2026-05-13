@@ -338,7 +338,7 @@ def _print_version_header() -> None:
     """First line of init: brand banner in green."""
     from .._format import print_brand_header
 
-    print_brand_header()
+    print_brand_header("init")
 
 
 def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) -> None:

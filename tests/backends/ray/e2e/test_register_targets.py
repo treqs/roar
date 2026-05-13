@@ -39,7 +39,7 @@ def _run_phase_pipeline(project_dir: Path, ray_cluster: dict[str, str]) -> None:
 def _current_status_session_hash(project_dir: Path) -> str:
     result = run_roar_cli_from_host(project_dir, "status", timeout=60)
     assert result.returncode == 0, result.stderr or result.stdout
-    match = re.search(r"DAG hash:\s+([a-f0-9]{64})", result.stdout)
+    match = re.search(r"Session:\s+([a-f0-9]{64})", result.stdout)
     assert match is not None, result.stdout
     return match.group(1)
 

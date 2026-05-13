@@ -277,6 +277,18 @@ def test_quiet_mode_emits_nothing() -> None:
     assert buf.getvalue() == ""
 
 
+def test_quiet_mode_suppresses_stale_warnings() -> None:
+    """`-q` on `roar run` strips all roar-emitted output, including the
+    stale-input/output safety warnings. The user is trading the signal
+    for a clean wrapped-command pipeline."""
+    presenter = _CapturePresenter()
+    buf = io.StringIO()
+    report = RunReportPresenter(presenter, stream=buf, caps=_tty_caps(), quiet=True)
+    report.show_stale_warnings(stale_upstream=[1, 2], stale_downstream=[5])
+    assert presenter.messages == []
+    assert buf.getvalue() == ""
+
+
 def test_pipe_mode_emits_only_done_line() -> None:
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_pipe_caps())

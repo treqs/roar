@@ -43,7 +43,7 @@ def run_command(request: RunRequest) -> int:
     algorithms = get_hash_algorithms(
         list(request.hash_algorithms) if request.hash_algorithms else None
     )
-    execution_inputs = _resolve_run_inputs(request)
+    execution_inputs = _resolve_run_inputs(request, verbosity=verbosity)
     if execution_inputs is None:
         return 0
     return _execute_tracked_command(
@@ -124,7 +124,9 @@ def _execute_tracked_command(
     return exit_code
 
 
-def _resolve_run_inputs(request: RunRequest) -> _ExecutionInputs | None:
+def _resolve_run_inputs(
+    request: RunRequest, *, verbosity: str = "normal"
+) -> _ExecutionInputs | None:
     args_list = list(request.args)
     dag_reference: str | None = None
     param_overrides: dict[str, str] = {}
@@ -150,6 +152,7 @@ def _resolve_run_inputs(request: RunRequest) -> _ExecutionInputs | None:
             roar_dir=request.roar_dir,
             reference=dag_reference,
             param_overrides=param_overrides,
+            verbosity=verbosity,
         )
 
     if not command:
@@ -162,6 +165,7 @@ def _resolve_dag_reference(
     roar_dir: Path,
     reference: str,
     param_overrides: dict[str, str],
+    verbosity: str = "normal",
 ) -> _ExecutionInputs | None:
     with create_database_context(roar_dir) as db_ctx:
         resolver = DAGReferenceResolver(
@@ -178,16 +182,22 @@ def _resolve_dag_reference(
     if resolved is None:
         raise ValueError(f"Could not resolve DAG reference: {reference}")
 
+    quiet = verbosity == "quiet"
     presenter = ConsolePresenter()
-    report = RunReportPresenter(presenter)
-    if resolved.stale_upstream:
+    report = RunReportPresenter(presenter, verbosity=cast(Any, verbosity))
+    # In quiet mode we skip the interactive stale-upstream prompt and
+    # the "Re-running @N" chrome — the user has asked for the wrapped
+    # command's output to stand alone. They're trading safety signals
+    # for silence; that's the explicit deal `-q` makes on `roar run`.
+    if resolved.stale_upstream and not quiet:
         if not report.show_upstream_stale_warning(resolved.step_number, resolved.stale_upstream):
             presenter.print("Aborted.")
             return None
         presenter.print("")
 
-    presenter.print(f"Re-running @{resolved.step_number}: {resolved.command}")
-    presenter.print("")
+    if not quiet:
+        presenter.print(f"Re-running @{resolved.step_number}: {resolved.command}")
+        presenter.print("")
 
     return _ExecutionInputs(
         command=shlex.split(resolved.command),

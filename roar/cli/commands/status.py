@@ -15,6 +15,13 @@ from ..decorators import require_init
 @require_init
 def status(ctx: RoarContext) -> None:
     """Show a summary of the active session."""
+    from .._format import hints_should_print, make_hint_printer, print_brand_header
+
+    # The banner and the trailing hints both check `hints_should_print()`
+    # internally, so non-TTY / quiet contexts get clean output.
+    print_brand_header("status")
+    if hints_should_print():
+        click.echo()
     try:
         click.echo(render_status(StatusQueryRequest(roar_dir=ctx.roar_dir)))
     except StatusQueryError as exc:
@@ -24,8 +31,6 @@ def status(ctx: RoarContext) -> None:
     # surfaces a user actually visits. Status is one of those surfaces:
     # the user is staring at the active session and may want to know
     # they can rebuild any artifact from it.
-    from .._format import hints_should_print, make_hint_printer
-
     if hints_should_print():
         _caps, hint = make_hint_printer()
         hint("To rebuild an artifact: roar reproduce <artifact-hash>")
