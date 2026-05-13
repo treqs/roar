@@ -15,6 +15,11 @@ from ...application.publish.requests import PutRequest
 from ...application.publish.service import put_artifacts
 from ..context import RoarContext
 from ..decorators import require_init
+from ..publish_intent import (
+    confirm_anonymous_public_publish,
+    resolve_publish_intent,
+    warn_public_default,
+)
 
 
 def _preview_hash(value: str | None) -> str | None:
@@ -29,26 +34,6 @@ def _resolve_glaas_web_url() -> str:
     from ...integrations.config import config_get
 
     return config_get("glaas.web_url") or "https://glaas.ai"
-
-
-def _resolve_public_flag(public: bool | None, *, start_dir: str | None = None) -> tuple[bool, bool]:
-    """Resolve publish visibility and whether public came from config default."""
-    if public is not None:
-        return public, False
-
-    from ...integrations.config import config_get
-
-    resolved_public = bool(config_get("registration.public_by_default", start_dir=start_dir))
-    return resolved_public, resolved_public
-
-
-def _warn_public_default() -> None:
-    """Tell the user when config caused public visibility."""
-    click.echo(
-        "Warning: defaulting to public visibility because "
-        "registration.public_by_default=true in roar config. Pass --private to override.",
-        err=True,
-    )
 
 
 @click.command("put")
@@ -84,6 +69,12 @@ def _warn_public_default() -> None:
     is_flag=True,
     help="Force public anonymous registration even when local GLaaS auth is configured.",
 )
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Skip confirmation prompt for anonymous public publishing.",
+)
 @click.pass_obj
 @require_init
 def put(
@@ -94,6 +85,7 @@ def put(
     no_tag: bool,
     public: bool | None,
     anonymous: bool,
+    yes: bool,
 ) -> None:
     """Publish artifacts to cloud storage and register with GLaaS.
 
@@ -114,8 +106,9 @@ def put(
     - private + anonymous is not allowed
 
     Effective visibility comes from `--public` / `--private` when provided,
-    otherwise from `registration.public_by_default` in roar config. `--anonymous`
-    forces public visibility.
+    otherwise from this repo's `roar scope` setting. `--anonymous` forces
+    public visibility. If the effective scope is anonymous, roar prompts before
+    publishing public anonymous lineage unless --yes is provided.
 
     \b
     Destination formats:
@@ -150,14 +143,22 @@ def put(
     if anonymous and public is False:
         raise click.ClickException("--anonymous requires public visibility; remove --private.")
 
-    if anonymous:
-        resolved_public, used_public_default = True, False
-    else:
-        resolved_public, used_public_default = _resolve_public_flag(
-            public, start_dir=str(ctx.repo_root or ctx.cwd)
-        )
-    if used_public_default:
-        _warn_public_default()
+    publish_intent = resolve_publish_intent(
+        public,
+        anonymous,
+        start_dir=str(ctx.repo_root or ctx.cwd),
+    )
+    if publish_intent.used_public_default:
+        warn_public_default()
+
+    if (
+        publish_intent.anonymous
+        and not yes
+        and not dry_run
+        and not confirm_anonymous_public_publish(command_name="roar put")
+    ):
+        click.echo("Publication aborted.")
+        raise SystemExit(1)
 
     try:
         response = put_artifacts(
@@ -169,8 +170,8 @@ def put(
                 destination=destination,
                 message=message,
                 dry_run=dry_run,
-                public=resolved_public,
-                anonymous=anonymous,
+                public=publish_intent.public,
+                anonymous=publish_intent.anonymous,
                 no_tag=no_tag,
             )
         )

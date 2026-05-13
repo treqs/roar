@@ -13,6 +13,11 @@ from ...application.publish.results import RegisterTagSummary
 from ...application.publish.service import register_lineage_target
 from ..context import RoarContext
 from ..decorators import require_init
+from ..publish_intent import (
+    confirm_anonymous_public_publish,
+    resolve_publish_intent,
+    warn_public_default,
+)
 
 
 def _preview_hash(value: str) -> str:
@@ -25,17 +30,6 @@ def _resolve_glaas_web_url(*, start_dir: str | None = None) -> str:
     from ...integrations.config.raw import get_raw_glaas_web_url
 
     return get_raw_glaas_web_url(start_dir=start_dir) or "https://glaas.ai"
-
-
-def _resolve_public_flag(public: bool | None, *, start_dir: str | None = None) -> tuple[bool, bool]:
-    """Resolve publish visibility and whether public came from config default."""
-    if public is not None:
-        return public, False
-
-    from ...integrations.config import config_get
-
-    resolved_public = bool(config_get("registration.public_by_default", start_dir=start_dir))
-    return resolved_public, resolved_public
 
 
 def _display_session_url(response_session_url: str | None, web_url: str, session_hash: str) -> str:
@@ -84,15 +78,6 @@ def _render_tag_summary(summary: RegisterTagSummary | None) -> None:
     click.echo("")
 
 
-def _warn_public_default() -> None:
-    """Tell the user when config caused public visibility."""
-    click.echo(
-        "Warning: defaulting to public visibility because "
-        "registration.public_by_default=true in roar config. Pass --private to override.",
-        err=True,
-    )
-
-
 def _confirm_secrets(detected_secrets: list[str]) -> bool:
     """Prompt user to confirm registration with secrets."""
     click.echo("")
@@ -114,7 +99,7 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     "--yes",
     "-y",
     is_flag=True,
-    help="Skip confirmation prompt and proceed with secret filtering",
+    help=("Skip confirmation prompts for anonymous public publishing and secret filtering."),
 )
 @click.option(
     "--as-blake3",
@@ -164,12 +149,14 @@ def register(
     - private + anonymous is not allowed
 
     Effective visibility comes from `--public` / `--private` when provided,
-    otherwise from `registration.public_by_default` in roar config. `--anonymous`
-    forces public visibility.
+    otherwise from this repo's `roar scope` setting. `--anonymous` forces
+    public visibility.
 
     If secrets are detected in the data (API keys, tokens, passwords, etc.),
     you will be prompted to confirm. Use --yes to skip the prompt and
-    automatically proceed with secret redaction.
+    automatically proceed with secret redaction. If the effective scope is
+    anonymous, you will also be prompted before publishing public anonymous
+    lineage unless --yes is provided.
 
     \b
     Examples:
@@ -195,12 +182,22 @@ def register(
     if anonymous and public is False:
         raise click.ClickException("--anonymous requires public visibility; remove --private.")
 
-    if anonymous:
-        resolved_public, used_public_default = True, False
-    else:
-        resolved_public, used_public_default = _resolve_public_flag(public, start_dir=str(ctx.cwd))
-    if used_public_default:
-        _warn_public_default()
+    publish_intent = resolve_publish_intent(
+        public,
+        anonymous,
+        start_dir=str(ctx.cwd),
+    )
+    if publish_intent.used_public_default:
+        warn_public_default()
+
+    if (
+        publish_intent.anonymous
+        and not yes
+        and not dry_run
+        and not confirm_anonymous_public_publish(command_name="roar register")
+    ):
+        click.echo("Registration aborted.")
+        raise SystemExit(1)
 
     response = register_lineage_target(
         RegisterLineageRequest(
@@ -209,8 +206,8 @@ def register(
             cwd=ctx.cwd,
             dry_run=dry_run,
             as_blake3=as_blake3,
-            public=resolved_public,
-            anonymous=anonymous,
+            public=publish_intent.public,
+            anonymous=publish_intent.anonymous,
             skip_confirmation=yes,
             confirm_callback=_confirm_secrets if not yes else None,
         )

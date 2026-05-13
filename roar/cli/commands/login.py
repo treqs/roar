@@ -22,6 +22,7 @@ from ...glaas_auth import (
     resolve_auth_api_url,
     start_device_authorization,
 )
+from ...scope_config import load_repo_scope, save_repo_scope
 
 
 @click.command("login")
@@ -79,6 +80,7 @@ def login(
     else:
         click.echo(f"Stored auth state for {identity}")
     click.echo(f"Saved to {path}")
+    _render_scope_hint_after_login(Path.cwd())
 
 
 def _run_device_login(resolved_api_url: str) -> dict[str, object]:
@@ -157,6 +159,28 @@ def _confirm_session_replacement(*, force: bool) -> None:
     click.echo(f"Already logged in as {identity}.")
     if not click.confirm("Replace existing session?", default=False):
         raise click.ClickException("Login cancelled; existing session preserved.")
+
+
+def _render_scope_hint_after_login(cwd: Path) -> None:
+    scope = load_repo_scope(cwd)
+    if scope is None:
+        click.echo("hint: Set this repo's publish scope with `roar scope use private`.")
+        return
+
+    if scope.mode == "anonymous" and scope.source == "scope":
+        path = save_repo_scope("private", start_dir=cwd)
+        click.echo("Scope: anonymous -> private  (auto-applied for this repo)")
+        click.echo("")
+        click.echo("hint: Your repo's scope just upgraded from anonymous to private.")
+        click.echo("hint:   `roar register` now publishes with access control.")
+        click.echo("hint: To use a project scope instead: `roar scope use <owner>/<project>`.")
+        click.echo("hint: To share lineage publicly and attributed: `roar scope use public`.")
+        click.echo("hint: To see your scopes: `roar scope list`.")
+        click.echo(f"Saved to {path}")
+        return
+
+    click.echo(f"Scope: {scope.mode} (unchanged)")
+    click.echo("hint: To see scopes available: `roar scope list`.")
 
 
 def _require_dev_email_feature_flag() -> None:

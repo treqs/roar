@@ -50,6 +50,37 @@ def test_force_anonymous_suppresses_ssh_auth_header_generation() -> None:
     assert client.publish_auth.ssh_auth_available is False
 
 
+def test_finalize_current_user_private_scope_reports_server_support_gap() -> None:
+    client = GlaasClient(
+        base_url="http://localhost:9999",
+        publish_auth=PublishAuthContext(
+            access_token="token",
+            scope_request={
+                "owner_resolution": "current_user",
+                "owner_type": "user",
+                "visibility": "private",
+            },
+        ),
+    )
+
+    with patch.object(client, "_request") as mock_request:
+        mock_request.return_value = (
+            None,
+            "HTTP 400: Invalid scope_request: unknown field owner_resolution",
+        )
+        _result, error = client.finalize_registration_session(
+            "reg-1",
+            git_repo="repo",
+            git_commit="commit",
+            git_branch="main",
+        )
+
+    assert error == (
+        "Private personal scope is not available on this GLaaS server yet. "
+        "Use `roar scope use <owner>/<project>` or `roar register --public`."
+    )
+
+
 class TestGlaasClientExceptions:
     """Test that GlaasClient raises proper exceptions."""
 

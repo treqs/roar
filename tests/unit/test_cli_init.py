@@ -38,6 +38,10 @@ def test_init_creates_gitignore_when_missing(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert gitignore.exists()
     assert ".roar/" in gitignore.read_text().splitlines()
+    config_text = (repo / ".roar" / "config.toml").read_text(encoding="utf-8")
+    assert "[scope]" in config_text
+    assert 'mode = "anonymous"' in config_text
+    assert "scope:      anonymous (public; no account)" in result.output
     assert "created .gitignore with .roar/ entry" in result.output
 
 

@@ -13,6 +13,7 @@ except ImportError:  # pragma: no cover
     import tomli as tomllib
 
 from .auth_store import load_auth_state
+from .scope_config import load_repo_scope
 
 
 class PublishAuthError(RuntimeError):
@@ -60,13 +61,27 @@ def load_publish_auth_context(
 
     ssh_auth_available = _has_ssh_auth_credentials()
     binding = None if allow_public_without_binding else _load_repo_binding(start_dir)
+    repo_scope = None if allow_public_without_binding else load_repo_scope(start_dir)
     if binding and not access_token and not ssh_auth_available:
         raise PublishAuthError(
             "Repo is linked to GLaaS but no global auth state is available. Run `roar login`."
         )
-    if not binding and not allow_public_without_binding:
+    if not binding and repo_scope is not None and repo_scope.mode == "project":
+        binding = {
+            "owner_id": repo_scope.owner_id or "",
+            "owner_type": repo_scope.owner_type or "",
+        }
+        if repo_scope.project_id:
+            binding["project_id"] = repo_scope.project_id
+        if not access_token and not ssh_auth_available:
+            raise PublishAuthError(
+                "Repo is linked to GLaaS but no global auth state is available. Run `roar login`."
+            )
+
+    if not binding and not allow_public_without_binding and not access_token:
         raise PublishAuthError(
-            "No GLaaS repo binding found for this publish. Link the repo to a TReqs owner/project first, or rerun with --public to publish publicly."
+            "Private registration requires GLaaS login when no project scope is linked. "
+            "Run `roar login`, use `roar scope use <project-id>`, or rerun with --public."
         )
 
     creator_identity = None
@@ -85,6 +100,12 @@ def load_publish_auth_context(
         project_id = binding.get("project_id")
         if project_id:
             scope_request["project_id"] = project_id
+    elif not allow_public_without_binding:
+        scope_request = {
+            "owner_resolution": "current_user",
+            "owner_type": "user",
+            "visibility": "private",
+        }
 
     return PublishAuthContext(
         access_token=access_token,

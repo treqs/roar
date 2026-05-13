@@ -212,6 +212,14 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "projects",
         "Manage GLaaS projects visible through your TReqs account",
         "GLaaS / TReqs Account",
+        hidden=True,
+    ),
+    CommandSpec(
+        "scope",
+        "roar.cli.commands.scope",
+        "scope",
+        "Show or change where this repo publishes lineage",
+        "GLaaS / TReqs Account",
     ),
     CommandSpec(
         "workflow",

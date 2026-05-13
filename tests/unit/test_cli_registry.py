@@ -37,7 +37,7 @@ def test_help_groups_are_built_from_command_specs() -> None:
         "login",
         "logout",
         "whoami",
-        "projects",
+        "scope",
         "workflow",
     )
     assert "telemetry" in help_groups["Setup and Admin"]
@@ -72,6 +72,7 @@ def test_help_shows_account_commands_by_default() -> None:
     assert "GLaaS / TReqs Account:" in result.output
     assert "Store global GLaaS/TReqs auth state" in result.output
     assert "Show current GLaaS/TReqs login and repo binding" in result.output
+    assert "projects" not in result.output
     assert "Generate TReqs workflow YAML from local sessions" in result.output
     assert "Track a command with provenance" in result.output
     assert "Publish artifacts and register lineage" in result.output
@@ -102,6 +103,11 @@ def test_cli_allows_account_commands_by_default() -> None:
 
     assert workflow_result.exit_code == 0, workflow_result.output
     assert "Generate TReqs workflow YAML from local roar sessions." in workflow_result.output
+
+    projects_result = runner.invoke(cli, ["projects", "--help"])
+
+    assert projects_result.exit_code == 0, projects_result.output
+    assert "Inspect and manage GLaaS projects." in projects_result.output
 
 
 def test_subcommand_help_reports_import_errors_cleanly() -> None:
