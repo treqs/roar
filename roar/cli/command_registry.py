@@ -212,6 +212,7 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "projects",
         "Manage GLaaS projects visible through your TReqs account",
         "GLaaS / TReqs Account",
+        hidden=True,
     ),
     CommandSpec(
         "scope",

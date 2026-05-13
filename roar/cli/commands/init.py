@@ -56,6 +56,11 @@ url = "https://api.glaas.ai"
 # Default roar register/put to public visibility unless overridden by --private
 public_by_default = false
 
+[scope]
+# Default repo publication scope. Anonymous means public and unattributed until
+# you run `roar login`, which upgrades this repo to private.
+mode = "anonymous"
+
 [registration.omit]
 # Enable secret filtering for registration data
 enabled = true
@@ -342,6 +347,7 @@ def _print_init_summary(*, roar_dir: Path, gitignore_status: str | None, in_git_
     click.echo(f"Initialized roar in {roar_dir.parent}")
     click.echo(f"  database:   {roar_dir / 'roar.db'}")
     click.echo(f"  config:     {roar_dir / 'config.toml'}")
+    click.echo("  scope:      anonymous (public; no account)")
     if gitignore_status:
         click.echo(f"  gitignore:  {gitignore_status}")
     if not in_git_repo:
@@ -371,6 +377,14 @@ def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) 
     hint("  roar run python train.py     # track inputs, outputs, env, commit")
     hint("  roar dag                     # view the lineage graph")
     hint("  roar register output.csv     # publish to GLaaS for teammates")
+    hint()
+    hint("Privacy:")
+    hint("  `roar register` and `roar put` publish public anonymous lineage")
+    hint("  until you change scope.")
+    hint("  Run `roar login` to switch this repo to private,")
+    hint("  or `roar scope use <owner>/<project>` for project scope.")
+    hint("  Anonymous public publishing prompts for confirmation;")
+    hint("  bypass with `roar register -y` or `roar put -y`.")
     hint()
     hint("Tracer auto-selects (eBPF → preload → ptrace). Switch with `roar tracer <backend>`;")
     hint("see all backends and readiness with `roar tracer`.")

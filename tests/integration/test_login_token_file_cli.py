@@ -126,11 +126,14 @@ def test_login_token_file_validates_with_backend_before_storing(
 
     assert result.returncode == 0, result.stderr
     assert fake_access_context_server.last_authorization == "Bearer access-token"
+    assert "Scope: anonymous -> private" in result.stdout
 
     stored_auth = json.loads((xdg_config_home / "roar" / "auth.json").read_text(encoding="utf-8"))
     assert stored_auth["user"]["db_user_id"] == "user-123"
     assert stored_auth["user"]["sub"] == "server-sub"
     assert stored_auth["user"]["username"] == "trevor"
+    config_text = (temp_git_repo / ".roar" / "config.toml").read_text(encoding="utf-8")
+    assert '[scope]\nmode = "private"' in config_text
 
 
 def test_login_token_file_rejects_invalid_backend_token(

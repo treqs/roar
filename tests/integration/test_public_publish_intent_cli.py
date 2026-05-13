@@ -161,6 +161,8 @@ def _parse_session_hash(output: str) -> str:
 def _write_repo_binding(repo: Path) -> None:
     config_path = repo / ".roar" / "config.toml"
     config_text = config_path.read_text(encoding="utf-8")
+    if 'mode = "anonymous"' in config_text:
+        config_text = config_text.replace('mode = "anonymous"', 'mode = "project"', 1)
     config_path.write_text(
         f'{config_text.rstrip()}\n\n[treqs]\nowner_id = "owner-test"\nowner_type = "organization"\nproject_id = "proj-test"\n',
         encoding="utf-8",
@@ -250,6 +252,7 @@ def test_register_uses_public_default_from_config_when_repo_has_no_binding(
     fake_glaas_publish_server: FakeGlaasServer,
 ) -> None:
     env = _configure_unbound_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    roar_cli("scope", "clear", env_overrides=env)
     roar_cli("config", "set", "registration.public_by_default", "true", env_overrides=env)
     _create_register_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
 
@@ -275,6 +278,7 @@ def test_register_private_flag_overrides_public_default_when_repo_has_no_binding
     fake_glaas_publish_server: FakeGlaasServer,
 ) -> None:
     env = _configure_unbound_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    roar_cli("scope", "clear", env_overrides=env)
     roar_cli("config", "set", "registration.public_by_default", "true", env_overrides=env)
     _create_register_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
 
@@ -616,6 +620,7 @@ def test_put_uses_public_default_from_config_when_repo_has_no_binding(
     fake_glaas_publish_server: FakeGlaasServer,
 ) -> None:
     env = _configure_unbound_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    roar_cli("scope", "clear", env_overrides=env)
     roar_cli("config", "set", "registration.public_by_default", "true", env_overrides=env)
     _create_put_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
     monkeypatch.setenv("ROAR_PUT_SKIP_UPLOAD", "1")
@@ -650,6 +655,7 @@ def test_put_private_flag_overrides_public_default_when_repo_has_no_binding(
     fake_glaas_publish_server: FakeGlaasServer,
 ) -> None:
     env = _configure_unbound_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    roar_cli("scope", "clear", env_overrides=env)
     roar_cli("config", "set", "registration.public_by_default", "true", env_overrides=env)
     _create_put_fixture(temp_git_repo, roar_cli, git_commit, python_exe, env)
     monkeypatch.setenv("ROAR_PUT_SKIP_UPLOAD", "1")
@@ -818,6 +824,7 @@ def test_put_anonymous_with_valid_ssh_forces_anonymous_public_registration_sessi
         "-m",
         "publish model",
         "--anonymous",
+        "--yes",
         env_overrides=env,
     )
 

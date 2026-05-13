@@ -67,3 +67,101 @@ def test_scope_use_private_writes_repo_scope(tmp_path: Path, monkeypatch) -> Non
     resolved = load_repo_scope(tmp_path)
     assert resolved is not None
     assert resolved.mode == "private"
+
+
+def test_scope_list_renders_owner_project_names(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _patch_logged_in_scope_context(monkeypatch)
+
+    result = CliRunner().invoke(scope, ["list", "--glaas-api-url", "http://glaas.test"])
+
+    assert result.exit_code == 0, result.output
+    assert "acme/foundation-models" in result.output
+    assert "acme/readonly-project" in result.output
+    assert "read-only" in result.output
+    assert "proj-789" not in result.output
+
+
+def test_scope_use_owner_project_name_writes_project_binding(tmp_path: Path, monkeypatch) -> None:
+    roar_dir = tmp_path / ".roar"
+    roar_dir.mkdir()
+    (roar_dir / "config.toml").write_text("[registration]\npublic_by_default = false\n")
+    monkeypatch.chdir(tmp_path)
+    _patch_logged_in_scope_context(monkeypatch)
+
+    result = CliRunner().invoke(
+        scope,
+        ["use", "acme/foundation-models", "--glaas-api-url", "http://glaas.test"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Set roar scope to acme/foundation-models" in result.output
+    config_text = (roar_dir / "config.toml").read_text(encoding="utf-8")
+    assert 'owner_id = "org-456"' in config_text
+    assert 'owner_type = "organization"' in config_text
+    assert 'project_id = "proj-789"' in config_text
+    resolved = load_repo_scope(tmp_path)
+    assert resolved is not None
+    assert resolved.mode == "project"
+    assert resolved.project_id == "proj-789"
+
+
+def test_scope_use_rejects_readonly_project_name(tmp_path: Path, monkeypatch) -> None:
+    roar_dir = tmp_path / ".roar"
+    roar_dir.mkdir()
+    (roar_dir / "config.toml").write_text("[registration]\npublic_by_default = false\n")
+    monkeypatch.chdir(tmp_path)
+    _patch_logged_in_scope_context(monkeypatch)
+
+    result = CliRunner().invoke(
+        scope,
+        ["use", "acme/readonly-project", "--glaas-api-url", "http://glaas.test"],
+    )
+
+    assert result.exit_code != 0
+    assert "visible but not writable" in result.output
+
+
+def _patch_logged_in_scope_context(monkeypatch) -> None:
+    monkeypatch.setattr("roar.cli.commands.scope.load_auth_state", lambda: object())
+    monkeypatch.setattr("roar.cli.commands.scope.is_auth_state_expired", lambda _state: False)
+    monkeypatch.setattr(
+        "roar.cli.commands.scope.resolve_auth_api_url",
+        lambda value=None: value or "http://glaas.test",
+    )
+    monkeypatch.setattr(
+        "roar.cli.commands.scope.fetch_access_context",
+        lambda _url: {
+            "owners": [
+                {
+                    "id": "user-123",
+                    "type": "user",
+                    "username": "trevor",
+                    "display_name": "Trevor",
+                },
+                {
+                    "id": "org-456",
+                    "type": "organization",
+                    "username": "acme",
+                    "display_name": "Acme AI",
+                },
+            ],
+            "projects_by_owner": {
+                "org-456": [
+                    {
+                        "id": "proj-789",
+                        "name": "foundation-models",
+                        "visibility": "private",
+                        "can_write": True,
+                    },
+                    {
+                        "id": "proj-readonly",
+                        "name": "readonly-project",
+                        "visibility": "private",
+                        "can_write": False,
+                    },
+                ],
+                "user-123": [],
+            },
+        },
+    )

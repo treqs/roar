@@ -8,6 +8,7 @@ from click.testing import CliRunner
 from roar.application.publish.results import PutDryRunItem, PutResponse, PutUploadedFile
 from roar.cli.commands.put import put
 from roar.integrations.config import config_set
+from roar.scope_config import save_repo_scope
 
 
 def _mock_context(tmp_path: Path) -> MagicMock:
@@ -154,7 +155,7 @@ def test_put_cli_anonymous_forces_public_without_default_warning(tmp_path: Path)
     with patch("roar.cli.commands.put.put_artifacts", return_value=response) as mock_put:
         result = runner.invoke(
             put,
-            ["model.pt", "s3://bucket/release", "-m", "publish release", "--anonymous"],
+            ["model.pt", "s3://bucket/release", "-m", "publish release", "--anonymous", "--yes"],
             obj=_mock_context(tmp_path),
         )
 
@@ -163,6 +164,25 @@ def test_put_cli_anonymous_forces_public_without_default_warning(tmp_path: Path)
     request = mock_put.call_args.args[0]
     assert request.public is True
     assert request.anonymous is True
+
+
+def test_put_cli_prompts_before_anonymous_scope_publish(tmp_path: Path) -> None:
+    runner = CliRunner()
+    save_repo_scope("anonymous", start_dir=tmp_path)
+
+    with patch("roar.cli.commands.put.put_artifacts") as mock_put:
+        result = runner.invoke(
+            put,
+            ["model.pt", "s3://bucket/release", "-m", "publish release"],
+            input="n\n",
+            obj=_mock_context(tmp_path),
+        )
+
+    assert result.exit_code != 0
+    assert "Anonymous scope publishes publicly without account attribution." in result.output
+    assert "Publish anonymously and publicly?" in result.output
+    assert "Publication aborted." in result.output
+    mock_put.assert_not_called()
 
 
 def test_put_cli_rejects_anonymous_private(tmp_path: Path) -> None:

@@ -205,6 +205,20 @@ def test_register_cli_uses_anonymous_scope_as_default_publish_intent(tmp_path: P
     assert request.anonymous is True
 
 
+def test_register_cli_prompts_before_anonymous_scope_publish(tmp_path: Path) -> None:
+    runner = CliRunner()
+    save_repo_scope("anonymous", start_dir=tmp_path)
+
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        result = runner.invoke(register, ["model.pt"], input="n\n", obj=_mock_context(tmp_path))
+
+    assert result.exit_code != 0
+    assert "Anonymous scope publishes publicly without account attribution." in result.output
+    assert "Publish anonymously and publicly?" in result.output
+    assert "Registration aborted." in result.output
+    mock_register.assert_not_called()
+
+
 def test_register_cli_uses_private_scope_as_default_publish_intent(tmp_path: Path) -> None:
     runner = CliRunner()
     save_repo_scope("private", start_dir=tmp_path)
