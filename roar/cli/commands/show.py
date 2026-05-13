@@ -5,7 +5,8 @@ from __future__ import annotations
 import click
 
 from ...application.query.requests import ShowQueryRequest, ShowQuerySelector
-from ...application.query.show import ShowQueryError, render_show
+from ...application.query.results import ShowArtifactSummary
+from ...application.query.show import ShowQueryError, render_show_with_summary
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -74,9 +75,21 @@ def show(
         show_all=show_all,
     )
     try:
-        click.echo(render_show(request))
+        output, summary = render_show_with_summary(request)
     except ShowQueryError as exc:
         raise click.ClickException(str(exc)) from exc
+    click.echo(output)
+
+    # Artifact targets get a `roar reproduce` nudge — the on-mission
+    # follow-up for a hash you're staring at. Jobs and sessions don't,
+    # because `roar reproduce` takes an artifact (the thing you're
+    # trying to recreate), not a job or session.
+    if isinstance(summary, ShowArtifactSummary):
+        from .._format import hints_should_print, make_hint_printer
+
+        if hints_should_print():
+            _caps, hint = make_hint_printer()
+            hint(f"To reproduce this artifact: roar reproduce {summary.id}")
 
 
 def _build_show_request(

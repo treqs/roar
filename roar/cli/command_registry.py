@@ -19,6 +19,7 @@ class CommandSpec:
 
 _HELP_SECTION_ORDER: tuple[str, ...] = (
     "Start Here",
+    "Sessions",
     "Inspect Local Lineage",
     "Share and Publish",
     "Setup and Admin",
@@ -38,14 +39,32 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "Start Here",
     ),
     CommandSpec(
-        "dag", "roar.cli.commands.dag", "dag", "Inspect the local execution DAG", "Start Here"
-    ),
-    CommandSpec(
         "status",
         "roar.cli.commands.status",
         "status",
         "Show the active session summary",
-        "Inspect Local Lineage",
+        "Sessions",
+    ),
+    CommandSpec(
+        "dag",
+        "roar.cli.commands.dag",
+        "dag",
+        "Inspect the local execution DAG",
+        "Sessions",
+    ),
+    CommandSpec(
+        "pop",
+        "roar.cli.commands.pop",
+        "pop",
+        "Undo the last job in the active session",
+        "Sessions",
+    ),
+    CommandSpec(
+        "reset",
+        "roar.cli.commands.reset",
+        "reset",
+        "Start a fresh session (boundary between pipelines)",
+        "Sessions",
     ),
     CommandSpec(
         "log",
@@ -88,9 +107,6 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "inputs",
         "Show root input artifacts for a target",
         "Inspect Local Lineage",
-    ),
-    CommandSpec(
-        "pop", "roar.cli.commands.pop", "pop", "Remove the last local step", "Inspect Local Lineage"
     ),
     CommandSpec(
         "reproduce",
@@ -162,7 +178,6 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "Manage S3 proxy for lineage tracking",
         "Setup and Admin",
     ),
-    CommandSpec("reset", "roar.cli.commands.reset", "reset", "Reset roar state", "Setup and Admin"),
     CommandSpec(
         "login",
         "roar.cli.commands.login",

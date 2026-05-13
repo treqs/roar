@@ -20,7 +20,13 @@ def test_lazy_registry_is_built_from_command_specs() -> None:
 def test_help_groups_are_built_from_command_specs() -> None:
     help_groups = dict(build_help_groups())
 
-    assert help_groups["Start Here"] == ("init", "run", "build", "dag")
+    assert help_groups["Start Here"] == ("init", "run", "build")
+    # P1-12: `status`, `dag`, `pop`, `reset` live in a dedicated
+    # Sessions group so the session-boundary primitives are
+    # discoverable. `dag` moved out of "Start Here"; `pop` and
+    # `reset` moved out of "Inspect Local Lineage" / "Setup and Admin"
+    # respectively.
+    assert help_groups["Sessions"] == ("status", "dag", "pop", "reset")
     assert help_groups["Share and Publish"] == (
         "put",
         "register",
