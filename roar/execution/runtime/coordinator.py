@@ -367,6 +367,7 @@ class RunCoordinator:
 
         # DAG stats + parent job lookup (best-effort, never fail the run).
         dag_jobs, dag_artifacts, dag_depth = 0, 0, 0
+        step_number: int | None = None
         try:
             from ...db.context import create_database_context as _create_db_ctx
             from ...presenters.dag_data_builder import DagDataBuilder
@@ -404,6 +405,15 @@ class RunCoordinator:
                         producers = jobs_info.get("produced_by", [])
                         if producers:
                             inp["parent_job_uid"] = producers[0].get("job_uid")
+
+                # Step number for the just-recorded job — drives the
+                # `roar register @N` form in the next-steps hint.
+                if job_uid:
+                    job_record = db_ctx.jobs.get_by_uid(job_uid)
+                    if job_record:
+                        recorded_step = job_record.get("step_number")
+                        if isinstance(recorded_step, int):
+                            step_number = recorded_step
         except Exception:
             pass
 
@@ -435,6 +445,7 @@ class RunCoordinator:
             dag_jobs=dag_jobs,
             dag_artifacts=dag_artifacts,
             dag_depth=dag_depth,
+            step_number=step_number,
             filter_counts=filter_counts if isinstance(filter_counts, dict) else {},
             dropped_paths=dropped_paths if isinstance(dropped_paths, dict) else {},
         )

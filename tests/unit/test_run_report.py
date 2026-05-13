@@ -145,13 +145,68 @@ def test_dag_line_singular() -> None:
     assert "artifacts" not in out
 
 
-def test_suggested_command() -> None:
+def test_summary_no_longer_embeds_show_suggestion() -> None:
+    """The old `· $ roar show --job …    # details` row inside the
+    summary block moved out to a `hint:` line after `done()`. Make sure
+    nothing puts it back."""
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
     report.summary(_make_result(job_uid="f3fba717"), [])
     out = _strip(buf.getvalue())
-    assert "$ roar show --job f3fba717" in out
-    assert "# details" in out
+    assert "$ roar show" not in out
+    assert "# details" not in out
+
+
+def test_next_steps_hint_prefers_step_form() -> None:
+    """When the step number is known, the register suggestion uses the
+    `@N` form — shorter and more discoverable than the bare UID."""
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.next_steps_hint(_make_result(job_uid="abc12345", step_number=3))
+    out = _strip(buf.getvalue())
+    assert "hint: next: roar show --job abc12345" in out
+    assert "roar dag" in out
+    assert "roar register @3" in out
+
+
+def test_next_steps_hint_falls_back_to_uid_form_when_no_step_number() -> None:
+    """Some code paths build RunResult without step_number. The register
+    suggestion still works — falls back to the UID form, which the
+    target resolver also accepts."""
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.next_steps_hint(_make_result(job_uid="abc12345", step_number=None))
+    out = _strip(buf.getvalue())
+    assert "roar register abc12345" in out
+    # No bogus `@N` form when N isn't available.
+    assert "roar register @" not in out
+
+
+def test_next_steps_hint_silent_in_pipe_mode() -> None:
+    """CI / piped stderr suppresses the hint — same convention as the
+    rest of the presenter's decorative output."""
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_pipe_caps())
+    report.next_steps_hint(_make_result(job_uid="abc12345"))
+    assert buf.getvalue() == ""
+
+
+def test_next_steps_hint_silent_in_quiet_mode() -> None:
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps(), verbosity="quiet")
+    report.next_steps_hint(_make_result(job_uid="abc12345"))
+    assert buf.getvalue() == ""
+
+
+def test_next_steps_hint_silent_when_hints_disabled() -> None:
+    """`hints.enabled = false` in config suppresses the hint."""
+    from unittest.mock import patch
+
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    with patch("roar.integrations.config.config_get", return_value=False):
+        report.next_steps_hint(_make_result(job_uid="abc12345"))
+    assert buf.getvalue() == ""
 
 
 # ---- lifecycle lines -------------------------------------------------------
