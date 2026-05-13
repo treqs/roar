@@ -15,7 +15,7 @@
 #   2. Build the platform-appropriate Rust tracer crates
 #   3. Stage the built binaries into `roar/bin/` so the editable install
 #      finds them at runtime
-#   4. Smoke-test with `roar tracer status`
+#   4. Smoke-test with `roar tracer`
 #
 # Re-run safely; the pip install is idempotent and cargo is incremental.
 set -euo pipefail
@@ -135,7 +135,7 @@ step "Smoke-testing the install"
 if ! command -v roar >/dev/null 2>&1; then
   warn "'roar' not on PATH — activate your venv or rehash your shell"
 else
-  roar tracer status || warn "roar tracer status reported issues — see output above"
+  roar tracer || warn "roar tracer reported issues — see output above"
   ok "roar CLI is on PATH"
 fi
 

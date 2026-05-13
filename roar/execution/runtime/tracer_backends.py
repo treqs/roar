@@ -81,8 +81,10 @@ class TracerPreflightResult:
     checks: tuple[PreflightCheck, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
+        # JSON key is "tracer" — "backend" was internal jargon and confused
+        # users who reasonably think of the Python side as the backend.
         return {
-            "backend": self.backend,
+            "tracer": self.backend,
             "ok": self.ok,
             "summary": self.summary,
             "command_checked": self.command_checked,
@@ -93,7 +95,7 @@ class TracerPreflightResult:
 
 @dataclass(frozen=True)
 class AutoPreflightResult:
-    """Strict preflight result for auto backend selection."""
+    """Strict preflight result for auto tracer selection."""
 
     ok: bool
     selected_backend: str | None
@@ -103,9 +105,9 @@ class AutoPreflightResult:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "backend": "auto",
+            "tracer": "auto",
             "ok": self.ok,
-            "selected_backend": self.selected_backend,
+            "selected_tracer": self.selected_backend,
             "summary": self.summary,
             "command_checked": self.command_checked,
             "results": [result.to_dict() for result in self.results],
@@ -302,6 +304,29 @@ def ebpf_is_ready(path: str) -> tuple[bool, str | None]:
     return ebpf_readiness(path).as_tuple()
 
 
+def ebpf_host_unavailable_reason() -> str | None:
+    """Why this host can't run roar's eBPF tracer at all, or None if it can.
+
+    Distinguishes "user can't fix this locally" (locked-down container,
+    non-Linux, kernel without BTF, no perf_event subsystem) from
+    "needs a `sudo setcap` or sysctl tweak" — which is what
+    `ebpf_readiness` already reports.
+
+    Returns the human-readable reason string, or None if the host is
+    capable of running eBPF (modulo fixable caps/sysctl).
+    """
+    if sys.platform != "linux":
+        return f"{sys.platform} (eBPF is Linux-only)"
+    # CO-RE programs need /sys/kernel/btf/vmlinux; without it the loader
+    # can't relocate the program against the running kernel's types.
+    if not Path("/sys/kernel/btf/vmlinux").exists():
+        return "kernel built without BTF (no /sys/kernel/btf/vmlinux)"
+    # No perf subsystem = no perf_event_open = no eBPF tracepoints.
+    if not Path("/proc/sys/kernel/perf_event_paranoid").exists():
+        return "kernel has no perf_event subsystem"
+    return None
+
+
 def ptrace_readiness(path: str) -> TracerReadiness:
     """
     Verify the ptrace tracer binary is actually executable on this host.
@@ -381,21 +406,22 @@ def suggestions_for_preflight_result(result: PreflightResult) -> tuple[str, ...]
 
     if isinstance(result, AutoPreflightResult):
         suggestions: list[str] = [
-            "Run `roar tracer status` to see detected tracer binaries and system readiness.",
+            "Run `roar tracer` to see detected tracer binaries and system readiness.",
         ]
         for backend_result in result.results:
             suggestions.extend(suggestions_for_preflight_result(backend_result))
         suggestions.append(
-            "If one backend is expected to work, try `roar tracer check --backend <backend> --command <cmd>` for details."
+            "If one tracer is expected to work, try `roar tracer check <tracer> --command <cmd>` for details."
         )
         return _dedupe_suggestions(suggestions, limit=5)
 
     summary = result.summary.lower()
     failed_checks = {check.name: (check.detail or "") for check in result.checks if not check.ok}
     detail_text = " ".join([summary, *failed_checks.values()]).lower()
-    suggestions = [
-        f"Run `roar tracer check --backend {result.backend}` to reproduce this preflight failure.",
-    ]
+    # The earlier "Run `roar tracer check --backend <self>` to reproduce
+    # this failure" suggestion was a no-op for users — they just ran
+    # this exact preflight. Suggestions below are actionable only.
+    suggestions = []
 
     if result.backend == "ebpf":
         if "not found" in detail_text:
@@ -404,11 +430,11 @@ def suggestions_for_preflight_result(result: PreflightResult) -> tuple[str, ...]
             )
         if "cap" in detail_text or "perf_event_paranoid" in detail_text:
             suggestions.append(
-                "Run `roar tracer setup ebpf` to configure eBPF tracer capabilities and sysctls."
+                "Run `roar tracer enable ebpf` to configure eBPF tracer capabilities and sysctls."
             )
         if "tracepoint" in detail_text or "attach" in detail_text:
             suggestions.append(
-                "Try `roar tracer check --backend preload` or `--backend ptrace` on this host."
+                "Try `roar tracer check preload` or `roar tracer check ptrace` on this host."
             )
         suggestions.append(
             "Use `roar run --tracer preload ...` or `roar run --tracer ptrace ...` if eBPF is not available here."
@@ -485,7 +511,7 @@ def preflight_auto_backend(
             return AutoPreflightResult(
                 ok=True,
                 selected_backend=backend,
-                summary=f"selected backend '{backend}'",
+                summary=f"selected tracer '{backend}'",
                 command_checked=command_checked,
                 results=tuple(results),
             )
@@ -626,13 +652,20 @@ def _merge_preflight_checks(
     result: TracerPreflightResult,
     checks: Sequence[PreflightCheck],
 ) -> TracerPreflightResult:
+    """Concatenate prefix checks with the in-binary preflight result,
+    dropping any prefix check whose name the binary already reported.
+    Without the dedupe, callers see e.g. `launcher: ok (...)` listed
+    twice — once added externally before invoking the binary, once
+    emitted by the binary itself."""
+    existing = {c.name for c in result.checks}
+    deduped = tuple(c for c in checks if c.name not in existing)
     return TracerPreflightResult(
         backend=result.backend,
         ok=result.ok,
         summary=result.summary,
         command_checked=result.command_checked,
         warnings=result.warnings,
-        checks=(*checks, *result.checks),
+        checks=(*deduped, *result.checks),
     )
 
 

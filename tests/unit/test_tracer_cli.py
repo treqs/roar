@@ -9,68 +9,79 @@ from click.testing import CliRunner
 tracer_cli_module = importlib.import_module("roar.cli.commands.tracer")
 
 
-class TestTracerStatusParanoidHint:
-    """P1-14: `roar tracer status` must show the sysctl fix when
-    perf_event_paranoid is too restrictive (and stay silent when ok)."""
+class TestTracerStatusEbpfRow:
+    """`roar tracer` should surface the cause-of-not-ready inline under
+    the ebpf row — not a separate trailing block."""
 
-    def test_too_restrictive_emits_both_fix_lines(self):
+    def test_too_restrictive_paranoid_shows_under_ebpf(self):
         runner = CliRunner()
-        with patch.object(tracer_cli_module, "_get_perf_event_paranoid", return_value=4):
-            result = runner.invoke(tracer_cli_module.tracer, ["status"])
-        assert result.exit_code == 0
-        assert "perf_event_paranoid: 4 (too restrictive (needs <= 1))" in result.output
-        assert "sudo sysctl -w kernel.perf_event_paranoid=1" in result.output
-        assert "(this boot; host-wide; security tradeoff)" in result.output
-        assert "/etc/sysctl.d/99-ebpf-tracer.conf" in result.output
-        assert "(persistent)" in result.output
-
-    def test_ok_value_emits_no_fix(self):
-        runner = CliRunner()
-        with patch.object(tracer_cli_module, "_get_perf_event_paranoid", return_value=1):
-            result = runner.invoke(tracer_cli_module.tracer, ["status"])
-        assert result.exit_code == 0
-        assert "perf_event_paranoid: 1 (ok)" in result.output
-        assert "sysctl" not in result.output
-        assert "/etc/sysctl.d" not in result.output
-
-    def test_unavailable_value_emits_no_paranoid_row(self):
-        """Non-Linux hosts return None — the dedicated paranoid row is
-        omitted entirely. (The eBPF readiness probe may still mention
-        perf_event_paranoid as part of its own reason string; that's a
-        different code path.)"""
-        runner = CliRunner()
-        with patch.object(tracer_cli_module, "_get_perf_event_paranoid", return_value=None):
-            result = runner.invoke(tracer_cli_module.tracer, ["status"])
-        assert result.exit_code == 0
-        # No standalone "  perf_event_paranoid: <value>" row at indent 2.
-        assert "  perf_event_paranoid:" not in result.output
-        # And no fix hints either.
-        assert "sysctl -w kernel.perf_event_paranoid" not in result.output
+        # Force fixable-eBPF state by stubbing the classifier.
+        fixable = tracer_cli_module._BackendStatus("fixable", "perf_event_paranoid=4 (needs <= 1)")
+        with patch.dict(
+            tracer_cli_module._CLASSIFIERS,
+            {
+                "ebpf": lambda: fixable,
+                "preload": lambda: tracer_cli_module._BackendStatus("ready", None),
+                "ptrace": lambda: tracer_cli_module._BackendStatus("ready", None),
+            },
+        ):
+            result = runner.invoke(tracer_cli_module.tracer)
+        assert result.exit_code == 0, result.output
+        assert "ebpf" in result.output
+        assert "not ready" in result.output
+        # Cause shows as a `↳` continuation under the ebpf row.
+        assert "↳ perf_event_paranoid=4 (needs <= 1)" in result.output
 
 
-class TestTracerCli:
-    def test_set_default_writes_tracer_default_key(self):
+class TestTracerUseVerb:
+    def test_use_writes_tracer_default_key(self):
         runner = CliRunner()
         with patch.object(
             tracer_cli_module, "config_set", return_value=("/tmp/config.toml", "ebpf")
         ) as mock_set:
-            result = runner.invoke(tracer_cli_module.tracer, ["set-default", "ebpf"])
+            result = runner.invoke(tracer_cli_module.tracer, ["use", "ebpf"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         mock_set.assert_called_once_with("tracer.default", "ebpf")
         assert "Default tracer set to: ebpf" in result.output
 
-    def test_set_default_preload_via_alias(self):
+    def test_use_preload(self):
         runner = CliRunner()
         with patch.object(
             tracer_cli_module, "config_set", return_value=("/tmp/config.toml", "preload")
         ) as mock_set:
-            result = runner.invoke(tracer_cli_module.tracer, ["preload"])
+            result = runner.invoke(tracer_cli_module.tracer, ["use", "preload"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         mock_set.assert_called_once_with("tracer.default", "preload")
         assert "Default tracer set to: preload" in result.output
 
+    def test_use_warns_when_picked_backend_is_fixable(self):
+        runner = CliRunner()
+        fixable = tracer_cli_module._BackendStatus("fixable", "perf_event_paranoid=4 (needs <= 1)")
+        with (
+            patch.object(tracer_cli_module, "config_set", return_value=("/tmp/c.toml", "ebpf")),
+            patch.dict(tracer_cli_module._CLASSIFIERS, {"ebpf": lambda: fixable}, clear=False),
+        ):
+            result = runner.invoke(tracer_cli_module.tracer, ["use", "ebpf"])
+        assert result.exit_code == 0, result.output
+        assert "ebpf is not ready" in result.output
+        assert "roar tracer enable ebpf" in result.output
+
+    def test_use_warns_when_picked_backend_unavailable(self):
+        runner = CliRunner()
+        unavail = tracer_cli_module._BackendStatus("unavailable", "darwin (Linux-only)")
+        with (
+            patch.object(tracer_cli_module, "config_set", return_value=("/tmp/c.toml", "ebpf")),
+            patch.dict(tracer_cli_module._CLASSIFIERS, {"ebpf": lambda: unavail}, clear=False),
+        ):
+            result = runner.invoke(tracer_cli_module.tracer, ["use", "ebpf"])
+        assert result.exit_code == 0, result.output
+        assert "unavailable" in result.output
+        assert "darwin" in result.output
+
+
+class TestTracerCli:
     def test_check_uses_strict_backend_preflight(self):
         runner = CliRunner()
         preflight = tracer_cli_module.tracer_backends.TracerPreflightResult(
@@ -88,7 +99,7 @@ class TestTracerCli:
             "_backend_preflight",
             return_value=preflight,
         ) as mock_preflight:
-            result = runner.invoke(tracer_cli_module.tracer, ["check", "--backend", "ptrace"])
+            result = runner.invoke(tracer_cli_module.tracer, ["check", "ptrace"])
 
         assert result.exit_code == 0
         mock_preflight.assert_called_once_with("ptrace", None)
@@ -110,15 +121,18 @@ class TestTracerCli:
         with patch.object(tracer_cli_module, "_backend_preflight", return_value=preflight):
             result = runner.invoke(
                 tracer_cli_module.tracer,
-                ["check", "--backend", "ebpf", "--json"],
+                ["check", "ebpf", "--json"],
             )
 
         assert result.exit_code == 1
         payload = json.loads(result.output)
-        assert payload["backend"] == "ebpf"
+        assert payload["tracer"] == "ebpf"
         assert payload["ok"] is False
         assert payload["summary"] == "attach failed"
+        # JSON output shouldn't carry the user-facing "Next steps" prose.
         assert "Next steps" not in result.output
+        # And shouldn't carry the old "backend" key.
+        assert "backend" not in payload
 
     def test_check_failure_prints_actionable_next_steps_without_traceback(self):
         runner = CliRunner()
@@ -133,12 +147,14 @@ class TestTracerCli:
             ),
         )
         with patch.object(tracer_cli_module, "_backend_preflight", return_value=preflight):
-            result = runner.invoke(tracer_cli_module.tracer, ["check", "--backend", "ebpf"])
+            result = runner.invoke(tracer_cli_module.tracer, ["check", "ebpf"])
 
         assert result.exit_code == 1
         assert "Tracer check failed for 'ebpf'" in result.output
         assert "Next steps:" in result.output
-        assert "roar tracer check --backend preload" in result.output
+        # Suggestions use the positional form, matching the surface.
+        assert "roar tracer check preload" in result.output
+        assert "--backend" not in result.output
         assert "Traceback" not in result.output
 
     def test_check_uses_auto_preflight_when_backend_unspecified(self):
@@ -169,7 +185,11 @@ class TestTracerCli:
             result = runner.invoke(tracer_cli_module.tracer, ["check"])
 
         assert result.exit_code == 0
-        mock_preflight.assert_called_once_with("auto", None)
+        # `auto` is the first call; the new flow then calls back into
+        # _backend_preflight with the selected backend to render the deep
+        # per-check detail consistently with `roar tracer check <backend>`.
+        mock_preflight.assert_any_call("auto", None)
+        mock_preflight.assert_any_call("preload", None)
         assert "Tracer check passed for 'auto': selected backend 'preload'" in result.output
         assert "ebpf: attach failed" in result.output
         assert "preload: ok" in result.output

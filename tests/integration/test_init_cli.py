@@ -47,7 +47,7 @@ def test_init_with_yes_adds_roar_to_gitignore(tmp_path: Path) -> None:
     assert active_session is not None
     assert active_session["is_active"] == 1
     assert active_session["current_step"] == 1
-    assert "Added .roar/ to .gitignore" in result.stdout
+    assert "added .roar/ entry" in result.stdout
     assert gitignore_path.read_text().endswith(".roar/\n")
 
 
@@ -64,7 +64,7 @@ def test_init_with_no_preserves_gitignore(tmp_path: Path) -> None:
     active_session = _active_session_row(tmp_path)
     assert active_session is not None
     assert active_session["is_active"] == 1
-    assert "Skipped .gitignore update." in result.stdout
+    assert "skipped (--no-gitignore)" in result.stdout
     assert gitignore_path.read_text() == original_gitignore
 
 
@@ -82,4 +82,4 @@ def test_init_with_path_initializes_target_directory(tmp_path: Path) -> None:
     assert active_session is not None
     assert active_session["is_active"] == 1
     assert not (tmp_path / ".roar").exists()
-    assert "Created" in result.stdout
+    assert "Initialized roar in" in result.stdout

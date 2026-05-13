@@ -150,7 +150,7 @@ class TestTracerSelection:
             except TracerPreflightError as exc:
                 assert "attach failed" in exc.message
                 assert "Next steps:" in exc.message
-                assert "roar tracer check --backend preload" in exc.message
+                assert "roar tracer check preload" in exc.message
                 assert "failures=" not in exc.message
             else:
                 raise AssertionError("expected TracerPreflightError")

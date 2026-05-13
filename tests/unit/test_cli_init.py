@@ -4,6 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from roar.cli import cli
@@ -37,7 +38,7 @@ def test_init_creates_gitignore_when_missing(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert gitignore.exists()
     assert ".roar/" in gitignore.read_text().splitlines()
-    assert "Created" in result.output and ".gitignore" in result.output
+    assert "created .gitignore with .roar/ entry" in result.output
 
 
 def test_init_appends_to_existing_gitignore_without_roar(tmp_path: Path) -> None:
@@ -54,7 +55,7 @@ def test_init_appends_to_existing_gitignore_without_roar(tmp_path: Path) -> None
     assert "__pycache__/" in lines
     assert "*.pyc" in lines
     assert ".roar/" in lines
-    assert "Added .roar/ to .gitignore" in result.output
+    assert "added .roar/ entry" in result.output
 
 
 def test_init_idempotent_when_gitignore_already_has_roar_slash(tmp_path: Path) -> None:
@@ -68,7 +69,7 @@ def test_init_idempotent_when_gitignore_already_has_roar_slash(tmp_path: Path) -
 
     assert result.exit_code == 0, result.output
     assert gitignore.read_text() == "foo\n.roar/\nbar\n"
-    assert "already in .gitignore" in result.output
+    assert "already excluded" in result.output
 
 
 def test_init_idempotent_when_gitignore_already_has_roar_unslashed(tmp_path: Path) -> None:
@@ -83,7 +84,7 @@ def test_init_idempotent_when_gitignore_already_has_roar_unslashed(tmp_path: Pat
 
     assert result.exit_code == 0, result.output
     assert gitignore.read_text() == ".roar\n"
-    assert "already in .gitignore" in result.output
+    assert "already excluded" in result.output
 
 
 def test_init_no_gitignore_flag_skips(tmp_path: Path) -> None:
@@ -95,7 +96,7 @@ def test_init_no_gitignore_flag_skips(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert not (repo / ".gitignore").exists()
-    assert "Skipped .gitignore update" in result.output
+    assert "skipped (--no-gitignore)" in result.output
 
 
 def test_init_short_no_flag_still_skips(tmp_path: Path) -> None:
@@ -125,7 +126,7 @@ def test_init_substring_match_does_not_count_as_already_present(tmp_path: Path) 
     lines = gitignore.read_text().splitlines()
     assert "not.roar" in lines
     assert ".roar/" in lines
-    assert "Added .roar/ to .gitignore" in result.output
+    assert "added .roar/ entry" in result.output
 
 
 def test_init_appends_when_gitignore_missing_trailing_newline(tmp_path: Path) -> None:
@@ -150,7 +151,73 @@ def test_init_outside_git_repo_does_not_touch_gitignore(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert not (plain_dir / ".gitignore").exists()
-    assert "Not in a git repository" in result.output
+    assert "(not in a git repo)" in result.output
+
+
+def test_init_hints_visible_when_gate_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the hint gate forced on (simulating TTY), `hint:` lines appear."""
+    from roar.cli import _format
+
+    monkeypatch.setattr(_format, "hints_should_print", lambda: True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    assert "hint: Get started:" in result.output
+    assert "roar run python train.py" in result.output
+    assert "roar dag" in result.output
+    assert "roar register" in result.output
+    assert "https://glaas.ai/docs" in result.output
+    assert "roar config set hints.enabled false" in result.output
+
+
+def test_init_hints_suppressed_in_non_tty(tmp_path: Path) -> None:
+    """CliRunner runs as non-TTY — hints must be suppressed (CI scenario)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    assert "Initialized roar in" in result.output
+    assert "hint:" not in result.output
+
+
+def test_init_hints_suppressed_when_hints_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even with the TTY gate forced on, hints.enabled=false silences."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    (repo / ".roar").mkdir()
+    (repo / ".roar" / "config.toml").write_text("[hints]\nenabled = false\n")
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    assert "hint:" not in result.output
+
+
+def test_init_version_header_printed(tmp_path: Path) -> None:
+    """First line of init output is the brand banner: `roar:` (no emoji
+    in non-TTY) + `roar vX.Y.Z`."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    first = result.output.splitlines()[0]
+    assert "roar v" in first  # version present
+    assert first.startswith(("roar:", "🦖"))
 
 
 def test_init_path_uses_target_repo_for_gitignore_updates(tmp_path: Path) -> None:
@@ -176,8 +243,8 @@ def test_init_path_uses_target_repo_for_gitignore_updates(tmp_path: Path) -> Non
         os.chdir(original_cwd)
 
     assert result.exit_code == 0, result.output
-    assert "Added .roar/ to .gitignore" in result.output
-    assert ".roar is already in .gitignore" not in result.output
+    assert "added .roar/ entry" in result.output
+    assert "already excluded" not in result.output
     assert caller_gitignore.read_text() == ".roar/\n"
     assert ".roar/" in target_gitignore.read_text().splitlines()
     assert (target_repo / ".roar").is_dir()
