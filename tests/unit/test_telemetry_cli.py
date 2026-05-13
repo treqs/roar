@@ -5,7 +5,6 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from roar.cli import cli
 from roar.cli.commands.telemetry import telemetry
 from roar.cli.context import RoarContext
 from roar.telemetry import paths
@@ -115,20 +114,13 @@ def test_telemetry_disable_enable_and_endpoint_write_global_config(tmp_path: Pat
     assert 'endpoint = "https://collector.example/roar"' in config_path.read_text(encoding="utf-8")
 
 
-def test_init_discloses_telemetry_forbidden_data_categories(tmp_path: Path) -> None:
-    env = {**_env(tmp_path), "ROAR_NO_TELEMETRY": "1"}
-    project = tmp_path / "project"
-    project.mkdir()
+def test_telemetry_print_omits_forbidden_data_categories(tmp_path: Path) -> None:
+    env = _env(tmp_path)
     runner = CliRunner()
 
-    result = runner.invoke(
-        cli,
-        ["init", "--path", str(project), "--no-gitignore"],
-        env=env,
-    )
+    result = runner.invoke(telemetry, ["--print"], obj=_ctx(tmp_path), env=env)
 
     assert result.exit_code == 0, result.output
-    assert "Telemetry payloads do not include" in result.output
     for forbidden in (
         "commands",
         "paths",
@@ -137,4 +129,4 @@ def test_init_discloses_telemetry_forbidden_data_categories(tmp_path: Path) -> N
         "stdout/stderr",
         "API keys/secrets",
     ):
-        assert forbidden in result.output
+        assert forbidden not in result.output
