@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from roar.application.query.diff_engine import (
+    collect_root_inputs,
+    compare_lineage_graphs,
     diff_args,
     diff_matched_jobs,
     extract_packages,
@@ -327,6 +329,33 @@ class TestDiffMatchedJobs:
         assert len(code_diffs) == 1
         assert "aaaa1111" in code_diffs[0].description
 
+    def test_param_diff_uses_ab_format(self):
+        ja = _job(command="python train.py --lr 0.01")
+        jb = _job(command="python train.py")
+        diffs = diff_matched_jobs([JobMatch(ja, jb)])
+        param = next(d for d in diffs if d.category == DiffCategory.PARAMS)
+        assert "A: 0.01" in param.description
+        assert "B: (absent)" in param.description
+        assert "->" not in param.description
+
+    def test_code_diff_uses_ab_format(self):
+        ja = _job(git_commit="aaaa1111")
+        jb = _job(git_commit="bbbb2222")
+        diffs = diff_matched_jobs([JobMatch(ja, jb)])
+        code = next(d for d in diffs if d.category == DiffCategory.CODE)
+        assert "A: aaaa1111" in code.description
+        assert "B: bbbb2222" in code.description
+        assert "->" not in code.description
+
+    def test_env_diff_uses_ab_format(self):
+        ja = _job(metadata={"packages": {"pip": {"scipy": "1.16.1"}}})
+        jb = _job(metadata={"packages": {"pip": {"scipy": "1.17.1"}}})
+        diffs = diff_matched_jobs([JobMatch(ja, jb)])
+        env = next(d for d in diffs if d.category == DiffCategory.COMPUTE)
+        assert "A: 1.16.1" in env.description
+        assert "B: 1.17.1" in env.description
+        assert "->" not in env.description
+
     def test_input_content_changed(self):
         ja = _job(
             input_hashes={"a": "hash_old"},
@@ -468,3 +497,100 @@ class TestScoreDiffs:
         ga = _graph([])
         gb = _graph([])
         assert score_diffs([], ga, gb) == []
+
+
+# ---------------------------------------------------------------------------
+# collect_root_inputs
+# ---------------------------------------------------------------------------
+
+
+class TestCollectRootInputs:
+    def test_basic_root_input(self):
+        extract = _job(
+            job_id=1,
+            command="python extract.py",
+            input_hashes={"raw": "raw_d"},
+            input_paths={"raw": "/data/raw.parquet"},
+            output_hashes={"feats": "feats_d"},
+        )
+        train = _job(
+            job_id=2,
+            command="python train.py",
+            input_hashes={"feats": "feats_d"},
+            output_hashes={"model": "model_d"},
+        )
+        roots = collect_root_inputs(_graph([extract, train]))
+        assert roots == {"raw_d": "/data/raw.parquet"}
+
+    def test_inputless_producer_output_is_still_root(self):
+        # A download job with no inputs is itself a source: its output stays a
+        # root input, matching `roar inputs` semantics.
+        download = _job(
+            job_id=1,
+            command="wget https://example.com/raw.parquet",
+            input_hashes={},
+            output_hashes={"raw": "raw_d"},
+        )
+        extract = _job(
+            job_id=2,
+            command="python extract.py",
+            input_hashes={"raw": "raw_d"},
+            input_paths={"raw": "/data/raw.parquet"},
+            output_hashes={"feats": "feats_d"},
+        )
+        roots = collect_root_inputs(_graph([download, extract]))
+        assert roots == {"raw_d": "/data/raw.parquet"}
+
+    def test_unproduced_input_is_root(self):
+        job = _job(
+            input_hashes={"x": "x_d"},
+            input_paths={"x": "/data/x.csv"},
+            output_hashes={"y": "y_d"},
+        )
+        assert collect_root_inputs(_graph([job])) == {"x_d": "/data/x.csv"}
+
+    def test_job_with_no_inputs_has_no_roots(self):
+        job = _job(input_hashes={}, output_hashes={"y": "y_d"})
+        assert collect_root_inputs(_graph([job])) == {}
+
+
+# ---------------------------------------------------------------------------
+# compare_lineage_graphs — root input comparison
+# ---------------------------------------------------------------------------
+
+
+def _pipeline_graph(raw_digest: str, raw_path: str, model_digest: str) -> LineageGraph:
+    extract = _job(
+        job_id=1,
+        command="python extract.py",
+        input_hashes={"raw": raw_digest},
+        input_paths={"raw": raw_path},
+        output_hashes={"feats": "feats_d"},
+    )
+    train = _job(
+        job_id=2,
+        command="python train.py",
+        input_hashes={"feats": "feats_d"},
+        output_hashes={"model": model_digest},
+    )
+    return _graph([extract, train])
+
+
+class TestCompareRootInputs:
+    def test_same_root_inputs_match(self):
+        result = compare_lineage_graphs(
+            _pipeline_graph("raw_d", "/data/raw.parquet", "model_a"),
+            _pipeline_graph("raw_d", "/data/raw.parquet", "model_b"),
+        )
+        assert result.root_inputs_match is True
+        assert result.root_inputs_a == {"raw_d": "/data/raw.parquet"}
+        assert result.root_inputs_b == {"raw_d": "/data/raw.parquet"}
+
+    def test_different_root_inputs_do_not_match(self):
+        result = compare_lineage_graphs(
+            _pipeline_graph("train_d", "/data/train.parquet", "model_a"),
+            _pipeline_graph("test_d", "/data/test.parquet", "model_b"),
+        )
+        assert result.root_inputs_match is False
+        assert result.root_inputs_a == {"train_d": "/data/train.parquet"}
+        assert result.root_inputs_b == {"test_d": "/data/test.parquet"}

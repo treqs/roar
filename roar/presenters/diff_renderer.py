@@ -52,6 +52,22 @@ class DiffRenderer:
         for d in result.diffs:
             by_category.setdefault(d.category, []).append(d)
 
+        # Root-input divergence: the raw artifacts each pipeline started from.
+        # Shown before the per-step categories since it's the root-level answer;
+        # when present, it supersedes the DATA category below (which would just
+        # re-report the same divergence step by step).
+        if not result.root_inputs_match:
+            only_a = sorted(set(result.root_inputs_a) - set(result.root_inputs_b))
+            only_b = sorted(set(result.root_inputs_b) - set(result.root_inputs_a))
+            lines.append("INPUTS (root artifacts differ)")
+            for digest in only_a:
+                path = result.root_inputs_a[digest] or "(no path)"
+                lines.append(f"  A only: {_short(path)}  {digest[:12]}...")
+            for digest in only_b:
+                path = result.root_inputs_b[digest] or "(no path)"
+                lines.append(f"  B only: {_short(path)}  {digest[:12]}...")
+            lines.append("")
+
         category_order = [
             DiffCategory.DATA,
             DiffCategory.PARAMS,
@@ -63,6 +79,8 @@ class DiffRenderer:
         for cat in category_order:
             cat_diffs = by_category.get(cat)
             if not cat_diffs:
+                continue
+            if cat == DiffCategory.DATA and not result.root_inputs_match:
                 continue
             lines.append(f"{cat.value.upper()}")
             for d in cat_diffs:
@@ -81,6 +99,8 @@ class DiffRenderer:
                 unchanged.append("environment (same packages)")
             if DiffCategory.PARAMS not in all_categories_with_diffs:
                 unchanged.append("parameters (same arguments)")
+        if result.root_inputs_match and (result.root_inputs_a or result.root_inputs_b):
+            unchanged.append("inputs (same artifacts)")
         if unchanged:
             lines.append("UNCHANGED")
             for item in unchanged:
@@ -216,6 +236,9 @@ class DiffRenderer:
             "matched_jobs": len(result.matched_jobs),
             "only_in_a": len(result.only_in_a),
             "only_in_b": len(result.only_in_b),
+            "root_inputs_match": result.root_inputs_match,
+            "root_inputs_a": result.root_inputs_a,
+            "root_inputs_b": result.root_inputs_b,
         }
         if result.root_cause:
             data["root_cause"] = {

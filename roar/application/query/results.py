@@ -402,3 +402,6 @@ class DiffResult:
     only_in_a: list[JobNode] = field(default_factory=list)
     only_in_b: list[JobNode] = field(default_factory=list)
     root_cause: AtomicDiff | None = None
+    root_inputs_match: bool = True
+    root_inputs_a: dict[str, str] = field(default_factory=dict)
+    root_inputs_b: dict[str, str] = field(default_factory=dict)
