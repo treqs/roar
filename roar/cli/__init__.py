@@ -197,6 +197,9 @@ def cli(ctx: click.Context) -> None:
     \b
     Setup and Configuration:
         roar config            View or set configuration
+
+    \b
+    Account:
         roar auth key          Show the SSH key used for GLaaS signup
     """
     ctx.ensure_object(dict)

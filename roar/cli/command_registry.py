@@ -148,7 +148,7 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "roar.cli.commands.auth",
         "auth",
         "Manage GLaaS auth and SSH keys",
-        "Setup and Admin",
+        "GLaaS / TReqs Account",
     ),
     CommandSpec(
         "config",
