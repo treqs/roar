@@ -18,6 +18,11 @@ uv pip install roar-cli
 
 Requires Python 3.10+.
 
+> For the full prereqs, platform support matrix, tracer-backend setup,
+> macOS SIP notes, and sdist build steps, see the canonical
+> [Installing roar](https://glaas.ai/docs/roar-guide#installing-roar) docs page.
+> What's below is a TL;DR.
+
 ### Platform Support
 
 | Platform      | Status                                                      |
@@ -148,10 +153,16 @@ By default, `roar` uses `auto` mode: prefer eBPF, then preload, then ptrace.
 
 ```bash
 # Show what roar can currently find and whether it looks usable
-roar tracer status
+roar tracer
 
 # Set a default backend (auto|ebpf|preload|ptrace)
-roar tracer set-default preload
+roar tracer use preload
+
+# Deep preflight for one backend, with the exact failure cause
+roar tracer check ebpf
+
+# One-shot host setup for the eBPF backend (applies CAP_BPF)
+roar tracer enable ebpf
 ```
 
 ### macOS Tracing Limitations
@@ -647,10 +658,9 @@ rustup component add rust-src --toolchain nightly
 `scripts/install-dev.sh` skips eBPF gracefully when `bpf-linker` is
 absent — the other tracers still work.
 
-Verify the install with `roar tracer status`; every backend listed
-should be `ready` (or have a clear platform-specific reason it isn't,
-like `perf_event_paranoid=4 (needs <= 1)` for eBPF on a hardened
-kernel).
+Verify the install with `roar tracer`; every backend listed should be
+`ready` (or have a clear platform-specific reason it isn't, like
+`perf_event_paranoid=4 (needs <= 1)` for eBPF on a hardened kernel).
 
 ### Running Quality Checks
 
