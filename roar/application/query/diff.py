@@ -38,6 +38,9 @@ def build_diff_summary(request: DiffQueryRequest) -> DiffResult:
         only_in_a=comparison.only_in_a,
         only_in_b=comparison.only_in_b,
         root_cause=comparison.root_cause,
+        root_inputs_match=comparison.root_inputs_match,
+        root_inputs_a=comparison.root_inputs_a,
+        root_inputs_b=comparison.root_inputs_b,
     )
 
 

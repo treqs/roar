@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .diff_graph import JobMatch, JobNode, LineageGraph
@@ -28,6 +28,31 @@ class GraphDiffComputation:
     only_in_a: list[JobNode]
     only_in_b: list[JobNode]
     root_cause: AtomicDiff | None = None
+    root_inputs_match: bool = True
+    root_inputs_a: dict[str, str] = field(default_factory=dict)
+    root_inputs_b: dict[str, str] = field(default_factory=dict)
+
+
+def collect_root_inputs(graph: LineageGraph) -> dict[str, str]:
+    """Map ``digest -> display path`` for the graph's root input artifacts.
+
+    A root input is an artifact consumed by some job in the lineage that is
+    *not* produced by a job with its own upstream inputs. A producer with no
+    inputs (a download / ``roar get``) is itself a source, so its output still
+    counts as a root input — matching what ``roar inputs`` reports for a target.
+    """
+    consumed: dict[str, str] = {}
+    for job in graph.jobs:
+        for artifact_id, digest in job.input_hashes.items():
+            if digest:
+                consumed.setdefault(digest, job.input_paths.get(artifact_id, ""))
+
+    internally_produced: set[str] = set()
+    for job in graph.jobs:
+        if job.input_hashes:
+            internally_produced.update(job.output_hashes.values())
+
+    return {digest: path for digest, path in consumed.items() if digest not in internally_produced}
 
 
 def compare_lineage_graphs(
@@ -62,12 +87,18 @@ def compare_lineage_graphs(
     scored_diffs = score_diffs(diffs, graph_a, graph_b)
     root_cause = next((diff for diff in scored_diffs if diff.is_root_cause), None)
 
+    root_inputs_a = collect_root_inputs(graph_a)
+    root_inputs_b = collect_root_inputs(graph_b)
+
     return GraphDiffComputation(
         diffs=scored_diffs,
         matched_jobs=matched,
         only_in_a=only_in_a,
         only_in_b=only_in_b,
         root_cause=root_cause,
+        root_inputs_match=set(root_inputs_a) == set(root_inputs_b),
+        root_inputs_a=root_inputs_a,
+        root_inputs_b=root_inputs_b,
     )
 
 
@@ -213,7 +244,7 @@ def diff_matched_jobs(matched: list[JobMatch]) -> list[AtomicDiff]:
                         AtomicDiff(
                             change_type=ChangeType.PARAM_CHANGED,
                             category=DiffCategory.PARAMS,
-                            description=f"Step {step_label}: {arg_diff['param']}: {arg_diff['old']} -> {arg_diff['new']}",
+                            description=f"Step {step_label}: {arg_diff['param']}   A: {arg_diff['old']}   B: {arg_diff['new']}",
                             detail={"step": step_label, **arg_diff},
                         )
                     )
@@ -234,7 +265,7 @@ def diff_matched_jobs(matched: list[JobMatch]) -> list[AtomicDiff]:
                 AtomicDiff(
                     change_type=ChangeType.CODE_CHANGED,
                     category=DiffCategory.CODE,
-                    description=f"Step {step_label}: code changed ({job_a.git_commit[:8]} -> {job_b.git_commit[:8]})",
+                    description=f"Step {step_label}: code changed   A: {job_a.git_commit[:8]}   B: {job_b.git_commit[:8]}",
                     detail={
                         "step": step_label,
                         "old_commit": job_a.git_commit,
@@ -409,7 +440,9 @@ def diff_env(job_a: JobNode, job_b: JobNode, step_label: str, diffs: list[Atomic
             version_a = packages_a.get(package)
             version_b = packages_b.get(package)
             if version_a != version_b:
-                changed.append(f"{package}: {version_a or '(absent)'} -> {version_b or '(absent)'}")
+                changed.append(
+                    f"{package}   A: {version_a or '(absent)'}   B: {version_b or '(absent)'}"
+                )
         if changed:
             changed.sort(key=lambda value: (1 if "(absent)" in value else 0, value))
             preview = changed[:5]

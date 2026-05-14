@@ -42,6 +42,9 @@ def _result(
     only_in_a: list[JobNode] | None = None,
     only_in_b: list[JobNode] | None = None,
     root_cause: AtomicDiff | None = None,
+    root_inputs_match: bool = True,
+    root_inputs_a: dict[str, str] | None = None,
+    root_inputs_b: dict[str, str] | None = None,
 ) -> DiffResult:
     return DiffResult(
         ref_a="./model_a.pt",
@@ -56,6 +59,9 @@ def _result(
         only_in_a=only_in_a or [],
         only_in_b=only_in_b or [],
         root_cause=root_cause,
+        root_inputs_match=root_inputs_match,
+        root_inputs_a=root_inputs_a or {},
+        root_inputs_b=root_inputs_b or {},
     )
 
 
@@ -120,6 +126,72 @@ class TestSummaryView:
         output = DiffRenderer().render_text(r)
         assert "PIPELINE" in output
         assert "STRUCTURE" not in output
+
+    def test_inputs_same_artifacts_in_unchanged(self):
+        ja = _job(job_id=1)
+        jb = _job(job_id=2)
+        diff = AtomicDiff(
+            change_type=ChangeType.PARAM_CHANGED,
+            category=DiffCategory.PARAMS,
+            description="Step @1: --lr   A: 0.01   B: 0.001",
+            impact=0.5,
+        )
+        r = _result(
+            diffs=[diff],
+            matched_jobs=[JobMatch(ja, jb)],
+            root_inputs_match=True,
+            root_inputs_a={"raw_d": "/data/raw.parquet"},
+            root_inputs_b={"raw_d": "/data/raw.parquet"},
+        )
+        output = DiffRenderer().render_text(r)
+        assert "inputs (same artifacts)" in output
+
+    def test_inputs_section_when_root_inputs_differ(self):
+        diff = AtomicDiff(
+            change_type=ChangeType.CONTENT_CHANGED,
+            category=DiffCategory.DATA,
+            description="Step @1: input differs",
+            impact=0.9,
+        )
+        r = _result(
+            diffs=[diff],
+            root_inputs_match=False,
+            root_inputs_a={"train_d": "/data/train.parquet"},
+            root_inputs_b={"test_d": "/data/test.parquet"},
+        )
+        output = DiffRenderer().render_text(r)
+        assert "INPUTS (root artifacts differ)" in output
+        assert "A only: train.parquet" in output
+        assert "B only: test.parquet" in output
+
+    def test_data_category_suppressed_when_root_inputs_differ(self):
+        """The INPUTS section supersedes the per-step DATA category."""
+        diff = AtomicDiff(
+            change_type=ChangeType.CONTENT_CHANGED,
+            category=DiffCategory.DATA,
+            description="Step @1: input 'x' has different content",
+            impact=0.9,
+        )
+        r = _result(
+            diffs=[diff],
+            root_inputs_match=False,
+            root_inputs_a={"a_d": "/data/a"},
+            root_inputs_b={"b_d": "/data/b"},
+        )
+        output = DiffRenderer().render_text(r)
+        assert "INPUTS (root artifacts differ)" in output
+        assert "DATA" not in output
+
+    def test_data_category_shown_when_root_inputs_match(self):
+        diff = AtomicDiff(
+            change_type=ChangeType.CONTENT_CHANGED,
+            category=DiffCategory.DATA,
+            description="Step @1: intermediate differs",
+            impact=0.9,
+        )
+        r = _result(diffs=[diff], root_inputs_match=True)
+        output = DiffRenderer().render_text(r)
+        assert "DATA" in output
 
 
 # ---------------------------------------------------------------------------
@@ -262,3 +334,14 @@ class TestJsonOutput:
         r = _result()
         data = json.loads(DiffRenderer().render_json(r))
         assert data["root_cause"] is None
+
+    def test_root_inputs_fields_present(self):
+        r = _result(
+            root_inputs_match=False,
+            root_inputs_a={"a_d": "/data/a.parquet"},
+            root_inputs_b={"b_d": "/data/b.parquet"},
+        )
+        data = json.loads(DiffRenderer().render_json(r))
+        assert data["root_inputs_match"] is False
+        assert data["root_inputs_a"] == {"a_d": "/data/a.parquet"}
+        assert data["root_inputs_b"] == {"b_d": "/data/b.parquet"}
