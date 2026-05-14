@@ -33,14 +33,21 @@ def test_help_groups_are_built_from_command_specs() -> None:
         "get",
         "label",
     )
+    assert help_groups["Setup and Admin"] == (
+        "config",
+        "env",
+        "tracer",
+        "telemetry",
+        "proxy",
+    )
     assert help_groups["GLaaS / TReqs Account"] == (
+        "auth",
         "login",
         "logout",
         "whoami",
         "scope",
         "workflow",
     )
-    assert "telemetry" in help_groups["Setup and Admin"]
 
 
 def test_help_does_not_list_composite_command() -> None:
@@ -70,6 +77,7 @@ def test_help_shows_account_commands_by_default() -> None:
     assert "Share and Publish:" in result.output
     assert "Setup and Admin:" in result.output
     assert "GLaaS / TReqs Account:" in result.output
+    assert "Manage GLaaS auth and SSH keys" in result.output
     assert "Store global GLaaS/TReqs auth state" in result.output
     assert "Show current GLaaS/TReqs login and repo binding" in result.output
     assert "projects" not in result.output
