@@ -22,6 +22,17 @@ class RuntimeImportController:
     def __init__(self, environ: MutableMapping[str, str]):
         self._environ = environ
         self._initialized_backend_names: set[str] = set()
+        self._backend_dispatch_disabled = False
+
+    def disable_backend_dispatch(self) -> None:
+        """Suppress backend init / observe / patch for the lifetime of this controller.
+
+        Used when the traced Python's ABI doesn't match roar's bundled compiled
+        deps — loading a backend plugin would trigger an ``ImportError`` from
+        wrong-ABI wheels (pydantic_core, etc.). The stdlib tracker hooks
+        (file opens, environ reads, import names) keep running.
+        """
+        self._backend_dispatch_disabled = True
 
     def resolve_selected_backend(self) -> ExecutionBackend | None:
         backend_name = str(self._environ.get(ROAR_EXECUTION_BACKEND_ENV) or "").strip()
@@ -33,11 +44,16 @@ class RuntimeImportController:
             return None
 
     def initialize_selected_backend(self) -> None:
+        if self._backend_dispatch_disabled:
+            return
         backend = self.resolve_selected_backend()
         if backend is not None:
             self._initialize_backend(backend)
 
     def handle_import(self, module_name: str, module: Any) -> ExecutionBackend | None:
+        if self._backend_dispatch_disabled:
+            return None
+
         matched_backend = match_execution_backend_for_module(module_name)
         if matched_backend is not None:
             self._environ.setdefault(ROAR_EXECUTION_BACKEND_ENV, matched_backend.name)
