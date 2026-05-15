@@ -74,7 +74,9 @@ def test_install_runtime_writes_stamp_and_returns_true_on_success(
     cache_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Pretend uv is on PATH so _select_installer picks it.
-    monkeypatch.setattr(lazy_install.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(
+        lazy_install.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None
+    )
     # Mock the subprocess.run that does the install — pretend it succeeded.
     monkeypatch.setattr(
         subprocess,
@@ -94,7 +96,9 @@ def test_install_runtime_writes_stamp_and_returns_true_on_success(
 def test_install_runtime_returns_false_on_subprocess_failure(
     cache_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(lazy_install.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(
+        lazy_install.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None
+    )
     monkeypatch.setattr(
         subprocess,
         "run",
@@ -128,7 +132,9 @@ def test_install_runtime_replaces_stale_cache(
     (stale_dir / "site-packages").mkdir()
     (stale_dir / "site-packages" / "stale.txt").write_text("old")
 
-    monkeypatch.setattr(lazy_install.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(
+        lazy_install.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None
+    )
     monkeypatch.setattr(
         subprocess,
         "run",
