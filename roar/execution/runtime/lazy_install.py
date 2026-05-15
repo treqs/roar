@@ -173,7 +173,9 @@ def runtime_install_mode(start_dir: Path | None = None) -> str:
     try:
         from roar.integrations.config.access import config_get
 
-        configured = config_get("runtime.install", start_dir=start_dir)
+        configured = config_get(
+            "runtime.install", start_dir=str(start_dir) if start_dir is not None else None
+        )
     except Exception:
         return "auto"
     if isinstance(configured, str) and configured.lower() in ("auto", "skip"):
