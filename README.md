@@ -20,7 +20,7 @@ Requires Python 3.10+.
 
 > For the full prereqs, platform support matrix, tracer-backend setup,
 > macOS SIP notes, and sdist build steps, see the canonical
-> [Installing roar](https://glaas.ai/docs/roar-guide#installing-roar) docs page.
+> [Installation](https://glaas.ai/docs/installation) docs page.
 > What's below is a TL;DR.
 
 ### Platform Support
