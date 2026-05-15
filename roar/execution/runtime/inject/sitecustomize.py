@@ -5,19 +5,34 @@ import os
 import sys
 
 
-def _append_roar_runtime_pythonpath() -> None:
+def _prepend_roar_runtime_pythonpath() -> None:
+    """Prepend ``ROAR_RUNTIME_PYTHONPATH`` entries to ``sys.path`` (in order).
+
+    When the traced Python has a lazy-installed ABI-matched runtime tree on
+    ``ROAR_RUNTIME_PYTHONPATH``, that tree must beat system site-packages —
+    the system copies are the wrong-ABI ones, which is exactly why we
+    installed the tree in the first place. Prepending the whole list in
+    declared order (cache, then bundled fallbacks) keeps the lazy-install
+    cache at ``sys.path[0]``.
+
+    Logic is inlined (rather than imported from elsewhere in roar) because
+    this runs *before* roar is necessarily importable — making roar
+    importable is exactly what this function does.
+    """
     if importlib.util.find_spec("roar") is not None:
         return
-    appended = []
-    for path in os.environ.get("ROAR_RUNTIME_PYTHONPATH", "").split(os.pathsep):
-        if path and path not in sys.path:
-            sys.path.append(path)
-            appended.append(path)
-    if appended:
-        os.environ["ROAR_RUNTIME_PYTHONPATH_ACTIVE"] = os.pathsep.join(appended)
+    new_paths = [
+        path
+        for path in os.environ.get("ROAR_RUNTIME_PYTHONPATH", "").split(os.pathsep)
+        if path and path not in sys.path
+    ]
+    if not new_paths:
+        return
+    sys.path[:0] = new_paths
+    os.environ["ROAR_RUNTIME_PYTHONPATH_ACTIVE"] = os.pathsep.join(new_paths)
 
 
-_append_roar_runtime_pythonpath()
+_prepend_roar_runtime_pythonpath()
 
 from roar.execution.framework.runtime_imports import RuntimeImportController
 from roar.execution.runtime.inject.support import matching_compiled_pydantic_core

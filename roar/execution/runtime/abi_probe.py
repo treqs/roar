@@ -31,7 +31,9 @@ def probe_python_abi(executable: str) -> str | None:
             timeout=_PROBE_TIMEOUT_SECONDS,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except Exception:
+        # Anything from a missing executable to a test mock returning a weird
+        # value should degrade to "don't lazy-install for this target."
         return None
     if result.returncode != 0:
         return None

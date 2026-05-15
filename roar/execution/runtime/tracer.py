@@ -113,8 +113,12 @@ class TracerService:
 
             from .abi_probe import probe_python_abi
             from .lazy_install import ensure_runtime
-        except Exception as exc:
-            self.logger.debug("lazy-install import skipped: %s", exc)
+        except ImportError as exc:
+            # An import failure here is an internal contract violation (the
+            # imported names should always be available in a normal install),
+            # not a user-environment thing — log loud enough that a corrupted
+            # install surfaces in --verbose runs.
+            self.logger.warning("lazy-install init: import failed: %s", exc)
             return []
 
         target_python = command[0]

@@ -73,7 +73,9 @@ def install_runtime(
     to the sitecustomize gate."
     """
     cache_dir = runtime_cache_dir(abi_tag)
-    sys.stderr.write(f"🦖 installing roar runtime for {abi_tag} ...\n")
+    sys.stderr.write(
+        f"🦖 installing roar runtime for {abi_tag} ... (one-time per Python; cached)\n"
+    )
     sys.stderr.flush()
 
     try:
