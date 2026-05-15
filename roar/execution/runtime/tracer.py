@@ -95,6 +95,50 @@ class TracerService:
 
         return entries
 
+    def _lazy_install_runtime_entries(self, command: list[str], roar_dir: Path) -> list[str]:
+        """Probe the target Python and lazy-install a matching runtime tree on mismatch.
+
+        Returns a list of site-packages paths to prepend to
+        ``ROAR_RUNTIME_PYTHONPATH``. Empty on:
+        - non-Python targets (bash, make, etc.) — can't probe a python ABI;
+        - matching ABI — bundled deps work as-is;
+        - ``runtime.install = skip`` — opted out;
+        - install failure (no network, no installer, etc.) — the sitecustomize
+          gate handles the fallback.
+        """
+        if not command:
+            return []
+        try:
+            from roar import __version__ as roar_version
+
+            from .abi_probe import probe_python_abi
+            from .lazy_install import ensure_runtime
+        except Exception as exc:
+            self.logger.debug("lazy-install import skipped: %s", exc)
+            return []
+
+        target_python = command[0]
+        target_abi = probe_python_abi(target_python)
+        if not target_abi:
+            return []
+        bundled_abi = sys.implementation.cache_tag
+        if target_abi == bundled_abi:
+            return []
+        try:
+            tree = ensure_runtime(
+                target_python=target_python,
+                target_abi=target_abi,
+                bundled_abi=bundled_abi,
+                roar_version=roar_version,
+                start_dir=roar_dir,
+            )
+        except Exception as exc:
+            self.logger.debug("lazy-install failed: %s", exc)
+            return []
+        if tree is None:
+            return []
+        return [str(tree)]
+
     def _find_ptrace_tracer(self) -> str | None:
         """Find the roar-tracer (ptrace) binary."""
         return tracer_backends.find_ptrace_tracer(self._package_path)
@@ -430,7 +474,9 @@ class TracerService:
         env["PYTHONPATH"] = (
             f"{inject_dir}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else inject_dir
         )
-        env["ROAR_RUNTIME_PYTHONPATH"] = os.pathsep.join(self._runtime_pythonpath_entries())
+        runtime_entries = self._lazy_install_runtime_entries(command, roar_dir)
+        runtime_entries.extend(self._runtime_pythonpath_entries())
+        env["ROAR_RUNTIME_PYTHONPATH"] = os.pathsep.join(runtime_entries)
         env["ROAR_LOG_FILE"] = inject_log_file
         env["ROAR_WRAP"] = "1"
         env["ROAR_PROJECT_DIR"] = str(roar_dir.parent)
