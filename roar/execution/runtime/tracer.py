@@ -5,6 +5,7 @@ Handles tracer binary discovery and process execution via the tracer.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -108,6 +109,22 @@ class TracerService:
         """
         if not command:
             return []
+
+        target_python = command[0]
+
+        # Fast path: if the target Python is the same executable roar-cli
+        # itself runs under, we know the ABI matches by construction — skip
+        # the probe subprocess entirely. Avoids a Python-startup-per-run on
+        # platforms where that startup is slow (macOS framework Python),
+        # which on tight test budgets is the difference between passing and
+        # timing out.
+        try:
+            resolved_target = shutil.which(target_python) or target_python
+            if os.path.realpath(resolved_target) == os.path.realpath(sys.executable):
+                return []
+        except OSError:
+            pass  # fall through to the full probe
+
         try:
             from roar import __version__ as roar_version
 
@@ -121,7 +138,6 @@ class TracerService:
             self.logger.warning("lazy-install init: import failed: %s", exc)
             return []
 
-        target_python = command[0]
         target_abi = probe_python_abi(target_python)
         if not target_abi:
             return []
