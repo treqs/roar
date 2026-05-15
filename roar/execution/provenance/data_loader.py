@@ -217,4 +217,6 @@ class DataLoaderService:
             shared_libs=data.get("shared_libs", []),
             used_packages=data.get("used_packages", {}),
             installed_packages=data.get("installed_packages", {}),
+            python_version=data.get("python_version", ""),
+            python_implementation=data.get("python_implementation", ""),
         )

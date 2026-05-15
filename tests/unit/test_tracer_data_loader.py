@@ -146,3 +146,92 @@ class TestDataLoaderService:
                 "written_threads": [202],
             }
         ]
+
+
+# ---------------------------------------------------------------------------
+# load_python_data — the inject-log reader side
+# ---------------------------------------------------------------------------
+
+
+class TestLoadPythonData:
+    def test_python_identity_keys_flow_through(self, tmp_path: Path) -> None:
+        """python_version / python_implementation make it from JSON into the model."""
+        log_path = tmp_path / "inject-log.json"
+        _write_json(
+            log_path,
+            {
+                "opened_files": [],
+                "imported_modules": [],
+                "env_reads": {},
+                "modules_files": [],
+                "roar_inject_dir": str(tmp_path),
+                "shared_libs": [],
+                "sys_prefix": "/opt/py312",
+                "sys_base_prefix": "/opt/py312",
+                "installed_packages": {},
+                "used_packages": {},
+                "python_version": "3.12.3",
+                "python_implementation": "CPython",
+            },
+        )
+
+        data = DataLoaderService().load_python_data(str(log_path))
+
+        assert data.python_version == "3.12.3"
+        assert data.python_implementation == "CPython"
+
+    def test_python_identity_keys_default_to_empty_for_older_logs(self, tmp_path: Path) -> None:
+        """An inject log without the new keys loads cleanly (back-compat)."""
+        log_path = tmp_path / "inject-log.json"
+        _write_json(
+            log_path,
+            {
+                "opened_files": [],
+                "imported_modules": [],
+                "env_reads": {},
+                "modules_files": [],
+                "roar_inject_dir": str(tmp_path),
+                "shared_libs": [],
+                "sys_prefix": "/opt/py312",
+                "sys_base_prefix": "/opt/py312",
+                "installed_packages": {},
+                "used_packages": {},
+            },
+        )
+
+        data = DataLoaderService().load_python_data(str(log_path))
+
+        assert data.python_version == ""
+        assert data.python_implementation == ""
+
+    def test_writer_reader_roundtrip_carries_python_identity(self, tmp_path: Path) -> None:
+        """End-to-end seam: the real tracker writes the JSON, the real loader reads it.
+
+        Would have caught both halves of the friction-journal bug — if the
+        writer drops the key or the reader doesn't extract it, the loaded
+        model's python_version is empty.
+        """
+        from roar.execution.runtime.inject.tracker import RuntimeInjectionTracker
+
+        log_path = tmp_path / "inject-log.json"
+
+        class _FakeController:
+            def handle_import(self, module_name, module) -> None:
+                return None
+
+        tracker = RuntimeInjectionTracker(
+            {"ROAR_LOG_FILE": str(log_path)},
+            _FakeController(),
+            log_file=str(log_path),
+            inject_dir=str(tmp_path / "inject"),
+        )
+        tracker.write_log()
+
+        data = DataLoaderService().load_python_data(str(log_path))
+
+        # In-process round-trip: this test's interpreter wrote the JSON, so
+        # the version is the test runner's — but the *seam* is what we care
+        # about, not the value.
+        assert data.python_version
+        assert data.python_version.count(".") >= 2  # e.g. "3.12.3"
+        assert data.python_implementation
