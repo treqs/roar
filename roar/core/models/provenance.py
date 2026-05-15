@@ -65,6 +65,8 @@ class PythonInjectData(RoarBaseModel):
     shared_libs: list[str] = Field(default_factory=list)
     used_packages: dict[str, str | None] = Field(default_factory=dict)
     installed_packages: dict[str, str] = Field(default_factory=dict)
+    python_version: str = ""
+    python_implementation: str = ""
 
     @computed_field  # type: ignore[prop-decorator]
     @property

@@ -55,7 +55,7 @@ if os.environ.get("ROAR_WRAP") == "1":
             f"    - Install roar in this Python: pip install roar-cli\n"
             f"    - Reinstall roar-cli under matching Python:\n"
             f"        uv tool install --python python{_running_abi[0]}.{_running_abi[1]} "
-            f"roar-cli --force\n"
+            f"roar-cli --reinstall\n"
         )
         _runtime_import_controller.disable_backend_dispatch()
     else:

@@ -6,6 +6,7 @@ import builtins
 import contextlib
 import json
 import os
+import platform
 import sys
 from collections.abc import Mapping, MutableMapping, Sequence
 from typing import Any, Protocol, cast
@@ -203,6 +204,8 @@ class RuntimeInjectionTracker:
             "argv": sys.argv,
             "installed_packages": installed_packages,
             "used_packages": used_packages,
+            "python_version": platform.python_version(),
+            "python_implementation": platform.python_implementation(),
         }
         with self._real_open(self._log_file, "w") as handle:
             json.dump(data, handle)

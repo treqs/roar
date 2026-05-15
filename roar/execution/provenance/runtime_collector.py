@@ -195,8 +195,14 @@ class RuntimeCollectorService:
                 "machine": platform.machine(),
             },
             python={
-                "version": platform.python_version(),
-                "implementation": platform.python_implementation(),
+                # Prefer the traced child's Python (captured via the inject log)
+                # over roar-cli's host Python — when they differ (cross-Python
+                # roar run), the host value would misrepresent which Python
+                # actually ran the user's code.
+                "version": python_data.python_version or platform.python_version(),
+                "implementation": (
+                    python_data.python_implementation or platform.python_implementation()
+                ),
             },
             env_vars=python_data.env_reads,
             container=container_info,
