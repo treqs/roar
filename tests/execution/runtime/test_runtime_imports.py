@@ -118,3 +118,52 @@ def test_initialize_selected_backend_initializes_only_configured_backend(
     controller.initialize_selected_backend()
 
     assert calls == ["initialize"]
+
+
+def test_disable_backend_dispatch_short_circuits_initialize_selected_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.execution.framework.runtime_imports as runtime_imports
+
+    calls: list[str] = []
+    fake_backend = _fake_backend(calls)
+    controller = RuntimeImportController({ROAR_EXECUTION_BACKEND_ENV: "fake"})
+
+    monkeypatch.setattr(
+        runtime_imports,
+        "get_execution_backend",
+        lambda backend_name: fake_backend if backend_name == "fake" else None,
+    )
+
+    controller.disable_backend_dispatch()
+    controller.initialize_selected_backend()
+
+    assert calls == []
+
+
+def test_disable_backend_dispatch_short_circuits_handle_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.execution.framework.runtime_imports as runtime_imports
+
+    calls: list[str] = []
+    fake_backend = _fake_backend(calls)
+    controller = RuntimeImportController({})
+
+    monkeypatch.setattr(
+        runtime_imports,
+        "match_execution_backend_for_module",
+        lambda module_name: fake_backend if module_name == "json" else None,
+    )
+    monkeypatch.setattr(
+        runtime_imports,
+        "get_execution_backend",
+        lambda backend_name: fake_backend if backend_name == "fake" else None,
+    )
+
+    controller.disable_backend_dispatch()
+    result = controller.handle_import("json", __import__("json"))
+
+    assert result is None
+    assert calls == []
+    assert ROAR_EXECUTION_BACKEND_ENV not in controller._environ
