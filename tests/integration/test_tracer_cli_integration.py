@@ -153,4 +153,5 @@ def test_tracer_check_no_backend_flag_anymore(temp_git_repo: Path) -> None:
     """The `--backend` option is gone; positional is the only form."""
     result = _run_roar_tracer("check", "--backend", "ptrace", cwd=temp_git_repo)
     assert result.returncode != 0
-    assert "No such option: --backend" in result.stderr
+    assert "No such option" in result.stderr
+    assert "--backend" in result.stderr
