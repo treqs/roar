@@ -182,13 +182,19 @@ def test_next_steps_hint_falls_back_to_uid_form_when_no_step_number() -> None:
     assert "roar register @" not in out
 
 
-def test_next_steps_hint_silent_in_pipe_mode() -> None:
-    """CI / piped stderr suppresses the hint — same convention as the
-    rest of the presenter's decorative output."""
+def test_next_steps_hint_appears_in_pipe_mode_for_agents_and_ci() -> None:
+    """Pipe mode (non-TTY stderr) no longer suppresses the hint.
+
+    Agents and CI logs that capture stderr should see the next-step
+    nudge. Hints already live on stderr — stdout consumers don't need
+    to be protected by suppression. ANSI styling still gates on
+    ``caps.can_color`` so captured logs stay plain.
+    """
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_pipe_caps())
     report.next_steps_hint(_make_result(job_uid="abc12345"))
-    assert buf.getvalue() == ""
+    out = _strip(buf.getvalue())
+    assert "hint: next: roar show --job abc12345" in out
 
 
 def test_next_steps_hint_silent_in_quiet_mode() -> None:

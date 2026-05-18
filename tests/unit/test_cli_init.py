@@ -180,8 +180,9 @@ def test_init_hints_visible_when_gate_passes(
     assert "roar config set hints.enabled false" in result.output
 
 
-def test_init_hints_suppressed_in_non_tty(tmp_path: Path) -> None:
-    """CliRunner runs as non-TTY — hints must be suppressed (CI scenario)."""
+def test_init_hints_appear_in_non_tty_on_stderr(tmp_path: Path) -> None:
+    """Hints fire in non-TTY contexts (agents, CI) so consumers see the
+    nudges. They go to stderr — stdout stays clean for pipelines."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_git_repo(repo)
@@ -189,8 +190,10 @@ def test_init_hints_suppressed_in_non_tty(tmp_path: Path) -> None:
     result = _run_init(repo)
 
     assert result.exit_code == 0, result.output
-    assert "Initialized roar in" in result.output
-    assert "hint:" not in result.output
+    assert "Initialized roar in" in result.stdout
+    assert "hint:" in result.stderr
+    # Stdout stays free of hint chrome so consumers can pipe/redirect cleanly.
+    assert "hint:" not in result.stdout
 
 
 def test_init_hints_suppressed_when_hints_disabled(
@@ -232,9 +235,10 @@ def test_init_brand_header_visible_when_gate_passes(
     assert "roar v" not in first
 
 
-def test_init_brand_header_suppressed_in_non_tty(tmp_path: Path) -> None:
-    """CliRunner runs non-TTY — brand banner is suppressed alongside the
-    hints. First line is the actual init summary."""
+def test_init_brand_header_appears_in_non_tty_on_stderr(tmp_path: Path) -> None:
+    """Brand header fires in non-TTY contexts (agents, CI) on stderr,
+    matching the new hints-on-stderr convention. Stdout still leads
+    with the actual init summary so pipelines parse cleanly."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_git_repo(repo)
@@ -242,9 +246,10 @@ def test_init_brand_header_suppressed_in_non_tty(tmp_path: Path) -> None:
     result = _run_init(repo)
 
     assert result.exit_code == 0, result.output
-    assert "🦖" not in result.output
-    assert "roar: roar init" not in result.output
-    assert "Initialized roar in" in result.output
+    # Brand header on stderr (emoji plain-fallback because CliRunner is non-TTY).
+    assert "roar init" in result.stderr
+    # Stdout leads with the body, not the banner.
+    assert result.stdout.startswith("Initialized roar in")
 
 
 def test_init_path_uses_target_repo_for_gitignore_updates(tmp_path: Path) -> None:
