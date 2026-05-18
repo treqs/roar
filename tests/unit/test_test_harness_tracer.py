@@ -23,6 +23,27 @@ def test_subprocess_env_prepends_repo_local_binary_dirs(monkeypatch) -> None:
     assert env["PATH"].split(os.pathsep)[:3] == ["/tmp/release-bin", "/tmp/package-bin", "/usr/bin"]
 
 
+def test_release_artifacts_missing_or_stale_detects_missing_output(tmp_path: Path) -> None:
+    assert test_conftest._release_artifacts_missing_or_stale([tmp_path / "roar-tracer"])
+
+
+def test_release_artifacts_missing_or_stale_compares_source_and_output_mtime(
+    monkeypatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "main.rs"
+    output = tmp_path / "roar-tracer"
+    source.write_text("source")
+    output.write_text("binary")
+    monkeypatch.setattr(test_conftest, "_rust_source_inputs", lambda: [source])
+
+    os.utime(source, (20, 20))
+    os.utime(output, (10, 10))
+    assert test_conftest._release_artifacts_missing_or_stale([output])
+
+    os.utime(output, (30, 30))
+    assert not test_conftest._release_artifacts_missing_or_stale([output])
+
+
 def test_run_command_ensures_repo_local_ptrace_tracer(monkeypatch, tmp_path: Path) -> None:
     ensure_tracer = Mock()
     monkeypatch.setattr(test_conftest, "_ensure_repo_local_ptrace_tracer", ensure_tracer)

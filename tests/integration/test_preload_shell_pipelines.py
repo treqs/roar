@@ -19,20 +19,17 @@ emitting events.
 from __future__ import annotations
 
 import platform
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
+import tests.conftest as test_conftest
+
 try:
     import msgpack  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover
     msgpack = None
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RUST_MANIFEST = REPO_ROOT / "rust" / "Cargo.toml"
-RELEASE_BIN_DIR = REPO_ROOT / "rust" / "target" / "release"
 
 pytestmark = [
     pytest.mark.integration,
@@ -42,38 +39,7 @@ pytestmark = [
 
 
 def _ensure_preload() -> Path:
-    binary = RELEASE_BIN_DIR / "roar-tracer-preload"
-    so = next(
-        (
-            p
-            for p in [
-                RELEASE_BIN_DIR / "libroar_tracer_preload.so",
-                RELEASE_BIN_DIR / "libroar-tracer-preload.so",
-            ]
-            if p.exists()
-        ),
-        None,
-    )
-    if binary.exists() and so is not None:
-        return binary
-    cargo = shutil.which("cargo")
-    if cargo is None:
-        pytest.skip("cargo required to build roar-tracer-preload")
-    result = subprocess.run(
-        [
-            cargo,
-            "build",
-            "--release",
-            "--manifest-path",
-            str(RUST_MANIFEST),
-            "-p",
-            "roar-tracer-preload",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, f"cargo build failed: {result.stderr}"
-    return binary
+    return test_conftest._ensure_repo_local_preload_tracer()
 
 
 def _run(tracer: Path, command: list[str], cwd: Path) -> dict:

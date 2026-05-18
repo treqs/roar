@@ -56,6 +56,37 @@ def test_osmo_workflow_submit_command_appends_json_output_flag_by_default() -> N
     ]
 
 
+def test_osmo_workflow_submit_normalizes_repeated_template_overrides() -> None:
+    command = [
+        "osmo",
+        "workflow",
+        "submit",
+        "workflow.yaml",
+        "--pool",
+        "default",
+        "--set-string",
+        "workflow_name=workflow-product",
+        "--set-string",
+        "output_dataset=workflow-product-output",
+    ]
+
+    planned = _module().plan_osmo_workflow_submit_command(command)
+
+    assert planned.command == [
+        "osmo",
+        "workflow",
+        "submit",
+        "workflow.yaml",
+        "--set-string",
+        "workflow_name=workflow-product",
+        "output_dataset=workflow-product-output",
+        "--pool",
+        "default",
+        "--format-type",
+        "json",
+    ]
+
+
 def test_osmo_workflow_submit_preserves_explicit_format_type() -> None:
     command = ["osmo", "workflow", "submit", "workflow.yaml", "--format-type", "yaml"]
 
