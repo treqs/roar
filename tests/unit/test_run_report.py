@@ -182,6 +182,30 @@ def test_next_steps_hint_falls_back_to_uid_form_when_no_step_number() -> None:
     assert "roar register @" not in out
 
 
+def test_next_steps_hint_explains_what_register_does() -> None:
+    """The hint line is followed by a one-line explainer that tells the
+    user (and any agent reading the output) what `roar register` does.
+    Uses the same register_arg as the action line so the two stay in
+    sync."""
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.next_steps_hint(_make_result(job_uid="abc12345", step_number=3))
+    out = _strip(buf.getvalue())
+    assert "'roar register @3' uploads lineage to glaas.ai" in out
+    assert "reproduce it later" in out
+
+
+def test_next_steps_hint_explainer_uses_uid_form_when_no_step_number() -> None:
+    """When the action line falls back to the UID form, the explainer
+    refers to the same UID — not a missing `@N`."""
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.next_steps_hint(_make_result(job_uid="abc12345", step_number=None))
+    out = _strip(buf.getvalue())
+    assert "'roar register abc12345' uploads lineage to glaas.ai" in out
+    assert "'roar register @" not in out
+
+
 def test_next_steps_hint_appears_in_pipe_mode_for_agents_and_ci() -> None:
     """Pipe mode (non-TTY stderr) no longer suppresses the hint.
 
