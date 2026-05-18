@@ -13,7 +13,6 @@ invariant separately from the success path.
 from __future__ import annotations
 
 import platform
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -25,9 +24,7 @@ except ImportError:  # pragma: no cover - dev dep
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RUST_MANIFEST = REPO_ROOT / "rust" / "Cargo.toml"
-RELEASE_BIN_DIR = REPO_ROOT / "rust" / "target" / "release"
+import tests.conftest as test_conftest
 
 pytestmark = [
     pytest.mark.integration,
@@ -37,20 +34,8 @@ pytestmark = [
 
 
 def _ensure_ptrace_tracer() -> Path:
-    binary = RELEASE_BIN_DIR / "roar-tracer"
-    if binary.exists():
-        return binary
-    cargo = shutil.which("cargo")
-    if cargo is None:
-        pytest.skip("cargo required to build roar-tracer")
-    result = subprocess.run(
-        [cargo, "build", "--release", "--manifest-path", str(RUST_MANIFEST), "-p", "roar-tracer"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, f"cargo build failed: {result.stderr}"
-    return binary
+    test_conftest._ensure_repo_local_ptrace_tracer()
+    return test_conftest.RELEASE_BIN_DIR / "roar-tracer"
 
 
 def _run_under_tracer(tracer: Path, workload: list[str], *, cwd: Path) -> dict:

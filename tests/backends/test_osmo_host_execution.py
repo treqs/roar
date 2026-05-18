@@ -147,6 +147,7 @@ workflow:
             "params=params.json",
             "--set-string",
             "mode=test",
+            "profile=debug",
             "--format-type",
             "json",
         ],
@@ -169,6 +170,7 @@ workflow:
                 "params=params.json",
                 "--set-string",
                 "mode=test",
+                "profile=debug",
                 "--format-type",
                 "json",
             ],
@@ -185,7 +187,10 @@ workflow:
     assert metadata["osmo_submit"]["submit"]["workflow_spec"]["argument"] == "workflow.yaml"
     assert metadata["osmo_submit"]["submit"]["workflow_spec"]["path"] == str(workflow_path)
     assert metadata["osmo_submit"]["submit"]["set_files"] == {"params": "params.json"}
-    assert metadata["osmo_submit"]["submit"]["set_strings"] == {"mode": "test"}
+    assert metadata["osmo_submit"]["submit"]["set_strings"] == {
+        "mode": "test",
+        "profile": "debug",
+    }
 
     input_paths = {str(entry["path"]) for entry in result.inputs}
     assert input_paths == {str(workflow_path), str(dataset_path)}

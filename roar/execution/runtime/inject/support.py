@@ -56,6 +56,32 @@ def abi_minor_version(tag: str | None) -> tuple[int, int] | None:
     return (int(digits[0]), int(digits[1:]))
 
 
+def matching_compiled_pydantic_core(sys_path: list[str], expected_soabi: str) -> bool:
+    """Return True if a pydantic_core/_pydantic_core.<soabi>.so exists on ``sys_path``.
+
+    ``expected_soabi`` is the long-form CPython SOABI substring (e.g.
+    ``cpython-313``) — typically built from the running interpreter's version
+    tuple. Used as the gate primitive in ``sitecustomize.py``: if a matching
+    compiled pydantic_core is reachable (either in roar's bundled tree or in
+    a lazy-installed runtime tree on ``ROAR_RUNTIME_PYTHONPATH``), backend
+    dispatch can safely fire.
+    """
+    for entry in sys_path:
+        if not entry:
+            continue
+        pdc_dir = os.path.join(entry, "pydantic_core")
+        if not os.path.isdir(pdc_dir):
+            continue
+        try:
+            filenames = os.listdir(pdc_dir)
+        except OSError:
+            continue
+        for filename in filenames:
+            if expected_soabi in filename and filename.endswith(".so"):
+                return True
+    return False
+
+
 def is_suppressed() -> bool:
     return bool(getattr(_roar_suppress, "active", False))
 

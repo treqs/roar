@@ -1,25 +1,14 @@
 """Regression coverage for hard-link publication tracing."""
 
-import os
 import platform
-import shutil
 import sqlite3
-import subprocess
 import sys
-import tempfile
 import textwrap
 from pathlib import Path
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - non-Unix fallback
-    fcntl = None
-
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RUST_MANIFEST = REPO_ROOT / "rust" / "Cargo.toml"
-RELEASE_BIN_DIR = REPO_ROOT / "rust" / "target" / "release"
+import tests.conftest as test_conftest
 
 pytestmark = [
     pytest.mark.integration,
@@ -27,51 +16,8 @@ pytestmark = [
 ]
 
 
-def _preload_artifacts_exist() -> bool:
-    return (RELEASE_BIN_DIR / "roar-tracer-preload").exists() and any(
-        (RELEASE_BIN_DIR / name).exists()
-        for name in ("libroar_tracer_preload.so", "libroar-tracer-preload.so")
-    )
-
-
 def _ensure_preload_tracer() -> None:
-    if _preload_artifacts_exist():
-        return
-
-    cargo = shutil.which("cargo")
-    if cargo is None:
-        pytest.skip("cargo is required to build roar-tracer-preload")
-
-    lock_path = Path(tempfile.gettempdir()) / "roar-linkat-preload-build.lock"
-    with lock_path.open("w", encoding="utf-8") as lock_file:
-        if fcntl is not None:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            if _preload_artifacts_exist():
-                return
-            result = subprocess.run(
-                [
-                    cargo,
-                    "build",
-                    "--release",
-                    "--manifest-path",
-                    str(RUST_MANIFEST),
-                    "-p",
-                    "roar-tracer-preload",
-                ],
-                cwd=REPO_ROOT,
-                capture_output=True,
-                text=True,
-                env=dict(os.environ),
-            )
-            assert result.returncode == 0, (
-                "failed to build roar-tracer-preload\n"
-                f"stdout:\n{result.stdout or '<empty>'}\n"
-                f"stderr:\n{result.stderr or '<empty>'}"
-            )
-        finally:
-            if fcntl is not None:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    test_conftest._ensure_repo_local_preload_tracer()
 
 
 @pytest.mark.parametrize("tracer", ["ptrace", "preload"])

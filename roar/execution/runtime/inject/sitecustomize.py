@@ -5,22 +5,37 @@ import os
 import sys
 
 
-def _append_roar_runtime_pythonpath() -> None:
+def _prepend_roar_runtime_pythonpath() -> None:
+    """Prepend ``ROAR_RUNTIME_PYTHONPATH`` entries to ``sys.path`` (in order).
+
+    When the traced Python has a lazy-installed ABI-matched runtime tree on
+    ``ROAR_RUNTIME_PYTHONPATH``, that tree must beat system site-packages —
+    the system copies are the wrong-ABI ones, which is exactly why we
+    installed the tree in the first place. Prepending the whole list in
+    declared order (cache, then bundled fallbacks) keeps the lazy-install
+    cache at ``sys.path[0]``.
+
+    Logic is inlined (rather than imported from elsewhere in roar) because
+    this runs *before* roar is necessarily importable — making roar
+    importable is exactly what this function does.
+    """
     if importlib.util.find_spec("roar") is not None:
         return
-    appended = []
-    for path in os.environ.get("ROAR_RUNTIME_PYTHONPATH", "").split(os.pathsep):
-        if path and path not in sys.path:
-            sys.path.append(path)
-            appended.append(path)
-    if appended:
-        os.environ["ROAR_RUNTIME_PYTHONPATH_ACTIVE"] = os.pathsep.join(appended)
+    new_paths = [
+        path
+        for path in os.environ.get("ROAR_RUNTIME_PYTHONPATH", "").split(os.pathsep)
+        if path and path not in sys.path
+    ]
+    if not new_paths:
+        return
+    sys.path[:0] = new_paths
+    os.environ["ROAR_RUNTIME_PYTHONPATH_ACTIVE"] = os.pathsep.join(new_paths)
 
 
-_append_roar_runtime_pythonpath()
+_prepend_roar_runtime_pythonpath()
 
 from roar.execution.framework.runtime_imports import RuntimeImportController
-from roar.execution.runtime.inject.support import abi_minor_version, bundled_abi_tag
+from roar.execution.runtime.inject.support import matching_compiled_pydantic_core
 from roar.execution.runtime.inject.tracker import RuntimeInjectionTracker
 
 LOG_FILE = os.environ.get("ROAR_LOG_FILE")
@@ -43,18 +58,19 @@ _runtime_tracker.install()
 
 
 if os.environ.get("ROAR_WRAP") == "1":
-    _bundled_abi = abi_minor_version(bundled_abi_tag(_ROAR_INJECT_DIR))
     _running_abi = (sys.version_info.major, sys.version_info.minor)
-    if _bundled_abi is not None and _bundled_abi != _running_abi:
+    _expected_soabi = f"cpython-{_running_abi[0]}{_running_abi[1]}"
+    if not matching_compiled_pydantic_core(sys.path, _expected_soabi):
         sys.stderr.write(
-            f"roar: traced Python is {_running_abi[0]}.{_running_abi[1]} but "
-            f"roar-cli was installed under Python "
-            f"{_bundled_abi[0]}.{_bundled_abi[1]}.\n"
+            f"roar: no ABI-matched runtime found for Python "
+            f"{_running_abi[0]}.{_running_abi[1]}.\n"
             f"  Backend integrations (Ray, OSMO) are disabled for this run.\n"
             f"  File I/O is still captured.\n"
-            f"  To re-enable backends, reinstall under the matching Python:\n"
-            f"    uv tool install --python python{_running_abi[0]}.{_running_abi[1]} "
-            f"roar-cli --force\n"
+            f"  Fix one of:\n"
+            f"    - Install roar in this Python: pip install roar-cli\n"
+            f"    - Reinstall roar-cli under matching Python:\n"
+            f"        uv tool install --python python{_running_abi[0]}.{_running_abi[1]} "
+            f"roar-cli --reinstall\n"
         )
         _runtime_import_controller.disable_backend_dispatch()
     else:

@@ -675,17 +675,21 @@ def _extract_submit_command_context(command: list[str], repo_root: str) -> OsmoS
             format_type = arg.split("=", 1)[1]
             i += 1
             continue
-        if arg == "--set-string" and i + 1 < len(command):
-            _assign_submit_mapping(set_strings, command[i + 1])
-            i += 2
+        if arg == "--set-string":
+            i = max(
+                _assign_submit_mappings_from_args(set_strings, command, start=i + 1),
+                i + 1,
+            )
             continue
         if arg.startswith("--set-string="):
             _assign_submit_mapping(set_strings, arg.split("=", 1)[1])
             i += 1
             continue
-        if arg == "--set-file" and i + 1 < len(command):
-            _assign_submit_mapping(set_files, command[i + 1])
-            i += 2
+        if arg == "--set-file":
+            i = max(
+                _assign_submit_mappings_from_args(set_files, command, start=i + 1),
+                i + 1,
+            )
             continue
         if arg.startswith("--set-file="):
             _assign_submit_mapping(set_files, arg.split("=", 1)[1])
@@ -702,6 +706,19 @@ def _extract_submit_command_context(command: list[str], repo_root: str) -> OsmoS
         set_strings=set_strings or None,
         set_files=set_files or None,
     )
+
+
+def _assign_submit_mappings_from_args(
+    target: dict[str, str],
+    command: list[str],
+    *,
+    start: int,
+) -> int:
+    i = start
+    while i < len(command) and not command[i].startswith("-"):
+        _assign_submit_mapping(target, command[i])
+        i += 1
+    return i
 
 
 def _assign_submit_mapping(target: dict[str, str], value: str) -> None:

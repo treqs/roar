@@ -37,6 +37,11 @@ def test_runtime_tracker_writes_expected_log_payload(tmp_path) -> None:
     assert str(data_path.resolve()) in payload["opened_files"]
     assert payload["env_reads"]["VIRTUAL_ENV"] == "/tmp/venv"
     assert payload["virtual_env"] == "/tmp/venv"
+    # Python identity from the *traced* process — consumed by runtime_collector
+    # to populate job metadata. Critical when roar's host Python and the traced
+    # Python differ (cross-Python `roar run`).
+    assert payload["python_version"].count(".") >= 2  # e.g. "3.12.3"
+    assert payload["python_implementation"]  # e.g. "CPython"
 
 
 def test_runtime_tracker_excludes_roar_runtime_pythonpath_modules(tmp_path) -> None:

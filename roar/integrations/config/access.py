@@ -179,6 +179,16 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
         "description": "Show a one-time per-machine banner when a tracer backend is "
         "selected for the first time or via fallback (set to false to suppress)",
     },
+    "runtime.install": {
+        "type": str,
+        "default": "auto",
+        "description": (
+            "How to handle a traced Python whose ABI doesn't match roar-cli's bundled "
+            "deps. 'auto' = lazy-install a matching runtime tree on first roar run; "
+            "'skip' = use bundled deps only (backend integrations disabled on mismatch). "
+            "Useful in restricted-network containers."
+        ),
+    },
     "telemetry.enabled": {
         "type": bool,
         "default": True,
