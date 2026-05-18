@@ -397,3 +397,43 @@ class TestValidateGitCleanPropagation:
 
         with pytest.raises(ValueError, match="Run blocked"):
             validate_git_clean(verb="run", args=["echo"], roar_dir=roar_dir)
+
+
+    def test_worktree_modified_path_is_not_truncated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Porcelain emits ` M path` (X column is a space) for worktree-only
+        modifications. An earlier version `.strip()`-ed the subprocess
+        output, eating the leading space and chopping the first character
+        off the path (`train.py` → `rain.py`)."""
+        import subprocess
+
+        from roar.application.run.execution import validate_git_clean
+
+        home = tmp_path / "fake-home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+
+        repo = tmp_path / "project"
+        repo.mkdir()
+        monkeypatch.chdir(repo)
+
+        original = subprocess.check_output
+
+        def fake_check_output(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if cmd[:2] == ["git", "rev-parse"]:
+                return str(repo) + "\n"
+            if cmd[:2] == ["git", "status"]:
+                return " M train.py\n"  # X=space (worktree-modified-only)
+            return original(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_git_clean(verb="run", args=["echo"])
+
+        message = str(exc_info.value)
+        # Check the action line specifically. The earlier bug rendered
+        # `git add rain.py` here instead of `git add train.py`.
+        assert "git add train.py" in message
+        assert "git add rain.py" not in message

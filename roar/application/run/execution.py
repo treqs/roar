@@ -65,16 +65,20 @@ def validate_git_clean(
         ) from None
 
     try:
+        # Preserve leading whitespace in porcelain output: the two-column
+        # status code starts with a space for worktree-only modifications
+        # (` M path`), and `.strip()` would eat that space and shift the
+        # parser by one character — turning `train.py` into `rain.py`.
         status_output = subprocess.check_output(
             ["git", "status", "--porcelain"],
             stderr=subprocess.DEVNULL,
             text=True,
             cwd=repo_root,
-        ).strip()
+        )
     except (subprocess.CalledProcessError, FileNotFoundError):
         status_output = ""
 
-    if status_output:
+    if status_output.strip():
         from .dirty_tree_error import format_dirty_tree_error
 
         # Build the message inside an ExitStack so the DB context (if we
