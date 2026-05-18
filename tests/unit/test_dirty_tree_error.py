@@ -349,3 +349,51 @@ class TestVerbHandling:
             args=["./build.sh"],
         )
         assert "roar build ./build.sh" in out
+
+
+# ---------------------------------------------------------------------------
+# regression: validate_git_clean's DB-context plumbing must propagate the
+# ValueError raised on a dirty tree, not turn it into a generator error.
+# ---------------------------------------------------------------------------
+
+
+class TestValidateGitCleanPropagation:
+    """The dirty-tree refusal raises ``ValueError``. The DB-context helper
+    that wraps the call must not swallow it (an earlier version turned
+    ``ValueError`` from inside a ``@contextmanager`` ``with`` block into
+    ``RuntimeError: generator didn't stop after throw()``)."""
+
+    def test_dirty_tree_raises_valueerror_with_roar_dir_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import subprocess
+
+        from roar.application.run.execution import validate_git_clean
+
+        # Make the home-dir branch not fire.
+        home = tmp_path / "fake-home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+
+        repo = tmp_path / "project"
+        repo.mkdir()
+        roar_dir = repo / ".roar"
+        roar_dir.mkdir()
+        monkeypatch.chdir(repo)
+
+        # Stub git: rev-parse returns the repo path; status returns one
+        # untracked file. validate_git_clean must surface the bucketed
+        # message as a plain ValueError, not a contextmanager RuntimeError.
+        original = subprocess.check_output
+
+        def fake_check_output(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if cmd[:2] == ["git", "rev-parse"]:
+                return str(repo) + "\n"
+            if cmd[:2] == ["git", "status"]:
+                return "?? stray.txt\n"
+            return original(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+
+        with pytest.raises(ValueError, match="Run blocked"):
+            validate_git_clean(verb="run", args=["echo"], roar_dir=roar_dir)

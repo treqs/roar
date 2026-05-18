@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import click
 
@@ -77,38 +77,44 @@ def validate_git_clean(
     if status_output:
         from .dirty_tree_error import format_dirty_tree_error
 
-        with _maybe_artifact_lookup(roar_dir) as artifact_lookup:
-            raise ValueError(
-                format_dirty_tree_error(
-                    status_output=status_output,
-                    repo_root=repo_root,
-                    verb=verb,
-                    args=args,
-                    artifact_lookup=artifact_lookup,
-                )
+        # Build the message inside an ExitStack so the DB context (if we
+        # opened one) is closed before we leave this scope, and we raise
+        # the bare string-bearing exception outside any context manager.
+        # An earlier version wrapped the raise inside a `@contextmanager`
+        # generator with a too-broad `try/except`; the re-thrown
+        # ValueError was caught and the generator tried to yield a
+        # second time, surfacing as `generator didn't stop after throw()`.
+        with ExitStack() as stack:
+            artifact_lookup = _open_artifact_lookup(roar_dir, stack)
+            message = format_dirty_tree_error(
+                status_output=status_output,
+                repo_root=repo_root,
+                verb=verb,
+                args=args,
+                artifact_lookup=artifact_lookup,
             )
+        raise ValueError(message)
 
     return repo_root
 
 
-@contextmanager
-def _maybe_artifact_lookup(roar_dir: Path | str | None):
-    """Yield ``db_ctx.artifacts`` when a roar DB is available; else None.
+def _open_artifact_lookup(roar_dir: Path | str | None, stack: ExitStack) -> Any:
+    """Open the roar DB if reachable and return ``db_ctx.artifacts``, else None.
 
-    The classifier treats ``None`` as "skip the prior-roar-output bucket"
-    so a fresh-init repo (no DB yet, or the DB doesn't have artifacts
-    for these paths) still gets a sensible message.
+    Registers the DB context with ``stack`` for cleanup. Failures here
+    (no DB, corrupt DB, etc.) are silent — the classifier treats ``None``
+    as "skip the prior-roar-output bucket" so fresh-init repos still
+    get a sensible message.
     """
     if roar_dir is None:
-        yield None
-        return
+        return None
     try:
         from ...db.query_context import create_query_database_context
 
-        with create_query_database_context(Path(roar_dir)) as db_ctx:
-            yield db_ctx.artifacts
+        db_ctx = stack.enter_context(create_query_database_context(Path(roar_dir)))
     except Exception:
-        yield None
+        return None
+    return db_ctx.artifacts
 
 
 def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
