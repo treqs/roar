@@ -398,7 +398,6 @@ class TestValidateGitCleanPropagation:
         with pytest.raises(ValueError, match="Run blocked"):
             validate_git_clean(verb="run", args=["echo"], roar_dir=roar_dir)
 
-
     def test_worktree_modified_path_is_not_truncated(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

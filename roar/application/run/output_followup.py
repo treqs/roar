@@ -53,7 +53,9 @@ def emit_dirty_outputs_warning(
         f"warning: {count} {noun} {verb} this repo dirty and will block the next "
         f"`roar run`. Add to .gitignore or commit."
     )
-    _emit(stream, style(warning, "warn_amber", enabled=can_color))
+    # Warnings get yellow (distinct from amber `hint:` lines below) so a
+    # reader can tell the actionable-vs-advisory split at a glance.
+    _emit(stream, style(warning, "warn_yellow", enabled=can_color))
 
     from .gitignore_suggest import gitignore_lines
 
