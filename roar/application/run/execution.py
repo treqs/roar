@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -26,14 +27,23 @@ class ExecutionReport:
     setup_error: bool = False
 
 
-def validate_git_clean(*, verb: str = "run", args: list[str] | None = None) -> str:
+def validate_git_clean(
+    *,
+    verb: str = "run",
+    args: list[str] | None = None,
+    roar_dir: Path | str | None = None,
+) -> str:
     """Validate git repository is clean and return repo root.
 
-    On a dirty tree, raises `ValueError` with a teaching message: the
+    On a dirty tree, raises ``ValueError`` with a teaching message: the
     principle behind the rule, the exact remediation commands using the
     user's own filenames and original CLI args, and a docs link. The
-    `verb`/`args` parameters customize the recovery line so users see
-    the exact `roar run python …` (or `roar build …`) they typed.
+    ``verb``/``args`` parameters customize the recovery line so users see
+    the exact ``roar run python …`` (or ``roar build …``) they typed.
+
+    When ``roar_dir`` is provided and a roar DB is reachable, the dirty
+    paths are classified into code / prior-roar outputs / unknown so the
+    message recommends the right fix per bucket (commit vs .gitignore).
     """
     import subprocess
 
@@ -67,16 +77,38 @@ def validate_git_clean(*, verb: str = "run", args: list[str] | None = None) -> s
     if status_output:
         from .dirty_tree_error import format_dirty_tree_error
 
-        raise ValueError(
-            format_dirty_tree_error(
-                status_output=status_output,
-                repo_root=repo_root,
-                verb=verb,
-                args=args,
+        with _maybe_artifact_lookup(roar_dir) as artifact_lookup:
+            raise ValueError(
+                format_dirty_tree_error(
+                    status_output=status_output,
+                    repo_root=repo_root,
+                    verb=verb,
+                    args=args,
+                    artifact_lookup=artifact_lookup,
+                )
             )
-        )
 
     return repo_root
+
+
+@contextmanager
+def _maybe_artifact_lookup(roar_dir: Path | str | None):
+    """Yield ``db_ctx.artifacts`` when a roar DB is available; else None.
+
+    The classifier treats ``None`` as "skip the prior-roar-output bucket"
+    so a fresh-init repo (no DB yet, or the DB doesn't have artifacts
+    for these paths) still gets a sensible message.
+    """
+    if roar_dir is None:
+        yield None
+        return
+    try:
+        from ...db.query_context import create_query_database_context
+
+        with create_query_database_context(Path(roar_dir)) as db_ctx:
+            yield db_ctx.artifacts
+    except Exception:
+        yield None
 
 
 def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
@@ -161,6 +193,18 @@ def execute_and_report(
         post_duration=result.post_duration,
     )
     report.next_steps_hint(result)
+
+    # Warn now if the run left the tree dirty so the *next* `roar run`
+    # doesn't surprise the user with a refusal they could have fixed in
+    # one .gitignore line right now.
+    from .output_followup import emit_dirty_outputs_warning
+
+    emit_dirty_outputs_warning(
+        repo_root=repo_root,
+        stream=report._stream,
+        caps=report._caps,
+        quiet=(verbosity == "quiet"),
+    )
 
     if result.stale_upstream or result.stale_downstream:
         report.show_stale_warnings(
