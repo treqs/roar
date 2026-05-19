@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import click
 
@@ -26,14 +27,23 @@ class ExecutionReport:
     setup_error: bool = False
 
 
-def validate_git_clean(*, verb: str = "run", args: list[str] | None = None) -> str:
+def validate_git_clean(
+    *,
+    verb: str = "run",
+    args: list[str] | None = None,
+    roar_dir: Path | str | None = None,
+) -> str:
     """Validate git repository is clean and return repo root.
 
-    On a dirty tree, raises `ValueError` with a teaching message: the
+    On a dirty tree, raises ``ValueError`` with a teaching message: the
     principle behind the rule, the exact remediation commands using the
     user's own filenames and original CLI args, and a docs link. The
-    `verb`/`args` parameters customize the recovery line so users see
-    the exact `roar run python …` (or `roar build …`) they typed.
+    ``verb``/``args`` parameters customize the recovery line so users see
+    the exact ``roar run python …`` (or ``roar build …``) they typed.
+
+    When ``roar_dir`` is provided and a roar DB is reachable, the dirty
+    paths are classified into code / prior-roar outputs / unknown so the
+    message recommends the right fix per bucket (commit vs .gitignore).
     """
     import subprocess
 
@@ -55,28 +65,60 @@ def validate_git_clean(*, verb: str = "run", args: list[str] | None = None) -> s
         ) from None
 
     try:
+        # Preserve leading whitespace in porcelain output: the two-column
+        # status code starts with a space for worktree-only modifications
+        # (` M path`), and `.strip()` would eat that space and shift the
+        # parser by one character — turning `train.py` into `rain.py`.
         status_output = subprocess.check_output(
             ["git", "status", "--porcelain"],
             stderr=subprocess.DEVNULL,
             text=True,
             cwd=repo_root,
-        ).strip()
+        )
     except (subprocess.CalledProcessError, FileNotFoundError):
         status_output = ""
 
-    if status_output:
+    if status_output.strip():
         from .dirty_tree_error import format_dirty_tree_error
 
-        raise ValueError(
-            format_dirty_tree_error(
+        # Build the message inside an ExitStack so the DB context (if we
+        # opened one) is closed before we leave this scope, and we raise
+        # the bare string-bearing exception outside any context manager.
+        # An earlier version wrapped the raise inside a `@contextmanager`
+        # generator with a too-broad `try/except`; the re-thrown
+        # ValueError was caught and the generator tried to yield a
+        # second time, surfacing as `generator didn't stop after throw()`.
+        with ExitStack() as stack:
+            artifact_lookup = _open_artifact_lookup(roar_dir, stack)
+            message = format_dirty_tree_error(
                 status_output=status_output,
                 repo_root=repo_root,
                 verb=verb,
                 args=args,
+                artifact_lookup=artifact_lookup,
             )
-        )
+        raise ValueError(message)
 
     return repo_root
+
+
+def _open_artifact_lookup(roar_dir: Path | str | None, stack: ExitStack) -> Any:
+    """Open the roar DB if reachable and return ``db_ctx.artifacts``, else None.
+
+    Registers the DB context with ``stack`` for cleanup. Failures here
+    (no DB, corrupt DB, etc.) are silent — the classifier treats ``None``
+    as "skip the prior-roar-output bucket" so fresh-init repos still
+    get a sensible message.
+    """
+    if roar_dir is None:
+        return None
+    try:
+        from ...db.query_context import create_query_database_context
+
+        db_ctx = stack.enter_context(create_query_database_context(Path(roar_dir)))
+    except Exception:
+        return None
+    return db_ctx.artifacts
 
 
 def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
@@ -161,6 +203,18 @@ def execute_and_report(
         post_duration=result.post_duration,
     )
     report.next_steps_hint(result)
+
+    # Warn now if the run left the tree dirty so the *next* `roar run`
+    # doesn't surprise the user with a refusal they could have fixed in
+    # one .gitignore line right now.
+    from .output_followup import emit_dirty_outputs_warning
+
+    emit_dirty_outputs_warning(
+        repo_root=repo_root,
+        stream=report._stream,
+        caps=report._caps,
+        quiet=(verbosity == "quiet"),
+    )
 
     if result.stale_upstream or result.stale_downstream:
         report.show_stale_warnings(

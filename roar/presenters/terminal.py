@@ -68,7 +68,8 @@ _ANSI = {
     # Named semantic tokens — 256-color palette entries that read well on
     # both dark and light terminal backgrounds.
     "status_green": "\033[38;5;35m",  # ANSI-256 #35 — muted green
-    "warn_amber": "\033[38;5;172m",  # ANSI-256 #172 — amber/orange
+    "warn_amber": "\033[38;5;172m",  # ANSI-256 #172 — amber/orange (advisory hints)
+    "warn_yellow": "\033[38;5;226m",  # ANSI-256 #226 — pure yellow (warnings)
     "command_blue": "\033[38;5;74m",  # ANSI-256 #74 — steel blue
 }
 
