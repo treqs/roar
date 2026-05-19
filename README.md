@@ -54,7 +54,7 @@ bash scripts/install-dev.sh
 when available) and then builds the Rust tracer binaries
 (`roar-tracer`, `roar-tracer-preload`, `roar-tracer-ebpf`, `roard`,
 `roar-proxy`) and stages them into `roar/bin/`. A bare
-`pip install -e .` does *not* build the tracer binaries because they
+`pip install -e .` does _not_ build the tracer binaries because they
 live in separate cargo crates outside the maturin manifest, so
 `roar run` would fail with "No tracer binary found" until the script
 runs. See [Building from source](#building-from-source) below for
@@ -276,6 +276,16 @@ To register SSH auth with GLaaS:
 2. Sign up at <https://glaas.ai> where you can paste your public key
 3. Run `roar auth test` to verify
 
+### `roar login`
+
+Authenticate with GLaaS and store your global login state for attributed publishing and project access. By default, `roar login` starts a browser/device login flow and can then unlock private or project-scoped publication in repositories that use `roar scope`.
+
+```bash
+roar login
+roar login --force
+roar login --token-file ~/.config/roar/auth.json
+```
+
 ### `roar config`
 
 View or set configuration options.
@@ -288,20 +298,20 @@ roar config set <key> <value>
 
 Run `roar config list` to see all available options with descriptions. Common options:
 
-| Key                            | Default                | Description                             |
-| ------------------------------ | ---------------------- | --------------------------------------- |
-| `output.track_repo_files`      | false                  | Include repo files in provenance        |
-| `output.quiet`                 | false                  | Suppress written files report           |
-| `filters.ignore_system_reads`  | true                   | Ignore /sys, /etc, /sbin reads          |
-| `filters.ignore_package_reads` | true                   | Ignore installed package reads          |
-| `filters.ignore_torch_cache`   | true                   | Ignore torch/triton cache               |
-| `filters.ignore_tmp_files`     | true                   | Ignore /tmp files                       |
-| `glaas.url`                    | <https://api.glaas.ai> | GLaaS server URL                        |
-| `glaas.web_url`                | <https://glaas.ai>     | GLaaS web UI URL                        |
-| `registration.public_by_default` | false                | Default `register`/`put` visibility     |
-| `registration.omit.enabled`    | true                   | Enable secret filtering                 |
-| `hash.primary`                 | blake3                 | Primary hash algorithm                  |
-| `logging.level`                | warning                | Log level (debug, info, warning, error) |
+| Key                              | Default                | Description                             |
+| -------------------------------- | ---------------------- | --------------------------------------- |
+| `output.track_repo_files`        | false                  | Include repo files in provenance        |
+| `output.quiet`                   | false                  | Suppress written files report           |
+| `filters.ignore_system_reads`    | true                   | Ignore /sys, /etc, /sbin reads          |
+| `filters.ignore_package_reads`   | true                   | Ignore installed package reads          |
+| `filters.ignore_torch_cache`     | true                   | Ignore torch/triton cache               |
+| `filters.ignore_tmp_files`       | true                   | Ignore /tmp files                       |
+| `glaas.url`                      | <https://api.glaas.ai> | GLaaS server URL                        |
+| `glaas.web_url`                  | <https://glaas.ai>     | GLaaS web UI URL                        |
+| `registration.public_by_default` | false                  | Default `register`/`put` visibility     |
+| `registration.omit.enabled`      | true                   | Enable secret filtering                 |
+| `hash.primary`                   | blake3                 | Primary hash algorithm                  |
+| `logging.level`                  | warning                | Log level (debug, info, warning, error) |
 
 ### `roar dag`
 
@@ -333,6 +343,18 @@ Display recent job execution history.
 roar log                  # Show recent job history
 ```
 
+### `roar scope`
+
+Show or change the default publication scope for the current repo. Scopes connect lineage from this repo to your personal space or to a specific org/project so later `roar register` and `roar put` commands publish in the right place.
+
+```bash
+roar scope status
+roar scope list
+roar scope use private
+roar scope use acme/foundation-models
+roar scope clear
+```
+
 ### `roar label`
 
 Manage local labels for DAGs (sessions), jobs, and artifacts.
@@ -362,6 +384,17 @@ roar label history artifact <artifact-hash>
 roar label sync
 roar label sync job @2
 roar label sync artifact ./outputs/model.pt --dry-run
+```
+
+### `roar diff <ref-a> <ref-b>`
+
+Compare the lineage of two artifacts, jobs, steps, or sessions to see what changed in their inputs, parameters, code, environment, or pipeline structure. Use it to identify the likely root cause when two outputs differ.
+
+```bash
+roar diff ./model.pkl ./model-v2.pkl
+roar diff @5 @7 --format dag
+roar diff session:current session:<hash>
+roar diff @5 @7 --json
 ```
 
 **Entity targets:**
