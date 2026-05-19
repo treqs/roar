@@ -56,10 +56,13 @@ def maybe_print_telemetry_disclosure(
             return
 
         _caps, hint = make_hint_printer()
-        hint("Telemetry: anonymous counters (version, commands) — no paths, content, or tokens.")
         hint(
-            "  Off: `roar telemetry --disable` or `DO_NOT_TRACK=1`. "
-            "Status: `roar telemetry --status`."
+            "Telemetry: roar sends anonymous counters (version, commands) — "
+            "no paths, content, or tokens."
+        )
+        hint(
+            "  Disable with `roar telemetry --disable` or `DO_NOT_TRACK=1`. "
+            "See state with `roar telemetry --status`."
         )
 
         paths.disclosure_sentinel_file.parent.mkdir(parents=True, exist_ok=True)

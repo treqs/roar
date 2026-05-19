@@ -65,7 +65,8 @@ def test_disclosure_prints_once_and_creates_sentinel(
     maybe_print_telemetry_disclosure(environ=env)
 
     output = buf.getvalue()
-    assert "Telemetry: anonymous counters" in output
+    assert "Telemetry:" in output
+    assert "anonymous counters" in output
     assert "roar telemetry --disable" in output
     assert "DO_NOT_TRACK=1" in output
 
