@@ -307,6 +307,96 @@ def test_register_lineage_target_aborts_on_tag_push_failure(tmp_path: Path) -> N
     assert "auth failed pushing to origin" in (response.error or "")
 
 
+def test_register_lineage_target_anonymous_downgrades_tag_push_failure(tmp_path: Path) -> None:
+    """Anonymous register continues past a tag-push failure with a warning.
+
+    The user explicitly opted into no-account publication, so requiring
+    git-remote auth (a separate concern from GLaaS) would defeat the
+    point. The GLaaS write must still happen, and the response must
+    carry a self-contained warning that names the actual failure kind
+    (git auth, not GLaaS) and the config knob that silences it.
+    """
+    from roar.application.publish.register_tag_push import TagPushError
+
+    expected = RegisterResult(
+        success=True,
+        session_hash="b" * 64,
+        session_url="https://glaas.local/dag/session",
+    )
+    runtime = MagicMock()
+    logger = MagicMock()
+    collected = MagicMock()
+    collected.lineage = LineageData(
+        jobs=[], artifacts=[], artifact_hashes=set(), pipeline={"id": 9}
+    )
+    collected.session_id = 9
+    collected.artifact_hash = "b" * 64
+    collected.session_hash_override = None
+    prepared = PreparedRegisterExecution(
+        git_context=MagicMock(commit="cafebabecafebabecafebabecafebabecafebabe"),
+        session_id=9,
+        session_hash="b" * 64,
+        session_url="https://glaas.local/dag/session",
+        git_tag_name="roar/cafebabe",
+        git_tag_repo_root=tmp_path,
+    )
+
+    with (
+        patch("roar.application.publish.service.build_publish_runtime", return_value=runtime),
+        patch("roar.application.publish.service.get_logger", return_value=logger),
+        patch(
+            "roar.application.publish.service.resolve_register_lineage_target",
+            return_value=ResolvedRegisterTarget(kind="artifact_path", value="model.pt"),
+        ),
+        patch(
+            "roar.application.publish.service.collect_register_lineage",
+            return_value=(collected, None),
+        ),
+        patch(
+            "roar.application.publish.service.prepare_register_execution",
+            return_value=prepared,
+        ),
+        patch(
+            "roar.application.publish.register_tag_push.ensure_roar_tags_pushed",
+            side_effect=TagPushError(
+                "git@github.com: Permission denied (publickey).\n"
+                "fatal: Could not read from remote repository."
+            ),
+        ),
+        patch("roar.application.publish.service.RegisterService") as mock_cls,
+    ):
+        register_service = mock_cls.return_value
+        register_service.register_prepared_lineage.return_value = expected
+
+        response = register_lineage_target(
+            RegisterLineageRequest(
+                target="model.pt",
+                roar_dir=tmp_path / ".roar",
+                cwd=tmp_path,
+                public=True,
+                anonymous=True,
+            )
+        )
+
+    # GLaaS write DID happen — anonymous register is not gated on tag push.
+    register_service.register_prepared_lineage.assert_called_once()
+    assert response.success is True
+    assert response.session_hash == "b" * 64
+
+    # And the user gets a warning that:
+    # - names this as a git push failure, not a GLaaS auth failure
+    # - mentions GLaaS registration still happened (via "continued")
+    # - points at the config-knob escape hatch
+    # - includes the verbatim git error for context
+    assert len(response.warnings) == 1
+    warning = response.warnings[0]
+    assert "git remote" in warning
+    assert "not GLaaS" in warning
+    assert "continued" in warning
+    assert "git.push_tags_on_register" in warning
+    assert "Permission denied (publickey)" in warning
+
+
 def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) -> None:
     db_ctx = MagicMock()
     put_result = PutResult(success=True, job_id=7, uploaded_files=[], dry_run=False)

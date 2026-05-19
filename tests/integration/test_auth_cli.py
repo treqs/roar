@@ -177,4 +177,9 @@ def test_auth_test_surfaces_unauthorized_response(
     combined_output = f"{result.stdout}\n{result.stderr}"
     assert result.returncode != 0
     assert "Authentication failed: Unknown key" in combined_output
+    # Error must direct the user to the actual key-registration URL and
+    # mention the browser-based alternative. The old copy pointed at
+    # https://glaas.ai (homepage) which doesn't accept key paste.
+    assert "https://glaas.ai/login" in combined_output
+    assert "roar login" in combined_output
     assert fake_glaas_auth_server.last_authorization is not None

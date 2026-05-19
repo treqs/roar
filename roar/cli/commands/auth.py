@@ -76,8 +76,10 @@ def auth(ctx: click.Context) -> None:
     \b
     To set up GLaaS auth:
         1. Run 'roar auth key' to display your public key
-        2. Sign up for GLaaS at https://glaas.ai where you can paste your public key
+        2. Sign in at https://glaas.ai/login (via GitHub) and paste your public key
         3. Once added, run 'roar auth test' to verify
+
+    Alternatively, run 'roar login' to authenticate via browser instead.
 
     \b
     Examples:
@@ -213,8 +215,10 @@ def auth_test() -> None:
                 detail = str(e)
             raise click.ClickException(
                 f"Authentication failed: {detail}\n\n"
-                "Your key may not be registered with the server.\n"
-                "Sign up for GLaaS at https://glaas.ai where you can paste your public key."
+                "Your key isn't registered with GLaaS. Two ways to fix:\n"
+                "  1. Register the key at https://glaas.ai/login (sign in with "
+                "GitHub, then paste your public key).\n"
+                "  2. Or run `roar login` to authenticate via browser instead."
             ) from e
         else:
             raise click.ClickException(f"Server error: {e.code}") from e
