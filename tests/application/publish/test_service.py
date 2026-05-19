@@ -386,15 +386,21 @@ def test_register_lineage_target_anonymous_downgrades_tag_push_failure(tmp_path:
     # And the user gets a warning that:
     # - names this as a git push failure, not a GLaaS auth failure
     # - mentions GLaaS registration still happened (via "continued")
-    # - points at the config-knob escape hatch
+    # - explains why the missing push matters (reproducibility for
+    #   anyone reading the GLaaS record)
+    # - points at the real fix (`git push` after configuring auth)
     # - includes the verbatim git error for context
+    # - does NOT suggest `git.push_tags_on_register=never`, which would
+    #   break reproducibility for every future anonymous register
     assert len(response.warnings) == 1
     warning = response.warnings[0]
     assert "git remote" in warning
     assert "not GLaaS" in warning
     assert "continued" in warning
-    assert "git.push_tags_on_register" in warning
+    assert "git push" in warning
     assert "Permission denied (publickey)" in warning
+    assert "git.push_tags_on_register" not in warning
+    assert "never" not in warning
 
 
 def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) -> None:

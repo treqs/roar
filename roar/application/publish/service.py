@@ -553,14 +553,21 @@ def _format_anonymous_tag_push_warning(tag_push_error: str) -> str:
     Anonymous register continues past the push failure (GLaaS publish
     succeeds), so the message has to (a) make clear the failure is git
     remote auth, not GLaaS, (b) tell the user GLaaS registration still
-    happened, and (c) point at the config knob that silences this for
-    future anonymous registers.
+    happened, (c) explain why the missing push matters (the GLaaS
+    record references a tag that doesn't yet exist on the remote, so
+    anyone reading the record can't ``git checkout`` it), and
+    (d) point at the real fix (configure git remote auth + push the
+    tag). We deliberately do *not* suggest
+    ``git.push_tags_on_register=never`` here — that "fix" breaks
+    reproducibility for everyone viewing the GLaaS record, not just
+    silences a local warning.
     """
     return (
         "roar tag push to git remote failed (git auth, not GLaaS) — "
         "anonymous register continued without pushing the tag.\n"
-        "  Suppress for future anonymous registers: "
-        "`roar config set git.push_tags_on_register never`.\n"
+        "  The local tag exists, but viewers of the GLaaS record need it "
+        "on the remote to reproduce.\n"
+        "  Fix git remote auth, then push: `git push <remote> <tag>`.\n"
         f"  Verbatim git error: {tag_push_error}"
     )
 
