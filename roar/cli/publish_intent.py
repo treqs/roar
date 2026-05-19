@@ -55,11 +55,27 @@ def warn_public_default() -> None:
     )
 
 
-def confirm_anonymous_public_publish(*, command_name: str) -> bool:
-    """Prompt before an anonymous public publication."""
+def confirm_anonymous_public_publish(*, command_name: str, start_dir: str | None = None) -> bool:
+    """Prompt before an anonymous public publication.
+
+    Renders a "Will publish to:" preview line above the prompt so the user
+    sees the destination URL pattern before committing — mirroring what
+    ``--dry-run`` already shows. The session-hash component is a
+    placeholder (the real hash isn't known until registration runs), but
+    the host + path shape is the actionable trust signal.
+    """
     click.echo("")
+    click.echo(f"Will publish to: {_publish_url_preview(start_dir)}")
     click.echo("Anonymous scope publishes publicly without account attribution.")
     click.echo("Anyone with the GLaaS record hash can read this lineage.")
     click.echo(f"Use `{command_name} -y` to skip this confirmation in scripts.")
     click.echo("")
     return click.confirm("Publish anonymously and publicly?", default=False)
+
+
+def _publish_url_preview(start_dir: str | None) -> str:
+    """Return the dag URL pattern using the configured GLaaS host."""
+    from ..integrations.config.raw import get_raw_glaas_web_url
+
+    web_url = get_raw_glaas_web_url(start_dir=start_dir) or "https://glaas.ai"
+    return f"{web_url}/dag/<session-hash>"

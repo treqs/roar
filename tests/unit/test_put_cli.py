@@ -185,6 +185,29 @@ def test_put_cli_prompts_before_anonymous_scope_publish(tmp_path: Path) -> None:
     mock_put.assert_not_called()
 
 
+def test_put_cli_anonymous_prompt_previews_publish_url(tmp_path: Path) -> None:
+    """``roar put`` must also preview the GLaaS destination URL above the
+    anonymous-publish confirmation, mirroring ``roar register``.
+    """
+    runner = CliRunner()
+    save_repo_scope("anonymous", start_dir=tmp_path)
+
+    with patch("roar.cli.commands.put.put_artifacts") as mock_put:
+        result = runner.invoke(
+            put,
+            ["model.pt", "s3://bucket/release", "-m", "publish release"],
+            input="n\n",
+            obj=_mock_context(tmp_path),
+        )
+
+    assert result.exit_code != 0
+    assert "Will publish to: https://glaas.ai/dag/<session-hash>" in result.output
+    preview_idx = result.output.index("Will publish to:")
+    prompt_idx = result.output.index("Publish anonymously and publicly?")
+    assert preview_idx < prompt_idx
+    mock_put.assert_not_called()
+
+
 def test_put_cli_rejects_anonymous_private(tmp_path: Path) -> None:
     runner = CliRunner()
 

@@ -194,7 +194,9 @@ def register(
         publish_intent.anonymous
         and not yes
         and not dry_run
-        and not confirm_anonymous_public_publish(command_name="roar register")
+        and not confirm_anonymous_public_publish(
+            command_name="roar register", start_dir=str(ctx.cwd)
+        )
     ):
         click.echo("Registration aborted.")
         raise SystemExit(1)

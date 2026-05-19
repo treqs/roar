@@ -219,6 +219,42 @@ def test_register_cli_prompts_before_anonymous_scope_publish(tmp_path: Path) -> 
     mock_register.assert_not_called()
 
 
+def test_register_cli_anonymous_prompt_previews_publish_url(tmp_path: Path) -> None:
+    """The confirmation prompt must show the GLaaS destination URL before
+    asking the user to commit — the live prompt matches the --dry-run
+    affordance so users can preview the destination before deciding.
+    """
+    runner = CliRunner()
+    save_repo_scope("anonymous", start_dir=tmp_path)
+
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        result = runner.invoke(register, ["model.pt"], input="n\n", obj=_mock_context(tmp_path))
+
+    assert result.exit_code != 0
+    # Preview line should appear above the prompt copy.
+    assert "Will publish to: https://glaas.ai/dag/<session-hash>" in result.output
+    preview_idx = result.output.index("Will publish to:")
+    prompt_idx = result.output.index("Publish anonymously and publicly?")
+    assert preview_idx < prompt_idx
+    mock_register.assert_not_called()
+
+
+def test_register_cli_anonymous_prompt_uses_configured_glaas_host(tmp_path: Path) -> None:
+    """When glaas.web_url is overridden (e.g. staging), the preview URL
+    must reflect the configured host, not the public default.
+    """
+    runner = CliRunner()
+    save_repo_scope("anonymous", start_dir=tmp_path)
+    config_set("glaas.web_url", "https://glaas.staging.example", start_dir=str(tmp_path))
+
+    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
+        result = runner.invoke(register, ["model.pt"], input="n\n", obj=_mock_context(tmp_path))
+
+    assert result.exit_code != 0
+    assert "Will publish to: https://glaas.staging.example/dag/<session-hash>" in result.output
+    mock_register.assert_not_called()
+
+
 def test_register_cli_uses_private_scope_as_default_publish_intent(tmp_path: Path) -> None:
     runner = CliRunner()
     save_repo_scope("private", start_dir=tmp_path)

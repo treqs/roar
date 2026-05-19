@@ -155,7 +155,9 @@ def put(
         publish_intent.anonymous
         and not yes
         and not dry_run
-        and not confirm_anonymous_public_publish(command_name="roar put")
+        and not confirm_anonymous_public_publish(
+            command_name="roar put", start_dir=str(ctx.repo_root or ctx.cwd)
+        )
     ):
         click.echo("Publication aborted.")
         raise SystemExit(1)
