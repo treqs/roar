@@ -17,6 +17,27 @@ _BUILTIN_EXECUTION_BACKEND_MODULES = (
     "roar.backends.osmo.plugin",
     "roar.backends.local.plugin",
 )
+# Well-known job-environment markers for built-in backends. Each marker
+# is also declared on its backend's ``ExecutionPolicyAdapter`` (single
+# source of truth at the policy level — see consistency tests in
+# ``tests/execution/framework/test_execution_planning.py``), but they're
+# enumerated statically here so ``is_execution_backend_job_environment``
+# can answer without triggering full backend discovery. That detection
+# fires on *every* roar invocation (called from telemetry suppression),
+# and triggering discovery would import every backend plugin module —
+# ~300ms of cost in exchange for checking a handful of stable env-var
+# names.
+_BUILTIN_JOB_ENVIRONMENT_MARKERS: frozenset[str] = frozenset({"RAY_JOB_ID"})
+
+# Top-level TOML section names owned by built-in backends. The config
+# loader checks against this to decide whether a `config_get("X.Y")`
+# lookup *could* resolve through a backend (and so needs full
+# backend-config resolution), or whether the raw TOML walk is
+# authoritative. Without this static set, `config_get("hints.enabled")`
+# would pay ~300ms loading every backend plugin just to confirm "hints"
+# isn't a backend-namespaced key. Kept in sync with each builtin
+# backend's ``BackendConfigAdapter.section_name`` by a consistency test.
+_BUILTIN_BACKEND_CONFIG_SECTIONS: frozenset[str] = frozenset({"ray", "osmo"})
 _registered_execution_backends: list[ExecutionBackend] = []
 _execution_backends_discovered = False
 _execution_backends_discovering = False
@@ -166,9 +187,21 @@ def iter_execution_job_environment_markers() -> tuple[str, ...]:
 
 
 def is_execution_backend_job_environment(environ: Mapping[str, str] | None = None) -> bool:
+    """Whether ``environ`` looks like a roar-spawned backend job.
+
+    Fast path: well-known built-in markers (no backend discovery).
+    Slow path (entry-point plugin backends only): consulted only if
+    discovery has *already* happened in this process — never trigger
+    discovery just for this check, since the caller is typically
+    telemetry suppression running before any real command work.
+    """
     resolved_env = os.environ if environ is None else environ
     if _truthy_env_value(resolved_env.get("ROAR_JOB_INSTRUMENTED")):
         return True
+    if any(marker in resolved_env for marker in _BUILTIN_JOB_ENVIRONMENT_MARKERS):
+        return True
+    if not _execution_backends_discovered:
+        return False
     return any(marker in resolved_env for marker in iter_execution_job_environment_markers())
 
 

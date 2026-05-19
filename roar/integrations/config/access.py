@@ -754,11 +754,35 @@ def save_config(
 
 
 def config_get(key: str, start_dir: str | None = None):
-    """Get a config value."""
+    """Get a config value.
+
+    Three-stage lookup, fast to slow:
+
+      1. Typed pydantic sections (``output``, ``glaas``, …).
+      2. Raw TOML data — covers user-set values in non-typed sections
+         (``hints.enabled``, ad-hoc keys) without triggering backend-
+         config resolution.
+      3. Full ``to_dict()`` — only when the key prefix is a known
+         backend section, since that's the only case where ``to_dict()``
+         contributes defaults that the raw TOML doesn't. ``to_dict()``
+         is the step that imports every backend plugin (~300ms); skipping
+         it for ``hints.*`` and similar cheap reads is the bulk of the
+         ``roar dag`` / ``roar show`` perf win.
+    """
     settings = load_settings(start_dir=start_dir)
     value = _get_nested_from_settings(settings, key, _MISSING)
     if value is not _MISSING:
         return value
+
+    raw_value = _get_nested(settings._backend_config_source, key)
+    if raw_value is not None:
+        return raw_value
+
+    from ...execution.framework.registry import _BUILTIN_BACKEND_CONFIG_SECTIONS
+
+    section = str(key).split(".", 1)[0]
+    if section not in _BUILTIN_BACKEND_CONFIG_SECTIONS:
+        return None
 
     config = settings.to_dict()
     return _get_nested(config, key)
