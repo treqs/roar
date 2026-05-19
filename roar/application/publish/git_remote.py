@@ -84,10 +84,11 @@ def resolve_canonical_remote(repo_root: Path | str, configured_remote: str | Non
     if not remotes:
         raise GitRemoteError(
             "No git remote configured. `roar register` needs a remote to push "
-            "roar tags to so teammates can resolve GLaaS links.\n"
+            "roar tags to so anyone reading the GLaaS record can resolve them "
+            "back to the commit.\n"
             "Add one: `git remote add origin <url>`.\n"
             "Or skip the push: `roar config set git.push_tags_on_register never` "
-            "(local-only — GLaaS links will not resolve for teammates)."
+            "(commit links on GLaaS may be broken)."
         )
     if len(remotes) > 1:
         raise GitRemoteError(
