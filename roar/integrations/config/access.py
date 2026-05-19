@@ -225,9 +225,8 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
         "type": bool,
         "default": True,
         "description": (
-            "Show advisory hint blocks (next steps, docs pointers, etc.). "
-            "Hints are also auto-suppressed in quiet output mode and when "
-            "stdout is not a TTY (CI/redirected output)."
+            "Show advisory hint blocks (next steps, docs pointers, etc.) on "
+            "stderr. Also auto-suppressed when output.verbosity = quiet."
         ),
     },
     "logging.level": {

@@ -57,7 +57,9 @@ def test_show_cli_path_selector_builds_explicit_request(tmp_path) -> None:
         result = CliRunner().invoke(show, ["--path", "deadbeef"], obj=ctx)
 
     assert result.exit_code == 0, result.output
-    assert result.output == "ok\n"
+    # Brand header now goes to stderr (agent/CI visibility); stdout
+    # carries just the rendered query result so pipelines stay clean.
+    assert result.stdout == "ok\n"
     render_show.assert_called_once_with(
         ShowQueryRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, ref="deadbeef", selector="path")
     )

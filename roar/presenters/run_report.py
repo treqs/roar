@@ -179,20 +179,18 @@ class RunReportPresenter:
         self._trex(f"done {self._dim_sep()}{timing}")
 
     def next_steps_hint(self, result: RunResult) -> None:
-        """Amber `hint: next: …` line printed after `done()`.
+        """Amber ``hint: next: …`` line printed after ``done()``.
 
         Restores the next-step breadcrumb that v0.2.10 had as a Next:
-        block embedded in the summary — but as a single hint line and
-        gated like all other roar hints: silenced in quiet mode, in
-        non-TTY contexts (CI / piped stderr), and when
-        `hints.enabled = false` in config.
+        block embedded in the summary — but as a single hint line.
+        Goes to the presenter's stream (stderr by default), gated by
+        ``_quiet`` and ``hints.enabled = false``. No TTY check: stdout
+        consumers stay clean by virtue of the stream choice, and
+        non-TTY consumers (CI logs, agents) still see the nudge. ANSI
+        styling further gates on ``self._caps.can_color`` so captured
+        logs stay plain.
         """
         if self._quiet:
-            return
-        # `pipe_mode` here is the presenter's own stream's TTY-ness
-        # (stderr in normal use). Same gating semantics the rest of
-        # the presenter uses for decorative lines.
-        if self._caps.pipe_mode:
             return
         try:
             from ..integrations.config import config_get
