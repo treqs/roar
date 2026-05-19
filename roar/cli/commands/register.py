@@ -240,6 +240,8 @@ def register(
         if response.artifact_hash:
             click.echo(f"  Artifact: {web_url}/artifact/{response.artifact_hash}")
     else:
+        for warning in response.warnings:
+            click.echo(f"Warning: {warning}", err=True)
         _render_tag_summary(response.tag_summary)
         click.echo(f"Registered lineage for: {target}")
         click.echo(f"  Session: {session_preview}")

@@ -476,10 +476,17 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
 
         # P1-23: push roar tags BEFORE writing the GLaaS record so the
         # record never references a tag that doesn't yet exist on the
-        # canonical remote. Fail-closed.
+        # canonical remote. Attributed registers fail-closed here.
+        #
+        # Anonymous registers degrade tag-push failures to warnings: the
+        # user explicitly opted into a no-account publish, so requiring
+        # git-remote auth (a separate concern from GLaaS) would defeat
+        # the whole point. The local tag still gets created; only the
+        # push to the canonical remote is skipped on failure.
         from ...integrations.config import config_get
         from .register_tag_push import TagPushError, ensure_roar_tags_pushed
 
+        tag_push_warning: str | None = None
         try:
             tag_summary = ensure_roar_tags_pushed(
                 repo_root=prepared.git_tag_repo_root or request.cwd,
@@ -493,11 +500,14 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
                 logger=logger,
             )
         except TagPushError as exc:
-            return RegisterLineageResponse(
-                success=False,
-                artifact_hash=collected_lineage.artifact_hash,
-                error=str(exc),
-            )
+            if not request.anonymous:
+                return RegisterLineageResponse(
+                    success=False,
+                    artifact_hash=collected_lineage.artifact_hash,
+                    error=str(exc),
+                )
+            tag_push_warning = _format_anonymous_tag_push_warning(str(exc))
+            tag_summary = None
 
         service = RegisterService(
             glaas_client=runtime.glaas_client,
@@ -514,6 +524,10 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             prepared=prepared,
         )
 
+        warnings: list[str] = []
+        if tag_push_warning:
+            warnings.append(tag_push_warning)
+
         return RegisterLineageResponse(
             success=result.success,
             session_hash=result.session_hash,
@@ -527,9 +541,35 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             secrets_redacted=result.secrets_redacted,
             aborted_by_user=result.aborted_by_user,
             tag_summary=tag_summary,
+            warnings=warnings,
         )
     except PublishAuthError as exc:
         return RegisterLineageResponse(success=False, error=str(exc))
+
+
+def _format_anonymous_tag_push_warning(tag_push_error: str) -> str:
+    """Wrap a tag-push failure as a self-contained user-facing warning.
+
+    Anonymous register continues past the push failure (GLaaS publish
+    succeeds), so the message has to (a) make clear the failure is git
+    remote auth, not GLaaS, (b) tell the user GLaaS registration still
+    happened, (c) explain why the missing push matters (the GLaaS
+    record references a tag that doesn't yet exist on the remote, so
+    anyone reading the record can't ``git checkout`` it), and
+    (d) point at the real fix (configure git remote auth + push the
+    tag). We deliberately do *not* suggest
+    ``git.push_tags_on_register=never`` here — that "fix" breaks
+    reproducibility for everyone viewing the GLaaS record, not just
+    silences a local warning.
+    """
+    return (
+        "roar tag push to git remote failed (git auth, not GLaaS) — "
+        "anonymous register continued without pushing the tag.\n"
+        "  The local tag exists, but viewers of the GLaaS record need it "
+        "on the remote to reproduce.\n"
+        "  Fix git remote auth, then push: `git push <remote> <tag>`.\n"
+        f"  Verbatim git error: {tag_push_error}"
+    )
 
 
 def put_artifacts(request: PutRequest) -> PutResponse:

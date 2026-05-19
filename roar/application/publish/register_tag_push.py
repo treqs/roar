@@ -81,7 +81,7 @@ def _create_local_tags(repo_root: Path, commit_to_tag: Iterable[tuple[str, str]]
                 "If the commit is no longer reachable locally (e.g. rebase, "
                 "garbage collection), recover it via `git reflog` before retrying — "
                 "or set `git.push_tags_on_register=never` to register local-only "
-                "(GLaaS links will not resolve for teammates)."
+                "(commit links on GLaaS may be broken)."
             )
 
 

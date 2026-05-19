@@ -282,3 +282,49 @@ def test_register_cli_rejects_anonymous_private(tmp_path: Path) -> None:
     assert result.exit_code != 0
     assert "--anonymous requires public visibility" in result.output
     mock_register.assert_not_called()
+
+
+def test_register_cli_renders_warnings_above_summary(tmp_path: Path) -> None:
+    """When the service returns warnings (e.g. anonymous register with a
+    failed tag push), the CLI must surface them to stderr before the
+    success summary — the user shouldn't have to scroll past 'Registered
+    lineage for: …' to find out a sub-step degraded."""
+    response = RegisterLineageResponse(
+        success=True,
+        session_hash="0123456789abcdef0123456789abcdef",
+        artifact_hash="b" * 64,
+        jobs_registered=2,
+        artifacts_registered=3,
+        links_created=4,
+        warnings=[
+            "roar tag push to git remote failed (git auth, not GLaaS) — "
+            "anonymous register continued without pushing the tag.\n"
+            "  The local tag exists, but viewers of the GLaaS record need it "
+            "on the remote to reproduce.\n"
+            "  Fix git remote auth, then push: `git push <remote> <tag>`.\n"
+            "  Verbatim git error: Permission denied (publickey)"
+        ],
+    )
+
+    runner = CliRunner()
+    with (
+        patch("roar.cli.commands.register.register_lineage_target", return_value=response),
+        patch(
+            "roar.cli.commands.register._resolve_glaas_web_url",
+            return_value="https://glaas.example",
+        ),
+    ):
+        result = runner.invoke(
+            register, ["model.pt", "--yes", "--anonymous"], obj=_mock_context(tmp_path)
+        )
+
+    assert result.exit_code == 0, result.output
+    # Warning prefix used (matches `roar put`'s convention).
+    assert "Warning: roar tag push to git remote failed" in result.output
+    # Warning appears before the "Registered lineage for:" success line.
+    warning_idx = result.output.index("Warning: roar tag push to git remote failed")
+    summary_idx = result.output.index("Registered lineage for:")
+    assert warning_idx < summary_idx
+    # Actionable info is intact in the rendered warning.
+    assert "git push" in result.output
+    assert "Permission denied (publickey)" in result.output

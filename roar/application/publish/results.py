@@ -36,6 +36,7 @@ class RegisterLineageResponse:
     secrets_redacted: bool = False
     aborted_by_user: bool = False
     tag_summary: RegisterTagSummary | None = None
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
