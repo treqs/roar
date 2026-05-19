@@ -209,10 +209,17 @@ def cli(ctx: click.Context) -> None:
         ctx.exit(0)
     else:
         # Create RoarContext for subcommands (lazy import)
-        from ..telemetry.hooks import record_cli_subcommand
+        from ..telemetry.hooks import (
+            maybe_print_telemetry_disclosure,
+            record_cli_subcommand,
+        )
         from .context import RoarContext
 
         ctx.obj = RoarContext.create()
+        # First-run disclosure must fire before any recording so the user
+        # is informed before telemetry events queue for this invocation
+        # or any later one.
+        maybe_print_telemetry_disclosure(start_dir=ctx.obj.cwd)
         record_cli_subcommand(ctx.invoked_subcommand, start_dir=ctx.obj.cwd)
 
 

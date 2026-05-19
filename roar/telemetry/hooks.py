@@ -9,7 +9,8 @@ import sys
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
-from . import enqueue_trigger, record_run_result, record_subcommand
+from . import enqueue_trigger, record_run_result, record_subcommand, resolve_config
+from .paths import resolve_paths
 
 LOGGER = logging.getLogger(__name__)
 
@@ -17,6 +18,54 @@ IDENTITY_UPLOAD_TRIGGERS = {
     "first_seen_for_install_id",
     "first_seen_for_version",
 }
+
+
+def maybe_print_telemetry_disclosure(
+    *,
+    start_dir: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> None:
+    """Print the one-time telemetry disclosure if the user hasn't seen it.
+
+    Gates, in order:
+      1. Telemetry must be enabled — nothing to disclose to users who've
+         already opted out via config or `DO_NOT_TRACK`/`ROAR_NO_TELEMETRY`.
+      2. Sentinel ``~/.config/roar/.telemetry-disclosed`` must be missing.
+      3. Output gate must allow hints — TTY, ``hints.enabled``,
+         non-quiet (same gate the brand banner uses).
+
+    When all three pass, prints the two-line hint to stdout via the
+    shared hint printer and writes the sentinel. If the gate fails, the
+    sentinel is *not* written: a later interactive invocation will show
+    the disclosure instead. Any failure is swallowed — telemetry must
+    never break CLI use.
+    """
+    try:
+        paths = resolve_paths(environ)
+        if paths.disclosure_sentinel_file.exists():
+            return
+        effective = resolve_config(start_dir=start_dir, environ=environ, paths=paths)
+        if not effective.stats_enabled:
+            return
+
+        # Lazy import: `roar.cli._format` pulls in click + integrations.config,
+        # which we don't want to touch from telemetry except on the first run.
+        from ..cli._format import hints_should_print, make_hint_printer
+
+        if not hints_should_print():
+            return
+
+        _caps, hint = make_hint_printer()
+        hint("Telemetry: anonymous counters (version, commands) — no paths, content, or tokens.")
+        hint(
+            "  Off: `roar telemetry --disable` or `DO_NOT_TRACK=1`. "
+            "Status: `roar telemetry --status`."
+        )
+
+        paths.disclosure_sentinel_file.parent.mkdir(parents=True, exist_ok=True)
+        paths.disclosure_sentinel_file.touch()
+    except Exception as exc:  # pragma: no cover - disclosure must never break CLI use
+        LOGGER.debug("Failed to print telemetry disclosure: %s", exc)
 
 
 def record_cli_subcommand(

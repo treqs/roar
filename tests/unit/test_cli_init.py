@@ -180,13 +180,13 @@ def test_init_hints_visible_when_gate_passes(
     assert "roar config set hints.enabled false" in result.output
 
 
-def test_init_hints_disclose_telemetry_and_opt_outs(
+def test_init_hint_block_does_not_duplicate_telemetry_disclosure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`roar init` is the first command most users run and it's the only
-    place the user is actively told that telemetry is on. The section
-    must name the opt-out paths so a privacy-conscious reader doesn't
-    need to hunt through README or config.toml.
+    """The telemetry disclosure lives in the top-level dispatcher (gated
+    by a per-user sentinel), not in `roar init`'s hint block. Repeating
+    it here would re-show the disclosure on every `roar init` and
+    duplicate the same lines users have already seen.
     """
     from roar.cli import _format
 
@@ -198,12 +198,7 @@ def test_init_hints_disclose_telemetry_and_opt_outs(
     result = _run_init(repo)
 
     assert result.exit_code == 0, result.output
-    assert "Telemetry:" in result.output
-    assert "anonymous counters" in result.output
-    # Both global and per-invocation opt-outs must appear so the user
-    # doesn't need the README to find them.
-    assert "roar telemetry --disable" in result.output
-    assert "DO_NOT_TRACK=1" in result.output
+    assert "Telemetry: anonymous counters" not in result.output
 
 
 def test_init_hints_appear_in_non_tty_on_stderr(tmp_path: Path) -> None:
