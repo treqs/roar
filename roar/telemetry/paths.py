@@ -20,6 +20,7 @@ class TelemetryPaths:
     stats_file: Path
     queue_dir: Path
     lock_file: Path
+    disclosure_sentinel_file: Path
 
 
 def resolve_paths(environ: Mapping[str, str] | None = None) -> TelemetryPaths:
@@ -41,6 +42,7 @@ def resolve_paths(environ: Mapping[str, str] | None = None) -> TelemetryPaths:
         stats_file=cache_dir / "stats.json",
         queue_dir=telemetry_dir / "queue",
         lock_file=telemetry_dir / "telemetry.lock",
+        disclosure_sentinel_file=config_home / "roar" / ".telemetry-disclosed",
     )
 
 

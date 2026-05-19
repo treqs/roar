@@ -180,6 +180,27 @@ def test_init_hints_visible_when_gate_passes(
     assert "roar config set hints.enabled false" in result.output
 
 
+def test_init_hint_block_does_not_duplicate_telemetry_disclosure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The telemetry disclosure lives in the top-level dispatcher (gated
+    by a per-user sentinel), not in `roar init`'s hint block. Repeating
+    it here would re-show the disclosure on every `roar init` and
+    duplicate the same lines users have already seen.
+    """
+    from roar.cli import _format
+
+    monkeypatch.setattr(_format, "hints_should_print", lambda: True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    assert "Telemetry: anonymous counters" not in result.output
+
+
 def test_init_hints_appear_in_non_tty_on_stderr(tmp_path: Path) -> None:
     """Hints fire in non-TTY contexts (agents, CI) so consumers see the
     nudges. They go to stderr — stdout stays clean for pipelines."""
