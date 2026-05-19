@@ -219,6 +219,13 @@ class RunReportPresenter:
             f"  ·  roar register {register_arg}"
         )
         self._print(style(line, "warn_amber", enabled=c))
+        # One-line explainer so users (and agents) reading the hint know
+        # what `roar register` actually does without having to look it up.
+        explainer = (
+            f"'roar register {register_arg}' uploads lineage to glaas.ai "
+            f"so you can reproduce it later."
+        )
+        self._print(style(explainer, "warn_amber", enabled=c))
 
     # ---- backward-compat one-shot ----------------------------------------
 
