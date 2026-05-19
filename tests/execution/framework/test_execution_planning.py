@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import types
 
 from roar.execution.framework.contract import (
@@ -247,6 +248,95 @@ def test_execution_policy_helpers_use_registered_backend_policy(monkeypatch) -> 
     assert module.is_execution_submit_job({"execution_backend": "fake", "execution_role": "submit"})
     assert module.is_execution_task_job({"execution_backend": "fake", "execution_role": "task"})
     assert module.is_execution_noise_job({"execution_backend": "fake", "execution_role": "noise"})
+
+
+def test_job_environment_detection_does_not_trigger_backend_discovery(monkeypatch) -> None:
+    """``is_execution_backend_job_environment`` runs on every roar
+    invocation (called from telemetry suppression). It must answer from
+    the static built-in marker set without importing any backend plugin
+    module — otherwise we pay ~300ms per invocation to enumerate
+    env-var names that are stable and few.
+    """
+    import roar.execution.framework.registry as module
+
+    monkeypatch.setattr(module, "_registered_execution_backends", [])
+    monkeypatch.setattr(module, "_execution_backends_discovered", False)
+    imports: list[str] = []
+
+    real_import = module.importlib.import_module
+
+    def _tracking_import_module(name: str):
+        imports.append(name)
+        return real_import(name)
+
+    monkeypatch.setattr(module.importlib, "import_module", _tracking_import_module)
+
+    # Negative case (no markers set) — must not discover backends.
+    assert module.is_execution_backend_job_environment({}) is False
+    # Positive case via a built-in static marker — must not discover either.
+    assert module.is_execution_backend_job_environment({"RAY_JOB_ID": "job-1"}) is True
+    # Positive case via the explicit override env var.
+    assert module.is_execution_backend_job_environment({"ROAR_JOB_INSTRUMENTED": "1"}) is True
+
+    assert imports == [], f"backend discovery should not run, got imports: {imports}"
+    assert module._execution_backends_discovered is False
+
+
+def test_builtin_job_environment_markers_match_backend_policies() -> None:
+    """Single-source-of-truth invariant: the static marker set used by
+    the fast path must equal the union of ``job_environment_markers``
+    declared by every built-in backend. If a developer adds a marker to
+    a built-in backend's policy without updating the static set, this
+    test fails before the slow path silently kicks in for that marker.
+    """
+    from roar.execution.framework.registry import (
+        _BUILTIN_EXECUTION_BACKEND_MODULES,
+        _BUILTIN_JOB_ENVIRONMENT_MARKERS,
+    )
+
+    policy_markers: set[str] = set()
+    for module_name in _BUILTIN_EXECUTION_BACKEND_MODULES:
+        mod = importlib.import_module(module_name)
+        for attr in vars(mod).values():
+            policy = getattr(attr, "policy", None)
+            markers = getattr(policy, "job_environment_markers", None)
+            if markers:
+                policy_markers.update(str(m) for m in markers if m)
+
+    assert policy_markers == set(_BUILTIN_JOB_ENVIRONMENT_MARKERS), (
+        f"builtin markers ({sorted(_BUILTIN_JOB_ENVIRONMENT_MARKERS)}) must match the "
+        f"union of policy.job_environment_markers across builtin backends "
+        f"({sorted(policy_markers)}). Update _BUILTIN_JOB_ENVIRONMENT_MARKERS in "
+        f"roar/execution/framework/registry.py."
+    )
+
+
+def test_builtin_backend_config_sections_match_backend_adapters() -> None:
+    """Same invariant for ``BackendConfigAdapter.section_name``. The
+    static set drives ``config_get``'s fast path: keys outside both
+    typed sections and these names short-circuit before triggering
+    backend discovery.
+    """
+    from roar.execution.framework.registry import (
+        _BUILTIN_BACKEND_CONFIG_SECTIONS,
+        _BUILTIN_EXECUTION_BACKEND_MODULES,
+    )
+
+    adapter_sections: set[str] = set()
+    for module_name in _BUILTIN_EXECUTION_BACKEND_MODULES:
+        mod = importlib.import_module(module_name)
+        for attr in vars(mod).values():
+            config_adapter = getattr(attr, "config", None)
+            section = getattr(config_adapter, "section_name", None)
+            if section:
+                adapter_sections.add(str(section))
+
+    assert adapter_sections == set(_BUILTIN_BACKEND_CONFIG_SECTIONS), (
+        f"builtin section names ({sorted(_BUILTIN_BACKEND_CONFIG_SECTIONS)}) must match "
+        f"the union of config.section_name across builtin backends "
+        f"({sorted(adapter_sections)}). Update _BUILTIN_BACKEND_CONFIG_SECTIONS in "
+        f"roar/execution/framework/registry.py."
+    )
 
 
 def test_iter_execution_backends_loads_builtin_modules_once(monkeypatch) -> None:

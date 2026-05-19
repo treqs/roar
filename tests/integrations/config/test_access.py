@@ -75,6 +75,95 @@ class TestProxyConfigGetSet:
         assert saved_config["proxy"]["enabled"] is True
 
 
+class _SettingsStub:
+    """Bare-attribute stub that mimics RoarSettings for the ``config_get``
+    lookup path. Uses real attributes (not MagicMock) so ``hasattr``
+    returns the right answer for missing keys."""
+
+    def __init__(
+        self,
+        *,
+        backend_config_source: dict,
+        to_dict_result: dict | None = None,
+        to_dict_must_not_be_called: bool = False,
+    ) -> None:
+        self._backend_config_source = backend_config_source
+        self._to_dict_result = to_dict_result
+        self._to_dict_must_not_be_called = to_dict_must_not_be_called
+        self.to_dict_call_count = 0
+
+    def to_dict(self) -> dict:
+        self.to_dict_call_count += 1
+        if self._to_dict_must_not_be_called:
+            raise AssertionError(
+                "to_dict() must not be called for non-backend keys — it "
+                "would trigger ~300ms of backend discovery on every "
+                "roar invocation."
+            )
+        return self._to_dict_result or {}
+
+
+class TestConfigGetDoesNotDiscoverBackends:
+    """``config_get`` runs on every roar invocation (e.g. for
+    ``hints.enabled`` from the shared output gate). Eagerly resolving
+    ``to_dict()`` would import every backend plugin module just to know
+    a non-backend key isn't backend-namespaced. The fast path must
+    short-circuit before reaching ``to_dict()`` for keys that can't
+    resolve through a backend.
+    """
+
+    def test_non_backend_key_skips_to_dict(self) -> None:
+        from roar.integrations.config import config_get
+
+        settings = _SettingsStub(
+            backend_config_source={},
+            to_dict_must_not_be_called=True,
+        )
+
+        with patch("roar.integrations.config.access.load_settings", return_value=settings):
+            result = config_get("hints.enabled")
+
+        assert result is None
+        assert settings.to_dict_call_count == 0
+
+    def test_raw_toml_value_returned_without_to_dict(self) -> None:
+        """When the user has explicitly set a non-typed key in TOML
+        (e.g. ``[hints] enabled = false``), the raw-config walk must
+        return it — also without touching ``to_dict()``.
+        """
+        from roar.integrations.config import config_get
+
+        settings = _SettingsStub(
+            backend_config_source={"hints": {"enabled": False}},
+            to_dict_must_not_be_called=True,
+        )
+
+        with patch("roar.integrations.config.access.load_settings", return_value=settings):
+            result = config_get("hints.enabled")
+
+        assert result is False
+        assert settings.to_dict_call_count == 0
+
+    def test_backend_key_still_resolves_through_to_dict(self) -> None:
+        """For known backend sections, ``to_dict()`` is still the
+        authoritative source — that's where the backend's defaults live
+        when the user hasn't overridden them. Don't accidentally break
+        the slow path for keys that need it.
+        """
+        from roar.integrations.config import config_get
+
+        settings = _SettingsStub(
+            backend_config_source={},
+            to_dict_result={"ray": {"runtime": "auto"}},
+        )
+
+        with patch("roar.integrations.config.access.load_settings", return_value=settings):
+            result = config_get("ray.runtime")
+
+        assert result == "auto"
+        assert settings.to_dict_call_count == 1
+
+
 class TestSaveConfigProxy:
     def test_save_config_writes_proxy_section_when_non_default(self, tmp_path):
         config = RoarConfig().to_dict()
