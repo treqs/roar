@@ -386,6 +386,11 @@ def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) 
     hint("  Anonymous public publishing prompts for confirmation;")
     hint("  bypass with `roar register -y` or `roar put -y`.")
     hint()
+    hint("Telemetry: anonymous counters (version, commands) — no paths, content, or tokens.")
+    hint(
+        "  Off: `roar telemetry --disable` or `DO_NOT_TRACK=1`. Status: `roar telemetry --status`."
+    )
+    hint()
     hint("Tracer auto-selects (eBPF → preload → ptrace). Switch with `roar tracer <backend>`;")
     hint("see all backends and readiness with `roar tracer`.")
     if in_git_repo:

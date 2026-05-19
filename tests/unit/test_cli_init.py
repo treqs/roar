@@ -180,6 +180,32 @@ def test_init_hints_visible_when_gate_passes(
     assert "roar config set hints.enabled false" in result.output
 
 
+def test_init_hints_disclose_telemetry_and_opt_outs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`roar init` is the first command most users run and it's the only
+    place the user is actively told that telemetry is on. The section
+    must name the opt-out paths so a privacy-conscious reader doesn't
+    need to hunt through README or config.toml.
+    """
+    from roar.cli import _format
+
+    monkeypatch.setattr(_format, "hints_should_print", lambda: True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    result = _run_init(repo)
+
+    assert result.exit_code == 0, result.output
+    assert "Telemetry:" in result.output
+    assert "anonymous counters" in result.output
+    # Both global and per-invocation opt-outs must appear so the user
+    # doesn't need the README to find them.
+    assert "roar telemetry --disable" in result.output
+    assert "DO_NOT_TRACK=1" in result.output
+
+
 def test_init_hints_appear_in_non_tty_on_stderr(tmp_path: Path) -> None:
     """Hints fire in non-TTY contexts (agents, CI) so consumers see the
     nudges. They go to stderr — stdout stays clean for pipelines."""
