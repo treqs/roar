@@ -274,7 +274,7 @@ class RunCoordinator:
         with run_presenter.hashing(total=total_files or None):
             self.logger.debug("Recording job in database")
             t_record_start = time.perf_counter()
-            job_id, job_uid, read_file_info, written_file_info, stale_upstream, stale_downstream = (
+            job_id, job_uid, read_file_info, written_file_info, stale_upstream, stale_downstream, dag_stats = (
                 self._record_job(
                     ctx,
                     prov,
@@ -341,81 +341,24 @@ class RunCoordinator:
         if not isinstance(backend_name, str):
             backend_name = None
 
-        # Git info (best-effort, never fail the run for this).
+        # Git info — reuse what provenance already collected instead of
+        # spawning new subprocess calls.
         git_branch, git_short_commit, git_clean = None, None, True
         try:
-            git_branch = (
-                subprocess.check_output(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    stderr=subprocess.DEVNULL,
-                    text=True,
-                    cwd=ctx.repo_root,
-                ).strip()
-                or None
-            )
-            git_short_commit = (
-                subprocess.check_output(
-                    ["git", "rev-parse", "--short", "HEAD"],
-                    stderr=subprocess.DEVNULL,
-                    text=True,
-                    cwd=ctx.repo_root,
-                ).strip()
-                or None
-            )
+            prov_git = prov.get("executables", {}).get("code", {}).get("git", {})
+            git_branch = prov_git.get("branch") or None
+            full_commit = prov_git.get("commit") or ""
+            git_short_commit = full_commit[:7] if full_commit else None
+            git_clean = prov_git.get("clean", True)
         except Exception:
             pass
 
-        # DAG stats + parent job lookup (best-effort, never fail the run).
-        dag_jobs, dag_artifacts, dag_depth = 0, 0, 0
-        step_number: int | None = None
-        try:
-            from ...db.context import create_database_context as _create_db_ctx
-            from ...presenters.dag_data_builder import DagDataBuilder
-
-            with _create_db_ctx(ctx.roar_dir) as db_ctx:
-                session = db_ctx.sessions.get_active()
-                if session:
-                    builder = DagDataBuilder(db_ctx, int(session["id"]))
-                    dag_data = builder.build(expanded=False)
-                    dag_jobs = len(dag_data.get("nodes", []))
-                    dag_artifacts = len(dag_data.get("artifacts", []))
-                    # Compute depth: longest dependency chain.
-                    nodes = dag_data.get("nodes", [])
-                    if nodes:
-                        step_deps = {n["step_number"]: n.get("dependencies", []) for n in nodes}
-                        all_steps = set(step_deps)
-                        memo: dict[int, int] = {}
-
-                        def _depth(s: int) -> int:
-                            if s in memo:
-                                return memo[s]
-                            children = [x for x in all_steps if s in step_deps.get(x, [])]
-                            d = 1 + max((_depth(ch) for ch in children), default=0)
-                            memo[s] = d
-                            return d
-
-                        roots = [s for s in all_steps if not step_deps.get(s)]
-                        dag_depth = max((_depth(r) for r in roots), default=1) if roots else 1
-
-                # Parent job UIDs for input artifacts.
-                for inp in read_file_info:
-                    aid = inp.get("artifact_id")
-                    if aid:
-                        jobs_info = db_ctx.artifacts.get_jobs(aid)
-                        producers = jobs_info.get("produced_by", [])
-                        if producers:
-                            inp["parent_job_uid"] = producers[0].get("job_uid")
-
-                # Step number for the just-recorded job — drives the
-                # `roar register @N` form in the next-steps hint.
-                if job_uid:
-                    job_record = db_ctx.jobs.get_by_uid(job_uid)
-                    if job_record:
-                        recorded_step = job_record.get("step_number")
-                        if isinstance(recorded_step, int):
-                            step_number = recorded_step
-        except Exception:
-            pass
+        # DAG stats + parent job lookup — collected inside _record_job's
+        # DB context to avoid opening a 2nd SQLAlchemy session (~250ms import cost).
+        dag_jobs = dag_stats.get("dag_jobs", 0)
+        dag_artifacts = dag_stats.get("dag_artifacts", 0)
+        dag_depth = dag_stats.get("dag_depth", 0)
+        step_number = dag_stats.get("step_number")
 
         prov_data = prov.get("data", {}) if isinstance(prov, dict) else {}
         filter_counts = prov_data.get("filter_counts") or {}
