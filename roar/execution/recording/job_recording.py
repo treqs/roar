@@ -771,16 +771,12 @@ class ExecutionJobRecorder:
             if dataset_identifiers:
                 metadata["dataset_identifiers"] = dataset_identifiers
 
-        # Include persistent env vars in metadata for reproduction.
-        # Reuse config from prov context if available rather than re-loading.
+        # Include persistent env vars from [env] config section for reproduction.
         try:
-            prov_runtime = prov.get("runtime", {}) if isinstance(prov, dict) else {}
-            env_vars = prov_runtime.get("env_vars")
-            if not env_vars:
-                from ...integrations.config import load_config
+            from ...integrations.config import load_config
 
-                config = load_config(start_dir=ctx.repo_root)
-                env_vars = config.get("env", {})
+            config = load_config(start_dir=ctx.repo_root)
+            env_vars = config.get("env", {})
             if isinstance(env_vars, dict) and env_vars:
                 metadata["env_vars"] = env_vars
         except Exception:
