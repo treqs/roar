@@ -93,7 +93,7 @@ def main():
                 results[algo][size_label] = gbs
 
                 print(
-                    f"  {algo:>6} × {size_label:>6}: "
+                    f"  {algo:>6} x {size_label:>6}: "
                     f"{mean_s:.3f}s mean  "
                     f"({gbs:.2f} GB/s)"
                 )
