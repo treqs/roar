@@ -92,11 +92,7 @@ def main():
                 gbs = throughput_gbs(size_bytes, mean_s)
                 results[algo][size_label] = gbs
 
-                print(
-                    f"  {algo:>6} x {size_label:>6}: "
-                    f"{mean_s:.3f}s mean  "
-                    f"({gbs:.2f} GB/s)"
-                )
+                print(f"  {algo:>6} x {size_label:>6}: {mean_s:.3f}s mean  ({gbs:.2f} GB/s)")
 
             # Clean up large file before next size
             path.unlink()
