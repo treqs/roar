@@ -626,7 +626,9 @@ class ExecutionJobRecorder:
         is_build: bool,
         s3_entries: list[S3LogEntry] | None = None,
         run_job_uid: str | None = None,
-    ) -> tuple[int, str, list[dict[str, Any]], list[dict[str, Any]], list[int], list[int], dict[str, Any]]:
+    ) -> tuple[
+        int, str, list[dict[str, Any]], list[dict[str, Any]], list[int], list[int], dict[str, Any]
+    ]:
         """Record job and return tuple expected by RunCoordinator."""
         from ...db.context import create_database_context
 
@@ -644,14 +646,20 @@ class ExecutionJobRecorder:
 
         has_files = bool(read_files or written_files)
         dataset_hint_paths = self._extract_dataset_hint_paths(ctx.command, ctx.repo_root)
-        telemetry_json = self._build_telemetry_json(ctx.repo_root, start_time) if has_files else None
+        telemetry_json = (
+            self._build_telemetry_json(ctx.repo_root, start_time) if has_files else None
+        )
 
         stale_upstream: list[int] = []
         stale_downstream: list[int] = []
         run_composite_config = (
-            self._run_composite_config
-            or RunCompositeMaterializationConfig.from_repo_root(ctx.repo_root)
-        ) if has_files else RunCompositeMaterializationConfig()
+            (
+                self._run_composite_config
+                or RunCompositeMaterializationConfig.from_repo_root(ctx.repo_root)
+            )
+            if has_files
+            else RunCompositeMaterializationConfig()
+        )
         with create_database_context(ctx.roar_dir) as db_ctx:
             session_window_paths = self._collect_session_window_paths(db_ctx) if has_files else []
             metadata_json = self._build_metadata_json(
@@ -717,7 +725,15 @@ class ExecutionJobRecorder:
             # to avoid opening a 2nd context in the coordinator.
             dag_stats = self._collect_dag_stats(db_ctx, session, job_uid, read_file_info)
 
-        return job_id, job_uid, read_file_info, written_file_info, stale_upstream, stale_downstream, dag_stats
+        return (
+            job_id,
+            job_uid,
+            read_file_info,
+            written_file_info,
+            stale_upstream,
+            stale_downstream,
+            dag_stats,
+        )
 
     def _build_metadata_json(
         self,

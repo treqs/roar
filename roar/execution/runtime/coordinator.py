@@ -273,16 +273,22 @@ class RunCoordinator:
         with run_presenter.hashing(total=total_files or None):
             self.logger.debug("Recording job in database")
             t_record_start = time.perf_counter()
-            job_id, job_uid, read_file_info, written_file_info, stale_upstream, stale_downstream, dag_stats = (
-                self._record_job(
-                    ctx,
-                    prov,
-                    tracer_result,
-                    start_time,
-                    is_build,
-                    list(runtime_observations.s3_entries),
-                    run_job_uid=run_job_uid,
-                )
+            (
+                job_id,
+                job_uid,
+                read_file_info,
+                written_file_info,
+                stale_upstream,
+                stale_downstream,
+                dag_stats,
+            ) = self._record_job(
+                ctx,
+                prov,
+                tracer_result,
+                start_time,
+                is_build,
+                list(runtime_observations.s3_entries),
+                run_job_uid=run_job_uid,
             )
             t_record_end = time.perf_counter()
             self.logger.debug(
