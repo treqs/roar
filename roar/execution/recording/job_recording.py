@@ -626,7 +626,7 @@ class ExecutionJobRecorder:
         is_build: bool,
         s3_entries: list[S3LogEntry] | None = None,
         run_job_uid: str | None = None,
-    ) -> tuple[int, str, list[dict[str, Any]], list[dict[str, Any]], list[int], list[int]]:
+    ) -> tuple[int, str, list[dict[str, Any]], list[dict[str, Any]], list[int], list[int], dict[str, Any]]:
         """Record job and return tuple expected by RunCoordinator."""
         from ...db.context import create_database_context
 
