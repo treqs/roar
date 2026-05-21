@@ -157,6 +157,21 @@ class ExperimentTrackerAnalyzer(Analyzer):
                     except (OSError, json.JSONDecodeError):
                         pass
 
+                # Parse entity/project/run_id from debug.log.
+                # wandb writes "finishing run <entity>/<project>/<run_id>"
+                # to this file on every online run.
+                debug_log = run_dir / "logs" / "debug.log"
+                if debug_log.exists():
+                    try:
+                        text = debug_log.read_text(errors="replace")
+                        finish_match = re.search(r"finishing run (\S+)/(\S+)/(\S+)", text)
+                        if finish_match:
+                            info["entity"] = finish_match.group(1)
+                            info["project"] = finish_match.group(2)
+                            info["run_id"] = finish_match.group(3)
+                    except OSError:
+                        pass
+
                 # Check wandb-summary.json for runtime
                 summary_file = run_dir / "files" / "wandb-summary.json"
                 if summary_file.exists():
@@ -169,7 +184,7 @@ class ExperimentTrackerAnalyzer(Analyzer):
                     except (OSError, json.JSONDecodeError):
                         pass
 
-        # Resolve entity and project from env if not found in files
+        # Fall back to env vars if entity/project still missing
         if not info.get("entity"):
             info["entity"] = env.get("WANDB_ENTITY", "")
         if not info.get("project"):
