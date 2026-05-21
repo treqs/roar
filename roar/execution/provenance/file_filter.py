@@ -69,6 +69,7 @@ class FileFilterService:
         "/sbin/",
         "/proc/",
         "/dev/",
+        "/run/",
         "/usr/",  # All of /usr/ (share, local, lib, bin, etc.)
         "/opt/",
         "/lib/",
