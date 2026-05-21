@@ -30,9 +30,19 @@ class ExperimentTrackerAnalyzer(Analyzer):
         ".neptune/*",
     ]
 
+    @staticmethod
+    def _all_written_files(context: dict) -> list:
+        """Return unfiltered written files so tracker detection works even
+        when tracker directories are in ignore_paths."""
+        tracer_data = context.get("tracer_data", {})
+        unfiltered = tracer_data.get("written_files", [])
+        if unfiltered:
+            return unfiltered
+        return context.get("written_files", [])
+
     def relevant(self, context: dict) -> bool:
         """Check if any tracker directories were written to."""
-        written = context.get("written_files", [])
+        written = self._all_written_files(context)
         for path in written:
             for _tracker, patterns in self.TRACKER_PATTERNS.items():
                 if any(p in path for p in patterns):
@@ -40,7 +50,7 @@ class ExperimentTrackerAnalyzer(Analyzer):
         return False
 
     def analyze(self, context: dict) -> dict | None:
-        written = context.get("written_files", [])
+        written = self._all_written_files(context)
         env = context.get("env", {})
 
         results: dict[str, Any] = {
