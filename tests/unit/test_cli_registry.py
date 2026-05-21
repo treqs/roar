@@ -36,9 +36,10 @@ def test_help_groups_are_built_from_command_specs() -> None:
     assert help_groups["Setup and Admin"] == (
         "config",
         "env",
-        "tracer",
-        "telemetry",
+        "filter",
         "proxy",
+        "telemetry",
+        "tracer",
     )
     assert help_groups["GLaaS / TReqs Account"] == (
         "auth",
