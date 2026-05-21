@@ -88,6 +88,7 @@ class FilterCounts(ImmutableModel):
     roar_internal: Annotated[int, Field(ge=0)] = 0
     git_metadata: Annotated[int, Field(ge=0)] = 0
     write_noise: Annotated[int, Field(ge=0)] = 0
+    ignore_paths: Annotated[int, Field(ge=0)] = 0
 
     @property
     def total(self) -> int:
@@ -99,6 +100,7 @@ class FilterCounts(ImmutableModel):
             + self.roar_internal
             + self.git_metadata
             + self.write_noise
+            + self.ignore_paths
         )
 
 
