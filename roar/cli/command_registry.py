@@ -158,6 +158,13 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "Setup and Admin",
     ),
     CommandSpec(
+        "filter",
+        "roar.cli.commands.filter",
+        "filter_group",
+        "Manage project-level path filters (.roarconfig)",
+        "Setup and Admin",
+    ),
+    CommandSpec(
         "env",
         "roar.cli.commands.env",
         "env",

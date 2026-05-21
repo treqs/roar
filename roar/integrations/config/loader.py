@@ -54,6 +54,16 @@ def _infer_search_stop(start: Path) -> Path:
     return start.resolve()
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> None:
+    """Merge *override* into *base* in-place. Nested dicts are merged recursively;
+    all other values (including lists) are replaced by the override."""
+    for key, value in override.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+
+
 def find_config_file(start_dir: str | None = None, stop_dir: str | None = None) -> Path | None:
     """
     Find .roar/config.toml by walking up from start_dir (or cwd).
@@ -132,16 +142,29 @@ class TomlConfigSource(PydanticBaseSettingsSource):
         self._data: dict[str, Any] | None = None
 
     def _load_toml(self) -> dict[str, Any]:
-        """Load and cache TOML data."""
+        """Load and cache TOML data.
+
+        Merges two layers:
+        1. ``.roarconfig`` at repo root (project-level, committed)
+        2. ``.roar/config.toml`` (local, gitignored) — overrides .roarconfig
+
+        List-valued keys in .roarconfig (like ``filters.ignore_paths``) are
+        used as the base; .roar/config.toml can override them entirely.
+        """
         if self._data is not None:
             return self._data
 
         self._data = {}
 
-        # Find config file if not explicitly provided
+        # Find the primary config file (.roar/config.toml or pyproject.toml)
         path = self._config_path
         if path is None:
             path = find_config_file(self._start_dir)
+
+        # Load .roarconfig as the base layer (project-level, committed).
+        roarconfig_data = self._load_roarconfig(path)
+        if roarconfig_data:
+            self._data = roarconfig_data
 
         if path is None:
             return self._data
@@ -154,7 +177,8 @@ class TomlConfigSource(PydanticBaseSettingsSource):
             if path.name == "pyproject.toml":
                 data = data.get("tool", {}).get("roar", {})
 
-            self._data = data
+            # Merge: local config overrides .roarconfig.
+            _deep_merge(self._data, data)
             self._data["_config_file"] = str(path)
 
         except tomllib.TOMLDecodeError as e:
@@ -165,6 +189,29 @@ class TomlConfigSource(PydanticBaseSettingsSource):
             self._data["_config_error"] = f"Failed to read config file: {e}"
 
         return self._data
+
+    @staticmethod
+    def _load_roarconfig(local_config_path: Path | None) -> dict[str, Any]:
+        """Load .roarconfig from the repo root if it exists."""
+        # Infer repo root from the local config path or cwd.
+        if local_config_path and local_config_path.name == "config.toml":
+            # .roar/config.toml → repo root is .roar/..
+            repo_root = local_config_path.parent.parent
+        elif local_config_path:
+            repo_root = local_config_path.parent
+        else:
+            repo_root = Path.cwd()
+
+        roarconfig = repo_root / ".roarconfig"
+        if not roarconfig.exists():
+            return {}
+
+        try:
+            with open(roarconfig, "rb") as f:
+                return tomllib.load(f)
+        except (tomllib.TOMLDecodeError, OSError) as e:
+            get_logger().debug("Failed to load .roarconfig at %s: %s", roarconfig, e)
+            return {}
 
     def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:
         """Get field value from TOML data."""
