@@ -177,11 +177,18 @@ class ShowRenderer:
             lines.append(f"Outputs ({len(outputs)}):")
             lines.extend(self._render_job_artifact_rows(outputs))
 
+        # ---- experiment tracking links ----------------------------------------
+        meta = job.get("metadata")
+        if isinstance(meta, dict):
+            exp_lines = self._render_experiment_tracking(meta)
+            if exp_lines:
+                lines.append("")
+                lines.extend(exp_lines)
+
         # ---- environment summary --------------------------------------------
         # By default we collapse the full metadata block into a 2-line
         # summary (host facts + package counts). `--all` restores the
         # exhaustive listing for repro debugging.
-        meta = job.get("metadata")
         if isinstance(meta, dict):
             if self.show_all:
                 lines.extend(self._render_full_metadata(meta))
@@ -227,6 +234,37 @@ class ShowRenderer:
                 else:
                     out.append(f"    ({kind})")
         return out
+
+    @staticmethod
+    def _render_experiment_tracking(meta: dict) -> list[str]:
+        """Render experiment tracker links from analysis metadata."""
+        analysis = meta.get("analysis", {})
+        if not isinstance(analysis, dict):
+            return []
+        exp = analysis.get("experiment_tracking")
+        if not isinstance(exp, dict):
+            return []
+
+        runs = exp.get("runs", [])
+        if not runs:
+            return []
+
+        lines: list[str] = ["Experiment:"]
+        for run in runs:
+            tracker = run.get("tracker", "unknown")
+            url = run.get("url")
+            project = run.get("project")
+            run_id = run.get("run_id")
+
+            if url:
+                lines.append(f"  {tracker}: {url}")
+            elif project and run_id:
+                lines.append(f"  {tracker}: {project} / {run_id}")
+            elif project:
+                lines.append(f"  {tracker}: project={project}")
+            else:
+                lines.append(f"  {tracker}: detected (no run URL available)")
+        return lines
 
     @staticmethod
     def _render_environment_summary(meta: dict) -> list[str]:
