@@ -20,3 +20,4 @@ class GetRequest:
     dry_run: bool = False
     force: bool = False
     tag: bool = False
+    step_name: str | None = None

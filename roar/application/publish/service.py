@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -649,6 +650,11 @@ def put_artifacts(request: PutRequest) -> PutResponse:
                 git_commit=git_commit,
                 git_tag=expected_tag,
             )
+
+            # Apply step name label if provided.
+            if request.step_name and result.success and result.job_id:
+                with contextlib.suppress(Exception):
+                    db_ctx.job_recording._record_step_name_label(result.job_id, request.step_name)
 
     if request.dry_run:
         created_git_tag = None

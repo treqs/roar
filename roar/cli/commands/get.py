@@ -55,6 +55,7 @@ from ..decorators import require_init
     is_flag=True,
     help="Show what would be downloaded without doing it.",
 )
+@click.option("-n", "--name", "step_name", help="Set the name label for this step.")
 @click.pass_obj
 @require_init
 def get(
@@ -67,6 +68,7 @@ def get(
     tag: bool,
     force: bool,
     dry_run: bool,
+    step_name: str | None,
 ) -> None:
     """Download artifacts from cloud storage and record in the local DAG.
 
@@ -128,6 +130,7 @@ def get(
                 dry_run=dry_run,
                 force=force,
                 tag=tag,
+                step_name=step_name,
             )
         )
     except FileExistsError as e:

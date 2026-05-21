@@ -75,6 +75,7 @@ def _resolve_glaas_web_url() -> str:
     is_flag=True,
     help="Skip confirmation prompt for anonymous public publishing.",
 )
+@click.option("-n", "--name", "step_name", help="Set the name label for this step.")
 @click.pass_obj
 @require_init
 def put(
@@ -86,6 +87,7 @@ def put(
     public: bool | None,
     anonymous: bool,
     yes: bool,
+    step_name: str | None,
 ) -> None:
     """Publish artifacts to cloud storage and register with GLaaS.
 
@@ -175,6 +177,7 @@ def put(
                 public=publish_intent.public,
                 anonymous=publish_intent.anonymous,
                 no_tag=no_tag,
+                step_name=step_name,
             )
         )
     except (FileNotFoundError, ValueError, ImportError) as e:
