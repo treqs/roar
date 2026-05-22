@@ -59,12 +59,40 @@ def get_artifacts(request: GetRequest) -> GetResponse:
         except Exception:
             pass
 
+    git_branch = None
+    git_repo_url = None
+    if not request.dry_run:
+        try:
+            import subprocess
+
+            git_branch = (
+                subprocess.check_output(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=str(repo_root),
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                ).strip()
+                or None
+            )
+            git_repo_url = (
+                subprocess.check_output(
+                    ["git", "remote", "get-url", "origin"],
+                    cwd=str(repo_root),
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                ).strip()
+                or None
+            )
+        except Exception:
+            pass
+
     with create_database_context(request.roar_dir) as db_ctx:
         service = GetService(
             backend=backend,
             source=parsed_source,
             repo_root=repo_root,
         )
+        t0 = time.time()
         transfer_result = service.get(
             destination=request.destination,
             expected_hash=request.expected_hash,
@@ -72,6 +100,7 @@ def get_artifacts(request: GetRequest) -> GetResponse:
             force=request.force,
             is_prefix=is_prefix,
         )
+        download_duration = time.time() - t0
 
         result = _materialize_get_result(
             db_ctx=db_ctx,
@@ -81,6 +110,7 @@ def get_artifacts(request: GetRequest) -> GetResponse:
             git_commit=git_commit,
             git_branch=git_branch,
             git_repo=git_repo_url,
+            duration_seconds=download_duration,
         )
 
     git_tag_name = None
@@ -120,6 +150,7 @@ def _materialize_get_result(
     git_commit: str | None,
     git_branch: str | None = None,
     git_repo: str | None = None,
+    duration_seconds: float = 0.0,
 ) -> GetResponse:
     if transfer_result.dry_run or not transfer_result.success:
         return GetResponse(
@@ -159,6 +190,7 @@ def _materialize_get_result(
         git_commit=git_commit,
         git_branch=git_branch,
         git_repo=git_repo,
+        duration_seconds=duration_seconds,
         step_name=request.step_name,
     )
     return GetResponse(
