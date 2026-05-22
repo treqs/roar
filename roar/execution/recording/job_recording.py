@@ -218,6 +218,7 @@ class LocalJobRecorder:
         exit_code: int | None = None,
         session_id: int | None = None,
         job_uid: str | None = None,
+        step_name: str | None = None,
     ) -> tuple[int, str]:
         """Create a job and link precomputed input/output artifacts."""
         resolved_session_id = session_id
@@ -257,6 +258,9 @@ class LocalJobRecorder:
             job_id=job_id,
             job=cast(Any, db_ctx.jobs).get(job_id),
         )
+
+        if step_name:
+            db_ctx.job_recording._record_step_name_label(job_id, step_name)
 
         return job_id, recorded_job_uid
 

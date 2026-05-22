@@ -36,3 +36,4 @@ class PutRequest:
     public: bool = False
     anonymous: bool = False
     no_tag: bool = False
+    step_name: str | None = None

@@ -127,6 +127,7 @@ def _materialize_get_result(
         job_type="get",
         output_artifacts=output_artifacts,
         exit_code=0,
+        step_name=request.step_name,
     )
     return GetResponse(
         success=True,
