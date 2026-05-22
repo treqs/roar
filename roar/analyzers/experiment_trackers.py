@@ -135,7 +135,7 @@ class ExperimentTrackerAnalyzer(Analyzer):
                         info["run_id"] = metadata.get("run_id")
                         info["project"] = metadata.get("project")
                         info["entity"] = metadata.get("entity")
-                        if all(k in info for k in ["entity", "project", "run_id"]):
+                        if info.get("entity") and info.get("project") and info.get("run_id"):
                             info["url"] = (
                                 f"https://wandb.ai/{info['entity']}/{info['project']}/runs/{info['run_id']}"
                             )
