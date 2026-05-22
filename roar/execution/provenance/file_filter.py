@@ -26,6 +26,7 @@ _FILTER_CATEGORIES: tuple[str, ...] = (
     "torch_cache",
     "tmp_files",
     "write_noise",
+    "ignore_paths",
 )
 
 
@@ -162,12 +163,22 @@ class FileFilterService:
         ignore_package_reads = filters_config.get("ignore_package_reads", True)
         ignore_torch_cache = filters_config.get("ignore_torch_cache", True)
         ignore_tmp_files = filters_config.get("ignore_tmp_files", True)
+        ignore_paths_raw: list[str] = filters_config.get("ignore_paths", [])
+        # Build separate lists for absolute prefixes and repo-relative prefixes.
+        ignore_abs: list[str] = []
+        ignore_rel: list[str] = []
+        for pattern in ignore_paths_raw:
+            if pattern.startswith("/"):
+                ignore_abs.append(pattern)
+            else:
+                ignore_rel.append(pattern)
         self.logger.debug(
-            "Filter config: system_reads=%s, package_reads=%s, torch_cache=%s, tmp_files=%s",
+            "Filter config: system_reads=%s, package_reads=%s, torch_cache=%s, tmp_files=%s, ignore_paths=%d",
             ignore_system_reads,
             ignore_package_reads,
             ignore_torch_cache,
             ignore_tmp_files,
+            len(ignore_paths_raw),
         )
 
         # Get cleanup settings
@@ -216,6 +227,8 @@ class FileFilterService:
                 return "package_reads"
             if ignore_tmp_files and self._is_tmp_path(path):
                 return "tmp_files"
+            if self._matches_ignore_paths(path, ignore_abs, ignore_rel):
+                return "ignore_paths"
             return None
 
         def filter_reads(paths: list[str]) -> list[str]:
@@ -262,6 +275,9 @@ class FileFilterService:
                     continue
                 if f not in read_files_set and delete_tmp_writes:
                     tmp_files_to_delete.append(f)
+            if self._matches_ignore_paths(f, ignore_abs, ignore_rel):
+                _record_drop("ignore_paths", f)
+                continue
             filtered_written_files.append(f)
 
         # Delete /tmp files if strict mode enabled
@@ -353,6 +369,24 @@ class FileFilterService:
             return True
         # Python bytecode cache files
         return bool(path.endswith(".pyc"))
+
+    @staticmethod
+    def _matches_ignore_paths(
+        path: str,
+        abs_prefixes: list[str],
+        rel_prefixes: list[str],
+    ) -> bool:
+        """Check if path matches any user-configured ignore_paths pattern.
+
+        Absolute patterns (starting with ``/``) are matched against the full
+        path.  Relative patterns are matched as substrings — if the pattern
+        appears anywhere in the path, it matches.  A trailing ``/`` on the
+        pattern means "directory prefix"; otherwise the pattern is matched
+        as a path component substring.
+        """
+        if any(path.startswith(prefix) for prefix in abs_prefixes):
+            return True
+        return any(pattern in path for pattern in rel_prefixes)
 
     def _cleanup_tmp_files(self, files: list[str]) -> int:
         """
