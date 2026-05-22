@@ -19,9 +19,11 @@ use clap::Parser;
 use forward::ForwardState;
 use s3::{LogMeta, S3OpType, S3Operation};
 
-// Buffer small and medium GET responses, but stream large objects to avoid
-// turning full downloads into extra proxy-side serialization work.
-const DEFAULT_RESPONSE_BUFFER_BYTES: usize = 1024 * 1024;
+// Buffer GET responses up to this size instead of streaming them.
+// Buffering avoids the coordination overhead of the async streaming path,
+// which shows measurable latency gains for objects up to ~16 MB.
+// Override with ROAR_PROXY_BUFFER_RESPONSE_BYTES.
+const DEFAULT_RESPONSE_BUFFER_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Parser)]
 #[command(
