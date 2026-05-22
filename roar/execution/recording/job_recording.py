@@ -218,6 +218,9 @@ class LocalJobRecorder:
         exit_code: int | None = None,
         session_id: int | None = None,
         job_uid: str | None = None,
+        git_commit: str | None = None,
+        git_branch: str | None = None,
+        git_repo: str | None = None,
         step_name: str | None = None,
     ) -> tuple[int, str]:
         """Create a job and link precomputed input/output artifacts."""
@@ -232,12 +235,16 @@ class LocalJobRecorder:
             job_uid=job_uid,
             session_id=resolved_session_id,
             step_number=step_number,
+            step_name=step_name,
             metadata=metadata,
             execution_backend=execution_backend,
             execution_role=execution_role,
             job_type=job_type,
             exit_code=exit_code,
             duration_seconds=duration_seconds,
+            git_commit=git_commit,
+            git_branch=git_branch,
+            git_repo=git_repo,
         )
 
         self._register_artifacts(

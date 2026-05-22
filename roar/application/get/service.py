@@ -27,12 +27,37 @@ def get_artifacts(request: GetRequest) -> GetResponse:
     is_prefix = request.source.rstrip("/") != request.source or parsed_source.is_prefix
 
     git_commit = None
+    git_branch = None
+    git_repo_url = None
     if not request.dry_run:
         try:
             git_commit = resolve_git_state(repo_root).commit
             logger.debug("Git commit: %s", git_commit)
         except Exception as exc:
             logger.debug("Git operation failed (non-fatal for get): %s", exc)
+        try:
+            import subprocess
+
+            git_branch = (
+                subprocess.check_output(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=str(repo_root),
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                ).strip()
+                or None
+            )
+            git_repo_url = (
+                subprocess.check_output(
+                    ["git", "remote", "get-url", "origin"],
+                    cwd=str(repo_root),
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                ).strip()
+                or None
+            )
+        except Exception:
+            pass
 
     with create_database_context(request.roar_dir) as db_ctx:
         service = GetService(
@@ -54,6 +79,8 @@ def get_artifacts(request: GetRequest) -> GetResponse:
             parsed_source=parsed_source,
             transfer_result=transfer_result,
             git_commit=git_commit,
+            git_branch=git_branch,
+            git_repo=git_repo_url,
         )
 
     git_tag_name = None
@@ -91,6 +118,8 @@ def _materialize_get_result(
     parsed_source,
     transfer_result: GetTransferResult,
     git_commit: str | None,
+    git_branch: str | None = None,
+    git_repo: str | None = None,
 ) -> GetResponse:
     if transfer_result.dry_run or not transfer_result.success:
         return GetResponse(
@@ -127,6 +156,9 @@ def _materialize_get_result(
         job_type="get",
         output_artifacts=output_artifacts,
         exit_code=0,
+        git_commit=git_commit,
+        git_branch=git_branch,
+        git_repo=git_repo,
         step_name=request.step_name,
     )
     return GetResponse(
