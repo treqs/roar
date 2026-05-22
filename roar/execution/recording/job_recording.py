@@ -626,7 +626,9 @@ class ExecutionJobRecorder:
         is_build: bool,
         s3_entries: list[S3LogEntry] | None = None,
         run_job_uid: str | None = None,
-    ) -> tuple[int, str, list[dict[str, Any]], list[dict[str, Any]], list[int], list[int]]:
+    ) -> tuple[
+        int, str, list[dict[str, Any]], list[dict[str, Any]], list[int], list[int], dict[str, Any]
+    ]:
         """Record job and return tuple expected by RunCoordinator."""
         from ...db.context import create_database_context
 
@@ -642,17 +644,24 @@ class ExecutionJobRecorder:
         git_branch = git_info.get("branch")
         git_repo = git_info.get("remote_url")
 
+        has_files = bool(read_files or written_files)
         dataset_hint_paths = self._extract_dataset_hint_paths(ctx.command, ctx.repo_root)
-        telemetry_json = self._build_telemetry_json(ctx.repo_root, start_time)
+        telemetry_json = (
+            self._build_telemetry_json(ctx.repo_root, start_time) if has_files else None
+        )
 
         stale_upstream: list[int] = []
         stale_downstream: list[int] = []
         run_composite_config = (
-            self._run_composite_config
-            or RunCompositeMaterializationConfig.from_repo_root(ctx.repo_root)
+            (
+                self._run_composite_config
+                or RunCompositeMaterializationConfig.from_repo_root(ctx.repo_root)
+            )
+            if has_files
+            else RunCompositeMaterializationConfig()
         )
         with create_database_context(ctx.roar_dir) as db_ctx:
-            session_window_paths = self._collect_session_window_paths(db_ctx)
+            session_window_paths = self._collect_session_window_paths(db_ctx) if has_files else []
             metadata_json = self._build_metadata_json(
                 ctx,
                 prov,
@@ -712,7 +721,19 @@ class ExecutionJobRecorder:
                     db_ctx, session["id"], job_id
                 )
 
-        return job_id, job_uid, read_file_info, written_file_info, stale_upstream, stale_downstream
+            # Collect DAG stats and parent job lookups in the same DB context
+            # to avoid opening a 2nd context in the coordinator.
+            dag_stats = self._collect_dag_stats(db_ctx, session, job_uid, read_file_info)
+
+        return (
+            job_id,
+            job_uid,
+            read_file_info,
+            written_file_info,
+            stale_upstream,
+            stale_downstream,
+            dag_stats,
+        )
 
     def _build_metadata_json(
         self,
@@ -743,13 +764,14 @@ class ExecutionJobRecorder:
             inference_paths.extend(session_window_paths)
         if dataset_hint_paths:
             inference_paths.extend(dataset_hint_paths)
-        dataset_identifiers = self._dataset_identifier_inferer.infer(
-            inference_paths, repo_root=ctx.repo_root
-        )
-        if dataset_identifiers:
-            metadata["dataset_identifiers"] = dataset_identifiers
+        if inference_paths:
+            dataset_identifiers = self._dataset_identifier_inferer.infer(
+                inference_paths, repo_root=ctx.repo_root
+            )
+            if dataset_identifiers:
+                metadata["dataset_identifiers"] = dataset_identifiers
 
-        # Include persistent env vars in metadata for reproduction.
+        # Include persistent env vars from [env] config section for reproduction.
         try:
             from ...integrations.config import load_config
 
@@ -856,6 +878,65 @@ class ExecutionJobRecorder:
                         return list(dict.fromkeys(collected))
 
         return list(dict.fromkeys(collected))
+
+    @staticmethod
+    def _collect_dag_stats(
+        db_ctx: Any,
+        session: dict | None,
+        job_uid: str | None,
+        read_file_info: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Collect DAG stats and parent job lookups within the existing DB context."""
+        stats: dict[str, Any] = {
+            "dag_jobs": 0,
+            "dag_artifacts": 0,
+            "dag_depth": 0,
+            "step_number": None,
+        }
+        try:
+            if session:
+                from ...presenters.dag_data_builder import DagDataBuilder
+
+                builder = DagDataBuilder(db_ctx, int(session["id"]))
+                dag_data = builder.build(expanded=False)
+                stats["dag_jobs"] = len(dag_data.get("nodes", []))
+                stats["dag_artifacts"] = len(dag_data.get("artifacts", []))
+
+                nodes = dag_data.get("nodes", [])
+                if nodes:
+                    step_deps = {n["step_number"]: n.get("dependencies", []) for n in nodes}
+                    all_steps = set(step_deps)
+                    memo: dict[int, int] = {}
+
+                    def _depth(s: int) -> int:
+                        if s in memo:
+                            return memo[s]
+                        children = [x for x in all_steps if s in step_deps.get(x, [])]
+                        d = 1 + max((_depth(ch) for ch in children), default=0)
+                        memo[s] = d
+                        return d
+
+                    roots = [s for s in all_steps if not step_deps.get(s)]
+                    stats["dag_depth"] = max((_depth(r) for r in roots), default=1) if roots else 1
+
+            for inp in read_file_info:
+                aid = inp.get("artifact_id")
+                if aid:
+                    jobs_info = db_ctx.artifacts.get_jobs(aid)
+                    producers = jobs_info.get("produced_by", [])
+                    if producers:
+                        inp["parent_job_uid"] = producers[0].get("job_uid")
+
+            if job_uid:
+                job_record = db_ctx.jobs.get_by_uid(job_uid)
+                if job_record:
+                    recorded_step = job_record.get("step_number")
+                    if isinstance(recorded_step, int):
+                        stats["step_number"] = recorded_step
+        except Exception:
+            pass
+
+        return stats
 
     @staticmethod
     def _compute_cwd_relative(repo_root: str) -> str | None:

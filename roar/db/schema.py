@@ -248,6 +248,9 @@ CREATE INDEX IF NOT EXISTS idx_hash_cache_updated ON hash_cache(cached_at);
 """
 
 
+_SCHEMA_VERSION = 3  # Bump when adding new migrations below.
+
+
 def run_migrations(conn) -> None:
     """
     Run any needed schema migrations.
@@ -255,6 +258,16 @@ def run_migrations(conn) -> None:
     Args:
         conn: SQLite connection
     """
+    # Fast path: skip all migration checks if the schema is already current.
+    # PRAGMA user_version is a free integer stored in the SQLite header —
+    # reading it costs one page read, vs the ~67 DDL statements below.
+    try:
+        current_version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if current_version >= _SCHEMA_VERSION:
+            return
+    except Exception:
+        pass  # Fall through to full migration check on any error.
+
     # Check columns in jobs table
     cursor = conn.execute("PRAGMA table_info(jobs)")
     columns = {row["name"] for row in cursor.fetchall()}
@@ -351,3 +364,6 @@ def run_migrations(conn) -> None:
         label_columns = {row["name"] for row in cursor.fetchall()}
         if "write_origin" not in label_columns:
             conn.execute("ALTER TABLE labels ADD COLUMN write_origin TEXT")
+
+    # Stamp the schema version so subsequent opens skip the full migration check.
+    conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")

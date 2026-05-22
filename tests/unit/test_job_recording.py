@@ -74,6 +74,7 @@ def test_record_registers_proxy_outputs_before_get_outputs(tmp_path: Path) -> No
             written_file_info,
             _stale_upstream,
             _stale_downstream,
+            _dag_stats,
         ) = recorder.record(
             ctx=ctx,
             prov=prov,

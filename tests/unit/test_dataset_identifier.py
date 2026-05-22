@@ -118,12 +118,14 @@ def test_record_materializes_local_composite_outputs(tmp_path: Path):
     }
     tracer_result = SimpleNamespace(duration=0.2, exit_code=0)
 
-    job_id, _job_uid, _inputs, outputs, _stale_upstream, _stale_downstream = recorder.record(
-        ctx=ctx,
-        prov=prov,
-        tracer_result=tracer_result,
-        start_time=1700000000.0,
-        is_build=False,
+    job_id, _job_uid, _inputs, outputs, _stale_upstream, _stale_downstream, _dag_stats = (
+        recorder.record(
+            ctx=ctx,
+            prov=prov,
+            tracer_result=tracer_result,
+            start_time=1700000000.0,
+            is_build=False,
+        )
     )
 
     outputs_by_path = {item["path"]: item for item in outputs}
@@ -193,12 +195,14 @@ def test_record_materializes_composite_even_when_run_hashes_exclude_blake3(tmp_p
     }
     tracer_result = SimpleNamespace(duration=0.2, exit_code=0)
 
-    _job_id, _job_uid, _inputs, outputs, _stale_upstream, _stale_downstream = recorder.record(
-        ctx=ctx,
-        prov=prov,
-        tracer_result=tracer_result,
-        start_time=1700000000.0,
-        is_build=False,
+    _job_id, _job_uid, _inputs, outputs, _stale_upstream, _stale_downstream, _dag_stats = (
+        recorder.record(
+            ctx=ctx,
+            prov=prov,
+            tracer_result=tracer_result,
+            start_time=1700000000.0,
+            is_build=False,
+        )
     )
 
     outputs_by_path = {item["path"]: item for item in outputs}
@@ -242,12 +246,14 @@ enabled = false
     }
     tracer_result = SimpleNamespace(duration=0.2, exit_code=0)
 
-    _job_id, _job_uid, _inputs, outputs, _stale_upstream, _stale_downstream = recorder.record(
-        ctx=ctx,
-        prov=prov,
-        tracer_result=tracer_result,
-        start_time=1700000000.0,
-        is_build=False,
+    _job_id, _job_uid, _inputs, outputs, _stale_upstream, _stale_downstream, _dag_stats = (
+        recorder.record(
+            ctx=ctx,
+            prov=prov,
+            tracer_result=tracer_result,
+            start_time=1700000000.0,
+            is_build=False,
+        )
     )
 
     outputs_by_path = {item["path"]: item for item in outputs}
