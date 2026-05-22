@@ -55,7 +55,13 @@ from ..decorators import require_init
     is_flag=True,
     help="Show what would be downloaded without doing it.",
 )
-@click.option("-n", "--name", "step_name", help="Set the name label for this step.")
+@click.option(
+    "-n",
+    "--name",
+    "step_name",
+    default=None,
+    help="Set the name label for this step.",
+)
 @click.pass_obj
 @require_init
 def get(
