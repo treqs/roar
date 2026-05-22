@@ -30,9 +30,19 @@ class ExperimentTrackerAnalyzer(Analyzer):
         ".neptune/*",
     ]
 
+    @staticmethod
+    def _all_written_files(context: dict) -> list:
+        """Return unfiltered written files so tracker detection works even
+        when tracker directories are in ignore_paths."""
+        tracer_data = context.get("tracer_data", {})
+        unfiltered = tracer_data.get("written_files", [])
+        if unfiltered:
+            return unfiltered
+        return context.get("written_files", [])
+
     def relevant(self, context: dict) -> bool:
         """Check if any tracker directories were written to."""
-        written = context.get("written_files", [])
+        written = self._all_written_files(context)
         for path in written:
             for _tracker, patterns in self.TRACKER_PATTERNS.items():
                 if any(p in path for p in patterns):
@@ -40,7 +50,7 @@ class ExperimentTrackerAnalyzer(Analyzer):
         return False
 
     def analyze(self, context: dict) -> dict | None:
-        written = context.get("written_files", [])
+        written = self._all_written_files(context)
         env = context.get("env", {})
 
         results: dict[str, Any] = {
@@ -126,7 +136,12 @@ class ExperimentTrackerAnalyzer(Analyzer):
                     run_dir = None
 
             if run_dir and run_dir.exists():
-                # Try to read run metadata
+                # Extract run_id from directory name: run-YYYYMMDD_HHMMSS-<run_id>
+                dir_match = re.match(r"run-\d{8}_\d{6}-(.+)$", run_dir.name)
+                if dir_match:
+                    info["run_id"] = dir_match.group(1)
+
+                # Try to read run metadata for additional fields
                 run_metadata = run_dir / "files" / "wandb-metadata.json"
                 if run_metadata.exists():
                     try:
@@ -142,27 +157,44 @@ class ExperimentTrackerAnalyzer(Analyzer):
                     except (OSError, json.JSONDecodeError):
                         pass
 
-                # Also check wandb-summary.json for run info
+                # Parse entity/project/run_id from debug.log.
+                # wandb writes "finishing run <entity>/<project>/<run_id>"
+                # to this file on every online run.
+                debug_log = run_dir / "logs" / "debug.log"
+                if debug_log.exists():
+                    try:
+                        text = debug_log.read_text(errors="replace")
+                        finish_match = re.search(r"finishing run (\S+)/(\S+)/(\S+)", text)
+                        if finish_match:
+                            info["entity"] = finish_match.group(1)
+                            info["project"] = finish_match.group(2)
+                            info["run_id"] = finish_match.group(3)
+                    except OSError:
+                        pass
+
+                # Check wandb-summary.json for runtime
                 summary_file = run_dir / "files" / "wandb-summary.json"
-                if summary_file.exists() and "run_id" not in info:
+                if summary_file.exists():
                     try:
                         with open(summary_file) as f:
                             summary = json.load(f)
-                        # Summary might have _wandb key with run info
                         wandb_info = summary.get("_wandb", {})
                         if "runtime" in wandb_info:
                             info["runtime_seconds"] = wandb_info["runtime"]
                     except (OSError, json.JSONDecodeError):
                         pass
 
-        # Fall back to env vars
-        if "url" not in info:
-            entity = env.get("WANDB_ENTITY", "")
-            project = env.get("WANDB_PROJECT", "")
-            if entity and project:
-                info["entity"] = entity
-                info["project"] = project
-                # Can't get run_id from env alone
+        # Fall back to env vars if entity/project still missing
+        if not info.get("entity"):
+            info["entity"] = env.get("WANDB_ENTITY", "")
+        if not info.get("project"):
+            info["project"] = env.get("WANDB_PROJECT", "")
+
+        # Build URL if we have all three components
+        if info.get("entity") and info.get("project") and info.get("run_id"):
+            info["url"] = (
+                f"https://wandb.ai/{info['entity']}/{info['project']}/runs/{info['run_id']}"
+            )
 
         return info if len(info) > 1 else None
 
