@@ -411,3 +411,40 @@ def test_iter_execution_backends_loads_entrypoint_callable_once(monkeypatch) -> 
     assert loads == ["load"]
     assert backends_first == (fake_backend,)
     assert backends_second == (fake_backend,)
+
+
+def test_builtin_backend_discovery_skips_unimportable_plugin(monkeypatch) -> None:
+    """A builtin backend whose compiled deps can't import — e.g. a wrong-ABI
+    wheel (pydantic_core, cryptography, ...) under a cross-Python ``roar run`` —
+    is skipped rather than crashing discovery for the other backends or the
+    traced workload.
+    """
+    import roar.execution.framework.registry as module
+
+    monkeypatch.setattr(module, "_registered_execution_backends", [])
+    monkeypatch.setattr(module, "_execution_backends_discovered", False)
+    monkeypatch.setattr(module, "_execution_backends_discovering", False)
+    monkeypatch.setattr(module, "_skipped_builtin_backend_imports", {})
+    monkeypatch.setattr(
+        module,
+        "_BUILTIN_EXECUTION_BACKEND_MODULES",
+        ("roar.backends.ray.plugin", "roar.backends.local.plugin"),
+    )
+    monkeypatch.setattr(module, "_iter_execution_backend_entrypoints", lambda: ())
+
+    real_import = module.importlib.import_module
+
+    def fake_import(name: str):
+        if name == "roar.backends.ray.plugin":
+            raise ImportError("_rust.abi3.so: undefined symbol: PyType_GetName")
+        return real_import(name)
+
+    monkeypatch.setattr(module.importlib, "import_module", fake_import)
+
+    module._ensure_execution_backends_discovered()  # must not raise
+
+    assert module._execution_backends_discovered is True
+    assert "roar.backends.ray.plugin" in module._skipped_builtin_backend_imports
+    registered = {backend.name for backend in module._registered_execution_backends}
+    assert "ray" not in registered  # unimportable plugin skipped
+    assert "local" in registered  # importable plugin still registered

@@ -17,6 +17,10 @@ _BUILTIN_EXECUTION_BACKEND_MODULES = (
     "roar.backends.osmo.plugin",
     "roar.backends.local.plugin",
 )
+# Builtin backend plugin modules skipped during discovery because their
+# compiled deps failed to import (e.g. a wrong-ABI wheel under a cross-Python
+# `roar run`). Maps module name -> import error string. Diagnostics only.
+_skipped_builtin_backend_imports: dict[str, str] = {}
 # Well-known job-environment markers for built-in backends. Each marker
 # is also declared on its backend's ``ExecutionPolicyAdapter`` (single
 # source of truth at the policy level — see consistency tests in
@@ -290,7 +294,16 @@ def _ensure_execution_backends_discovered() -> None:
 
 def _load_builtin_execution_backends() -> None:
     for module_name in _BUILTIN_EXECUTION_BACKEND_MODULES:
-        module = importlib.import_module(module_name)
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as exc:
+            # A builtin backend whose compiled deps can't import — e.g. a
+            # wrong-ABI wheel (pydantic_core, cryptography, ...) under a
+            # cross-Python `roar run` — must not take down discovery for the
+            # other backends or crash the traced workload. Skip it; it's simply
+            # absent from the registry. Recorded for diagnostics/tests.
+            _skipped_builtin_backend_imports[module_name] = str(exc)
+            continue
         register = getattr(module, "register", None)
         if not callable(register):
             raise TypeError(
@@ -302,7 +315,15 @@ def _load_builtin_execution_backends() -> None:
 
 def _load_entrypoint_execution_backends() -> None:
     for entry_point in _iter_execution_backend_entrypoints():
-        payload = entry_point.load()
+        try:
+            payload = entry_point.load()
+        except ImportError as exc:
+            # Same resilience as the builtin loader: an entry-point backend
+            # whose compiled deps can't import (wrong-ABI wheel under a
+            # cross-Python `roar run`) is skipped rather than crashing
+            # discovery and the traced workload.
+            _skipped_builtin_backend_imports[entry_point.value] = str(exc)
+            continue
         _register_entrypoint_payload(payload)
 
 
