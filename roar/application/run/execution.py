@@ -203,6 +203,7 @@ def execute_and_report(
         post_duration=result.post_duration,
     )
     report.next_steps_hint(result)
+    report.tmp_filtered_hint(result)
 
     # Warn now if the run left the tree dirty so the *next* `roar run`
     # doesn't surprise the user with a refusal they could have fixed in
