@@ -120,6 +120,38 @@ def test_private_publish_without_binding_uses_current_user_scope_request(
     }
 
 
+def test_public_scope_uses_current_user_public_scope_request(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".roar"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text('[scope]\nmode = "public"\n', encoding="utf-8")
+
+    with (
+        patch("roar.publish_auth.load_auth_state", return_value=_auth_state()),
+        patch("roar.publish_auth._has_ssh_auth_credentials", return_value=False),
+    ):
+        context = load_publish_auth_context(start_dir=tmp_path, allow_public_without_binding=False)
+
+    assert context.scope_request == {
+        "owner_resolution": "current_user",
+        "owner_type": "user",
+        "visibility": "public",
+    }
+
+
+def test_anonymous_scope_omits_scope_request(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".roar"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text('[scope]\nmode = "anonymous"\n', encoding="utf-8")
+
+    with (
+        patch("roar.publish_auth.load_auth_state", return_value=_auth_state()),
+        patch("roar.publish_auth._has_ssh_auth_credentials", return_value=False),
+    ):
+        context = load_publish_auth_context(start_dir=tmp_path, allow_public_without_binding=False)
+
+    assert context.scope_request is None
+
+
 def test_project_bound_private_publish_keeps_project_scope_request(tmp_path: Path) -> None:
     config_dir = tmp_path / ".roar"
     config_dir.mkdir(parents=True)
