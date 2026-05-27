@@ -69,6 +69,14 @@ def drain_queue(
 
 def main() -> int:
     drain_queue()
+    # Piggyback the "newer roar available?" pypi check on this already-detached
+    # background process so the foreground command never makes a network call.
+    try:
+        from ..version_check import refresh_pypi_version_cache
+
+        refresh_pypi_version_cache()
+    except Exception:  # pragma: no cover - opportunistic, must never break
+        pass
     return 0
 
 

@@ -364,6 +364,7 @@ def _print_version_header() -> None:
 def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) -> None:
     """Print git-style `hint:` lines for next steps. Amber-colored to
     match git's hint convention. Suppressed in quiet/non-TTY contexts."""
+    from ...version_check import upgrade_hint_text
     from .._format import hints_should_print, make_hint_printer
 
     if not hints_should_print():
@@ -395,6 +396,12 @@ def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) 
         hint()
         hint("Commit the .gitignore change before your first `roar run`:")
         hint("  git add .gitignore && git commit -m 'ignore .roar/'")
+
+    upgrade = upgrade_hint_text()
+    if upgrade:
+        hint()
+        hint(upgrade)
+
     hint()
     hint("Docs: https://glaas.ai/docs")
     hint("Disable these hints with `roar config set hints.enabled false`.")
