@@ -37,6 +37,7 @@ _prepend_roar_runtime_pythonpath()
 from roar.execution.framework.runtime_imports import RuntimeImportController
 from roar.execution.runtime.inject.support import (
     SuppressTracking,
+    apply_runtime_gate,
     matching_compiled_pydantic_core,
 )
 from roar.execution.runtime.inject.tracker import RuntimeInjectionTracker
@@ -98,32 +99,36 @@ def _repair_runtime_in_process(expected_soabi: str) -> bool:
     return matching_compiled_pydantic_core(sys.path, expected_soabi)
 
 
+def _runtime_gate_degrade_message(running_abi: tuple[int, int]) -> str:
+    return (
+        f"roar: no ABI-matched runtime found for Python {running_abi[0]}.{running_abi[1]}.\n"
+        f"  Backend integrations (Ray, OSMO) are disabled for this run.\n"
+        f"  File I/O is still captured.\n"
+        f"  Fix one of:\n"
+        f"    - Install roar in this Python: pip install roar-cli\n"
+        f"    - Reinstall roar-cli under matching Python:\n"
+        f"        uv tool install --python python{running_abi[0]}.{running_abi[1]} "
+        f"roar-cli --reinstall\n"
+    )
+
+
 if os.environ.get("ROAR_WRAP") == "1":
     _running_abi = (sys.version_info.major, sys.version_info.minor)
     _expected_soabi = f"cpython-{_running_abi[0]}{_running_abi[1]}"
-    if matching_compiled_pydantic_core(sys.path, _expected_soabi):
-        _runtime_import_controller.initialize_selected_backend()
-    else:
-        # Backend interception (Ray, OSMO) is a primary job of the injection, so
-        # try to repair in-process before giving up on it. Disable dispatch
-        # *first* so the repair's own imports can't trigger a wrong-ABI backend
-        # load; re-enable only if the repair makes matched deps reachable.
-        _runtime_import_controller.disable_backend_dispatch()
-        if _repair_runtime_in_process(_expected_soabi):
-            _runtime_import_controller.enable_backend_dispatch()
-            _runtime_import_controller.initialize_selected_backend()
-        else:
-            sys.stderr.write(
-                f"roar: no ABI-matched runtime found for Python "
-                f"{_running_abi[0]}.{_running_abi[1]}.\n"
-                f"  Backend integrations (Ray, OSMO) are disabled for this run.\n"
-                f"  File I/O is still captured.\n"
-                f"  Fix one of:\n"
-                f"    - Install roar in this Python: pip install roar-cli\n"
-                f"    - Reinstall roar-cli under matching Python:\n"
-                f"        uv tool install --python python{_running_abi[0]}.{_running_abi[1]} "
-                f"roar-cli --reinstall\n"
-            )
+
+    def _emit_runtime_gate_degrade() -> None:
+        sys.stderr.write(_runtime_gate_degrade_message(_running_abi))
+
+    # Backend interception (Ray, OSMO) is a primary job of the injection, so on
+    # an ABI mismatch try to repair in-process before giving up on it. The
+    # disable-before-repair / enable-only-on-success ordering lives in
+    # apply_runtime_gate (unit-tested in test_inject_support.py).
+    apply_runtime_gate(
+        _runtime_import_controller,
+        matched=matching_compiled_pydantic_core(sys.path, _expected_soabi),
+        repair=lambda: _repair_runtime_in_process(_expected_soabi),
+        on_degrade=_emit_runtime_gate_degrade,
+    )
 
 
 atexit.register(_runtime_tracker.write_log)
