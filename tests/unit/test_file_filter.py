@@ -184,7 +184,9 @@ def test_filter_files_drops_huggingface_cache_when_library_caches_enabled(monkey
     """
     monkeypatch.setattr(file_filter, "_get_editable_install_dirs", lambda: frozenset())
 
-    hf_dataset_meta = "/home/ubuntu/.cache/huggingface/datasets/openai___gsm8k/main/0.0.0/dataset_info.json"
+    hf_dataset_meta = (
+        "/home/ubuntu/.cache/huggingface/datasets/openai___gsm8k/main/0.0.0/dataset_info.json"
+    )
     hf_hub_blob = "/root/.cache/huggingface/hub/datasets--cais--mmlu/blobs/abcdef"
     hf_xet_chunk = (
         "/home/ubuntu/.cache/huggingface/xet/https___cas_serv-x_y_z/chunk-cache/-8/_AIAAAAD"
