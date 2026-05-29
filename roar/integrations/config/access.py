@@ -48,6 +48,17 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
         "default": True,
         "description": "Ignore torch/triton cache reads (/tmp/torchinductor_*, etc.)",
     },
+    "filters.ignore_library_caches": {
+        "type": bool,
+        "default": True,
+        "description": (
+            "Ignore well-known per-library user-cache subdirs "
+            "(~/.cache/huggingface, ~/.cache/pip, ~/.cache/uv, ~/.cache/poetry, "
+            "~/.cache/wandb, ~/.cache/mlflow, etc.). Project-specific cache "
+            "subdirs not on the curated list (e.g. ~/.cache/<your-project>/) "
+            "stay tracked."
+        ),
+    },
     "filters.ignore_tmp_files": {
         "type": bool,
         "default": True,

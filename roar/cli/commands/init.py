@@ -39,6 +39,10 @@ ignore_system_reads = true
 ignore_package_reads = true
 # Ignore torch/triton cache reads
 ignore_torch_cache = true
+# Ignore well-known per-library user-cache subdirs (~/.cache/huggingface,
+# ~/.cache/pip, ~/.cache/uv, ~/.cache/wandb, etc.). Project-specific
+# subdirs (e.g. ~/.cache/<your-project>/) stay tracked.
+ignore_library_caches = true
 # Ignore /tmp files entirely
 ignore_tmp_files = true
 

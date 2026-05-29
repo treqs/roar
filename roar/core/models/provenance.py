@@ -84,6 +84,7 @@ class FilterCounts(ImmutableModel):
     system_reads: Annotated[int, Field(ge=0)] = 0
     package_reads: Annotated[int, Field(ge=0)] = 0
     torch_cache: Annotated[int, Field(ge=0)] = 0
+    library_caches: Annotated[int, Field(ge=0)] = 0
     tmp_files: Annotated[int, Field(ge=0)] = 0
     roar_internal: Annotated[int, Field(ge=0)] = 0
     git_metadata: Annotated[int, Field(ge=0)] = 0
@@ -96,6 +97,7 @@ class FilterCounts(ImmutableModel):
             self.system_reads
             + self.package_reads
             + self.torch_cache
+            + self.library_caches
             + self.tmp_files
             + self.roar_internal
             + self.git_metadata

@@ -24,6 +24,7 @@ _FILTER_CATEGORIES: tuple[str, ...] = (
     "system_reads",
     "package_reads",
     "torch_cache",
+    "library_caches",
     "tmp_files",
     "write_noise",
     "ignore_paths",
@@ -89,6 +90,36 @@ class FileFilterService:
         "/tmp/torchinductor_",
         "/tmp/torch_",
         "/tmp/triton",
+    )
+
+    # Curated set of per-library user-cache subpaths that are transient,
+    # library-managed state rather than user-meaningful artifacts. Matched as
+    # substrings so any home-dir variant (~/.cache/, /root/.cache/, /Users/<u>/
+    # /Library/Caches/-style equivalents won't match — those are covered by
+    # write-noise rules instead) is caught. A project that legitimately writes
+    # outputs under ~/.cache/<your-project>/ stays tracked unless its
+    # subpath is on this list.
+    LIBRARY_CACHE_PATTERNS = (
+        "/.cache/huggingface/",
+        "/.cache/pip/",
+        "/.cache/uv/",
+        "/.cache/poetry/",
+        "/.cache/pypoetry/",
+        "/.cache/conda/",
+        "/.cache/wandb/",
+        "/.cache/mlflow/",
+        "/.cache/pre-commit/",
+        "/.cache/black/",
+        "/.cache/mypy/",
+        "/.cache/ruff/",
+        "/.cache/pylint/",
+        "/.cache/yarn/",
+        "/.cache/npm/",
+        "/.cache/Cypress/",
+        "/.cache/torch/",  # complements TORCH_CACHE_PATTERNS (which covers /tmp)
+        "/.cache/triton/",
+        "/.cache/jupyter/",
+        "/.cache/matplotlib/",
     )
 
     # Paths to always filter from written_files (not reproducibility-relevant)
@@ -163,6 +194,7 @@ class FileFilterService:
         ignore_system_reads = filters_config.get("ignore_system_reads", True)
         ignore_package_reads = filters_config.get("ignore_package_reads", True)
         ignore_torch_cache = filters_config.get("ignore_torch_cache", True)
+        ignore_library_caches = filters_config.get("ignore_library_caches", True)
         ignore_tmp_files = filters_config.get("ignore_tmp_files", True)
         ignore_paths_raw: list[str] = filters_config.get("ignore_paths", [])
         # Build separate lists for absolute prefixes and repo-relative prefixes.
@@ -174,10 +206,12 @@ class FileFilterService:
             else:
                 ignore_rel.append(pattern)
         self.logger.debug(
-            "Filter config: system_reads=%s, package_reads=%s, torch_cache=%s, tmp_files=%s, ignore_paths=%d",
+            "Filter config: system_reads=%s, package_reads=%s, torch_cache=%s, "
+            "library_caches=%s, tmp_files=%s, ignore_paths=%d",
             ignore_system_reads,
             ignore_package_reads,
             ignore_torch_cache,
+            ignore_library_caches,
             ignore_tmp_files,
             len(ignore_paths_raw),
         )
@@ -222,6 +256,8 @@ class FileFilterService:
                 return "system_reads"
             if ignore_torch_cache and self._is_torch_cache(path):
                 return "torch_cache"
+            if ignore_library_caches and self._is_library_cache(path):
+                return "library_caches"
             if ignore_package_reads and self._is_package_file(
                 path, sys_prefix, sys_base_prefix, editable_dirs=editable_dirs
             ):
@@ -270,6 +306,9 @@ class FileFilterService:
             if ignore_torch_cache and self._is_torch_cache(f):
                 _record_drop("torch_cache", f)
                 continue
+            if ignore_library_caches and self._is_library_cache(f):
+                _record_drop("library_caches", f)
+                continue
             if self._is_tmp_path(f):
                 if ignore_tmp_files:
                     _record_drop("tmp_files", f)
@@ -312,6 +351,17 @@ class FileFilterService:
     def _is_torch_cache(self, path: str) -> bool:
         """Check if path is a torch/triton cache file."""
         return any(path.startswith(pattern) for pattern in self.TORCH_CACHE_PATTERNS)
+
+    def _is_library_cache(self, path: str) -> bool:
+        """Check if path is in a curated well-known per-library user-cache subdir.
+
+        Matched as a substring so any user-home variant (``~/.cache/``,
+        ``/root/.cache/``, etc.) is caught without enumerating every home
+        layout. Project-specific cache subdirs that aren't on the curated
+        ``LIBRARY_CACHE_PATTERNS`` list stay tracked (e.g. ``~/.cache/<your
+        project>/`` is intentionally NOT filtered).
+        """
+        return any(pattern in path for pattern in self.LIBRARY_CACHE_PATTERNS)
 
     @staticmethod
     def _is_roar_internal(path: str) -> bool:
