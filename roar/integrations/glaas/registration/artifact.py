@@ -287,6 +287,114 @@ class ArtifactRegistrationService(IArtifactRegistrar):
             errors=errors,
         )
 
+    def register_batch_under_registration_session(
+        self,
+        artifacts: list[dict],
+        registration_session_id: str,
+    ) -> ArtifactRegistrationResult:
+        """Stage a batch of artifacts under a registration session (Phase 3 bearer flow).
+
+        Mirrors ``register_batch`` but does not include ``session_hash`` on
+        each artifact (the registration_session_id in the URL path scopes the
+        request server-side).
+        """
+        if not artifacts:
+            return ArtifactRegistrationResult(success_count=0, error_count=0, errors=[])
+
+        self._logger.debug(
+            "Preparing %d artifacts for staged registration in registration session %s",
+            len(artifacts),
+            registration_session_id,
+        )
+
+        valid_artifacts: list[dict] = []
+        errors: list[str] = []
+
+        for i, art in enumerate(artifacts):
+            hashes = art.get("hashes", [])
+            size = art.get("size")
+            source_type = art.get("source_type")
+
+            if not hashes and art.get("hash"):
+                hashes = [{"algorithm": "blake3", "digest": art["hash"]}]
+
+            # Reuse the standard validator. The registration_session_id is a
+            # real identifier, not a placeholder, so it satisfies the
+            # non-placeholder check; we strip session_hash from the payload
+            # below since the staged endpoint scopes by URL.
+            validation = validate_artifact_registration(
+                hashes=hashes,
+                size=size,
+                source_type=source_type,
+                session_hash=registration_session_id,
+            )
+
+            if not validation:
+                hash_preview = hashes[0].get("digest", "")[:12] if hashes else "none"
+                error_msg = f"Artifact {i} ({hash_preview}): {'; '.join(validation.errors)}"
+                self._logger.warning("Skipping invalid staged artifact: %s", error_msg)
+                errors.append(error_msg)
+                continue
+
+            payload: dict = {
+                "hashes": hashes,
+                "size": size,
+                "source_type": source_type,
+            }
+            if art.get("source_url"):
+                payload["source_url"] = art["source_url"]
+            if art.get("metadata"):
+                payload["metadata"] = art["metadata"]
+
+            valid_artifacts.append(payload)
+
+        if not valid_artifacts:
+            return ArtifactRegistrationResult(
+                success_count=0,
+                error_count=len(errors),
+                errors=errors,
+            )
+
+        total_success = 0
+        total_errors = 0
+
+        batches = _batch_by_size(valid_artifacts)
+        total_batches = len(batches)
+        self._logger.debug(
+            "Split %d valid staged artifacts into %d batches for registration",
+            len(valid_artifacts),
+            total_batches,
+        )
+
+        for batch_idx, batch in enumerate(batches):
+            batch_size_bytes = len(json.dumps(batch))
+            self._logger.debug(
+                "Sending staged batch %d/%d: %d artifacts (%d bytes)",
+                batch_idx + 1,
+                total_batches,
+                len(batch),
+                batch_size_bytes,
+            )
+            success_count, error_count, batch_error = (
+                self.client.register_artifacts_batch_under_registration_session(
+                    registration_session_id, batch
+                )
+            )
+
+            total_success += success_count
+            total_errors += error_count
+
+            if batch_error:
+                errors.append(f"Staged batch registration error: {batch_error}")
+                self._logger.warning("Staged batch artifact registration failed: %s", batch_error)
+                break
+
+        return ArtifactRegistrationResult(
+            success_count=total_success,
+            error_count=total_errors + len(errors),
+            errors=errors,
+        )
+
     def resolve_artifact_hash(self, artifact_ref: dict[str, Any]) -> tuple[str | None, str | None]:
         """Resolve a server artifact hash from a hash/hash-list artifact reference.
 
