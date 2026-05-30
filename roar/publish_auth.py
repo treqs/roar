@@ -31,6 +31,21 @@ class PublishAuthContext:
     ssh_auth_available: bool = False
 
 
+def _scope_visibility(repo_scope: Any) -> str | None:
+    """Resolve the visibility for a scope_request from the active repo scope.
+
+    ``public`` -> ``"public"`` (attributed); ``anonymous`` -> ``None`` so the
+    caller omits ``scope_request`` and the server uses the legacy anonymous
+    public scope; everything else (``private``/``project``/unset) -> ``"private"``.
+    """
+    if repo_scope is not None:
+        if repo_scope.mode == "public":
+            return "public"
+        if repo_scope.mode == "anonymous":
+            return None
+    return "private"
+
+
 def load_publish_auth_context(
     start_dir: str | Path | None = None,
     *,
@@ -95,17 +110,22 @@ def load_publish_auth_context(
         scope_request = {
             "owner_id": binding["owner_id"],
             "owner_type": binding["owner_type"],
-            "visibility": "private",
+            "visibility": _scope_visibility(repo_scope) or "private",
         }
         project_id = binding.get("project_id")
         if project_id:
             scope_request["project_id"] = project_id
     elif not allow_public_without_binding:
-        scope_request = {
-            "owner_resolution": "current_user",
-            "owner_type": "user",
-            "visibility": "private",
-        }
+        # Server-authoritative owner resolution; visibility follows the active
+        # repo scope. The anonymous scope yields None here so we omit
+        # scope_request entirely (server uses the legacy anonymous public scope).
+        visibility = _scope_visibility(repo_scope)
+        if visibility is not None:
+            scope_request = {
+                "owner_resolution": "current_user",
+                "owner_type": "user",
+                "visibility": visibility,
+            }
 
     return PublishAuthContext(
         access_token=access_token,
