@@ -239,6 +239,51 @@ def test_next_steps_hint_silent_when_hints_disabled() -> None:
     assert buf.getvalue() == ""
 
 
+def test_tmp_filtered_hint_fires_when_tmp_io_was_filtered() -> None:
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.tmp_filtered_hint(_make_result(filter_counts={"tmp_files": 3}))
+    out = _strip(buf.getvalue())
+    assert "hint:" in out
+    assert "3 /tmp files filtered" in out
+    assert "filters.ignore_tmp_files" in out
+
+
+def test_tmp_filtered_hint_singular() -> None:
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.tmp_filtered_hint(_make_result(filter_counts={"tmp_files": 1}))
+    assert "1 /tmp file filtered" in _strip(buf.getvalue())
+
+
+def test_tmp_filtered_hint_silent_when_nothing_filtered() -> None:
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.tmp_filtered_hint(_make_result(filter_counts={"tmp_files": 0}))
+    assert buf.getvalue() == ""
+    buf2 = io.StringIO()
+    report2 = RunReportPresenter(stream=buf2, caps=_tty_caps())
+    report2.tmp_filtered_hint(_make_result())  # no filter_counts at all
+    assert buf2.getvalue() == ""
+
+
+def test_tmp_filtered_hint_silent_in_quiet_mode() -> None:
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps(), verbosity="quiet")
+    report.tmp_filtered_hint(_make_result(filter_counts={"tmp_files": 3}))
+    assert buf.getvalue() == ""
+
+
+def test_tmp_filtered_hint_silent_when_hints_disabled() -> None:
+    from unittest.mock import patch
+
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    with patch("roar.integrations.config.config_get", return_value=False):
+        report.tmp_filtered_hint(_make_result(filter_counts={"tmp_files": 3}))
+    assert buf.getvalue() == ""
+
+
 # ---- lifecycle lines -------------------------------------------------------
 
 

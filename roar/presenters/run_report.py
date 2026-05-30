@@ -227,6 +227,40 @@ class RunReportPresenter:
         )
         self._print(style(explainer, "warn_amber", enabled=c))
 
+    def tmp_filtered_hint(self, result: RunResult) -> None:
+        """Amber hint when /tmp artifact I/O was dropped by the tmp filter.
+
+        Fires only when at least one /tmp path was filtered out of lineage
+        (``filters.ignore_tmp_files``, on by default), so artifacts that
+        silently landed under /tmp — a common surprise when a workspace lives
+        in /tmp — get surfaced. Reuses the count the filter already computed
+        (no extra recording). Same gating as ``next_steps_hint`` (quiet +
+        ``hints.enabled``).
+        """
+        if self._quiet:
+            return
+        n = int((result.filter_counts or {}).get("tmp_files", 0) or 0)
+        if n <= 0:
+            return
+        try:
+            from ..integrations.config import config_get
+
+            if config_get("hints.enabled") is False:
+                return
+        except Exception:
+            pass
+        c = self._caps.can_color
+        plural = "s" if n != 1 else ""
+        self._print(
+            style(
+                f"hint: {n} /tmp file{plural} filtered out of this run's lineage "
+                f"(filters.ignore_tmp_files). Run outside /tmp, or "
+                f"`roar config set filters.ignore_tmp_files false`, to track them.",
+                "warn_amber",
+                enabled=c,
+            )
+        )
+
     # ---- backward-compat one-shot ----------------------------------------
 
     def show_report(self, result: RunResult, command: list[str], quiet: bool = False) -> None:
@@ -248,6 +282,7 @@ class RunReportPresenter:
             post_duration=result.post_duration,
         )
         self.next_steps_hint(result)
+        self.tmp_filtered_hint(result)
 
     # ---- stale warnings (unchanged) --------------------------------------
 
