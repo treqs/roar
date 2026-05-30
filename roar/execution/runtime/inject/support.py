@@ -6,8 +6,47 @@ import re
 import shutil
 import sys
 import threading
+from collections.abc import Callable
+from typing import Protocol
 
 _roar_suppress = threading.local()
+
+
+class _BackendDispatchController(Protocol):
+    """The slice of ``RuntimeImportController`` the runtime gate drives."""
+
+    def disable_backend_dispatch(self) -> None: ...
+    def enable_backend_dispatch(self) -> None: ...
+    def initialize_selected_backend(self) -> None: ...
+
+
+def apply_runtime_gate(
+    controller: _BackendDispatchController,
+    *,
+    matched: bool,
+    repair: Callable[[], bool],
+    on_degrade: Callable[[], None],
+) -> None:
+    """Decide backend dispatch for a traced process based on ABI match.
+
+    - ``matched`` (bundled/co-installed deps are the right ABI): enable backends.
+    - mismatch: disable dispatch **first** — so the repair's own imports can't
+      trigger a wrong-ABI backend load (the original cross-Python crash) — then
+      attempt ``repair``; re-enable and initialize **only** if repair made
+      ABI-matched deps reachable, otherwise ``on_degrade``.
+
+    Extracted from ``sitecustomize`` so the ordering (disable-before-repair,
+    enable-only-on-success) is unit-testable without importing the module body.
+    """
+    if matched:
+        controller.initialize_selected_backend()
+        return
+    controller.disable_backend_dispatch()
+    if repair():
+        controller.enable_backend_dispatch()
+        controller.initialize_selected_backend()
+    else:
+        on_degrade()
 
 
 def bundled_abi_tag(inject_dir: str) -> str | None:

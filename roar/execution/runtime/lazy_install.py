@@ -21,7 +21,13 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # non-POSIX; locking degrades to best-effort (no lock)
+    fcntl = None  # type: ignore[assignment]
 
 # Deps backend dispatch needs in the traced Python. Kept short — pip/uv
 # resolves transitive deps. Unpinned: roar tolerates any pydantic 2.x.
@@ -29,6 +35,10 @@ _RUNTIME_DEPS: tuple[str, ...] = ("pydantic", "blake3")
 
 _STAMP_FILENAME = "roar_runtime.json"
 _INSTALL_TIMEOUT_SECONDS = 180
+# A waiter must outlast a winner that is mid-install, so the lock timeout sits
+# above the install timeout — otherwise a waiter could give up while the winner
+# is still legitimately working.
+_LOCK_TIMEOUT_SECONDS = _INSTALL_TIMEOUT_SECONDS + 30
 
 
 def runtime_cache_root() -> Path:
@@ -100,6 +110,7 @@ def install_runtime(
                 text=True,
                 timeout=_INSTALL_TIMEOUT_SECONDS,
                 check=False,
+                env=_clean_subprocess_env(),
             )
         except (OSError, subprocess.SubprocessError) as exc:
             sys.stderr.write(f"🦖 install failed: {exc}\n")
@@ -131,6 +142,82 @@ def install_runtime(
                 shutil.rmtree(tmpdir)
 
     return is_runtime_cached(abi_tag, roar_version)
+
+
+def _clean_subprocess_env() -> dict[str, str]:
+    """Env for the installer subprocess with roar's injection stripped out.
+
+    The in-process repair path (``sitecustomize``) can call ``install_runtime``
+    from *inside* a traced process, where ``ROAR_WRAP=1`` and roar's inject dir
+    is on ``PYTHONPATH``. Left in place, the installer's own Python would
+    re-inject roar into itself — recursion and polluted lineage. Dropping the
+    wrap flag and the inject dir makes the installer run as a plain, untraced
+    process. Harmless when called from the (already-clean) launch-time path.
+    """
+    env = dict(os.environ)
+    env.pop("ROAR_WRAP", None)
+    env.pop("ROAR_RUNTIME_PYTHONPATH", None)
+    env.pop("ROAR_RUNTIME_PYTHONPATH_ACTIVE", None)
+
+    inject_dir = os.path.realpath(str(Path(__file__).resolve().parent / "inject"))
+    pythonpath = env.get("PYTHONPATH")
+    if pythonpath:
+        kept = [
+            entry
+            for entry in pythonpath.split(os.pathsep)
+            if entry and os.path.realpath(entry) != inject_dir
+        ]
+        if kept:
+            env["PYTHONPATH"] = os.pathsep.join(kept)
+        else:
+            env.pop("PYTHONPATH", None)
+    return env
+
+
+@contextlib.contextmanager
+def _install_lock(abi_tag: str, timeout: float = _LOCK_TIMEOUT_SECONDS) -> Iterator[bool]:
+    """Hold an exclusive cross-process lock for installing one ABI tree.
+
+    Yields ``True`` once the lock is held, or ``False`` if it could not be
+    acquired within ``timeout`` (the caller should then degrade to the gate
+    rather than block forever). Best-effort: with no ``fcntl`` (non-POSIX) the
+    lock is a no-op and we yield ``True``.
+
+    Used to collapse the torchrun "thundering herd": one worker per GPU can
+    reach the installer at the same instant on a cold cache; the lock lets the
+    winner install while the rest wait, then re-check the cache and reuse it.
+    """
+    if fcntl is None:
+        yield True
+        return
+    try:
+        cache_root = runtime_cache_root()
+        cache_root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Can't even make the cache dir; let install_runtime surface the error.
+        yield True
+        return
+
+    lock_path = cache_root / f".{abi_tag}.lock"
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    acquired = False
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.2)
+        yield acquired
+    finally:
+        if acquired:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def _select_installer(
@@ -212,6 +299,16 @@ def ensure_runtime(
     if is_runtime_cached(target_abi, roar_version):
         return runtime_site_packages(target_abi)
 
-    if install_runtime(target_abi, target_python, roar_version):
-        return runtime_site_packages(target_abi)
+    # Cold cache. Under a wrapper launch (torchrun, accelerate, ...) every
+    # worker process reaches here at once, so serialize on a per-ABI lock and
+    # re-check the cache after acquiring it: the winner installs once, the rest
+    # find the freshly-installed tree and reuse it instead of racing N installs.
+    with _install_lock(target_abi) as acquired:
+        if is_runtime_cached(target_abi, roar_version):
+            return runtime_site_packages(target_abi)
+        if not acquired:
+            # Timed out waiting on another installer; degrade to the gate.
+            return None
+        if install_runtime(target_abi, target_python, roar_version):
+            return runtime_site_packages(target_abi)
     return None

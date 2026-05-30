@@ -34,6 +34,16 @@ class RuntimeImportController:
         """
         self._backend_dispatch_disabled = True
 
+    def enable_backend_dispatch(self) -> None:
+        """Re-enable backend dispatch after a prior :meth:`disable_backend_dispatch`.
+
+        Used by the sitecustomize gate: on an ABI mismatch it disables dispatch
+        *before* attempting an in-process runtime repair (so the repair's own
+        imports don't trigger a wrong-ABI backend load), then re-enables here
+        once an ABI-matched runtime has been made reachable.
+        """
+        self._backend_dispatch_disabled = False
+
     def resolve_selected_backend(self) -> ExecutionBackend | None:
         backend_name = str(self._environ.get(ROAR_EXECUTION_BACKEND_ENV) or "").strip()
         if not backend_name:

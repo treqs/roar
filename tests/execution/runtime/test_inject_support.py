@@ -4,9 +4,85 @@ from pathlib import Path
 
 from roar.execution.runtime.inject.support import (
     abi_minor_version,
+    apply_runtime_gate,
     bundled_abi_tag,
     matching_compiled_pydantic_core,
 )
+
+
+class _RecordingController:
+    """Records backend-dispatch lifecycle calls into a shared event list."""
+
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def disable_backend_dispatch(self) -> None:
+        self._events.append("disable")
+
+    def enable_backend_dispatch(self) -> None:
+        self._events.append("enable")
+
+    def initialize_selected_backend(self) -> None:
+        self._events.append("init")
+
+
+def test_apply_runtime_gate_matched_initializes_without_repair() -> None:
+    events: list[str] = []
+    repair_called: list[bool] = []
+    degraded: list[bool] = []
+
+    apply_runtime_gate(
+        _RecordingController(events),
+        matched=True,
+        repair=lambda: bool(repair_called.append(True)) or True,
+        on_degrade=lambda: degraded.append(True),
+    )
+
+    assert events == ["init"]  # matched ABI → backends straight on
+    assert repair_called == []  # no repair attempted
+    assert degraded == []
+
+
+def test_apply_runtime_gate_disables_before_repair_then_reenables_on_success() -> None:
+    events: list[str] = []
+    degraded: list[bool] = []
+
+    def repair() -> bool:
+        events.append("repair")
+        return True
+
+    apply_runtime_gate(
+        _RecordingController(events),
+        matched=False,
+        repair=repair,
+        on_degrade=lambda: degraded.append(True),
+    )
+
+    # Critical ordering: dispatch is disabled BEFORE repair runs (so repair's
+    # own imports can't trigger a wrong-ABI backend load), then re-enabled and
+    # initialized only after a successful repair.
+    assert events == ["disable", "repair", "enable", "init"]
+    assert degraded == []
+
+
+def test_apply_runtime_gate_degrades_when_repair_fails() -> None:
+    events: list[str] = []
+    degraded: list[bool] = []
+
+    def repair() -> bool:
+        events.append("repair")
+        return False
+
+    apply_runtime_gate(
+        _RecordingController(events),
+        matched=False,
+        repair=repair,
+        on_degrade=lambda: degraded.append(True),
+    )
+
+    # Repair failed: dispatch stays disabled (no enable/init), degrade fires.
+    assert events == ["disable", "repair"]
+    assert degraded == [True]
 
 
 def _make_inject_layout(root: Path, compiled_pkg: str, so_filename: str) -> Path:

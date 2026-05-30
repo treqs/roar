@@ -167,3 +167,29 @@ def test_disable_backend_dispatch_short_circuits_handle_import(
     assert result is None
     assert calls == []
     assert ROAR_EXECUTION_BACKEND_ENV not in controller._environ
+
+
+def test_enable_backend_dispatch_reenables_after_disable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sitecustomize gate disables dispatch while it repairs a cross-ABI
+    runtime, then re-enables it once matched deps are reachable.
+    """
+    import roar.execution.framework.runtime_imports as runtime_imports
+
+    calls: list[str] = []
+    fake_backend = _fake_backend(calls)
+    controller = RuntimeImportController({ROAR_EXECUTION_BACKEND_ENV: "fake"})
+    monkeypatch.setattr(
+        runtime_imports,
+        "get_execution_backend",
+        lambda backend_name: fake_backend if backend_name == "fake" else None,
+    )
+
+    controller.disable_backend_dispatch()
+    controller.initialize_selected_backend()
+    assert calls == []  # disabled → no init
+
+    controller.enable_backend_dispatch()
+    controller.initialize_selected_backend()
+    assert calls == ["initialize"]  # re-enabled → backend initializes
