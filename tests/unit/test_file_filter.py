@@ -210,6 +210,37 @@ def test_filter_files_drops_huggingface_cache_when_library_caches_enabled(monkey
     assert filtered.counts.library_caches >= 3
 
 
+def test_filter_files_drops_triton_jit_cache_when_library_caches_enabled(monkeypatch) -> None:
+    """Triton's JIT kernel cache lives at ~/.triton/cache/ (NOT under ~/.cache/),
+    so it needs its own pattern. torch.compile on GPU writes compiled .so
+    launchers here every run — confirmed leaking on a nanochat A10 run.
+    """
+    monkeypatch.setattr(file_filter, "_get_editable_install_dirs", lambda: frozenset())
+
+    triton_so = (
+        "/home/ubuntu/.triton/cache/3HMPBPHQEJAVV3TKQCBPMFNMCUDE4S5Y624MJ2OCL5QA/"
+        "__triton_launcher.cpython-310-x86_64-linux-gnu.so"
+    )
+    triton_cuda = "/root/.triton/cache/KJGBFCDPODDSTMI2D3ESJLJ6/cuda_utils.cpython-310.so"
+
+    tracer_data = TracerData(
+        opened_files=[triton_so, triton_cuda],
+        read_files=[triton_so],
+        written_files=[triton_so, triton_cuda],
+    )
+    python_data = PythonInjectData(sys_prefix="", sys_base_prefix="", roar_inject_dir="")
+
+    filtered = FileFilterService().filter_files(
+        tracer_data, python_data, _filter_config(ignore_library_caches=True)
+    )
+
+    for p in (triton_so, triton_cuda):
+        assert p not in filtered.opened_files
+        assert p not in filtered.read_files
+        assert p not in filtered.written_files
+    assert filtered.counts.library_caches >= 2
+
+
 def test_filter_files_keeps_huggingface_cache_when_library_caches_disabled(monkeypatch) -> None:
     """Setting ignore_library_caches=False (the override) keeps the paths."""
     monkeypatch.setattr(file_filter, "_get_editable_install_dirs", lambda: frozenset())

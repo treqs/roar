@@ -118,6 +118,10 @@ class FileFilterService:
         "/.cache/Cypress/",
         "/.cache/torch/",  # complements TORCH_CACHE_PATTERNS (which covers /tmp)
         "/.cache/triton/",
+        # Triton's JIT kernel cache defaults to ~/.triton/cache/ (NOT under
+        # ~/.cache/), so it needs its own pattern — torch.compile/inductor on
+        # GPU writes compiled .so launchers here every run.
+        "/.triton/cache/",
         "/.cache/jupyter/",
         "/.cache/matplotlib/",
     )
