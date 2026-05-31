@@ -11,12 +11,21 @@ path in ``roar.application.publish``.
 
 from .canonical import normalize_relpath, preimage
 from .detect import Detection, detect, detect_nested
-from .qualifying import Composite, Leaf, build, build_nested, sha256_tree
+from .qualifying import (
+    Composite,
+    Leaf,
+    blake3_tree,
+    build,
+    build_nested,
+    sha256_tree,
+    tree,
+)
 
 __all__ = [
     "Composite",
     "Detection",
     "Leaf",
+    "blake3_tree",
     "build",
     "build_nested",
     "detect",
@@ -24,4 +33,5 @@ __all__ = [
     "normalize_relpath",
     "preimage",
     "sha256_tree",
+    "tree",
 ]

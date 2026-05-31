@@ -10,11 +10,13 @@ import pytest
 
 from roar.application.composite import (
     Leaf,
+    blake3_tree,
     build,
     build_nested,
     normalize_relpath,
     preimage,
     sha256_tree,
+    tree,
 )
 
 
@@ -93,3 +95,20 @@ def test_nested_composite_of_composites() -> None:
 
 def test_empty_is_defined_and_stable() -> None:
     assert sha256_tree([]) == sha256_tree([])
+
+
+def test_algorithm_follows_source_blake3_vs_sha256() -> None:
+    """Same leaves, different content algorithm -> different key (domain-separated)."""
+    leaves = _leaves(("data/x", "aa" * 32), ("data/y", "bb" * 32))
+    assert tree(leaves, algo="sha256") == sha256_tree(leaves)
+    assert tree(leaves, algo="blake3") == blake3_tree(leaves)
+    assert sha256_tree(leaves) != blake3_tree(leaves)  # per-algo domain + combiner
+
+
+def test_build_labels_algo_and_is_path_sensitive_per_algo() -> None:
+    leaves = _leaves(("train/0", "aa" * 32), ("val/0", "bb" * 32))
+    sha = build(leaves, algo="sha256")
+    bl = build(leaves, algo="blake3")
+    assert sha.algo == "sha256-tree" and bl.algo == "blake3-tree"
+    moved = _leaves(("val/0", "aa" * 32), ("train/0", "bb" * 32))
+    assert build(moved, algo="blake3").digest != bl.digest  # path-sensitive under blake3
