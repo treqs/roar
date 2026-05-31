@@ -30,14 +30,14 @@ def build_publish_composite_results(
 
     results: list[CompositeBuildResult] = []
     for root_path in sorted(grouped_by_root, key=lambda item: str(item)):
-        result = composite_builder.build_for_root(
-            root_path=root_path,
-            resolved_sources=grouped_by_root[root_path],
-            hashes_by_path=hashes_by_path,
-            session_hash=session_hash,
-            source_type=source_type,
+        results.extend(
+            composite_builder.build_all_for_root(
+                root_path=root_path,
+                resolved_sources=grouped_by_root[root_path],
+                hashes_by_path=hashes_by_path,
+                session_hash=session_hash,
+                source_type=source_type,
+            )
         )
-        if result is not None:
-            results.append(result)
 
     return results

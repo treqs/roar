@@ -81,12 +81,21 @@ def detect(paths: list[str]) -> Detection:
     return Detection("unstructured", sorted(rest), [], boiler, [])
 
 
+# Formats that declare themselves with a manifest/layout file are nestable as
+# sub-datasets. Loose-shard formats (parquet-shards, webdataset) are deliberately
+# excluded: a directory of partition dirs full of parquet shards (Hive-style
+# ``date=.../part-*.parquet``) is ONE partitioned dataset, not nested sub-datasets,
+# and is indistinguishable from a true container without a per-child manifest.
+_NESTABLE_KINDS = frozenset({"lerobot", "zarr", "lance", "rlds"})
+
+
 def detect_nested(paths: list[str]) -> Detection:
     """Detect a *container* of sub-datasets (the nesting case).
 
     Groups paths by top-level directory; if at least two top dirs each independently
-    detect as a structural dataset, returns kind ``"nested"`` with those dirs as
-    nested composites. Otherwise falls back to flat :func:`detect`.
+    detect as a *manifest-bearing* structural dataset, returns kind ``"nested"`` with
+    those dirs as nested composites. Otherwise falls back to flat :func:`detect` —
+    so partitioned single datasets and loose-shard splits stay one flat composite.
     """
     rest, boiler = _split_boilerplate(paths)
     by_top: dict[str, list[str]] = {}
@@ -96,7 +105,7 @@ def detect_nested(paths: list[str]) -> Detection:
             by_top.setdefault(top, []).append(sub)
 
     structural_children = [
-        top for top, subs in by_top.items() if detect(subs).kind != "unstructured"
+        top for top, subs in by_top.items() if detect(subs).kind in _NESTABLE_KINDS
     ]
 
     if len(structural_children) >= 2:

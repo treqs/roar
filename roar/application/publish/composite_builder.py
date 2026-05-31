@@ -19,6 +19,7 @@ from typing import Any
 
 from ...application.publish.source_resolution import ResolvedSource
 from ..composite import detect as _detect
+from ..composite import detect_nested as _detect_nested
 from ..composite import preimage as _preimage
 
 _blake3: Any | None
@@ -93,6 +94,162 @@ class CompositeArtifactBuilder:
             leaves=leaves,
             session_hash=session_hash,
             source_type=source_type,
+        )
+
+    def build_all_for_root(
+        self,
+        root_path: Path,
+        resolved_sources: list[ResolvedSource],
+        hashes_by_path: dict[str, str],
+        session_hash: str,
+        source_type: str | None,
+    ) -> list[CompositeBuildResult]:
+        """Build composite(s) for a root, forming a composite-of-composites when the
+        root is a container of >=2 independently-structured sub-datasets.
+
+        Returns ``[flat]`` for an ordinary dataset, or ``[child_1, ..., child_n,
+        parent]`` for a nested container (the parent's hash is Merkle over the child
+        composite hashes; its membership bloom is flat over every leaf blob).
+        """
+        raw = self._collect_raw_leaves(root_path, resolved_sources, hashes_by_path)
+        if not raw:
+            return []
+
+        detection = _detect_nested([leaf.relative_path for leaf in raw])
+        if detection.kind != "nested":
+            flat = self.build_for_leaves(
+                root_path=str(root_path),
+                leaves=self._drop_boilerplate(raw),
+                session_hash=session_hash,
+                source_type=source_type,
+            )
+            return [flat] if flat is not None else []
+
+        results: list[CompositeBuildResult] = []
+        children: list[tuple[str, CompositeBuildResult]] = []
+        child_identity_leaves: list[CompositeLeaf] = []
+        root_str = str(root_path).rstrip("/")
+        for prefix in detection.nested:
+            sub = self._drop_boilerplate(
+                [
+                    self._reroot_leaf(leaf, prefix)
+                    for leaf in raw
+                    if leaf.relative_path.startswith(prefix + "/")
+                ]
+            )
+            child = self.build_for_leaves(
+                root_path=f"{root_str}/{prefix}",
+                leaves=sub,
+                session_hash=session_hash,
+                source_type=source_type,
+            )
+            if child is not None:
+                results.append(child)
+                children.append((prefix, child))
+                child_identity_leaves.extend(self._reparent_leaf(leaf, prefix) for leaf in sub)
+
+        if len(children) < 2:
+            # not actually a multi-dataset container after boilerplate/empty drops
+            flat = self.build_for_leaves(
+                root_path=str(root_path),
+                leaves=self._drop_boilerplate(raw),
+                session_hash=session_hash,
+                source_type=source_type,
+            )
+            return [flat] if flat is not None else []
+
+        results.append(
+            self._build_parent(
+                root_path=root_str,
+                children=children,
+                leaf_blobs=child_identity_leaves,
+                session_hash=session_hash,
+                source_type=source_type,
+            )
+        )
+        return results
+
+    @staticmethod
+    def _reroot_leaf(leaf: CompositeLeaf, prefix: str) -> CompositeLeaf:
+        """Return ``leaf`` with ``prefix/`` stripped from its relative path."""
+        rel = leaf.relative_path[len(prefix) + 1 :]
+        return CompositeLeaf(
+            relative_path=rel,
+            digest=leaf.digest,
+            size=leaf.size,
+            component_type=leaf.component_type,
+            leaf_kind=leaf.leaf_kind,
+            component_algorithm=leaf.component_algorithm,
+        )
+
+    @staticmethod
+    def _reparent_leaf(leaf: CompositeLeaf, prefix: str) -> CompositeLeaf:
+        """Return a child leaf with its parent-relative path restored (``prefix/...``)."""
+        return CompositeLeaf(
+            relative_path=f"{prefix}/{leaf.relative_path}",
+            digest=leaf.digest,
+            size=leaf.size,
+            component_type=leaf.component_type,
+            leaf_kind=leaf.leaf_kind,
+            component_algorithm=leaf.component_algorithm,
+        )
+
+    def _build_parent(
+        self,
+        *,
+        root_path: str,
+        children: list[tuple[str, CompositeBuildResult]],
+        leaf_blobs: list[CompositeLeaf],
+        session_hash: str,
+        source_type: str | None,
+    ) -> CompositeBuildResult:
+        """Build a parent composite-of-composites: Merkle hash over child hashes,
+        flat membership bloom over every leaf blob."""
+        children = sorted(children, key=lambda item: item[0].encode("utf-8"))
+        combiner = self._combiner_algorithm(leaf_blobs)
+        # Merkle: hash over (child_path, child_algorithm, child_digest)
+        triples = [
+            (prefix, child.payload["hashes"][0]["algorithm"], child.digest)
+            for prefix, child in children
+        ]
+        pre = _preimage(triples, domain=f"roar:{combiner}-tree:v1\n".encode())
+        if combiner == "blake3":
+            if _blake3 is None:
+                raise RuntimeError("blake3 package is required for composite digest computation")
+            parent_digest = _blake3.blake3(pre).hexdigest()
+        else:
+            parent_digest = hashlib.new(combiner, pre).hexdigest()
+        parent_algorithm = f"composite-{combiner}"
+
+        components = [
+            {
+                "relative_path": prefix,
+                "leaf_kind": "composite",
+                "component_algorithm": child.payload["hashes"][0]["algorithm"],
+                "component_digest": child.digest,
+                "component_size": int(child.payload.get("size") or 0),
+                "component_type": "application/vnd.roar.composite",
+            }
+            for prefix, child in children
+        ]
+        membership = self._build_membership_index_base(leaf_blobs)
+        membership["stored_components"] = len(components)
+        payload: dict[str, Any] = {
+            "hash": parent_digest,
+            "hashes": [{"algorithm": parent_algorithm, "digest": parent_digest}],
+            "size": sum(int(child.payload.get("size") or 0) for _prefix, child in children),
+            "source_type": source_type,
+            "session_hash": session_hash,
+            "component_count_total": len(components),
+            "components": components,
+            "membership_index": membership,
+        }
+        return CompositeBuildResult(
+            root_path=root_path,
+            digest=parent_digest,
+            component_count_total=len(components),
+            component_count_stored=len(components),
+            payload=payload,
         )
 
     def build_for_leaves(
@@ -180,6 +337,16 @@ class CompositeArtifactBuilder:
         resolved_sources: list[ResolvedSource],
         hashes_by_path: dict[str, str],
     ) -> list[CompositeLeaf]:
+        return self._drop_boilerplate(
+            self._collect_raw_leaves(root_path, resolved_sources, hashes_by_path)
+        )
+
+    def _collect_raw_leaves(
+        self,
+        root_path: Path,
+        resolved_sources: list[ResolvedSource],
+        hashes_by_path: dict[str, str],
+    ) -> list[CompositeLeaf]:
         leaves: list[CompositeLeaf] = []
 
         for source in resolved_sources:
@@ -208,7 +375,7 @@ class CompositeArtifactBuilder:
                 )
             )
 
-        return self._drop_boilerplate(leaves)
+        return leaves
 
     @staticmethod
     def _drop_boilerplate(leaves: list[CompositeLeaf]) -> list[CompositeLeaf]:
