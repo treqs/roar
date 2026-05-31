@@ -244,26 +244,6 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
         "default": True,
         "description": "Output debug logs to ~/.roar/roar.log",
     },
-    "composites.run.enabled": {
-        "type": bool,
-        "default": True,
-        "description": "Enable local composite materialization during roar run",
-    },
-    "composites.run.min_confidence": {
-        "type": float,
-        "default": 0.80,
-        "description": "Minimum dataset confidence for run-time composite materialization",
-    },
-    "composites.run.min_components": {
-        "type": int,
-        "default": 2,
-        "description": "Minimum leaf components required to materialize a run composite",
-    },
-    "composites.run.max_roots_per_job": {
-        "type": int,
-        "default": 4,
-        "description": "Maximum composite roots materialized per run job",
-    },
 }
 
 
@@ -859,13 +839,6 @@ def config_set(key: str, value: str, start_dir: str | None = None) -> ConfigSetR
         typed_value = value
     else:
         typed_value = value
-
-    if key == "composites.run.min_confidence" and not (0.0 <= float(typed_value) <= 1.0):
-        raise ValueError("composites.run.min_confidence must be between 0.0 and 1.0")
-    if key == "composites.run.min_components" and int(typed_value) < 2:
-        raise ValueError("composites.run.min_components must be >= 2")
-    if key == "composites.run.max_roots_per_job" and int(typed_value) < 1:
-        raise ValueError("composites.run.max_roots_per_job must be >= 1")
 
     typed_value = _validate_targeted_config_value(key, typed_value)
 

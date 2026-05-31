@@ -154,16 +154,6 @@ level = "warning"
 console = false
 # Output debug logs to ~/.roar/roar.log
 file = true
-
-[composites.run]
-# Enable local composite materialization during roar run
-enabled = true
-# Minimum dataset confidence required for auto-materialization
-min_confidence = 0.80
-# Minimum component leaves required to form a composite
-min_components = 2
-# Maximum composite roots materialized per run job
-max_roots_per_job = 4
 """
 
 

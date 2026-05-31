@@ -77,7 +77,6 @@ class TestRoarInit:
         assert "registration" in config
         assert "hash" in config
         assert "logging" in config
-        assert "composites" in config
 
     def test_init_config_can_be_found(self, tmp_path: Path) -> None:
         """find_config_file() can locate the config created by init."""
@@ -228,19 +227,6 @@ class TestDefaultConfigTemplate:
         assert config["logging"]["console"] is False
         assert config["logging"]["file"] is True
 
-    def test_template_composites_run_defaults(self, tmp_path: Path) -> None:
-        """Template has correct run composite materialization defaults."""
-        config_path = tmp_path / ".roar" / "config.toml"
-        config_path.parent.mkdir(parents=True)
-        config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
-
-        config = load_config(config_path=config_path)
-
-        assert config["composites"]["run"]["enabled"] is True
-        assert config["composites"]["run"]["min_confidence"] == 0.8
-        assert config["composites"]["run"]["min_components"] == 2
-        assert config["composites"]["run"]["max_roots_per_job"] == 4
-
 
 class TestDefaultsMatchPydanticModels:
     """Verify that the init template defaults match Pydantic model defaults."""
@@ -266,7 +252,6 @@ class TestDefaultsMatchPydanticModels:
             "telemetry",
             "reversible",
             "logging",
-            "composites",
         ]:
             for key, template_val in template_config.get(section, {}).items():
                 pydantic_val = pydantic_defaults.get(section, {}).get(key)
@@ -306,7 +291,6 @@ class TestConfigLoading:
         assert config["output"]["quiet"] is False
         assert config["registration"]["omit"]["enabled"] is True
         assert config["hash"]["primary"] == "blake3"
-        assert config["composites"]["run"]["enabled"] is True
         assert config["telemetry"]["enabled"] is True
 
     def test_load_config_merges_with_defaults(self, tmp_path: Path) -> None:
@@ -514,23 +498,3 @@ default = "ebpf"
     def test_config_set_preload_mode(self, tmp_path: Path) -> None:
         config_set("tracer.default", "preload", start_dir=str(tmp_path))
         assert config_get("tracer.default", start_dir=str(tmp_path)) == "preload"
-
-    def test_config_set_run_composite_min_confidence(self, tmp_path: Path) -> None:
-        config_set("composites.run.min_confidence", "0.65", start_dir=str(tmp_path))
-        assert config_get("composites.run.min_confidence", start_dir=str(tmp_path)) == 0.65
-
-    def test_config_set_invalid_run_composite_min_confidence_is_rejected(
-        self, tmp_path: Path
-    ) -> None:
-        with pytest.raises(ValueError, match=r"composites\.run\.min_confidence"):
-            config_set("composites.run.min_confidence", "1.5", start_dir=str(tmp_path))
-
-    def test_config_set_run_composite_min_components(self, tmp_path: Path) -> None:
-        config_set("composites.run.min_components", "3", start_dir=str(tmp_path))
-        assert config_get("composites.run.min_components", start_dir=str(tmp_path)) == 3
-
-    def test_config_set_invalid_run_composite_min_components_is_rejected(
-        self, tmp_path: Path
-    ) -> None:
-        with pytest.raises(ValueError, match=r"composites\.run\.min_components"):
-            config_set("composites.run.min_components", "1", start_dir=str(tmp_path))

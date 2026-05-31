@@ -53,7 +53,6 @@ def test_payload_builder_only_serializes_allowlisted_fields() -> None:
             "proxy_enabled": True,
             "ray_enabled": False,
             "osmo_enabled": False,
-            "composites_run_enabled": True,
             "raw_endpoint": "https://private.example/customer",
         },
     )
@@ -74,7 +73,6 @@ def test_payload_builder_only_serializes_allowlisted_fields() -> None:
         "proxy_enabled": True,
         "ray_enabled": False,
         "osmo_enabled": False,
-        "composites_run_enabled": True,
     }
 
     encoded = json.dumps(built, sort_keys=True)

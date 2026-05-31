@@ -238,21 +238,6 @@ class LoggingConfig(ConfigBaseModel):
     file: bool = True
 
 
-class RunCompositeConfig(ConfigBaseModel):
-    """Run-time composite materialization policy."""
-
-    enabled: bool = True
-    min_confidence: Annotated[float, Field(ge=0.0, le=1.0)] = 0.80
-    min_components: Annotated[int, Field(ge=2, le=100_000)] = 2
-    max_roots_per_job: Annotated[int, Field(ge=1, le=128)] = 4
-
-
-class CompositesConfig(ConfigBaseModel):
-    """Composite artifact behavior configuration."""
-
-    run: RunCompositeConfig = Field(default_factory=RunCompositeConfig)
-
-
 class RoarConfig(ConfigBaseModel):
     """Complete roar configuration.
 
@@ -274,7 +259,6 @@ class RoarConfig(ConfigBaseModel):
     hints: HintsConfig = Field(default_factory=HintsConfig)
     reversible: ReversibleConfig = Field(default_factory=ReversibleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    composites: CompositesConfig = Field(default_factory=CompositesConfig)
     _backend_configs: dict[str, dict[str, Any]] = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
