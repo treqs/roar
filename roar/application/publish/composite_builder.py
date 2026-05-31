@@ -8,6 +8,7 @@ payloads from resolved file leaves.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import math
 import mimetypes
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from ...application.publish.source_resolution import ResolvedSource
+from ..composite import detect as _detect
+from ..composite import preimage as _preimage
 
 _blake3: Any | None
 try:
@@ -24,7 +27,6 @@ try:
 except Exception:  # pragma: no cover - dependency is required in runtime/test env
     _blake3 = None
 
-_CANONICAL_ALGORITHM = "composite-blake3"
 _MAX_STORED_COMPONENTS = 1000
 _BLOOM_PREFIX = b"roar:composite-membership:v1\0"
 _BLOOM_TARGET_FALSE_POSITIVE_RATE = 0.001  # 0.1%
@@ -106,11 +108,12 @@ class CompositeArtifactBuilder:
             return None
 
         leaves.sort(key=lambda leaf: leaf.relative_path.encode("utf-8"))
-        composite_digest = self._compute_composite_digest(leaves)
+        composite_digest, composite_algorithm = self._compute_composite_digest(leaves)
 
         payload = self._build_payload(
             leaves=leaves,
             composite_digest=composite_digest,
+            composite_algorithm=composite_algorithm,
             source_type=source_type,
             session_hash=session_hash,
         )
@@ -128,6 +131,7 @@ class CompositeArtifactBuilder:
         self,
         leaves: list[CompositeLeaf],
         composite_digest: str,
+        composite_algorithm: str,
         source_type: str | None,
         session_hash: str,
     ) -> dict[str, Any]:
@@ -140,7 +144,7 @@ class CompositeArtifactBuilder:
         def build_with_count(stored_count: int) -> dict[str, Any]:
             payload: dict[str, Any] = {
                 "hash": composite_digest,
-                "hashes": [{"algorithm": _CANONICAL_ALGORITHM, "digest": composite_digest}],
+                "hashes": [{"algorithm": composite_algorithm, "digest": composite_digest}],
                 "size": total_size,
                 "source_type": source_type,
                 "session_hash": session_hash,
@@ -204,7 +208,22 @@ class CompositeArtifactBuilder:
                 )
             )
 
-        return leaves
+        return self._drop_boilerplate(leaves)
+
+    @staticmethod
+    def _drop_boilerplate(leaves: list[CompositeLeaf]) -> list[CompositeLeaf]:
+        """Exclude format/repo boilerplate (README, .gitattributes, …) from identity.
+
+        Structure decides which files are identity-bearing; boilerplate is associated
+        with the dataset but does not move its composite hash or membership.
+        """
+        if not leaves:
+            return leaves
+        detection = _detect([leaf.relative_path for leaf in leaves])
+        boilerplate = set(detection.boilerplate)
+        if not boilerplate:
+            return leaves
+        return [leaf for leaf in leaves if leaf.relative_path not in boilerplate]
 
     @staticmethod
     def _resolve_component_digest(path: Path, hashes_by_path: dict[str, str]) -> str | None:
@@ -233,14 +252,32 @@ class CompositeArtifactBuilder:
     def _symlink_target_bytes(path: Path) -> bytes:
         return os.readlink(path).encode("utf-8")
 
-    def _compute_composite_digest(self, leaves: list[CompositeLeaf]) -> str:
-        if _blake3 is None:
-            raise RuntimeError("blake3 package is required for composite digest computation")
+    def _compute_composite_digest(self, leaves: list[CompositeLeaf]) -> tuple[str, str]:
+        """Path-sensitive composite digest + its algorithm name.
 
-        hasher = _blake3.blake3()
-        for digest in sorted(leaf.digest for leaf in leaves):
-            hasher.update(bytes.fromhex(digest))
-        return hasher.hexdigest()
+        Folds each component's relative path into the digest so moving a file (e.g.
+        a validation shard into the train split) changes the composite identity.
+        The *combiner* hash follows the source's content family — ``sha256`` when
+        every component is sha256 (HF/asserted), else ``blake3`` (local, etag, …) —
+        and the per-leaf component algorithm is preserved in the preimage. For a
+        homogeneous sha256/blake3 component set this reproduces the ``sha256-tree`` /
+        ``blake3-tree`` qualifying hash exactly (same domain and construction).
+        """
+        combiner = self._combiner_algorithm(leaves)
+        triples = [(leaf.relative_path, leaf.component_algorithm, leaf.digest) for leaf in leaves]
+        pre = _preimage(triples, domain=f"roar:{combiner}-tree:v1\n".encode())
+        if combiner == "blake3":
+            if _blake3 is None:
+                raise RuntimeError("blake3 package is required for composite digest computation")
+            digest = _blake3.blake3(pre).hexdigest()
+        else:
+            digest = hashlib.new(combiner, pre).hexdigest()
+        return digest, f"composite-{combiner}"
+
+    @staticmethod
+    def _combiner_algorithm(leaves: list[CompositeLeaf]) -> str:
+        """sha256 when all components are sha256 (HF), else blake3 (local default)."""
+        return "sha256" if {leaf.component_algorithm for leaf in leaves} == {"sha256"} else "blake3"
 
     @staticmethod
     def _component_payload(leaf: CompositeLeaf) -> dict[str, Any]:
@@ -292,7 +329,7 @@ class CompositeArtifactBuilder:
         bloom_bytes = bytearray((bloom_bits + 7) // 8)
 
         for leaf in leaves:
-            key = f"blake3:{leaf.digest}".encode()
+            key = f"{leaf.component_algorithm}:{leaf.digest}".encode()
             h1, h2 = self._bloom_hash_pair(key)
             if h2 == 0:
                 h2 = 1
