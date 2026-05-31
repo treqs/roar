@@ -30,14 +30,20 @@ def build_publish_composite_results(
 
     results: list[CompositeBuildResult] = []
     for root_path in sorted(grouped_by_root, key=lambda item: str(item)):
-        results.extend(
-            composite_builder.build_all_for_root(
-                root_path=root_path,
-                resolved_sources=grouped_by_root[root_path],
-                hashes_by_path=hashes_by_path,
-                session_hash=session_hash,
-                source_type=source_type,
-            )
+        # NOTE: this uses the flat builder. The nesting-aware builder
+        # (build_all_for_root) forms a composite-of-composites whose parent
+        # references child composites; GLaaS validation does not yet accept
+        # composite-component payloads, so wiring nesting into the publish path is
+        # deferred to a roar->glaas-api change. Nested formation is implemented and
+        # tested (build_all_for_root + tests/application/publish/test_nested_composites).
+        result = composite_builder.build_for_root(
+            root_path=root_path,
+            resolved_sources=grouped_by_root[root_path],
+            hashes_by_path=hashes_by_path,
+            session_hash=session_hash,
+            source_type=source_type,
         )
+        if result is not None:
+            results.append(result)
 
     return results
