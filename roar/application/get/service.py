@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any, cast
 
 from ...application.git import build_roar_git_tag_name, create_roar_git_tag, resolve_git_state
 from ...core.bootstrap import bootstrap
@@ -111,6 +112,7 @@ def get_artifacts(request: GetRequest) -> GetResponse:
             git_branch=git_branch,
             git_repo=git_repo_url,
             duration_seconds=download_duration,
+            backend=backend,
         )
 
     git_tag_name = None
@@ -151,6 +153,7 @@ def _materialize_get_result(
     git_branch: str | None = None,
     git_repo: str | None = None,
     duration_seconds: float = 0.0,
+    backend=None,
 ) -> GetResponse:
     if transfer_result.dry_run or not transfer_result.success:
         return GetResponse(
@@ -193,6 +196,12 @@ def _materialize_get_result(
         duration_seconds=duration_seconds,
         step_name=request.step_name,
     )
+
+    try:
+        _register_get_composite(db_ctx=db_ctx, backend=backend, job_id=job_id)
+    except Exception as exc:  # composite formation is best-effort; never fail a get
+        get_logger().debug("get composite formation skipped: %s", exc)
+
     return GetResponse(
         success=True,
         source=request.source,
@@ -200,6 +209,97 @@ def _materialize_get_result(
         job_uid=job_uid,
         downloaded_files=transfer_result.downloaded_files,
     )
+
+
+def _register_get_composite(*, db_ctx, backend, job_id: int):
+    """Form + register a composite for an HF dataset get (boundary-time, local).
+
+    Builds a ``composite-sha256`` over the dataset's LFS files (sha256 from the HF
+    manifest — content identity without re-hashing), excluding repo/format
+    boilerplate, and records it as an output of the get job with the HF coordinates
+    in metadata. Skips non-HF backends and anything that isn't a >=2-file dataset.
+    """
+    import json
+    import mimetypes
+
+    from ...application.composite import detect
+    from ...application.publish.composite_builder import (
+        CompositeArtifactBuilder,
+        CompositeLeaf,
+    )
+    from ...db.context import optional_repo
+
+    manifest_fn = getattr(backend, "manifest", None)
+    coords_attr = getattr(backend, "coordinates", None)
+    if manifest_fn is None or coords_attr is None:
+        return None  # not an HF backend
+
+    subpath = (getattr(backend, "_subpath", "") or "").rstrip("/")
+
+    def _rel(path: str) -> str:
+        if subpath and (path == subpath or path.startswith(subpath + "/")):
+            return path[len(subpath) + 1 :] or path
+        return path
+
+    files = [
+        f
+        for f in manifest_fn()
+        if not subpath or f.path == subpath or f.path.startswith(subpath + "/")
+    ]
+    boilerplate = set(detect([_rel(f.path) for f in files]).boilerplate)
+    leaves = [
+        CompositeLeaf(
+            relative_path=_rel(f.path),
+            digest=f.sha256,
+            size=f.size,
+            component_type=mimetypes.guess_type(_rel(f.path))[0],
+            leaf_kind="file",
+            component_algorithm="sha256",
+        )
+        for f in files
+        if f.is_lfs and f.sha256 and _rel(f.path) not in boilerplate
+    ]
+    if len(leaves) < 2:
+        return None  # a lone file (or all-boilerplate) is not a composite
+
+    coords = coords_attr
+    root_label = f"hf://{coords['repo_type']}/{coords['repo']}@{coords['commit']}"
+    result = CompositeArtifactBuilder().build_for_leaves(
+        root_path=root_label,
+        leaves=leaves,
+        session_hash="",
+        source_type="hf",
+    )
+    if result is None:
+        return None
+
+    metadata = json.dumps(
+        {
+            "composite": {
+                "root_path": root_label,
+                "component_count_total": result.component_count_total,
+                "component_count_stored": result.component_count_stored,
+            },
+            "hf": coords,
+        }
+    )
+    artifact_id, _created = db_ctx.artifacts.register(
+        hashes={result.payload["hashes"][0]["algorithm"]: result.digest},
+        size=int(result.payload.get("size") or 0),
+        path=root_label,
+        source_type="hf",
+        metadata=metadata,
+    )
+    composite_repo = cast(Any, optional_repo(db_ctx, "composites"))
+    if composite_repo is not None:
+        composite_repo.upsert_details(
+            artifact_id=artifact_id,
+            components=list(result.payload.get("components") or []),
+            component_count_total=result.component_count_total,
+            membership_index=result.payload.get("membership_index"),
+        )
+    db_ctx.jobs.add_output(job_id, artifact_id, root_label)
+    return result
 
 
 def _build_get_command(request: GetRequest) -> str:

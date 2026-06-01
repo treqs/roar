@@ -98,6 +98,42 @@ def test_live_list_keys_scoped_to_subpath():
 
 
 @pytest.mark.skipif(not _online(), reason="no network")
+def test_live_manifest_composite_sha256_matches_anchor():
+    """The sha256-tree over an HF dataset's LFS oids is the composite-sha256 key that
+    `roar get` forms — pinned against the esm2 anchor."""
+    import mimetypes
+
+    from roar.application.composite import detect
+    from roar.application.publish.composite_builder import CompositeArtifactBuilder, CompositeLeaf
+
+    b = HFDownloadBackend(
+        parse_source(
+            "hf://datasets/nvidia/esm2_uniref_pretraining_data"
+            "@4ac1d2973567e46b8ca95901f4b4793a21305995"
+        )
+    )
+    manifest = b.manifest()
+    boiler = set(detect([f.path for f in manifest]).boilerplate)
+    leaves = [
+        CompositeLeaf(
+            relative_path=f.path,
+            digest=f.sha256,
+            size=f.size,
+            component_type=mimetypes.guess_type(f.path)[0],
+            component_algorithm="sha256",
+        )
+        for f in manifest
+        if f.is_lfs and f.sha256 and f.path not in boiler
+    ]
+    result = CompositeArtifactBuilder().build_for_leaves(
+        root_path="hf://x", leaves=leaves, session_hash="", source_type="hf"
+    )
+    assert result is not None
+    assert result.payload["hashes"][0]["algorithm"] == "composite-sha256"
+    assert result.digest == "d70b5ec319e39091281ff5970bfd7647cf38eb9cfa6de0cfdd074207264ce4b4"
+
+
+@pytest.mark.skipif(not _online(), reason="no network")
 def test_live_download_and_exists():
     b = HFDownloadBackend(parse_source(LIBERO))
     d = Path(tempfile.mkdtemp())
