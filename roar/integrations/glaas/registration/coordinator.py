@@ -234,8 +234,22 @@ class RegistrationCoordinator(IRegistrationCoordinator):
         registration_session_id: str,
         git_context: GitContext,
         jobs: list[dict],
+        artifacts: list[dict] | None = None,
     ) -> BatchRegistrationResult:
-        """Stage complete lineage under a remote registration session."""
+        """Stage complete lineage under a remote registration session.
+
+        Implements the 4-phase pattern for the bearer flow, matching the
+        standard ``register_lineage``:
+
+          Phase 2: create jobs under the registration session
+          Phase 3: stage artifacts under the registration session
+          Phase 4: link artifacts to jobs
+
+        ``artifacts`` is accepted as optional for backwards-compatibility with
+        callers that haven't been updated yet; when omitted, Phase 3 is
+        skipped and the link endpoints' implicit stub-create remains the only
+        path that brings artifact rows into existence (the original M1 bug).
+        """
         errors: list[str] = []
         jobs_created = 0
         jobs_failed = 0
@@ -245,11 +259,13 @@ class RegistrationCoordinator(IRegistrationCoordinator):
         links_failed = 0
 
         self._logger.debug(
-            "Starting registration-session lineage staging: registration_session_id=%s, jobs=%d",
+            "Starting registration-session lineage staging: registration_session_id=%s, jobs=%d, artifacts=%d",
             registration_session_id,
             len(jobs),
+            len(artifacts or []),
         )
 
+        # Phase 2: Create jobs (no I/O links)
         job_uids_created: list[str] = []
         if jobs:
             batch_results = self.job_service.create_jobs_batch_under_registration_session(
@@ -272,6 +288,22 @@ class RegistrationCoordinator(IRegistrationCoordinator):
             jobs_failed,
         )
 
+        # Phase 3: Stage artifacts with real sizes (so Phase 4 link doesn't
+        # have to fall back to size=0 stub-creation server-side).
+        if artifacts:
+            art_result = self.artifact_service.register_batch_under_registration_session(
+                artifacts, registration_session_id
+            )
+            artifacts_registered += art_result.success_count
+            artifacts_failed += art_result.error_count
+            errors.extend(art_result.errors)
+            self._logger.debug(
+                "Registration-session artifact staging complete: %d staged, %d failed",
+                art_result.success_count,
+                art_result.error_count,
+            )
+
+        # Phase 4: Link artifacts to jobs
         for job in jobs:
             job_uid = job.get("job_uid")
             if not job_uid or job_uid not in job_uids_created:

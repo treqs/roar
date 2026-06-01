@@ -234,3 +234,137 @@ class TestRegisterLineage:
 
         assert result.links_failed == 1
         assert any("job-001" in e for e in result.errors)
+
+
+class TestRegisterLineageUnderRegistrationSession:
+    """Tests for the bearer (registration-session) coordinator.
+
+    The bearer flow originally lacked a Phase 3 step, so artifacts only came
+    into existence via Phase 4 link requests with `size: BigInt(?? 0)` —
+    producing the 247 0-byte stubs on the M1 nanochat DAG. These tests pin
+    the post-fix invariant: when artifacts are provided, Phase 3 runs
+    between Phase 2 and Phase 4.
+    """
+
+    @pytest.fixture
+    def mock_session_service(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_artifact_service(self):
+        service = MagicMock()
+        service.register_batch_under_registration_session.return_value = ArtifactRegistrationResult(
+            success_count=2, error_count=0, errors=[]
+        )
+        return service
+
+    @pytest.fixture
+    def mock_job_service(self):
+        service = MagicMock()
+        service.create_jobs_batch_under_registration_session.return_value = [
+            JobRegistrationResult(success=True, job_uid="job-001"),
+        ]
+        service.link_job_artifacts_under_registration_session.return_value = JobLinkResult(
+            success=True,
+            job_uid="job-001",
+            artifacts_registered=2,
+            inputs_linked=1,
+            outputs_linked=1,
+        )
+        return service
+
+    @pytest.fixture
+    def mock_logger(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def coordinator(
+        self, mock_session_service, mock_artifact_service, mock_job_service, mock_logger
+    ):
+        return RegistrationCoordinator(
+            session_service=mock_session_service,
+            artifact_service=mock_artifact_service,
+            job_service=mock_job_service,
+            logger=mock_logger,
+        )
+
+    def test_phase3_runs_with_artifacts(self, coordinator, mock_artifact_service, mock_job_service):
+        """Artifacts are staged via Phase 3 before Phase 4 link runs."""
+        jobs = [
+            {
+                "job_uid": "job-001",
+                "_inputs": [{"hash": "in1", "path": "/in.bin"}],
+                "_outputs": [{"hash": "out1", "path": "/out.bin"}],
+            },
+        ]
+        artifacts = [
+            {
+                "hashes": [{"algorithm": "blake3", "digest": "in1"}],
+                "size": 100,
+                "source_type": None,
+            },
+            {
+                "hashes": [{"algorithm": "blake3", "digest": "out1"}],
+                "size": 200,
+                "source_type": None,
+            },
+        ]
+
+        result = coordinator.register_lineage_under_registration_session(
+            registration_session_id="reg-sess-1",
+            git_context=GitContext(repo="repo", commit="abc", branch="main"),
+            jobs=jobs,
+            artifacts=artifacts,
+        )
+
+        mock_artifact_service.register_batch_under_registration_session.assert_called_once_with(
+            artifacts, "reg-sess-1"
+        )
+        assert result.artifacts_registered >= 2
+
+    def test_phase3_skipped_when_no_artifacts(self, coordinator, mock_artifact_service):
+        """Backwards-compat: omitted artifacts ⇒ no Phase 3 call."""
+        coordinator.register_lineage_under_registration_session(
+            registration_session_id="reg-sess-1",
+            git_context=GitContext(repo="repo", commit="abc", branch="main"),
+            jobs=[{"job_uid": "job-001"}],
+        )
+
+        mock_artifact_service.register_batch_under_registration_session.assert_not_called()
+
+    def test_phase3_errors_collected_but_does_not_block_phase4(
+        self, coordinator, mock_artifact_service, mock_job_service
+    ):
+        """Phase 3 failures surface in errors[] but Phase 4 still runs.
+
+        Matches the standard ``register_lineage`` behavior: Phase 4 plows
+        ahead regardless of Phase 3 outcome. Combined with the upcoming
+        glaas-api change that flips the link endpoints to strict (no
+        stub-create), a Phase 3 failure would then produce a loud 404 on
+        Phase 4 rather than the silent stub.
+        """
+        mock_artifact_service.register_batch_under_registration_session.return_value = (
+            ArtifactRegistrationResult(
+                success_count=0, error_count=1, errors=["Boom: validation failed"]
+            )
+        )
+
+        jobs = [
+            {
+                "job_uid": "job-001",
+                "_inputs": [{"hash": "in1", "path": "/in.bin"}],
+            },
+        ]
+        artifacts = [
+            {"hashes": [{"algorithm": "blake3", "digest": "in1"}], "size": 100, "source_type": None}
+        ]
+
+        result = coordinator.register_lineage_under_registration_session(
+            registration_session_id="reg-sess-1",
+            git_context=GitContext(repo="repo", commit="abc", branch="main"),
+            jobs=jobs,
+            artifacts=artifacts,
+        )
+
+        assert any("Boom" in e for e in result.errors)
+        mock_job_service.link_job_artifacts_under_registration_session.assert_called_once()

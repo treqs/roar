@@ -56,6 +56,7 @@ class FiltersConfig(ConfigBaseModel):
     ignore_system_reads: bool = True
     ignore_package_reads: bool = True
     ignore_torch_cache: bool = True
+    ignore_library_caches: bool = True
     ignore_tmp_files: bool = True
     ignore_paths: list[str] = Field(default_factory=list)
 

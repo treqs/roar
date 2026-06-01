@@ -301,10 +301,17 @@ class RegisterService:
 
             if registration_session_id:
                 spin.update("Staging jobs and artifacts...")
+                staged_artifacts = prepare_batch_registration_artifacts(
+                    lineage.artifacts,
+                    registration_session_id,  # placeholder; client strips it before send
+                    fallback_to_hash=True,
+                    prefer_blake3_first=True,
+                )
                 batch_result = self.coordinator.register_lineage_under_registration_session(
                     registration_session_id=registration_session_id,
                     git_context=git_context,
                     jobs=remote_registration_jobs,
+                    artifacts=staged_artifacts,
                 )
                 registration_errors.extend(batch_result.errors)
 
