@@ -160,6 +160,18 @@ class TestFileFilterCounts:
         assert result.counts.roar_internal == 1
         assert result.counts.write_noise == 1  # /dev/null
 
+    def test_credential_files_always_filtered(self) -> None:
+        # .netrc / _netrc hold login tokens — never reproducibility-relevant,
+        # so they are dropped from reads and writes regardless of config.
+        reads = ["/home/user/.netrc", "/home/user/project/data.parquet"]
+        writes = ["/home/user/_netrc"]
+        tracer, py = _make_data(reads, writes)
+        result = FileFilterService().filter_files(tracer, py, {})
+
+        assert result.counts.credential_files == 2  # .netrc read + _netrc write
+        assert result.read_files == ["/home/user/project/data.parquet"]
+        assert result.written_files == []
+
     def test_dropped_paths_empty_by_default(self) -> None:
         tracer, py = _make_data(["/sys/foo"], [])
         result = FileFilterService().filter_files(tracer, py, {})

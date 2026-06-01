@@ -315,3 +315,27 @@ def test_filter_files_drops_other_library_caches(monkeypatch) -> None:
         assert p not in filtered.read_files
         assert p not in filtered.written_files
     assert filtered.counts.library_caches >= len(paths)
+
+
+def test_filter_files_always_drops_netrc_credentials(monkeypatch) -> None:
+    """`.netrc`/`_netrc` hold machine login tokens (wandb, huggingface, curl)
+    and must NEVER enter lineage — dropped from reads AND writes, regardless of
+    any filter config. Observed leaking into a nanochat run (wandb reads ~/.netrc).
+    """
+    monkeypatch.setattr(file_filter, "_get_editable_install_dirs", lambda: frozenset())
+
+    netrc = str(Path("~/.netrc").expanduser())
+    win_netrc = "/home/ubuntu/_netrc"
+    tracer_data = TracerData(
+        opened_files=[netrc, win_netrc],
+        read_files=[netrc, win_netrc],
+        written_files=[netrc],
+    )
+    python_data = PythonInjectData(sys_prefix="", sys_base_prefix="", roar_inject_dir="")
+
+    filtered = FileFilterService().filter_files(tracer_data, python_data, _filter_config())
+
+    for p in (netrc, win_netrc):
+        assert p not in filtered.opened_files
+        assert p not in filtered.read_files
+        assert p not in filtered.written_files

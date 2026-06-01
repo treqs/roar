@@ -88,6 +88,7 @@ class FilterCounts(ImmutableModel):
     tmp_files: Annotated[int, Field(ge=0)] = 0
     roar_internal: Annotated[int, Field(ge=0)] = 0
     git_metadata: Annotated[int, Field(ge=0)] = 0
+    credential_files: Annotated[int, Field(ge=0)] = 0
     write_noise: Annotated[int, Field(ge=0)] = 0
     ignore_paths: Annotated[int, Field(ge=0)] = 0
 
@@ -101,6 +102,7 @@ class FilterCounts(ImmutableModel):
             + self.tmp_files
             + self.roar_internal
             + self.git_metadata
+            + self.credential_files
             + self.write_noise
             + self.ignore_paths
         )

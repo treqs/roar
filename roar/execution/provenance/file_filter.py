@@ -21,6 +21,7 @@ from ...core.models.provenance import (
 _FILTER_CATEGORIES: tuple[str, ...] = (
     "roar_internal",
     "git_metadata",
+    "credential_files",
     "system_reads",
     "package_reads",
     "torch_cache",
@@ -256,6 +257,8 @@ class FileFilterService:
                 return "roar_internal"
             if self._is_git_metadata(path):
                 return "git_metadata"
+            if self._is_credential_file(path):
+                return "credential_files"
             if ignore_system_reads and self._is_system_read(path):
                 return "system_reads"
             if ignore_torch_cache and self._is_torch_cache(path):
@@ -306,6 +309,9 @@ class FileFilterService:
                 continue
             if self._is_write_noise(f):
                 _record_drop("write_noise", f)
+                continue
+            if self._is_credential_file(f):
+                _record_drop("credential_files", f)
                 continue
             if ignore_torch_cache and self._is_torch_cache(f):
                 _record_drop("torch_cache", f)
@@ -376,6 +382,19 @@ class FileFilterService:
             or path.startswith(".roar/")
             or path == ".roar"
         )
+
+    @staticmethod
+    def _is_credential_file(path: str) -> bool:
+        """Check if path is a credentials file that must never enter lineage.
+
+        These hold secrets (not reproducibility-relevant data), so they are
+        always filtered from inputs and outputs regardless of config — a user
+        clearing ``filters.ignore_paths`` must not re-expose them.
+        """
+        basename = path.rsplit("/", 1)[-1]
+        # .netrc / _netrc: machine login tokens (curl, requests, huggingface,
+        # wandb). The _netrc spelling is the Windows / NETRC-env variant.
+        return basename in (".netrc", "_netrc")
 
     @staticmethod
     def _is_git_metadata(path: str) -> bool:

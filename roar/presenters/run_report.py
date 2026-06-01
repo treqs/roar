@@ -33,6 +33,7 @@ _FILTER_LABELS: tuple[tuple[str, str], ...] = (
     ("tmp_files", "tmp"),
     ("write_noise", "write-noise"),
     ("git_metadata", "git-meta"),
+    ("credential_files", "creds"),
     ("roar_internal", "roar-internal"),
 )
 
