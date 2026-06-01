@@ -89,6 +89,43 @@ def test_live_commit_and_manifest_have_sha256():
 
 
 @pytest.mark.skipif(not _online(), reason="no network")
+def test_live_sha256_of_nonlfs_meta_changes_composite_identity():
+    """Identity-bearing non-LFS meta/ files are re-hashed into the composite, so the
+    LFS+meta key differs from the LFS-only key (meta is part of identity)."""
+    import mimetypes
+
+    from roar.application.composite import detect
+    from roar.application.publish.composite_builder import CompositeArtifactBuilder, CompositeLeaf
+
+    b = HFDownloadBackend(
+        parse_source(
+            "hf://datasets/physical-intelligence/libero"
+            "@a4336d589d589045d1c56423ffdf3b88a0e19b1f"
+        )
+    )
+    m = b.manifest()
+    boiler = set(detect([f.path for f in m]).boilerplate)
+    identity = [f for f in m if f.path not in boiler]
+
+    def leaf(f, digest):
+        return CompositeLeaf(
+            relative_path=f.path,
+            digest=digest,
+            size=f.size,
+            component_type=mimetypes.guess_type(f.path)[0],
+            component_algorithm="sha256",
+        )
+
+    lfs_only = [leaf(f, f.sha256) for f in identity if f.is_lfs and f.sha256]
+    with_meta = lfs_only + [leaf(f, b.sha256_of(f.path)) for f in identity if not f.is_lfs]
+    builder = CompositeArtifactBuilder()
+    d_lfs = builder.build_for_leaves(root_path="x", leaves=lfs_only, session_hash="", source_type="hf")
+    d_all = builder.build_for_leaves(root_path="x", leaves=with_meta, session_hash="", source_type="hf")
+    assert d_lfs.digest == "9f01856f31ff9ee83e5c43aa494fb63d7517fc9d028422c9701d8aeadc1f86bb"
+    assert d_all.digest != d_lfs.digest  # meta/ files fold into identity
+
+
+@pytest.mark.skipif(not _online(), reason="no network")
 def test_live_list_keys_scoped_to_subpath():
     b = HFDownloadBackend(parse_source(LIBERO))
     keys = b.list_keys("")

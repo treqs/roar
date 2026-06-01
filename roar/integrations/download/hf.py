@@ -193,3 +193,13 @@ class HFDownloadBackend(DownloadBackend):
 
     def _sha256_by_path(self) -> dict[str, str]:
         return {f.path: f.sha256 for f in self.manifest() if f.sha256}
+
+    def sha256_of(self, remote_key: str) -> str:
+        """Download a (typically small, non-LFS) file and return its content sha256.
+
+        Used to fold identity-bearing non-LFS files (e.g. LeRobot ``meta/``) into a
+        composite at a uniform sha256 — HF only publishes sha256 for LFS files.
+        """
+        url = f"{_HF}/{self._repo_type}/{self._repo}/resolve/{self.commit}/{remote_key}"
+        with urllib.request.urlopen(self._request(url), timeout=120) as resp:
+            return hashlib.sha256(resp.read()).hexdigest()

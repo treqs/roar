@@ -246,19 +246,38 @@ def _register_get_composite(*, db_ctx, backend, job_id: int):
         for f in manifest_fn()
         if not subpath or f.path == subpath or f.path.startswith(subpath + "/")
     ]
-    boilerplate = set(detect([_rel(f.path) for f in files]).boilerplate)
-    leaves = [
-        CompositeLeaf(
-            relative_path=_rel(f.path),
-            digest=f.sha256,
-            size=f.size,
-            component_type=mimetypes.guess_type(_rel(f.path))[0],
-            leaf_kind="file",
-            component_algorithm="sha256",
+    detection = detect([_rel(f.path) for f in files])
+    boilerplate = set(detection.boilerplate)
+
+    # Identity-bearing files: data + format-declared meta, excluding boilerplate.
+    # LFS files use the published sha256 (free); identity-bearing non-LFS files
+    # (e.g. LeRobot meta/) are re-hashed to sha256 from a small download, gated by a
+    # byte budget so a pile of small non-LFS files can't trigger a huge fetch.
+    _NONLFS_REHASH_BUDGET = 64 * 1024 * 1024
+    identity = [f for f in files if _rel(f.path) not in boilerplate]
+    nonlfs_identity = [f for f in identity if not (f.is_lfs and f.sha256)]
+    rehash_nonlfs = sum(f.size for f in nonlfs_identity) <= _NONLFS_REHASH_BUDGET
+    sha256_of = getattr(backend, "sha256_of", None)
+
+    leaves: list[CompositeLeaf] = []
+    for f in identity:
+        rel = _rel(f.path)
+        if f.is_lfs and f.sha256:
+            digest = f.sha256  # asserted from HF metadata
+        elif rehash_nonlfs and sha256_of is not None:
+            digest = sha256_of(f.path)  # re-hashed from bytes, verified
+        else:
+            continue  # non-LFS over budget — left out (LFS-only identity)
+        leaves.append(
+            CompositeLeaf(
+                relative_path=rel,
+                digest=digest,
+                size=f.size,
+                component_type=mimetypes.guess_type(rel)[0],
+                leaf_kind="file",
+                component_algorithm="sha256",
+            )
         )
-        for f in files
-        if f.is_lfs and f.sha256 and _rel(f.path) not in boilerplate
-    ]
     if len(leaves) < 2:
         return None  # a lone file (or all-boilerplate) is not a composite
 
