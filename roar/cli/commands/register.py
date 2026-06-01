@@ -258,6 +258,17 @@ def register(
             for error in response.error.split("; "):
                 click.echo(f"  - {error}", err=True)
 
+        if not response.reproducible:
+            from .._format import hints_should_print, make_hint_printer
+
+            if hints_should_print():
+                _caps, hint = make_hint_printer()
+                hint(
+                    "registered without a git commit — this lineage records what ran, "
+                    "but can't be reproduced from source."
+                )
+                hint("Run inside a git repo (code committed) to register reproducible lineage.")
+
         click.echo("")
         click.echo("GLaaS:")
         click.echo(f"  Session:  {session_url}")

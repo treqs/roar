@@ -69,9 +69,11 @@ def run(
     command exit code, duration, and git commit.
 
     \b
-    Requires a clean git working tree. Every run is tagged with the
-    current commit SHA so artifacts can be traced back to the exact
-    code that produced them. Commit your changes before running.
+    Inside a git repo, requires a clean working tree: every run is tagged
+    with the current commit SHA so artifacts trace back to the exact code
+    that produced them. Commit your changes before running. Outside a repo,
+    runs are still captured — just without a commit (and so can't be
+    registered for reproducible sharing until run inside a repo).
 
     \b
     Examples:
@@ -140,8 +142,9 @@ Options:
 
 Hash algorithms: blake3 (default), sha256, sha512, md5
 
-Note: `roar run` requires a clean git working tree. Each run is tagged
-with the current commit SHA so artifacts can be traced to specific code.
+Note: inside a git repo, `roar run` requires a clean working tree and tags
+each run with the current commit SHA so artifacts trace to specific code.
+Outside a repo it still captures lineage, just without a commit.
 
 Examples:
   roar run python train.py
