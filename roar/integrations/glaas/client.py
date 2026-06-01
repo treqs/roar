@@ -301,6 +301,40 @@ class GlaasClient:
             return 0, 0, None
         return result.get("created", 0) + result.get("existing", 0), 0, None
 
+    def register_artifacts_batch_under_registration_session(
+        self,
+        registration_session_id: str,
+        artifacts: list,
+    ) -> tuple[int, int, str | None]:
+        """
+        Stage artifacts under a registration session (bearer-flow Phase 3).
+
+        Mirrors register_artifacts_batch but:
+          - hits /api/v1/registration-sessions/:id/artifacts/batch
+          - sends bearer auth (no signature fallback)
+          - does NOT include session_hash on each artifact (the path scopes it)
+
+        Returns (success_count, error_count, error_message).
+        """
+        if not artifacts:
+            return 0, 0, None
+
+        stripped = [{k: v for k, v in art.items() if k != "session_hash"} for art in artifacts]
+
+        body = {"artifacts": stripped}
+        result, error = self._request(
+            "POST",
+            f"/api/v1/registration-sessions/{registration_session_id}/artifacts/batch",
+            body,
+            auth_header_value=self._registration_session_auth_header(),
+            allow_auth_fallback=False,
+        )
+        if error:
+            return 0, len(artifacts), error
+        if result is None:
+            return 0, 0, None
+        return result.get("created", 0) + result.get("updated", 0), result.get("errors", 0), None
+
     def register_composite_artifact(
         self,
         payload: dict[str, Any],
