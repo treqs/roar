@@ -6,6 +6,8 @@ Usage: roar register [options] <target>
 Registers artifact, job, step, or session lineage with GLaaS.
 """
 
+import json
+
 import click
 
 from ...application.publish.requests import RegisterLineageRequest
@@ -37,6 +39,48 @@ def _display_session_url(response_session_url: str | None, web_url: str, session
     if response_session_url:
         return response_session_url
     return f"{web_url}/dag/{session_hash}"
+
+
+def _signup_nudge_marker():
+    """Once-per-user marker path for the GLaaS signup nudge, or None on error."""
+    try:
+        from ...telemetry.paths import resolve_paths
+
+        return resolve_paths().cache_dir / "signup_nudge.json"
+    except Exception:
+        return None
+
+
+def _maybe_show_signup_nudge() -> None:
+    """After a *first* anonymous register, name what a GLaaS account unlocks.
+
+    Anonymous public register succeeds with no account, so nothing otherwise
+    gives the user a reason to sign up — the value they came for (local DAG +
+    reproducibility) is already theirs. This names the account-only
+    capabilities (the local-vs-GLaaS difference) and the exact next command.
+
+    Fires once per user (a cache-dir marker so it isn't repeated every run)
+    and only when hints are enabled. Fail-open and silent on any error.
+    """
+    from .._format import hints_should_print, make_hint_printer
+
+    if not hints_should_print():
+        return
+    marker = _signup_nudge_marker()
+    if marker is not None and marker.exists():
+        return
+
+    _caps, hint = make_hint_printer()
+    hint("This lineage is public and unattributed (no account needed).")
+    hint("A GLaaS account lets you keep runs private, share them with your team,")
+    hint("and reproduce them on another machine — sign in with `roar login`.")
+
+    if marker is not None:
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(json.dumps({"shown": True}), encoding="utf-8")
+        except Exception:
+            pass
 
 
 def _render_tag_summary(summary: RegisterTagSummary | None) -> None:
@@ -272,3 +316,8 @@ def register(
         from ...telemetry.hooks import record_action_trigger
 
         record_action_trigger("register", start_dir=ctx.cwd)
+
+        # Anonymous register succeeds with no account; give first-timers the
+        # one reason to sign up they otherwise never hear at this moment.
+        if publish_intent.anonymous:
+            _maybe_show_signup_nudge()
