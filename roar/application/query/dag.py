@@ -37,7 +37,7 @@ def build_dag_visualization(request: DagQueryRequest) -> DagVisualization:
         session = _resolve_session(db_ctx, request.session_ref)
         if not session:
             if request.session_ref is None:
-                raise ValueError("No active session. Run 'roar init' or 'roar run' first.")
+                raise ValueError("No active session. Run 'roar init' first.")
             raise ValueError(f"No session found matching: {request.session_ref}")
 
         builder = DagDataBuilder(db_ctx, int(session["id"]))
