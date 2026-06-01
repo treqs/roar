@@ -40,7 +40,7 @@ def _dir_sources(root: Path) -> tuple[list[ResolvedSource], dict[str, str]]:
     return sources, hashes
 
 
-def _composite_for_dir(root: Path):
+def _composite_for_dir(root: Path, declared: bool = False):
     sources, hashes = _dir_sources(root)
     results = build_publish_composite_results(
         resolved_sources=sources,
@@ -49,6 +49,7 @@ def _composite_for_dir(root: Path):
         source_type=None,
         additional_composite_roots={},
         composite_builder=CompositeArtifactBuilder(),
+        declared=declared,
     )
     return results
 
@@ -128,6 +129,38 @@ def test_ungrouped_parquet_shards_are_structurally_grouped(tmp_path: Path):
     sources = [ResolvedSource(path=p, exists=True) for p in shard_files]
     roots = detect_additional_publish_composite_roots(resolved_sources=sources)
     assert root in roots and len(roots[root]) == 4
+
+
+def test_put_unstructured_dir_does_not_composite(tmp_path: Path):
+    """Bug 1: a directory of unrelated files is not auto-composited (structural-only)."""
+    root = tmp_path / "ds"
+    _w(root / "notes.txt", b"hello")
+    _w(root / "config.json", b'{"k":1}')
+    assert _composite_for_dir(root) == []
+
+
+def test_put_single_file_dir_does_not_composite(tmp_path: Path):
+    """Bug 2: a single data file is not a composite (>=2 floor)."""
+    root = tmp_path / "ds"
+    _w(root / "solo.parquet", b"ONLY")
+    assert _composite_for_dir(root) == []
+
+
+def test_put_dataset_flag_declares_unstructured_dir(tmp_path: Path):
+    """--dataset forces a composite over an unstructured (>=2 file) directory."""
+    root = tmp_path / "ds"
+    _w(root / "notes.txt", b"hello")
+    _w(root / "config.json", b'{"k":1}')
+    results = _composite_for_dir(root, declared=True)
+    assert len(results) == 1
+    assert results[0].component_count_total == 2
+
+
+def test_put_dataset_flag_still_rejects_single_file(tmp_path: Path):
+    """The >=2 floor holds even when --dataset is given."""
+    root = tmp_path / "ds"
+    _w(root / "solo.parquet", b"ONLY")
+    assert _composite_for_dir(root, declared=True) == []
 
 
 def test_two_unrelated_files_do_not_auto_composite(tmp_path: Path):

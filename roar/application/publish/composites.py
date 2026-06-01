@@ -16,6 +16,7 @@ def build_publish_composite_results(
     source_type: str | None,
     additional_composite_roots: dict[Path, list[ResolvedSource]],
     composite_builder: CompositeArtifactBuilder,
+    declared: bool = False,
 ) -> list[CompositeBuildResult]:
     """Build composite payloads for resolved publish roots."""
     grouped_by_root: dict[Path, list[ResolvedSource]] = {}
@@ -41,6 +42,7 @@ def build_publish_composite_results(
                 hashes_by_path=hashes_by_path,
                 session_hash=session_hash,
                 source_type=source_type,
+                declared=declared,
             )
         )
 

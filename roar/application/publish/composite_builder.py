@@ -103,13 +103,16 @@ class CompositeArtifactBuilder:
         hashes_by_path: dict[str, str],
         session_hash: str,
         source_type: str | None,
+        declared: bool = False,
     ) -> list[CompositeBuildResult]:
         """Build composite(s) for a root, forming a composite-of-composites when the
         root is a container of >=2 independently-structured sub-datasets.
 
-        Returns ``[flat]`` for an ordinary dataset, or ``[child_1, ..., child_n,
-        parent]`` for a nested container (the parent's hash is Merkle over the child
-        composite hashes; its membership bloom is flat over every leaf blob).
+        Returns ``[]`` when the input is not a dataset (an unstructured pile, unless
+        ``declared``, or fewer than two identity-bearing files); ``[flat]`` for an
+        ordinary dataset; or ``[child_1, ..., child_n, parent]`` for a nested
+        container (the parent's hash is Merkle over the child composite hashes; its
+        membership bloom is flat over every leaf blob).
         """
         raw = self._collect_raw_leaves(root_path, resolved_sources, hashes_by_path)
         if not raw:
@@ -117,13 +120,7 @@ class CompositeArtifactBuilder:
 
         detection = _detect_nested([leaf.relative_path for leaf in raw])
         if detection.kind != "nested":
-            flat = self.build_for_leaves(
-                root_path=str(root_path),
-                leaves=self._drop_boilerplate(raw),
-                session_hash=session_hash,
-                source_type=source_type,
-            )
-            return [flat] if flat is not None else []
+            return self._flat_or_none(root_path, raw, session_hash, source_type, declared)
 
         results: list[CompositeBuildResult] = []
         children: list[tuple[str, CompositeBuildResult]] = []
@@ -150,13 +147,7 @@ class CompositeArtifactBuilder:
 
         if len(children) < 2:
             # not actually a multi-dataset container after boilerplate/empty drops
-            flat = self.build_for_leaves(
-                root_path=str(root_path),
-                leaves=self._drop_boilerplate(raw),
-                session_hash=session_hash,
-                source_type=source_type,
-            )
-            return [flat] if flat is not None else []
+            return self._flat_or_none(root_path, raw, session_hash, source_type, declared)
 
         results.append(
             self._build_parent(
@@ -168,6 +159,33 @@ class CompositeArtifactBuilder:
             )
         )
         return results
+
+    def _flat_or_none(
+        self,
+        root_path: Path,
+        raw: list[CompositeLeaf],
+        session_hash: str,
+        source_type: str | None,
+        declared: bool,
+    ) -> list[CompositeBuildResult]:
+        """Form a single flat composite, or none when the input isn't a dataset.
+
+        A composite requires >=2 identity-bearing leaves (boilerplate excluded) and
+        either a detected structure or an explicit ``declared`` (roar put --dataset).
+        An unstructured pile or a lone file registers as plain artifacts instead.
+        """
+        identity = self._drop_boilerplate(raw)
+        if len(identity) < 2:
+            return []
+        if not declared and _detect([leaf.relative_path for leaf in identity]).kind == "unstructured":
+            return []
+        flat = self.build_for_leaves(
+            root_path=str(root_path),
+            leaves=identity,
+            session_hash=session_hash,
+            source_type=source_type,
+        )
+        return [flat] if flat is not None else []
 
     @staticmethod
     def _reroot_leaf(leaf: CompositeLeaf, prefix: str) -> CompositeLeaf:
