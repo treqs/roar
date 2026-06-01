@@ -21,6 +21,11 @@ def resolve_download_backend(source_url: str) -> DownloadBackend:
     builders = {
         "http": lambda: HTTPBackend(url=source_url),
         "https": lambda: HTTPBackend(url=source_url),
+        "hf": lambda: load_backend_class(
+            "roar.integrations.download.hf",
+            "HFDownloadBackend",
+            "HF backend is built in (stdlib)",
+        )(source=parsed),
         "s3": lambda: load_backend_class(
             "roar.integrations.download.s3",
             "S3DownloadBackend",
