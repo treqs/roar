@@ -90,8 +90,11 @@ class TestRenderLine:
         assert "'roar run' will be refused" in line
 
     def test_not_a_repo(self) -> None:
+        # `roar run` works outside a repo now (commit-less lineage); the
+        # line must not threaten a refusal, only note the missing commit tag.
         line = GitReadinessSummary(state="not_a_repo").render_line()
-        assert line == "not a git repo  ('roar run' will be refused)"
+        assert line == "not a git repo  ('roar run' works; not commit-tagged)"
+        assert "will be refused" not in line
 
     def test_home_dir(self) -> None:
         line = GitReadinessSummary(state="home_dir").render_line()

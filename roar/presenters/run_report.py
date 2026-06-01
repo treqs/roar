@@ -228,6 +228,45 @@ class RunReportPresenter:
         )
         self._print(style(explainer, "warn_amber", enabled=c))
 
+    def no_repo_hint(self, result: RunResult) -> None:
+        """Amber hint when the run was captured without a git commit.
+
+        Fires when neither a branch nor a commit was captured — the
+        signature of running outside a git repository (or in a repo with
+        no commit yet). Lineage is still captured locally, but it isn't
+        anchored to a code version, so it can't be ``roar register``-ed for
+        reproducible sharing. Nudges the user into a repo if they're
+        iterating on code. Same gating as ``next_steps_hint`` (quiet +
+        ``hints.enabled``).
+        """
+        if self._quiet:
+            return
+        if result.git_short_commit or result.git_branch:
+            return
+        try:
+            from ..integrations.config import config_get
+
+            if config_get("hints.enabled") is False:
+                return
+        except Exception:
+            pass
+        c = self._caps.can_color
+        self._print(
+            style(
+                "hint: no git commit captured — this run isn't tied to a code version.",
+                "warn_amber",
+                enabled=c,
+            )
+        )
+        self._print(
+            style(
+                "hint: run inside a git repository (code committed) to anchor lineage "
+                "and enable `roar register` for reproducible sharing.",
+                "warn_amber",
+                enabled=c,
+            )
+        )
+
     def tmp_filtered_hint(self, result: RunResult) -> None:
         """Amber hint when /tmp artifact I/O was dropped by the tmp filter.
 
@@ -284,6 +323,7 @@ class RunReportPresenter:
         )
         self.next_steps_hint(result)
         self.tmp_filtered_hint(result)
+        self.no_repo_hint(result)
 
     # ---- stale warnings (unchanged) --------------------------------------
 

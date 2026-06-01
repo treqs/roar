@@ -115,9 +115,17 @@ class GitVCSProvider(BaseVCSProvider):
         return info
 
     def get_status(self, repo_root: str) -> tuple[bool, list[str]]:
-        """Get the git working tree status."""
+        """Get the git working tree status.
+
+        ``stderr`` is suppressed so that probing a non-git directory (now
+        that ``roar run`` works outside a repo) doesn't leak git's
+        ``fatal: not a git repository`` chatter onto the user's terminal —
+        the ``CalledProcessError`` is the signal we act on.
+        """
         try:
-            out = subprocess.check_output(["git", "status", "--porcelain=v1"], cwd=repo_root)
+            out = subprocess.check_output(
+                ["git", "status", "--porcelain=v1"], cwd=repo_root, stderr=subprocess.DEVNULL
+            )
             lines = out.decode().splitlines()
             clean = len(lines) == 0
             return clean, lines

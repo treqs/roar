@@ -33,13 +33,18 @@ def validate_git_clean(
     args: list[str] | None = None,
     roar_dir: Path | str | None = None,
 ) -> str:
-    """Validate git repository is clean and return repo root.
+    """Resolve the working root, enforcing a clean tree when in a git repo.
 
-    On a dirty tree, raises ``ValueError`` with a teaching message: the
-    principle behind the rule, the exact remediation commands using the
-    user's own filenames and original CLI args, and a docs link. The
-    ``verb``/``args`` parameters customize the recovery line so users see
-    the exact ``roar run python …`` (or ``roar build …``) they typed.
+    Returns the repo root when inside a git repository, or the current
+    working directory when not (roar runs outside a repo too — lineage is
+    just captured without a commit; the run report nudges the user toward
+    a repo via ``no_repo_hint``).
+
+    On a dirty tree (in-repo only), raises ``ValueError`` with a teaching
+    message: the principle behind the rule, the exact remediation commands
+    using the user's own filenames and original CLI args, and a docs link.
+    The ``verb``/``args`` parameters customize the recovery line so users
+    see the exact ``roar run python …`` (or ``roar build …``) they typed.
 
     When ``roar_dir`` is provided and a roar DB is reachable, the dirty
     paths are classified into code / prior-roar outputs / unknown so the
@@ -56,13 +61,16 @@ def validate_git_clean(
             text=True,
         ).strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
-        from ...execution.framework.registry import is_execution_backend_job_environment
-
-        if is_execution_backend_job_environment():
-            return cwd
-        raise ValueError(
-            "roar requires the working directory to be inside a git repository."
-        ) from None
+        # Not inside a git repository (or git isn't installed). roar still
+        # runs here: lineage is captured without a commit, and the run
+        # report nudges the user to run inside a repo if they want
+        # reproducible, registerable lineage (see RunReportPresenter
+        # .no_repo_hint). The working directory stands in for repo_root so
+        # downstream path logic keeps a non-empty root. There is no dirty
+        # tree to validate when there is no tree, so we return early. This
+        # also covers execution-backend job drivers (e.g. Ray) that run
+        # from an extracted working_dir without a .git.
+        return cwd
 
     try:
         # Preserve leading whitespace in porcelain output: the two-column
@@ -204,6 +212,7 @@ def execute_and_report(
     )
     report.next_steps_hint(result)
     report.tmp_filtered_hint(result)
+    report.no_repo_hint(result)
 
     # Warn now if the run left the tree dirty so the *next* `roar run`
     # doesn't surprise the user with a refusal they could have fixed in

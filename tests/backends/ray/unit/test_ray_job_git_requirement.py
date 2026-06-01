@@ -35,15 +35,16 @@ def _invoke_run(
     return result, mock_run_command
 
 
-def test_run_in_non_git_dir_without_ray_job_id_exits_with_git_error(tmp_path, monkeypatch) -> None:
+def test_run_in_non_git_dir_without_ray_job_id_now_proceeds(tmp_path, monkeypatch) -> None:
+    # roar now runs outside a git repo (lineage captured without a commit),
+    # so a non-git dir with no RAY_JOB_ID no longer short-circuits with the
+    # old "must be inside a git repository" error — it reaches execution.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("RAY_JOB_ID", raising=False)
+    result, mock_run_command = _invoke_run(tmp_path, None, monkeypatch)
 
-    runner = CliRunner()
-    result = runner.invoke(run, ["python", "main.py"], obj=_ctx(tmp_path))
-
-    assert result.exit_code != 0
-    assert "roar requires the working directory to be inside a git repository." in result.output
+    assert result.exit_code == 0
+    assert "roar requires the working directory to be inside a git repository." not in result.output
+    mock_run_command.assert_called_once()
 
 
 @pytest.mark.parametrize("ray_job_id", ["rjob-12345", ""])
