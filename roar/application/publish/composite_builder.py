@@ -232,6 +232,12 @@ class CompositeArtifactBuilder:
             }
             for prefix, child in children
         ]
+        # Membership is flat over every leaf blob (total = blob count); the stored
+        # components are the child composites (a structural rollup). component_count_total
+        # tracks the blob population so it equals membership.total_components, and
+        # stored_components equals the number of child entries — satisfying GLaaS's
+        # composite count invariants for a composite-of-composites.
+        total_blobs = len(leaf_blobs)
         membership = self._build_membership_index_base(leaf_blobs)
         membership["stored_components"] = len(components)
         payload: dict[str, Any] = {
@@ -240,14 +246,14 @@ class CompositeArtifactBuilder:
             "size": sum(int(child.payload.get("size") or 0) for _prefix, child in children),
             "source_type": source_type,
             "session_hash": session_hash,
-            "component_count_total": len(components),
+            "component_count_total": total_blobs,
             "components": components,
             "membership_index": membership,
         }
         return CompositeBuildResult(
             root_path=root_path,
             digest=parent_digest,
-            component_count_total=len(components),
+            component_count_total=total_blobs,
             component_count_stored=len(components),
             payload=payload,
         )

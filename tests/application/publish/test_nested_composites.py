@@ -130,6 +130,25 @@ def test_parent_bloom_is_flat_over_leaf_blobs_not_child_hashes(tmp_path: Path):
     assert not contains(f"composite-blake3:{results[0].digest}".encode())
 
 
+def test_parent_payload_satisfies_glaas_count_invariants(tmp_path: Path):
+    """GLaaS requires membership.total_components == component_count_total and
+    membership.stored_components == len(components). The parent tracks blob count as
+    the total and child count as stored."""
+    root = tmp_path / "c"
+    for task in ["a_task", "b_task"]:
+        _rlds_task(root / task, shards=2)
+    parent = _build_all(root)[-1]
+    p = parent.payload
+    mi = p["membership_index"]
+    n_children = len(p["components"])
+    assert mi["total_components"] == p["component_count_total"]  # GLaaS invariant
+    assert mi["stored_components"] == n_children  # GLaaS invariant
+    assert mi["stored_components"] <= mi["total_components"]
+    assert n_children <= p["component_count_total"]
+    # total tracks blob population, stored tracks the child composites
+    assert p["component_count_total"] > n_children
+
+
 def test_single_structural_child_does_not_nest(tmp_path: Path):
     """One sub-dataset under a dir is not a container — stays a flat composite."""
     root = tmp_path / "c"
