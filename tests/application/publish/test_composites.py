@@ -25,21 +25,25 @@ def test_build_publish_composite_results_groups_roots_in_sorted_order(tmp_path: 
     second_file.write_text("two", encoding="utf-8")
 
     builder = MagicMock()
-    builder.build_for_root.side_effect = [
-        CompositeBuildResult(
-            root_path=str(second_root),
-            digest="a" * 64,
-            payload={"components": []},
-            component_count_total=1,
-            component_count_stored=1,
-        ),
-        CompositeBuildResult(
-            root_path=str(first_root),
-            digest="b" * 64,
-            payload={"components": []},
-            component_count_total=1,
-            component_count_stored=1,
-        ),
+    builder.build_all_for_root.side_effect = [
+        [
+            CompositeBuildResult(
+                root_path=str(second_root),
+                digest="a" * 64,
+                payload={"components": []},
+                component_count_total=1,
+                component_count_stored=1,
+            )
+        ],
+        [
+            CompositeBuildResult(
+                root_path=str(first_root),
+                digest="b" * 64,
+                payload={"components": []},
+                component_count_total=1,
+                component_count_stored=1,
+            )
+        ],
     ]
 
     results = build_publish_composite_results(
@@ -68,7 +72,7 @@ def test_build_publish_composite_results_groups_roots_in_sorted_order(tmp_path: 
     )
 
     assert [item.root_path for item in results] == [str(second_root), str(first_root)]
-    assert [call.kwargs["root_path"] for call in builder.build_for_root.call_args_list] == [
+    assert [call.kwargs["root_path"] for call in builder.build_all_for_root.call_args_list] == [
         second_root,
         first_root,
     ]
