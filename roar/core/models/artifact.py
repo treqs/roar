@@ -14,7 +14,7 @@ from .base import ImmutableModel, RoarBaseModel
 
 # Type aliases for validation
 # Includes canonical composite digest algorithm for composite artifacts.
-HashAlgorithm = Literal["blake3", "sha256", "sha512", "md5", "composite-blake3"]
+HashAlgorithm = Literal["blake3", "sha256", "sha512", "md5", "composite-blake3", "composite-sha256"]
 HexDigest = Annotated[str, Field(min_length=8, max_length=128, pattern=r"^[a-f0-9]+$")]
 
 

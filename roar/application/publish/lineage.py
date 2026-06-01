@@ -612,6 +612,8 @@ class LineageCollector:
             if not artifact:
                 artifact = ctx_db.artifacts.get_by_hash(h, algorithm="composite-blake3")
             if not artifact:
+                artifact = ctx_db.artifacts.get_by_hash(h, algorithm="composite-sha256")
+            if not artifact:
                 artifact = ctx_db.artifacts.get_by_hash(h)
             if artifact:
                 artifact["hash"] = h  # Add the hash we looked up

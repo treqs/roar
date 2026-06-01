@@ -306,4 +306,8 @@ class DefaultLineageService(LineageService):
         if artifact:
             return artifact
 
+        artifact = self._artifact_repo.get_by_hash(digest, algorithm="composite-sha256")
+        if artifact:
+            return artifact
+
         return self._artifact_repo.get_by_hash(digest)

@@ -78,6 +78,13 @@ def build_lineage_composite_payloads(
         component_rows: list[dict[str, Any]] = []
         membership_index: dict[str, Any] | None = None
         artifact_id = artifact.get("id")
+        # Lineage artifact dicts may omit source_type; pull it from the local row so
+        # the composite payload records its origin (e.g. 'hf' for roar get hf://).
+        if not artifact.get("source_type") and isinstance(artifact_id, str) and artifact_id:
+            artifacts_repo: Any = optional_repo(db_ctx, "artifacts")
+            loaded = artifacts_repo.get(artifact_id) if artifacts_repo is not None else None
+            if isinstance(loaded, dict) and loaded.get("source_type"):
+                artifact = {**artifact, "source_type": loaded["source_type"]}
         if composites_repo is not None and isinstance(artifact_id, str) and artifact_id:
             rows = composites_repo.get_components(artifact_id, limit=5000)
             if isinstance(rows, list):
@@ -122,7 +129,13 @@ def resolve_component_hash_for_registration(
     lineage_artifacts_by_id: dict[str, dict[str, Any]],
     logger: ILogger,
 ) -> tuple[str, str] | None:
-    """Resolve a component digest to a canonical blake3 hash when possible."""
+    """Resolve a component digest for registration.
+
+    Prefers a canonical blake3 (via a linked local artifact); otherwise falls back
+    to the component's own digest under its declared algorithm. HF composite
+    components carry sha256 (no blake3 exists), so this returns the sha256 digest
+    rather than dropping the component.
+    """
     artifact_id = row.get("artifact_id")
     linked_artifact: dict[str, Any] | None = None
 
@@ -151,11 +164,12 @@ def resolve_component_hash_for_registration(
     component_digest = row.get("component_digest")
     if (
         isinstance(component_algorithm, str)
-        and component_algorithm.strip().lower() == "blake3"
         and isinstance(component_digest, str)
         and component_digest
     ):
-        return "blake3", component_digest.lower()
+        algo = component_algorithm.strip().lower()
+        if algo in ("blake3", "sha256", "sha512", "md5"):
+            return algo, component_digest.lower()
 
     return None
 
