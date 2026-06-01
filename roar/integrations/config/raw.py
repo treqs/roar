@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 try:
     import tomllib
@@ -84,7 +85,12 @@ def get_raw_glaas_web_url(
     *,
     environ: Mapping[str, str] | None = None,
 ) -> str | None:
-    """Resolve the GLaaS web URL for local preview output."""
+    """Resolve the GLaaS web URL for local preview output.
+
+    Precedence: ``ROAR_GLAAS__WEB_URL`` env, explicit ``glaas.web_url`` config,
+    then a value derived from ``glaas.url`` (so a dev/staging API URL produces
+    matching dev/staging web links instead of falling back to prod).
+    """
     resolved_env = os.environ if environ is None else environ
     env_value = _normalize_url(resolved_env.get("ROAR_GLAAS__WEB_URL"))
     if env_value is not None:
@@ -93,8 +99,34 @@ def get_raw_glaas_web_url(
     raw_config = load_raw_config(start_dir=start_dir)
     glaas_config = raw_config.get("glaas")
     if isinstance(glaas_config, dict):
-        return _normalize_url(glaas_config.get("web_url"))
-    return None
+        explicit = _normalize_url(glaas_config.get("web_url"))
+        if explicit is not None:
+            return explicit
+
+    return _derive_web_url_from_api(
+        get_raw_glaas_api_url(start_dir=start_dir, environ=resolved_env)
+    )
+
+
+def _derive_web_url_from_api(api_url: str | None) -> str | None:
+    """Derive the web UI URL from the API URL by dropping a leading ``api.`` host label.
+
+    ``https://api.glaas.ai``     -> ``https://glaas.ai``
+    ``https://api.dev.glaas.ai`` -> ``https://dev.glaas.ai``
+
+    Hosts without an ``api.`` prefix (e.g. ``http://localhost:3000``) can't be
+    transformed reliably, so this returns ``None`` and the caller falls back.
+    """
+    if not api_url:
+        return None
+    parts = urlsplit(api_url)
+    host = parts.hostname
+    if not host or not host.startswith("api."):
+        return None
+    netloc = host[len("api.") :]
+    if parts.port is not None:
+        netloc = f"{netloc}:{parts.port}"
+    return urlunsplit((parts.scheme, netloc, "", "", "")).rstrip("/")
 
 
 def get_raw_glaas_api_url(
