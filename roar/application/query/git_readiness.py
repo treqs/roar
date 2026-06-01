@@ -7,7 +7,7 @@ a single-line summary for the status output:
 
   - clean        → "clean — branch @ commit  ('roar run' ready)"
   - dirty        → "dirty — 3 modified, 1 untracked  ('roar run' will be refused)"
-  - not_a_repo   → "not a git repo  ('roar run' will be refused)"
+  - not_a_repo   → "not a git repo  ('roar run' works; not commit-tagged)"
   - home_dir     → "running from $HOME  ('roar run' will be refused)"
 
 The categorization follows `git status --porcelain` v1: the X (index)
@@ -70,7 +70,7 @@ class GitReadinessSummary:
             return f"dirty — {self._dirty_breakdown()}  ('roar run' will be refused)"
         if self.state == "home_dir":
             return "running from $HOME  ('roar run' will be refused)"
-        return "not a git repo  ('roar run' will be refused)"
+        return "not a git repo  ('roar run' works; not commit-tagged)"
 
     def _dirty_breakdown(self) -> str:
         parts: list[tuple[int, str]] = [
