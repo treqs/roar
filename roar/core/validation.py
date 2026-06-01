@@ -44,6 +44,35 @@ def _is_placeholder(value: Any) -> bool:
     return value in FORBIDDEN_PLACEHOLDER_VALUES
 
 
+# Shown when a run has no git context at all — the signature of a run
+# captured outside a git repository. One clear, actionable line beats three
+# cryptic per-field "X is required" errors.
+_NO_GIT_CONTEXT_MESSAGE = (
+    "no git context captured — this run was not inside a git repository. "
+    "Local runs are still captured; registering to glaas.ai needs a commit to "
+    "anchor reproducible lineage, so re-run inside a git repo (with your code "
+    "committed) to register it."
+)
+
+
+def _git_context_errors(fields: list[tuple[str, Any, str]]) -> list[str]:
+    """Return git-context validation errors for ``fields``.
+
+    ``fields`` is a list of ``(label, value, hint)`` tuples. When *every*
+    field is a placeholder — the signature of a run captured outside a git
+    repository — return a single explanatory error instead of one cryptic
+    line per field. Otherwise return a granular ``<label> is required<hint>``
+    line for each placeholder field, preserving useful diagnostics for
+    partial cases like a detached HEAD.
+    """
+    missing = [(label, hint) for (label, value, hint) in fields if _is_placeholder(value)]
+    if not missing:
+        return []
+    if len(missing) == len(fields):
+        return [_NO_GIT_CONTEXT_MESSAGE]
+    return [f"{label} is required{hint}" for (label, hint) in missing]
+
+
 def validate_session_registration(
     session_hash: str | None,
     git_repo: str | None,
@@ -69,14 +98,15 @@ def validate_session_registration(
     if _is_placeholder(session_hash):
         errors.append("session_hash is required")
 
-    if _is_placeholder(git_repo):
-        errors.append("git_repo is required (not in a git repository?)")
-
-    if _is_placeholder(git_commit):
-        errors.append("git_commit is required (no commits yet?)")
-
-    if _is_placeholder(git_branch):
-        errors.append("git_branch is required (detached HEAD?)")
+    errors.extend(
+        _git_context_errors(
+            [
+                ("git_repo", git_repo, " (not in a git repository?)"),
+                ("git_commit", git_commit, " (no commits yet?)"),
+                ("git_branch", git_branch, " (detached HEAD?)"),
+            ]
+        )
+    )
 
     if errors:
         return ValidationResult.failure(*errors)
@@ -124,11 +154,14 @@ def validate_job_registration(
     if _is_placeholder(job_uid):
         errors.append("job_uid is required")
 
-    if _is_placeholder(git_commit):
-        errors.append("git_commit is required")
-
-    if _is_placeholder(git_branch):
-        errors.append("git_branch is required")
+    errors.extend(
+        _git_context_errors(
+            [
+                ("git_commit", git_commit, ""),
+                ("git_branch", git_branch, ""),
+            ]
+        )
+    )
 
     # job_type: None = normal run, "build" = build step (no validation needed)
 

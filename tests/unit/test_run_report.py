@@ -388,3 +388,48 @@ def test_show_report_legacy() -> None:
     assert "roar show --job f3fba717" in out
     assert "trace done" in out
     assert "done" in out
+
+
+# ---- no-repo hint ----------------------------------------------------------
+
+
+def test_no_repo_hint_fires_when_no_git_context() -> None:
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.no_repo_hint(_make_result(git_branch=None, git_short_commit=None))
+    out = _strip(buf.getvalue())
+    assert "no git commit captured" in out
+    assert "roar register" in out
+
+
+def test_no_repo_hint_silent_when_commit_present() -> None:
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.no_repo_hint(_make_result(git_branch="main", git_short_commit="10c570b"))
+    assert buf.getvalue() == ""
+
+
+def test_no_repo_hint_silent_when_only_branch_present() -> None:
+    # A detached-HEAD-style run still has a branch/commit signal; the
+    # hint is specifically for the no-git-context case.
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.no_repo_hint(_make_result(git_branch="main", git_short_commit=None))
+    assert buf.getvalue() == ""
+
+
+def test_no_repo_hint_silent_in_quiet_mode() -> None:
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps(), verbosity="quiet")
+    report.no_repo_hint(_make_result())
+    assert buf.getvalue() == ""
+
+
+def test_no_repo_hint_silent_when_hints_disabled() -> None:
+    from unittest.mock import patch
+
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    with patch("roar.integrations.config.config_get", return_value=False):
+        report.no_repo_hint(_make_result())
+    assert buf.getvalue() == ""

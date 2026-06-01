@@ -396,6 +396,11 @@ def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) 
     if in_git_repo:
         hint()
         hint("`roar run` requires a clean git tree — runs are tagged with the commit SHA.")
+    else:
+        hint()
+        hint("Not in a git repo: `roar run` still works and captures lineage,")
+        hint("but runs won't be tagged with a commit. Run inside a git repo")
+        hint("(code committed) to anchor lineage and enable `roar register`.")
     if gitignore_action in ("created", "appended"):
         hint()
         hint("Commit the .gitignore change before your first `roar run`:")
