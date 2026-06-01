@@ -1,10 +1,9 @@
-"""Tests for git-context validation in GLaaS registration payloads.
+"""Tests for git-context handling in GLaaS registration validation.
 
-Covers the relaxed-repo behavior: a run captured outside a git repository
-has no git context at all, and the validators should surface that as one
-clear, actionable message rather than three cryptic per-field errors —
-while still giving granular diagnostics for partial cases (detached HEAD,
-empty repo) where only some fields are missing.
+Git context is optional: a run captured outside a git repository has no
+repo/commit/branch, and that lineage is still registerable (GLaaS records it
+with ``pin_mode: missing``). Only genuinely-required fields (session_hash,
+command, job_uid, ...) are enforced.
 """
 
 from __future__ import annotations
@@ -41,55 +40,44 @@ def test_session_valid_when_git_context_present() -> None:
     assert validate_session_registration(**_valid_session_kwargs())
 
 
-def test_session_no_git_context_collapses_to_single_message() -> None:
+def test_session_valid_without_git_context() -> None:
+    # A run captured outside a git repo: no repo/commit/branch. Now allowed.
     kwargs = _valid_session_kwargs()
     kwargs.update(git_repo="", git_commit="", git_branch="")
-    result = validate_session_registration(**kwargs)
-    assert not result
-    # One combined message, not three per-field lines.
-    assert len(result.errors) == 1
-    msg = result.errors[0]
-    assert "not inside a git repository" in msg
-    assert "register" in msg
+    assert validate_session_registration(**kwargs)
 
 
-def test_session_partial_git_context_keeps_granular_messages() -> None:
-    # Repo + commit present, only branch missing (detached-HEAD-ish):
-    # the granular per-field message must survive.
+def test_session_valid_with_partial_git_context() -> None:
+    # Partial context (e.g. detached HEAD) is also accepted now.
     kwargs = _valid_session_kwargs()
     kwargs.update(git_branch="")
-    result = validate_session_registration(**kwargs)
-    assert not result
-    assert result.errors == ["git_branch is required (detached HEAD?)"]
+    assert validate_session_registration(**kwargs)
 
 
-def test_session_hash_error_is_independent_of_git_collapse() -> None:
+def test_session_hash_still_required_even_without_git() -> None:
     kwargs = _valid_session_kwargs()
     kwargs.update(session_hash="", git_repo="", git_commit="", git_branch="")
     result = validate_session_registration(**kwargs)
     assert not result
-    assert "session_hash is required" in result.errors
-    # Git context still collapses to its single combined message alongside it.
-    assert any("not inside a git repository" in e for e in result.errors)
+    assert result.errors == ["session_hash is required"]
 
 
 def test_job_valid_when_git_context_present() -> None:
     assert validate_job_registration(**_valid_job_kwargs())
 
 
-def test_job_no_git_context_collapses_to_single_message() -> None:
+def test_job_valid_without_git_context() -> None:
     kwargs = _valid_job_kwargs()
     kwargs.update(git_commit="", git_branch="")
-    result = validate_job_registration(**kwargs)
-    assert not result
-    git_errors = [e for e in result.errors if "git" in e.lower()]
-    assert len(git_errors) == 1
-    assert "not inside a git repository" in git_errors[0]
+    assert validate_job_registration(**kwargs)
 
 
-def test_job_partial_git_context_keeps_granular_message() -> None:
+def test_job_required_fields_still_enforced_without_git() -> None:
     kwargs = _valid_job_kwargs()
-    kwargs.update(git_branch="")
+    kwargs.update(command="", job_uid="", git_commit="", git_branch="")
     result = validate_job_registration(**kwargs)
     assert not result
-    assert "git_branch is required" in result.errors
+    assert "command is required" in result.errors
+    assert "job_uid is required" in result.errors
+    # No git-related errors remain.
+    assert not any("git" in e.lower() for e in result.errors)

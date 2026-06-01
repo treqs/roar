@@ -37,6 +37,11 @@ class RegisterLineageResponse:
     aborted_by_user: bool = False
     tag_summary: RegisterTagSummary | None = None
     warnings: list[str] = field(default_factory=list)
+    # False when the registered lineage has no git commit (run captured
+    # outside a git repository). GLaaS records it with ``pin_mode: missing``;
+    # the CLI surfaces a notice so the user knows it can't be reproduced from
+    # source. Defaults True so existing/normal registrations are unaffected.
+    reproducible: bool = True
 
 
 @dataclass(frozen=True)

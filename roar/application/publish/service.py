@@ -543,6 +543,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             aborted_by_user=result.aborted_by_user,
             tag_summary=tag_summary,
             warnings=warnings,
+            reproducible=bool(prepared.git_context.commit),
         )
     except PublishAuthError as exc:
         return RegisterLineageResponse(success=False, error=str(exc))
