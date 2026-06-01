@@ -172,15 +172,29 @@ def _materialize_get_result(
         downloaded_files=transfer_result.downloaded_files,
         git_commit=git_commit,
     )
+    # Form the dataset composite *before* recording the job so the job can link
+    # to the composite rather than to its individual leaf files. Best-effort:
+    # a composite never makes-or-breaks the get.
+    composite: tuple[str, str] | None = None
+    try:
+        composite = _form_get_composite(db_ctx=db_ctx, backend=backend, limit=request.limit)
+    except Exception as exc:  # composite formation is best-effort; never fail a get
+        get_logger().debug("get composite formation skipped: %s", exc)
+
     recorder = LocalJobRecorder()
-    output_artifacts = [
-        LocalRecordedArtifact(
-            path=file_info.local_path,
-            hashes={"blake3": str(file_info.hash)},
-            size=int(file_info.size or 0),
-        )
-        for file_info in transfer_result.downloaded_files
-    ]
+    if composite is not None:
+        # A get job links to the composite artifact, not its subfiles — the
+        # downloaded files are the composite's components.
+        output_artifacts: list[LocalRecordedArtifact] = []
+    else:
+        output_artifacts = [
+            LocalRecordedArtifact(
+                path=file_info.local_path,
+                hashes={"blake3": str(file_info.hash)},
+                size=int(file_info.size or 0),
+            )
+            for file_info in transfer_result.downloaded_files
+        ]
     job_id, job_uid = recorder.record(
         db_ctx,
         command=_build_get_command(request),
@@ -198,12 +212,9 @@ def _materialize_get_result(
         step_name=request.step_name,
     )
 
-    try:
-        _register_get_composite(
-            db_ctx=db_ctx, backend=backend, job_id=job_id, limit=request.limit
-        )
-    except Exception as exc:  # composite formation is best-effort; never fail a get
-        get_logger().debug("get composite formation skipped: %s", exc)
+    if composite is not None:
+        composite_artifact_id, composite_root_label = composite
+        db_ctx.jobs.add_output(job_id, composite_artifact_id, composite_root_label)
 
     return GetResponse(
         success=True,
@@ -214,15 +225,20 @@ def _materialize_get_result(
     )
 
 
-def _register_get_composite(*, db_ctx, backend, job_id: int, limit: int | None = None):
+def _form_get_composite(*, db_ctx, backend, limit: int | None = None):
     """Form + register a composite for an HF dataset get (boundary-time, local).
 
     Builds a ``composite-sha256`` over the dataset's data + format-declared meta
     (LFS sha256 from the HF manifest; identity-bearing non-LFS files re-hashed),
-    excluding repo/format boilerplate, and records it as an output of the get job
-    with the HF coordinates in metadata. When ``limit`` is set the composite is the
+    excluding repo/format boilerplate, and registers it locally with the HF
+    coordinates in metadata. When ``limit`` is set the composite is the
     first-N-files *subset* (matching the downloaded subset), tagged subset-of the
     full dataset. Skips non-HF backends and anything that isn't a >=2-file dataset.
+
+    Returns ``(artifact_id, root_label)`` for the caller to link as the get job's
+    output, or ``None`` when no composite forms. The leaf files are recorded as the
+    composite's components, not as standalone job outputs — a get job links to the
+    composite, not to its subfiles.
     """
     import json
     import mimetypes
@@ -259,9 +275,7 @@ def _register_get_composite(*, db_ctx, backend, job_id: int, limit: int | None =
     # (e.g. LeRobot meta/) are re-hashed to sha256 from a small download, gated by a
     # byte budget so a pile of small non-LFS files can't trigger a huge fetch.
     _NONLFS_REHASH_BUDGET = 64 * 1024 * 1024
-    identity = sorted(
-        (f for f in files if _rel(f.path) not in boilerplate), key=lambda f: f.path
-    )
+    identity = sorted((f for f in files if _rel(f.path) not in boilerplate), key=lambda f: f.path)
     if limit is not None and limit >= 0:
         identity = identity[:limit]  # subset: first N data files (matches the download)
     nonlfs_identity = [f for f in identity if not (f.is_lfs and f.sha256)]
@@ -336,15 +350,30 @@ def _register_get_composite(*, db_ctx, backend, job_id: int, limit: int | None =
             component_count_total=result.component_count_total,
             membership_index=result.payload.get("membership_index"),
         )
-    db_ctx.jobs.add_output(job_id, artifact_id, root_label)
-    return result
+    return artifact_id, root_label
 
 
 def _build_get_command(request: GetRequest) -> str:
-    command = f"roar get {request.source}"
+    """Reconstruct the user's `roar get` invocation for the job record.
+
+    Includes the flags that change *what* gets fetched/recorded (--limit, --name,
+    --tag, --force) so the recorded command faithfully reflects a subset get rather
+    than collapsing to a bare `roar get <source>`. The destination is omitted: it's
+    resolved to an absolute, environment-specific path that wouldn't match what the
+    user typed.
+    """
+    parts = ["roar get", request.source]
+    if request.limit is not None:
+        parts.append(f"--limit {request.limit}")
+    if request.step_name:
+        parts.append(f'-n "{request.step_name}"')
+    if getattr(request, "tag", False):
+        parts.append("--tag")
+    if getattr(request, "force", False):
+        parts.append("--force")
     if request.message:
-        command += f' -m "{request.message}"'
-    return command
+        parts.append(f'-m "{request.message}"')
+    return " ".join(parts)
 
 
 def _build_get_operation_metadata_json(

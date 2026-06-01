@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ...application.publish.registration import (
@@ -16,6 +17,25 @@ from ...core.interfaces.logger import ILogger
 from ...db.context import optional_repo
 from ...integrations.glaas import GlaasClient
 from .blake3_upgrade import ensure_artifact_blake3_digest, select_hash_by_algorithm
+
+
+def _coerce_metadata_json(value: Any) -> str | None:
+    """Normalize a stored artifact ``metadata`` value to a JSON string for GLaaS.
+
+    The composite registration payload carries ``metadata`` as a JSON string; the
+    local row may hold it already-serialized or as a dict (repo-dependent). Returns
+    ``None`` for empty/unset metadata so the payload omits the field entirely.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def has_lineage_composites(artifacts: list[dict[str, Any]]) -> bool:
@@ -78,13 +98,19 @@ def build_lineage_composite_payloads(
         component_rows: list[dict[str, Any]] = []
         membership_index: dict[str, Any] | None = None
         artifact_id = artifact.get("id")
-        # Lineage artifact dicts may omit source_type; pull it from the local row so
-        # the composite payload records its origin (e.g. 'hf' for roar get hf://).
-        if not artifact.get("source_type") and isinstance(artifact_id, str) and artifact_id:
+        # Lineage artifact dicts may omit source_type / metadata; pull them from the
+        # local row so the composite payload records its origin (e.g. 'hf') and its
+        # provenance metadata (HF coordinates, subset_of) reaches GLaaS.
+        metadata = _coerce_metadata_json(artifact.get("metadata"))
+        needs_source = not artifact.get("source_type")
+        if (needs_source or metadata is None) and isinstance(artifact_id, str) and artifact_id:
             artifacts_repo: Any = optional_repo(db_ctx, "artifacts")
             loaded = artifacts_repo.get(artifact_id) if artifacts_repo is not None else None
-            if isinstance(loaded, dict) and loaded.get("source_type"):
-                artifact = {**artifact, "source_type": loaded["source_type"]}
+            if isinstance(loaded, dict):
+                if needs_source and loaded.get("source_type"):
+                    artifact = {**artifact, "source_type": loaded["source_type"]}
+                if metadata is None:
+                    metadata = _coerce_metadata_json(loaded.get("metadata"))
         if composites_repo is not None and isinstance(artifact_id, str) and artifact_id:
             rows = composites_repo.get_components(artifact_id, limit=5000)
             if isinstance(rows, list):
@@ -112,6 +138,7 @@ def build_lineage_composite_payloads(
             membership_index=membership_index,
             session_hash=session_hash,
             composite_builder=composite_builder,
+            metadata=metadata,
             logger=logger,
         )
         if candidate is None:
