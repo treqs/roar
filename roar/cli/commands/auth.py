@@ -17,6 +17,18 @@ import click
 from ...integrations.config import config_get
 
 
+def _glaas_web_url() -> str:
+    """The GLaaS web UI URL for sign-in / key-management guidance.
+
+    Derived from config (``glaas.web_url``, else inferred from ``glaas.url``)
+    so guidance points at the same dev/staging deployment the CLI talks to,
+    instead of hardcoding prod. Falls back to ``https://glaas.ai``.
+    """
+    from ...integrations.config.raw import get_raw_glaas_web_url
+
+    return get_raw_glaas_web_url(start_dir=os.getcwd()) or "https://glaas.ai"
+
+
 def _find_ssh_pubkey() -> tuple[str, str, str] | None:
     """Find an SSH public key. Returns (key_type, pubkey_content, path) or None.
 
@@ -71,19 +83,20 @@ def _find_ssh_pubkey() -> tuple[str, str, str] | None:
 @click.group("auth", invoke_without_command=True)
 @click.pass_context
 def auth(ctx: click.Context) -> None:
-    """Manage authentication with https://glaas.ai
+    """Manage SSH-key authentication with GLaaS.
 
     \b
-    To set up GLaaS auth:
+    Most users should just run 'roar login' (browser sign-in — no key
+    handling). Use this SSH-key flow for CI or headless machines where a
+    browser isn't available:
         1. Run 'roar auth key' to display your public key
-        2. Sign in at https://glaas.ai/login (via GitHub) and paste your public key
-        3. Once added, run 'roar auth test' to verify
-
-    Alternatively, run 'roar login' to authenticate via browser instead.
+        2. Sign in at GLaaS (via GitHub) and add the key in your account settings
+        3. Run 'roar auth test' to verify
 
     \b
     Examples:
-        roar auth key         # Show your SSH key
+        roar login            # Recommended: browser sign-in
+        roar auth key         # Show your SSH key (CI/headless)
         roar auth test        # Test connection
         roar auth status      # Show auth status
     """
@@ -104,6 +117,7 @@ def _show_auth_key() -> None:
         )
 
     key_type, pubkey, path = key_info
+    web_url = _glaas_web_url()
     click.echo("Your SSH public key:")
     click.echo("")
     click.echo(f"  {pubkey}")
@@ -111,7 +125,10 @@ def _show_auth_key() -> None:
     click.echo(f"Key type: {key_type}")
     click.echo(f"Path: {path}")
     click.echo("")
-    click.echo("Copy and paste this key when you sign up at https://glaas.ai")
+    click.echo(f"To register it: sign in at {web_url}/login (via GitHub), then add")
+    click.echo("this key in your account settings. Verify with 'roar auth test'.")
+    click.echo("")
+    click.echo("Most users don't need this — 'roar login' signs in via browser instead.")
 
 
 def _extract_auth_error_detail(error_body: str, fallback: str) -> str:
@@ -213,12 +230,13 @@ def auth_test() -> None:
                 detail = _extract_auth_error_detail(error_body, "Unknown error")
             except Exception:
                 detail = str(e)
+            web_url = _glaas_web_url()
             raise click.ClickException(
                 f"Authentication failed: {detail}\n\n"
                 "Your key isn't registered with GLaaS. Two ways to fix:\n"
-                "  1. Register the key at https://glaas.ai/login (sign in with "
-                "GitHub, then paste your public key).\n"
-                "  2. Or run `roar login` to authenticate via browser instead."
+                "  1. Run `roar login` to sign in via browser (recommended).\n"
+                f"  2. Or sign in at {web_url}/login (via GitHub) and add this "
+                "key in your account settings."
             ) from e
         else:
             raise click.ClickException(f"Server error: {e.code}") from e
