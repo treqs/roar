@@ -41,6 +41,31 @@ class ShowRenderer:
         self.show_all = show_all
 
     @staticmethod
+    def _render_composite_provenance(lines: list[str], artifact: dict) -> None:
+        """Surface a composite's HF source and subset-of relation from metadata."""
+        raw = artifact.get("metadata")
+        if not raw:
+            return
+        try:
+            meta = json.loads(raw) if isinstance(raw, str) else raw
+        except (ValueError, TypeError):
+            return
+        if not isinstance(meta, dict):
+            return
+        hf = meta.get("hf")
+        if isinstance(hf, dict) and hf.get("repo"):
+            commit = str(hf.get("commit") or "")
+            commit_short = f"@{commit[:12]}" if commit else ""
+            lines.append(
+                f"Source:     hf://{hf.get('repo_type', 'datasets')}/{hf['repo']}{commit_short}"
+            )
+        subset = meta.get("subset_of")
+        if isinstance(subset, dict) and subset.get("dataset"):
+            selector = subset.get("selector")
+            suffix = f"  ({selector})" if selector else ""
+            lines.append(f"Subset of:  {subset['dataset']}{suffix}")
+
+    @staticmethod
     def _render_labels(lines: list[str], metadata: dict | None) -> None:
         if not metadata:
             return
@@ -423,6 +448,7 @@ class ShowRenderer:
                 lines.append(f"Kind:       {kind} ({component_count} components)")
             else:
                 lines.append(f"Kind:       {kind}")
+        self._render_composite_provenance(lines, artifact)
         lines.append(f"Size:       {format_size(artifact['size'])}")
         if first_seen_path:
             # Surface filesystem presence — same `(missing)` convention

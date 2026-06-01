@@ -66,7 +66,8 @@ from ..decorators import require_init
     "--limit",
     type=int,
     default=None,
-    help="For a dataset/prefix, download only the first N data files (subset get).",
+    help="For a dataset/prefix, download only the first N data files (subset get). "
+    "Like full datasets, a subset composite needs >=2 data files (N=1 forms none).",
 )
 @click.pass_obj
 @require_init
@@ -94,10 +95,12 @@ def get(
 
     \b
     Source formats:
-        https://example.com/file.pt    HTTP(S) download
-        s3://bucket/path/file.pt       AWS S3
-        gs://bucket/path/file.pt       Google Cloud Storage
-        s3://bucket/prefix/            S3 prefix (directory download)
+        https://example.com/file.pt              HTTP(S) download
+        s3://bucket/path/file.pt                 AWS S3
+        gs://bucket/path/file.pt                 Google Cloud Storage
+        s3://bucket/prefix/                      S3 prefix (directory download)
+        hf://datasets/<owner>/<name>[@<commit>]  Hugging Face dataset (forms a composite)
+        hf://models/<owner>/<name>               Hugging Face model repo
 
     \b
     Examples:
@@ -108,14 +111,14 @@ def get(
         # Download from S3
         roar get s3://my-bucket/models/model.pt
 
-        # Download to specific path
-        roar get s3://bucket/model.pt ./models/
-
         # Download entire S3 prefix
         roar get s3://my-bucket/checkpoints/ ./checkpoints/
 
-        # Download and verify hash
-        roar get s3://bucket/model.pt --hash abc123...
+        # Download an HF dataset (forms a composite-sha256 over its files)
+        roar get hf://datasets/ylecun/mnist ./mnist
+
+        # Pin to a commit and take just the first N data files (subset; needs >=2)
+        roar get hf://datasets/karpathy/climbmix-400b-shuffle@915333b ./data --limit 8
 
         # Dry run to see what would be downloaded
         roar get s3://bucket/data/ ./data/ --dry-run
