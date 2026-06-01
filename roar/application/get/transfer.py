@@ -85,6 +85,7 @@ class GetService:
         dry_run: bool = False,
         force: bool = False,
         is_prefix: bool = False,
+        limit: int | None = None,
     ) -> GetTransferResult:
         """
         Execute a get operation.
@@ -117,6 +118,7 @@ class GetService:
                 destination=destination,
                 dry_run=dry_run,
                 force=force,
+                limit=limit,
             )
         else:
             return self._get_single(
@@ -157,8 +159,13 @@ class GetService:
         destination: Path,
         dry_run: bool = False,
         force: bool = False,
+        limit: int | None = None,
     ) -> GetTransferResult:
-        """Download all files under a prefix."""
+        """Download all files under a prefix (or the first N data files when limited)."""
+        import posixpath
+
+        from ...application.composite.detect import BOILERPLATE
+
         prefix = self._source.key
         self._logger.debug("Listing keys under prefix: %s", prefix)
 
@@ -168,6 +175,11 @@ class GetService:
                 success=False,
                 error=f"No files found under prefix: {self._source.original_url}",
             )
+
+        if limit is not None and limit >= 0:
+            # Subset get: the first N *data* files (repo/format boilerplate excluded).
+            data_keys = [k for k in keys if posixpath.basename(k) not in BOILERPLATE]
+            keys = data_keys[:limit]
 
         self._logger.debug("Found %d key(s) under prefix", len(keys))
 

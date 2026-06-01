@@ -100,6 +100,7 @@ def get_artifacts(request: GetRequest) -> GetResponse:
             dry_run=request.dry_run,
             force=request.force,
             is_prefix=is_prefix,
+            limit=request.limit,
         )
         download_duration = time.time() - t0
 
@@ -198,7 +199,9 @@ def _materialize_get_result(
     )
 
     try:
-        _register_get_composite(db_ctx=db_ctx, backend=backend, job_id=job_id)
+        _register_get_composite(
+            db_ctx=db_ctx, backend=backend, job_id=job_id, limit=request.limit
+        )
     except Exception as exc:  # composite formation is best-effort; never fail a get
         get_logger().debug("get composite formation skipped: %s", exc)
 
@@ -211,13 +214,15 @@ def _materialize_get_result(
     )
 
 
-def _register_get_composite(*, db_ctx, backend, job_id: int):
+def _register_get_composite(*, db_ctx, backend, job_id: int, limit: int | None = None):
     """Form + register a composite for an HF dataset get (boundary-time, local).
 
-    Builds a ``composite-sha256`` over the dataset's LFS files (sha256 from the HF
-    manifest — content identity without re-hashing), excluding repo/format
-    boilerplate, and records it as an output of the get job with the HF coordinates
-    in metadata. Skips non-HF backends and anything that isn't a >=2-file dataset.
+    Builds a ``composite-sha256`` over the dataset's data + format-declared meta
+    (LFS sha256 from the HF manifest; identity-bearing non-LFS files re-hashed),
+    excluding repo/format boilerplate, and records it as an output of the get job
+    with the HF coordinates in metadata. When ``limit`` is set the composite is the
+    first-N-files *subset* (matching the downloaded subset), tagged subset-of the
+    full dataset. Skips non-HF backends and anything that isn't a >=2-file dataset.
     """
     import json
     import mimetypes
@@ -254,7 +259,11 @@ def _register_get_composite(*, db_ctx, backend, job_id: int):
     # (e.g. LeRobot meta/) are re-hashed to sha256 from a small download, gated by a
     # byte budget so a pile of small non-LFS files can't trigger a huge fetch.
     _NONLFS_REHASH_BUDGET = 64 * 1024 * 1024
-    identity = [f for f in files if _rel(f.path) not in boilerplate]
+    identity = sorted(
+        (f for f in files if _rel(f.path) not in boilerplate), key=lambda f: f.path
+    )
+    if limit is not None and limit >= 0:
+        identity = identity[:limit]  # subset: first N data files (matches the download)
     nonlfs_identity = [f for f in identity if not (f.is_lfs and f.sha256)]
     rehash_nonlfs = sum(f.size for f in nonlfs_identity) <= _NONLFS_REHASH_BUDGET
     sha256_of = getattr(backend, "sha256_of", None)
@@ -283,8 +292,10 @@ def _register_get_composite(*, db_ctx, backend, job_id: int):
 
     coords = coords_attr
     root_label = f"hf://{coords['repo_type']}/{coords['repo']}@{coords['commit']}"
+    is_subset = limit is not None and limit >= 0
+    label = f"{root_label}#first:{limit}" if is_subset else root_label
     result = CompositeArtifactBuilder().build_for_leaves(
-        root_path=root_label,
+        root_path=label,
         leaves=leaves,
         session_hash="",
         source_type="hf",
@@ -292,16 +303,24 @@ def _register_get_composite(*, db_ctx, backend, job_id: int):
     if result is None:
         return None
 
-    metadata = json.dumps(
-        {
-            "composite": {
-                "root_path": root_label,
-                "component_count_total": result.component_count_total,
-                "component_count_stored": result.component_count_stored,
-            },
-            "hf": coords,
+    metadata_payload: dict[str, Any] = {
+        "composite": {
+            "root_path": label,
+            "component_count_total": result.component_count_total,
+            "component_count_stored": result.component_count_stored,
+        },
+        "hf": coords,
+    }
+    if is_subset:
+        # The subset's identity is its own sha256-tree; record that it is a subset of
+        # the full dataset at this commit (the full composite is derivable from the
+        # manifest). The membership-stitch to the full composite is the job->composite
+        # layer (future); here we record the relation as metadata.
+        metadata_payload["subset_of"] = {
+            "dataset": root_label,
+            "selector": f"first:{limit}",
         }
-    )
+    metadata = json.dumps(metadata_payload)
     artifact_id, _created = db_ctx.artifacts.register(
         hashes={result.payload["hashes"][0]["algorithm"]: result.digest},
         size=int(result.payload.get("size") or 0),

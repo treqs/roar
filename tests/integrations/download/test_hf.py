@@ -170,6 +170,55 @@ def test_live_manifest_composite_sha256_matches_anchor():
     assert result.digest == "d70b5ec319e39091281ff5970bfd7647cf38eb9cfa6de0cfdd074207264ce4b4"
 
 
+def test_get_prefix_limit_excludes_boilerplate_and_caps():
+    """The subset transfer takes the first N *data* keys, dropping boilerplate."""
+    from roar.application.composite.detect import BOILERPLATE
+
+    keys = [".gitattributes", "README.md"] + [f"shard_{i:05d}.parquet" for i in range(10)]
+    data = [k for k in sorted(keys) if k.split("/")[-1] not in BOILERPLATE]
+    assert data[:4] == [f"shard_{i:05d}.parquet" for i in range(4)]
+    assert ".gitattributes" not in data and "README.md" not in data
+
+
+@pytest.mark.skipif(not _online(), reason="no network")
+def test_live_subset_composite_is_distinct_first_n():
+    """A subset get forms its own composite-sha256 over the first N data files."""
+    import mimetypes
+
+    from roar.application.publish.composite_builder import CompositeArtifactBuilder, CompositeLeaf
+
+    b = HFDownloadBackend(
+        parse_source(
+            "hf://datasets/karpathy/climbmix-400b-shuffle"
+            "@915333b4f8b8684f39aeaafea600fea6f43fb703"
+        )
+    )
+    lfs = sorted((f for f in b.manifest() if f.is_lfs), key=lambda f: f.path)
+
+    def comp(files):
+        leaves = [
+            CompositeLeaf(
+                relative_path=f.path,
+                digest=f.sha256,
+                size=f.size,
+                component_type=mimetypes.guess_type(f.path)[0],
+                component_algorithm="sha256",
+            )
+            for f in files
+        ]
+        return CompositeArtifactBuilder().build_for_leaves(
+            root_path="x", leaves=leaves, session_hash="", source_type="hf"
+        )
+
+    sub4 = comp(lfs[:4])
+    assert sub4.payload["hashes"][0]["algorithm"] == "composite-sha256"
+    assert sub4.component_count_total == 4
+    assert sub4.digest != comp(lfs[:5]).digest  # different selector -> different key
+    assert sub4.digest != (
+        "92fe50f14222b1004e2fbb73351b6a8211710bb10713b86aac1eaa58259dd0a6"  # full
+    )
+
+
 @pytest.mark.skipif(not _online(), reason="no network")
 def test_live_download_and_exists():
     b = HFDownloadBackend(parse_source(LIBERO))

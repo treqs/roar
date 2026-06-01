@@ -62,6 +62,12 @@ from ..decorators import require_init
     default=None,
     help="Set the name label for this step.",
 )
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="For a dataset/prefix, download only the first N data files (subset get).",
+)
 @click.pass_obj
 @require_init
 def get(
@@ -75,6 +81,7 @@ def get(
     force: bool,
     dry_run: bool,
     step_name: str | None,
+    limit: int | None,
 ) -> None:
     """Download artifacts from cloud storage and record in the local DAG.
 
@@ -137,6 +144,7 @@ def get(
                 force=force,
                 tag=tag,
                 step_name=step_name,
+                limit=limit,
             )
         )
     except FileExistsError as e:
