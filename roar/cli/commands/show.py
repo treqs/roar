@@ -11,6 +11,20 @@ from ..context import RoarContext
 from ..decorators import require_init
 
 
+def _primary_artifact_hash(summary: ShowArtifactSummary) -> str | None:
+    """The artifact's primary content-hash digest for the reproduce hint.
+
+    Prefers blake3 (roar's default and what the show header leads with), else
+    the first recorded hash. Returns ``None`` when no content hash is recorded
+    so the caller can fall back to the internal id.
+    """
+    hashes = summary.hashes or []
+    for entry in hashes:
+        if entry.algorithm == "blake3":
+            return entry.digest
+    return hashes[0].digest if hashes else None
+
+
 @click.command("show")
 @click.option("--path", "path_ref", metavar="PATH", help="Show an artifact by path.")
 @click.option(
@@ -92,7 +106,12 @@ def show(
 
         if hints_should_print():
             _caps, hint = make_hint_printer()
-            hint(f"To reproduce this artifact: roar reproduce {summary.id}")
+            # Echo the artifact's content hash (the value shown in the header
+            # above), not the internal DB id — `roar reproduce` resolves by
+            # artifact hash, and a second, unlabeled id read to users as a
+            # different/ambiguous hash.
+            repro_ref = _primary_artifact_hash(summary) or summary.id
+            hint(f"To reproduce this artifact: roar reproduce {repro_ref}")
 
 
 def _build_show_request(
