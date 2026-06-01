@@ -72,6 +72,7 @@ def _apply_reconstitution_filters(
     ignore_system_reads = bool(filters_config.get("ignore_system_reads", True))
     ignore_package_reads = bool(filters_config.get("ignore_package_reads", True))
     ignore_torch_cache = bool(filters_config.get("ignore_torch_cache", True))
+    ignore_library_caches = bool(filters_config.get("ignore_library_caches", True))
     ignore_tmp_files = bool(filters_config.get("ignore_tmp_files", True))
     if bool(cleanup_config.get("delete_tmp_writes", False)):
         ignore_tmp_files = False
@@ -95,6 +96,7 @@ def _apply_reconstitution_filters(
                 ignore_system_reads=ignore_system_reads,
                 ignore_package_reads=ignore_package_reads,
                 ignore_torch_cache=ignore_torch_cache,
+                ignore_library_caches=ignore_library_caches,
                 ignore_tmp_files=ignore_tmp_files,
                 sys_prefix=sys_prefix,
                 sys_base_prefix=sys_base_prefix,
@@ -111,6 +113,7 @@ def _apply_reconstitution_filters(
                 ignore_system_reads=ignore_system_reads,
                 ignore_package_reads=ignore_package_reads,
                 ignore_torch_cache=ignore_torch_cache,
+                ignore_library_caches=ignore_library_caches,
                 ignore_tmp_files=ignore_tmp_files,
                 sys_prefix=sys_prefix,
                 sys_base_prefix=sys_base_prefix,
@@ -157,6 +160,7 @@ def _should_include_ref(
     ignore_system_reads: bool,
     ignore_package_reads: bool,
     ignore_torch_cache: bool,
+    ignore_library_caches: bool,
     ignore_tmp_files: bool,
     sys_prefix: str,
     sys_base_prefix: str,
@@ -173,6 +177,8 @@ def _should_include_ref(
             return False
         if ignore_torch_cache and filter_service._is_torch_cache(path):
             return False
+        if ignore_library_caches and filter_service._is_library_cache(path):
+            return False
         if ignore_package_reads and filter_service._is_package_file(
             path,
             sys_prefix,
@@ -185,6 +191,8 @@ def _should_include_ref(
     if filter_service._is_write_noise(path):
         return False
     if ignore_torch_cache and filter_service._is_torch_cache(path):
+        return False
+    if ignore_library_caches and filter_service._is_library_cache(path):
         return False
     return not (ignore_tmp_files and filter_service._is_tmp_path(path))
 
