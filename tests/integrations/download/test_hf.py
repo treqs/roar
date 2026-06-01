@@ -220,6 +220,59 @@ def test_live_subset_composite_is_distinct_first_n():
 
 
 @pytest.mark.skipif(not _online(), reason="no network")
+@pytest.mark.skipif(
+    not Path("~/.hf_token").expanduser().exists() and not os.environ.get("HF_TOKEN"),
+    reason="no HF token",
+)
+def test_live_put_equals_get_symmetry():
+    """put == get: the composite built from the actual file bytes (put-style, sha256
+    of content) equals the composite get forms from HF's published oids. The key is
+    host-independent and content-derived, so getting from HF and putting the same
+    bytes (under the same layout) yield the same composite-sha256.
+    """
+    import hashlib
+    import mimetypes
+    import tempfile
+
+    from roar.application.publish.composite_builder import CompositeArtifactBuilder, CompositeLeaf
+
+    b = HFDownloadBackend(parse_source("hf://datasets/ylecun/mnist"))
+    lfs = sorted((f for f in b.manifest() if f.is_lfs), key=lambda f: f.path)
+    builder = CompositeArtifactBuilder()
+
+    def leaf(path, digest, size):
+        return CompositeLeaf(
+            relative_path=path,
+            digest=digest,
+            size=size,
+            component_type=mimetypes.guess_type(path)[0],
+            component_algorithm="sha256",
+        )
+
+    # GET side: composite from HF's published sha256 oids (asserted, no re-hash)
+    get_digest = builder.build_for_leaves(
+        root_path="x",
+        leaves=[leaf(f.path, f.sha256, f.size) for f in lfs],
+        session_hash="",
+        source_type="hf",
+    ).digest
+
+    # PUT side: download the bytes, hash sha256 ourselves (verified), same layout
+    d = Path(tempfile.mkdtemp())
+    put_leaves = []
+    for f in lfs:
+        b.download(f.path, d / f.path)
+        data = (d / f.path).read_bytes()
+        put_leaves.append(leaf(f.path, hashlib.sha256(data).hexdigest(), len(data)))
+    put_digest = builder.build_for_leaves(
+        root_path="x", leaves=put_leaves, session_hash="", source_type="hf"
+    ).digest
+
+    assert put_digest == get_digest  # content-derived, host-independent
+    assert get_digest == "ae4609f24ccaebd621f02625356259c1e8f392bee7f23dd4232c30220fed2ca7"
+
+
+@pytest.mark.skipif(not _online(), reason="no network")
 def test_live_download_and_exists():
     b = HFDownloadBackend(parse_source(LIBERO))
     d = Path(tempfile.mkdtemp())
