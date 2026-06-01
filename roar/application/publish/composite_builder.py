@@ -177,7 +177,10 @@ class CompositeArtifactBuilder:
         identity = self._drop_boilerplate(raw)
         if len(identity) < 2:
             return []
-        if not declared and _detect([leaf.relative_path for leaf in identity]).kind == "unstructured":
+        if (
+            not declared
+            and _detect([leaf.relative_path for leaf in identity]).kind == "unstructured"
+        ):
             return []
         flat = self.build_for_leaves(
             root_path=str(root_path),

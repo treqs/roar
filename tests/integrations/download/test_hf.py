@@ -99,8 +99,7 @@ def test_live_sha256_of_nonlfs_meta_changes_composite_identity():
 
     b = HFDownloadBackend(
         parse_source(
-            "hf://datasets/physical-intelligence/libero"
-            "@a4336d589d589045d1c56423ffdf3b88a0e19b1f"
+            "hf://datasets/physical-intelligence/libero@a4336d589d589045d1c56423ffdf3b88a0e19b1f"
         )
     )
     m = b.manifest()
@@ -119,8 +118,12 @@ def test_live_sha256_of_nonlfs_meta_changes_composite_identity():
     lfs_only = [leaf(f, f.sha256) for f in identity if f.is_lfs and f.sha256]
     with_meta = lfs_only + [leaf(f, b.sha256_of(f.path)) for f in identity if not f.is_lfs]
     builder = CompositeArtifactBuilder()
-    d_lfs = builder.build_for_leaves(root_path="x", leaves=lfs_only, session_hash="", source_type="hf")
-    d_all = builder.build_for_leaves(root_path="x", leaves=with_meta, session_hash="", source_type="hf")
+    d_lfs = builder.build_for_leaves(
+        root_path="x", leaves=lfs_only, session_hash="", source_type="hf"
+    )
+    d_all = builder.build_for_leaves(
+        root_path="x", leaves=with_meta, session_hash="", source_type="hf"
+    )
     assert d_lfs.digest == "9f01856f31ff9ee83e5c43aa494fb63d7517fc9d028422c9701d8aeadc1f86bb"
     assert d_all.digest != d_lfs.digest  # meta/ files fold into identity
 
@@ -189,8 +192,7 @@ def test_live_subset_composite_is_distinct_first_n():
 
     b = HFDownloadBackend(
         parse_source(
-            "hf://datasets/karpathy/climbmix-400b-shuffle"
-            "@915333b4f8b8684f39aeaafea600fea6f43fb703"
+            "hf://datasets/karpathy/climbmix-400b-shuffle@915333b4f8b8684f39aeaafea600fea6f43fb703"
         )
     )
     lfs = sorted((f for f in b.manifest() if f.is_lfs), key=lambda f: f.path)

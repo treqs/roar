@@ -366,7 +366,6 @@ class FragmentReconstituter:
             return parent.parent
         return parent
 
-
     def _count_local_rows(self) -> tuple[int, int]:
         if not self._roar_db_path.exists():
             return 0, 0

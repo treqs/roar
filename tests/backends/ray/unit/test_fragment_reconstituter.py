@@ -582,4 +582,3 @@ def test_fragment_key_file_is_retained_after_reconstitution(
     ).reconstitute()
 
     assert key_path.exists()
-

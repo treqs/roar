@@ -33,9 +33,7 @@ def _dir_sources(root: Path) -> tuple[list[ResolvedSource], dict[str, str]]:
         for f in files:
             p = Path(dirpath) / f
             rel = p.relative_to(root).as_posix()
-            sources.append(
-                ResolvedSource(path=p, exists=True, relative_key=rel, source_root=root)
-            )
+            sources.append(ResolvedSource(path=p, exists=True, relative_key=rel, source_root=root))
             hashes[str(p)] = blake3.blake3(p.read_bytes()).hexdigest()
     return sources, hashes
 

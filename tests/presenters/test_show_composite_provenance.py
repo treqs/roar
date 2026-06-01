@@ -22,7 +22,9 @@ def test_no_metadata_renders_nothing():
 
 
 def test_hf_source_rendered_with_commit():
-    meta = {"hf": {"repo_type": "datasets", "repo": "openai/gsm8k", "commit": "740312add88f7819abc"}}
+    meta = {
+        "hf": {"repo_type": "datasets", "repo": "openai/gsm8k", "commit": "740312add88f7819abc"}
+    }
     lines = _render(json.dumps(meta))
     assert lines == ["Source:     hf://datasets/openai/gsm8k@740312add88f"]
 

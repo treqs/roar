@@ -117,7 +117,10 @@ def test_parent_bloom_is_flat_over_leaf_blobs_not_child_hashes(tmp_path: Path):
         seed = blake3.blake3(b"roar:composite-membership:v1\0" + key).digest()
         h1 = int.from_bytes(seed[0:8], "little")
         h2 = int.from_bytes(seed[8:16], "little") or 1
-        return all((bloom[(h1 + i * h2) % bits // 8] >> ((h1 + i * h2) % bits % 8)) & 1 for i in range(nhash))
+        return all(
+            (bloom[(h1 + i * h2) % bits // 8] >> ((h1 + i * h2) % bits % 8)) & 1
+            for i in range(nhash)
+        )
 
     # every leaf blob (across both children) is in the parent bloom...
     for dp, _d, files in os.walk(root):
