@@ -22,3 +22,4 @@ class GetRequest:
     tag: bool = False
     step_name: str | None = None
     limit: int | None = None  # download only the first N data files (subset get)
+    full_anchor: bool = False  # re-hash non-LFS identity files past the budget

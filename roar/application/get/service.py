@@ -140,6 +140,7 @@ def get_artifacts(request: GetRequest) -> GetResponse:
         would_download=result.would_download,
         git_tag=git_tag_name,
         warnings=warnings,
+        anchor_lfs_only_mb=result.anchor_lfs_only_mb,
         error=result.error,
     )
 
@@ -171,8 +172,14 @@ def _materialize_get_result(
     # recorded as a *view* of the anchor (the selector below), never as its own subset
     # composite. Best-effort: a composite never makes-or-breaks the get.
     composite: tuple[str, str, str] | None = None
+    anchor_notices: dict[str, Any] = {}
     try:
-        composite = _form_get_composite(db_ctx=db_ctx, backend=backend)
+        composite = _form_get_composite(
+            db_ctx=db_ctx,
+            backend=backend,
+            full_anchor=request.full_anchor,
+            notices=anchor_notices,
+        )
     except Exception as exc:  # composite formation is best-effort; never fail a get
         get_logger().debug("get composite formation skipped: %s", exc)
 
@@ -240,10 +247,11 @@ def _materialize_get_result(
         job_id=job_id,
         job_uid=job_uid,
         downloaded_files=transfer_result.downloaded_files,
+        anchor_lfs_only_mb=anchor_notices.get("lfs_only_mb"),
     )
 
 
-def _form_get_composite(*, db_ctx, backend):
+def _form_get_composite(*, db_ctx, backend, full_anchor=False, notices=None):
     """Form + register the full-dataset *anchor* composite for an HF get.
 
     Builds the canonical ``sha256-tree`` over the dataset's data + format-declared
@@ -254,6 +262,11 @@ def _form_get_composite(*, db_ctx, backend):
     recorded by the caller as a *view* of the anchor (job link + selector), never as
     its own subset composite. Skips non-HF backends and anything that isn't a >=2-file
     structural dataset.
+
+    When the total size of identity-bearing non-LFS files exceeds the re-hash budget,
+    they are excluded from the anchor (LFS-only identity) unless ``full_anchor`` is set,
+    which lifts the cap and downloads them. The excluded megabytes are recorded in
+    ``notices['lfs_only_mb']`` so the caller can warn + hint.
 
     Returns ``(artifact_id, root_label, digest)`` for the caller to link as the get
     job's output, or ``None`` when no composite forms. The leaf files are the anchor's
@@ -296,7 +309,12 @@ def _form_get_composite(*, db_ctx, backend):
     _NONLFS_REHASH_BUDGET = 64 * 1024 * 1024
     identity = sorted((f for f in files if _rel(f.path) not in boilerplate), key=lambda f: f.path)
     nonlfs_identity = [f for f in identity if not (f.is_lfs and f.sha256)]
-    rehash_nonlfs = sum(f.size for f in nonlfs_identity) <= _NONLFS_REHASH_BUDGET
+    nonlfs_bytes = sum(f.size for f in nonlfs_identity)
+    # --full-anchor lifts the cap and downloads the non-LFS identity files; otherwise
+    # they are dropped from identity when over budget (and the caller is told).
+    rehash_nonlfs = bool(full_anchor) or nonlfs_bytes <= _NONLFS_REHASH_BUDGET
+    if nonlfs_identity and not rehash_nonlfs and notices is not None:
+        notices["lfs_only_mb"] = nonlfs_bytes / 1e6
     sha256_of = getattr(backend, "sha256_of", None)
 
     leaves: list[CompositeLeaf] = []

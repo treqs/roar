@@ -71,6 +71,86 @@ def _db_path(roar_dir: Path) -> Path:
     return next(roar_dir.rglob("roar.db"))
 
 
+class _LeRobotBackend:
+    """LeRobot-shaped repo: a large non-LFS meta file + two LFS data shards."""
+
+    _subpath = ""
+
+    def __init__(self, meta_size: int) -> None:
+        self._meta_size = meta_size
+        self.sha256_of_calls: list[str] = []
+
+    @property
+    def coordinates(self) -> dict[str, str]:
+        return {
+            "host": "hf",
+            "repo_type": "datasets",
+            "repo": "x/lerobot",
+            "ref": "main",
+            "commit": "f" * 40,
+        }
+
+    def manifest(self) -> list[HFFileMeta]:
+        return [
+            HFFileMeta(
+                path="meta/info.json",
+                size=self._meta_size,
+                is_lfs=False,
+                sha256=None,
+                git_oid="0" * 40,
+            ),
+            HFFileMeta(
+                path="data/chunk-000/file-0.parquet",
+                size=10,
+                is_lfs=True,
+                sha256="a" * 64,
+                git_oid="0" * 40,
+            ),
+            HFFileMeta(
+                path="data/chunk-000/file-1.parquet",
+                size=10,
+                is_lfs=True,
+                sha256="b" * 64,
+                git_oid="0" * 40,
+            ),
+        ]
+
+    def sha256_of(self, key: str) -> str:
+        self.sha256_of_calls.append(key)
+        return "c" * 64
+
+
+def test_anchor_budget_excludes_nonlfs_over_budget_and_signals(tmp_path: Path) -> None:
+    from roar.application.get.service import _form_get_composite
+
+    db = MagicMock()
+    db.artifacts.register.return_value = ("anchor-id", True)
+
+    over = 70 * 1024 * 1024  # non-LFS meta past the 64 MB budget
+    backend = _LeRobotBackend(meta_size=over)
+    notices: dict = {}
+    result = _form_get_composite(db_ctx=db, backend=backend, full_anchor=False, notices=notices)
+
+    assert result is not None  # anchor still forms (LFS-only over the 2 parquet)
+    assert backend.sha256_of_calls == []  # the over-budget non-LFS file is NOT downloaded
+    assert round(notices["lfs_only_mb"]) == round(over / 1e6)
+
+
+def test_full_anchor_includes_nonlfs_over_budget(tmp_path: Path) -> None:
+    from roar.application.get.service import _form_get_composite
+
+    db = MagicMock()
+    db.artifacts.register.return_value = ("anchor-id", True)
+
+    backend = _LeRobotBackend(meta_size=70 * 1024 * 1024)
+    notices: dict = {}
+    result = _form_get_composite(db_ctx=db, backend=backend, full_anchor=True, notices=notices)
+
+    assert result is not None
+    assert backend.sha256_of_calls == ["meta/info.json"]  # downloaded + folded in
+    assert "lfs_only_mb" not in notices  # no exclusion -> no warning
+
+
 def test_fake_hf_get_anchor_crosswalk_then_attribution(tmp_path: Path) -> None:
     from roar.application.get.requests import GetRequest
     from roar.application.get.service import get_artifacts
