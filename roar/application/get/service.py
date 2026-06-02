@@ -384,11 +384,14 @@ def _register_get_crosswalk_rows(*, db_ctx, backend, downloaded_files) -> None:
         sha256_digest = oid_map.get(remote_key)
         if sha256_digest is None:
             continue  # non-LFS / unknown — no published sha256 to cross-walk
+        # A downloaded shard is a local file artifact, not an `hf` composite — GLaaS
+        # only accepts `hf` source_type for composites, and a regular file registered
+        # with source_type="hf" is rejected. Leave it unset (local materialization);
+        # its HF provenance is carried by the anchor + the get job metadata.
         db_ctx.artifacts.register(
             hashes={"blake3": str(blake3_digest), "sha256": sha256_digest},
             size=int(file_info.size or 0),
             path=file_info.local_path,
-            source_type="hf",
         )
 
 
