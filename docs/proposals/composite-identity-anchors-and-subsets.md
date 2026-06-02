@@ -225,16 +225,26 @@ happens later, at register, via the local crosswalk — `run` itself is untouche
 - Must **not** publish `blake3`; push only origin-hash identities + composites.
 - Composite register-once / heal idempotency as above.
 
-### `roar put` — the new outgoing cost
+### `roar put` — reality check + the continuity bridge
 
-- Hash outgoing bytes once -> `blake3` + `sha256` (sha256 unavoidable to live in HF's
-  address space; blake3 verifies against the tracked digest, mismatch -> stop).
-- Register the `sha256-tree` portable identity; form the anchor for the put set.
-- Look up whether the put set is **already a local composite** (e.g. a previously
-  registered `blake3-tree`); if so, link old -> new via the put job edge rather than
-  landing a disconnected `sha256-tree`.
-- Express the verified `blake3 <-> sha256` relationship as the **put job edge**, not a
-  second hash on the artifact.
+**Reality (verified in code):** `roar put` uploads only to **S3/GCS** — there is no HF
+put path (destinations are `s3://`/`gs://`; storage backends are S3, GCS, noop,
+memory). S3/GCS impose no content hash, so `blake3-tree` is the *correct* published
+identity and the existing `composite-blake3` (`put_composites.py:239`) is **not a
+bug**. The "put publishes in the destination's algorithm" rule (decision 5) resolves
+to `blake3` for every put roar can do today. A `sha256-tree` put only arises if/when an
+HF (or other sha256-native) put destination is added — out of scope here.
+
+What *is* real even for S3/GCS is the **get->put continuity gap**: get-from-HF gives a
+`sha256-tree` anchor, then put-to-S3 forms a separate `blake3-tree` composite for the
+same bytes — two disconnected identities. The fix is **not** to compute sha256 at put
+(S3 doesn't need it) but to **bridge** the two via the put job edge:
+
+- Keep `blake3-tree` for the S3/GCS publication (`D_b3_s3`).
+- If the put set was got from HF (has a `sha256-tree` anchor, found via the local
+  crosswalk), record the source anchor as the put job's input and `D_b3_s3` as its
+  output — an ordinary lineage edge bridging the two hash planes. No second hash on any
+  artifact; neither composite is mutated.
 
 ## Decisions and open questions
 
@@ -305,13 +315,18 @@ job metadata; the put binding is an ordinary job edge).
   job links to the anchor and records `{anchor, selector}`. Close Gap B — register
   each downloaded shard as a local artifact carrying `blake3` + `sha256` (the local
   crosswalk cache) instead of `output_artifacts = []`.
-- **Phase 2 — put publishes in the destination algorithm (roar).** Replace the
-  hardcoded `composite-blake3` (`put_composites.py:239`) with destination-aware
-  identity: put-to-HF forms `sha256-tree` over the put set, hashing outgoing bytes
-  once into `blake3` + `sha256`; non-HF targets keep `blake3-tree`.
-- **Phase 3 — put binding edge (roar).** Look up whether the put set is already a
-  local composite; if so, verify `blake3` matches and link `D_b3 -> D_sha` via the
-  put job edge. Otherwise form `D_sha` fresh in the same pass.
+- **Phase 2 — put identity is destination-driven (roar).** The published composite
+  algorithm follows the destination. roar's only put destinations today are S3/GCS,
+  which impose no content hash, so `blake3-tree` is correct and stays the default (the
+  existing `composite-blake3` is right for them, not a bug). Make the choice explicit
+  and destination-driven so a future sha256-native destination would form `sha256-tree`
+  without a re-hardcode. No behavior change for S3/GCS.
+- **Phase 3 — get->put continuity bridge (roar).** When a put publishes files that were
+  got from HF (and so already have a `sha256-tree` anchor), link the put's
+  `blake3-tree` S3 composite to its source anchor via the put job edge (input = source
+  sha256 anchor, output = published blake3 composite), found through the local
+  crosswalk. Bridges the two hash planes for the same bytes without computing sha256 at
+  put time or mutating either composite.
 - **Phase 4 — register-time composite attribution (roar).** In the bulk register link
   phase, resolve a job's `blake3` inputs through the local crosswalk to the right
   composite. Confirm idempotency treats a composite as present iff digest + non-zero
