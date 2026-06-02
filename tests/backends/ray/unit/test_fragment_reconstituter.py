@@ -9,8 +9,6 @@ from pathlib import Path
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from roar.application.system_labels import refresh_job_system_labels
-from roar.db.context import create_database_context
 from roar.execution.fragments.sessions import (
     generate_fragment_session,
     load_fragment_session,
@@ -262,22 +260,6 @@ def test_reconstitute_fetches_decrypts_and_merges_fragments(
 
     assert merged_fragments == [[{"job_uid": "job-a"}, {"job_uid": "job-b"}]]
     assert result.fragments_processed == 2
-
-
-def test_shard_cluster_candidates_get_lower_reconstitution_confidence_floor() -> None:
-    module = _module()
-
-    config = type("Config", (), {"min_confidence": 0.8})()
-    candidate = {"evidence": ["high_cardinality", "payload_ext", "shard_cluster"]}
-
-    assert module.FragmentReconstituter._composite_confidence_floor(candidate, config) == 0.5
-    assert (
-        module.FragmentReconstituter._composite_confidence_floor(
-            {"evidence": ["payload_ext"]},
-            config,
-        )
-        == 0.8
-    )
 
 
 def test_resolve_s3_key_placeholders_rewrites_paths_when_concrete_match_exists() -> None:
@@ -600,91 +582,3 @@ def test_fragment_key_file_is_retained_after_reconstitution(
     ).reconstitute()
 
     assert key_path.exists()
-
-
-def test_materialized_reconstituted_composites_refresh_job_system_labels(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    import roar.execution.recording as execution_recording
-
-    module = _module()
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    roar_dir = repo_root / ".roar"
-    roar_dir.mkdir()
-    output_dir = repo_root / "outputs"
-    output_dir.mkdir()
-    output_path = output_dir / "result.txt"
-    output_path.write_text("ok\n", encoding="utf-8")
-
-    with create_database_context(roar_dir) as db_ctx:
-        session_id = db_ctx.sessions.create(make_active=True)
-        job_id, job_uid = db_ctx.jobs.create(
-            command="ray_task:basic",
-            timestamp=1.0,
-            job_uid="ray-task-1",
-            session_id=session_id,
-            step_number=2,
-            execution_backend="ray",
-            execution_role="task",
-            job_type="ray_task",
-            metadata=json.dumps(
-                {
-                    "task_identity": "identity-1",
-                    "backend": "ray",
-                    "ray_task_id": "task-1",
-                    "ray_worker_id": "worker-1",
-                    "ray_node_id": "node-1",
-                    "task_name": "basic",
-                }
-            ),
-        )
-        artifact_id, _created = db_ctx.artifacts.register(
-            hashes={"blake3": "a" * 64},
-            size=output_path.stat().st_size,
-            path=str(output_path),
-        )
-        db_ctx.jobs.add_output(job_id, artifact_id, str(output_path))
-        refresh_job_system_labels(db_ctx, job_id=job_id)
-        before = db_ctx.labels.get_current("job", job_id=job_id)
-
-    assert job_uid == "ray-task-1"
-    assert before is not None
-    assert "composites" not in before["metadata"]["roar"]
-
-    monkeypatch.setattr(
-        execution_recording.RunCompositeMaterializationConfig,
-        "from_repo_root",
-        classmethod(
-            lambda cls, repo_root: cls(
-                enabled=True,
-                min_confidence=0.0,
-                min_components=1,
-                max_roots_per_job=1,
-            )
-        ),
-    )
-    monkeypatch.setattr(
-        execution_recording.DatasetIdentifierInferer,
-        "infer",
-        lambda self, paths, repo_root, min_confidence=0.0: [
-            {"dataset_id": str(output_dir), "confidence": 1.0}
-        ],
-    )
-
-    reconstituter = module.FragmentReconstituter(
-        session_id="session-composites",
-        token="ab" * 32,
-        glaas_url="http://localhost:3001",
-        roar_db_path=roar_dir / "roar.db",
-    )
-    reconstituter._materialize_reconstituted_composites([{"job_uid": job_uid}])
-
-    with create_database_context(roar_dir) as db_ctx:
-        after = db_ctx.labels.get_current("job", job_id=job_id)
-
-    assert after is not None
-    composites = after["metadata"]["roar"]["composites"]
-    assert composites["count"] == 1
-    assert composites["0"]["root_path"] == str(output_dir)

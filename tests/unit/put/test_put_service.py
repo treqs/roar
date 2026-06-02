@@ -308,10 +308,12 @@ class TestPutService:
     def test_put_prepared_directory_source_registers_composite_artifact(
         self, tmp_path: Path
     ) -> None:
+        # A structurally-detected dataset (>=2 parquet shards) forms a composite;
+        # an unstructured pile of files deliberately does not (use --dataset for that).
         dataset_dir = tmp_path / "dataset"
         dataset_dir.mkdir()
-        (dataset_dir / "a.txt").write_text("a", encoding="utf-8")
-        (dataset_dir / "b.txt").write_text("b", encoding="utf-8")
+        (dataset_dir / "shard-0.parquet").write_text("a", encoding="utf-8")
+        (dataset_dir / "shard-1.parquet").write_text("b", encoding="utf-8")
 
         service = PutService(
             db_context=_create_mock_db(),
@@ -395,10 +397,12 @@ class TestPutService:
     def test_put_prepared_marks_unexpected_composite_registration_response_unsuccessful(
         self, tmp_path: Path
     ) -> None:
+        # A structurally-detected dataset (>=2 parquet shards) forms a composite;
+        # an unstructured pile of files deliberately does not (use --dataset for that).
         dataset_dir = tmp_path / "dataset"
         dataset_dir.mkdir()
-        (dataset_dir / "a.txt").write_text("a", encoding="utf-8")
-        (dataset_dir / "b.txt").write_text("b", encoding="utf-8")
+        (dataset_dir / "shard-0.parquet").write_text("a", encoding="utf-8")
+        (dataset_dir / "shard-1.parquet").write_text("b", encoding="utf-8")
 
         glaas_client = _create_mock_glaas_client()
         glaas_client.register_composite_artifact.return_value = "bad-response"

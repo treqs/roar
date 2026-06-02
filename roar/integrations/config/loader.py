@@ -23,7 +23,6 @@ from ...core.logging import get_logger
 from .schema import (
     AnalyzersConfig,
     CleanupConfig,
-    CompositesConfig,
     FiltersConfig,
     GlaasConfig,
     HashConfig,
@@ -253,7 +252,6 @@ class RoarSettings(BaseSettings):
     telemetry: TelemetryConfig = TelemetryConfig()
     reversible: ReversibleConfig = ReversibleConfig()
     logging: LoggingConfig = LoggingConfig()
-    composites: CompositesConfig = CompositesConfig()
     env: dict[str, str] = {}
     _backend_configs: dict[str, dict[str, Any]] = PrivateAttr(default_factory=dict)
     _backend_config_source: dict[str, Any] = PrivateAttr(default_factory=dict)
@@ -350,7 +348,6 @@ class RoarSettings(BaseSettings):
             "telemetry": self.telemetry.model_dump(),
             "reversible": self.reversible.model_dump(),
             "logging": self.logging.model_dump(),
-            "composites": self.composites.model_dump(),
             "env": dict(self.env),
         }
         result.update({key: dict(value) for key, value in self._backend_configs.items()})

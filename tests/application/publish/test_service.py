@@ -478,6 +478,7 @@ def test_put_artifacts_builds_put_service_and_creates_git_tag(tmp_path: Path) ->
         dry_run=False,
         git_commit="deadbeef",
         git_tag="roar/deadbeef",
+        declared=False,
     )
     assert response == PutResponse(
         success=True,

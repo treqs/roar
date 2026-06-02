@@ -37,3 +37,4 @@ class PutRequest:
     anonymous: bool = False
     no_tag: bool = False
     step_name: str | None = None
+    as_dataset: bool = False  # declare the source dir(s) a dataset even if unstructured

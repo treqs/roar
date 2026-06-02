@@ -21,3 +21,4 @@ class GetRequest:
     force: bool = False
     tag: bool = False
     step_name: str | None = None
+    limit: int | None = None  # download only the first N data files (subset get)

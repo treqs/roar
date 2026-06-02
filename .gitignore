@@ -229,3 +229,4 @@ tests/benchmarks/results/
 
 # Design docs — internal only, not for version control
 docs/design/
+scratch/

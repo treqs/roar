@@ -5,12 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ...core.digests import is_composite_algorithm
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
 from ..labels import collect_label_sync_payloads
 from .remote_registry import RemoteRegistryTransport, coerce_remote_registry
 
-_VALID_REMOTE_SOURCE_TYPES = {"s3", "gs", "https"}
+_VALID_REMOTE_SOURCE_TYPES = {"s3", "gs", "https", "hf"}
 
 
 @dataclass(frozen=True)
@@ -304,7 +305,7 @@ def prepare_batch_registration_artifacts(
             hashes = blake3_hashes + other_hashes
 
         if artifact.get("kind") == "composite" or any(
-            h.get("algorithm") == "composite-blake3" for h in hashes
+            is_composite_algorithm(h.get("algorithm")) for h in hashes
         ):
             continue
 
@@ -455,9 +456,9 @@ def sync_publish_labels(
 
 
 def extract_composite_digest(hashes: list[dict[str, str]]) -> str | None:
-    """Return the composite digest from a normalized hash list."""
+    """Return the composite digest from a normalized hash list (any composite-* algo)."""
     for item in hashes:
-        if item.get("algorithm") == "composite-blake3":
+        if is_composite_algorithm(item.get("algorithm")):
             digest = item.get("digest")
             if isinstance(digest, str) and digest:
                 return digest
@@ -471,7 +472,7 @@ def ensure_composite_hash_entry(
     """Ensure the composite digest is present in the outgoing hash list."""
     normalized_hashes = [dict(item) for item in hashes]
     has_composite_digest = any(
-        item.get("algorithm") == "composite-blake3" and item.get("digest") == composite_digest
+        is_composite_algorithm(item.get("algorithm")) and item.get("digest") == composite_digest
         for item in normalized_hashes
     )
     if not has_composite_digest:

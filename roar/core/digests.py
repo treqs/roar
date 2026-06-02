@@ -5,7 +5,17 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-PRIMARY_DIGEST_ALGORITHMS: tuple[str, ...] = ("blake3", "composite-blake3")
+# Composite artifact digest algorithms. blake3 for locally-produced composites,
+# sha256 for HF-sourced ones (roar get hf://...). The lineage/register path must
+# treat both as composites.
+COMPOSITE_ALGORITHMS: frozenset[str] = frozenset({"composite-blake3", "composite-sha256"})
+
+PRIMARY_DIGEST_ALGORITHMS: tuple[str, ...] = ("blake3", "composite-blake3", "composite-sha256")
+
+
+def is_composite_algorithm(algorithm: Any) -> bool:
+    """True if ``algorithm`` names a composite digest (any composite-* family)."""
+    return isinstance(algorithm, str) and algorithm in COMPOSITE_ALGORITHMS
 
 
 def extract_primary_digest(

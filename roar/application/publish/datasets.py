@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from urllib.parse import urlparse
 
 from ...execution.recording import DatasetIdentifierInferer
+from ..composite import detect
 from .source_resolution import ResolvedSource
-
-_AUTO_COMPOSITE_MIN_CONFIDENCE = 0.80
 
 
 def infer_publish_dataset_identifiers(
@@ -45,48 +43,29 @@ def infer_publish_dataset_identifiers(
 def detect_additional_publish_composite_roots(
     *,
     resolved_sources: list[ResolvedSource],
-    dataset_identifiers: list[dict[str, object]],
 ) -> dict[Path, list[ResolvedSource]]:
-    """Detect composite roots implied by dataset identifiers and grouped files."""
+    """Group ungrouped publish files into composite roots by *structural* detection.
+
+    Files supplied individually (no ``source_root``) are grouped by parent directory;
+    a parent becomes a composite root only when its contents structurally declare a
+    dataset (parquet shards, WebDataset, Zarr, …). Unstructured piles are not
+    auto-composited. This replaces the prior confidence-scored heuristic and its
+    "any two files under one parent" fallback — declared/structural, never scored.
+    """
     ungrouped = [source for source in resolved_sources if source.source_root is None]
     if len(ungrouped) < 2:
         return {}
 
-    grouped: dict[Path, list[ResolvedSource]] = {}
-    assigned_paths: set[str] = set()
-
-    for candidate in dataset_identifiers:
-        confidence = candidate.get("confidence")
-        if not isinstance(confidence, (int, float)):
-            continue
-        if float(confidence) < _AUTO_COMPOSITE_MIN_CONFIDENCE:
-            continue
-
-        dataset_id = str(candidate.get("dataset_id", ""))
-        parsed = urlparse(dataset_id)
-        if parsed.scheme != "file" or not parsed.path:
-            continue
-
-        root = Path(parsed.path)
-        matches = [
-            source
-            for source in ungrouped
-            if str(source.path) not in assigned_paths and source.path.is_relative_to(root)
-        ]
-        if len(matches) < 2:
-            continue
-
-        grouped[root] = matches
-        assigned_paths.update(str(source.path) for source in matches)
-
-    fallback_by_parent: dict[Path, list[ResolvedSource]] = {}
+    by_parent: dict[Path, list[ResolvedSource]] = {}
     for source in ungrouped:
-        if str(source.path) in assigned_paths:
-            continue
-        fallback_by_parent.setdefault(source.path.parent, []).append(source)
+        by_parent.setdefault(source.path.parent, []).append(source)
 
-    for parent, sources in fallback_by_parent.items():
-        if len(sources) >= 2:
+    grouped: dict[Path, list[ResolvedSource]] = {}
+    for parent, sources in by_parent.items():
+        if len(sources) < 2:
+            continue
+        relpaths = [source.path.name for source in sources]
+        if detect(relpaths).kind != "unstructured":
             grouped[parent] = sources
 
     return grouped

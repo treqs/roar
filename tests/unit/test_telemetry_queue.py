@@ -47,7 +47,6 @@ def _payload(event_id: str) -> dict[str, Any]:
             "proxy_enabled": False,
             "ray_enabled": False,
             "osmo_enabled": False,
-            "composites_run_enabled": True,
         },
     )
 

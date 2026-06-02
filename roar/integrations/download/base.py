@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 # Supported source URI schemes
-SUPPORTED_SOURCE_SCHEMES = {"s3", "gs", "http", "https"}
+SUPPORTED_SOURCE_SCHEMES = {"s3", "gs", "http", "https", "hf"}
 
 
 @dataclass
@@ -59,7 +59,27 @@ def parse_source(url: str) -> Source:
             f"Supported: {', '.join(sorted(SUPPORTED_SOURCE_SCHEMES))}"
         )
 
-    if scheme in ("s3", "gs"):
+    if scheme == "hf":
+        # hf://[datasets|models|spaces/]<owner>/<name>[@ref][/subpath]. The HF backend
+        # re-parses original_url for repo@ref/subpath; here we only set bucket/key and
+        # whether this is a whole-repo/dir (prefix) vs a single file.
+        rest = url[len("hf://") :]
+        body = rest.split("@", 1)[0]
+        subpath = (
+            "/".join(body.split("/")[3:])
+            if body.startswith(("datasets/", "models/", "spaces/"))
+            else "/".join(body.split("/")[2:])
+        )
+        last = subpath.rsplit("/", 1)[-1]
+        is_prefix = subpath == "" or subpath.endswith("/") or "." not in last
+        return Source(
+            scheme="hf",
+            bucket=body.rstrip("/"),
+            key=subpath.rstrip("/"),
+            original_url=url,
+            _is_prefix=is_prefix,
+        )
+    elif scheme in ("s3", "gs"):
         bucket = parsed.netloc
         key = parsed.path.lstrip("/")
         is_prefix = key.endswith("/") or key == ""

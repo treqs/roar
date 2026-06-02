@@ -196,7 +196,7 @@ def _refresh_job_io_refs(
 
 def _select_preferred_link_hash(artifact: dict[str, Any]) -> str | None:
     hashes = normalize_registration_hashes(artifact, fallback_to_hash=True)
-    for preferred_algorithm in ("blake3", "composite-blake3"):
+    for preferred_algorithm in ("blake3", "composite-blake3", "composite-sha256"):
         for entry in hashes:
             if entry.get("algorithm") == preferred_algorithm:
                 digest = entry.get("digest")

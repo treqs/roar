@@ -650,6 +650,7 @@ def put_artifacts(request: PutRequest) -> PutResponse:
                 dry_run=request.dry_run,
                 git_commit=git_commit,
                 git_tag=expected_tag,
+                declared=request.as_dataset,
             )
 
             # Apply step name label if provided.

@@ -94,7 +94,6 @@ def prepare_put_execution(
     )
     additional_composite_roots = detect_additional_publish_composite_roots(
         resolved_sources=resolved_sources,
-        dataset_identifiers=dataset_identifiers,
     )
 
     destination_type = _destination_type(destination)

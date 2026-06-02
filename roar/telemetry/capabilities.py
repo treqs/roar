@@ -18,7 +18,6 @@ _BOOL_FEATURE_KEYS = (
     "proxy_enabled",
     "ray_enabled",
     "osmo_enabled",
-    "composites_run_enabled",
 )
 _ENDPOINT_KINDS = {"default_prod", "default_dev", "custom", "unset"}
 
@@ -45,7 +44,6 @@ def collect_feature_capabilities(endpoint: str | None = None) -> dict[str, Any]:
         "proxy_enabled": False,
         "ray_enabled": importlib.util.find_spec("ray") is not None,
         "osmo_enabled": importlib.util.find_spec("osmo") is not None,
-        "composites_run_enabled": True,
     }
 
 

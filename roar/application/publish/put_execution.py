@@ -51,8 +51,6 @@ from .put_composites import (
 )
 from .results import PutCompositeRegistration, PutDryRunItem, PutUploadedFile
 
-_AUTO_COMPOSITE_MIN_CONFIDENCE = 0.80
-
 
 @dataclass
 class PutResult:
@@ -141,6 +139,7 @@ class PutService:
         dry_run: bool = False,
         git_commit: str | None = None,
         git_tag: str | None = None,
+        declared: bool = False,
     ) -> PutResult:
         """
         Execute a put operation.
@@ -294,6 +293,7 @@ class PutService:
                 additional_composite_roots=additional_composite_roots,
                 git_commit=git_commit,
                 git_tag=git_tag,
+                declared=declared,
             )
 
         with Spinner("Publishing lineage to GLaaS...") as spin:
@@ -362,6 +362,7 @@ class PutService:
                 source_type=composite_source_type,
                 additional_composite_roots=additional_composite_roots,
                 composite_builder=self._composite_builder,
+                declared=declared,
             )
             spin.update("Registering output composites...")
             composite_registrations = register_put_composites_with_glaas(
@@ -549,6 +550,7 @@ class PutService:
         additional_composite_roots: dict[Path, list[Any]],
         git_commit: str | None,
         git_tag: str | None,
+        declared: bool = False,
     ) -> PutResult:
         """Execute the authenticated Phase 5 publish flow via registration sessions."""
         session_hash = fallback_session_hash
@@ -603,6 +605,7 @@ class PutService:
             source_type=composite_source_type,
             additional_composite_roots=additional_composite_roots,
             composite_builder=self._composite_builder,
+            declared=declared,
         )
 
         put_job_registered = False
@@ -707,6 +710,7 @@ class PutService:
                             source_type=composite_source_type,
                             additional_composite_roots=additional_composite_roots,
                             composite_builder=self._composite_builder,
+                            declared=declared,
                         )
                         spin.update("Registering output composites...")
                         composite_registrations = register_put_composites_with_glaas(

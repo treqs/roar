@@ -80,6 +80,13 @@ def _resolve_glaas_web_url(*, start_dir: str | None = None) -> str:
     help="Skip confirmation prompt for anonymous public publishing.",
 )
 @click.option("-n", "--name", "step_name", help="Set the name label for this step.")
+@click.option(
+    "--dataset",
+    "as_dataset",
+    is_flag=True,
+    help="Declare each source directory a dataset (composite) even if its structure "
+    "isn't auto-detected. A composite still requires >=2 files.",
+)
 @click.pass_obj
 @require_init
 def put(
@@ -92,6 +99,7 @@ def put(
     anonymous: bool,
     yes: bool,
     step_name: str | None,
+    as_dataset: bool,
 ) -> None:
     """Publish artifacts to cloud storage and register with GLaaS.
 
@@ -182,6 +190,7 @@ def put(
                 anonymous=publish_intent.anonymous,
                 no_tag=no_tag,
                 step_name=step_name,
+                as_dataset=as_dataset,
             )
         )
     except (FileNotFoundError, ValueError, ImportError) as e:

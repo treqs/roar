@@ -48,7 +48,8 @@ def test_builder_is_deterministic_and_component_order_is_canonical(tmp_path: Pat
     assert first is not None
     assert second is not None
     assert first.digest == second.digest
-    assert first.digest == "8270918dbe04aab28a3b245ca1e44e5a3884f70061de2966944b6b8985bc3da8"
+    # path-sensitive blake3-tree digest (folds relative paths into the composite key)
+    assert first.digest == "b7fece775c87fff407b46a93b341d3af99618f1f7a3d79d928fa789b46a77f1e"
     assert first.payload["hashes"] == [{"algorithm": "composite-blake3", "digest": first.digest}]
     assert [item["relative_path"] for item in first.payload["components"]] == ["a.csv", "b.csv"]
     membership = first.payload["membership_index"]
@@ -60,6 +61,70 @@ def test_builder_is_deterministic_and_component_order_is_canonical(tmp_path: Pat
     bloom_filter = base64.b64decode(membership["bloom_filter_base64"])
     assert len(bloom_filter) == membership["bloom_bits"] // 8
     assert any(byte != 0 for byte in bloom_filter)
+
+
+def test_builder_excludes_boilerplate_from_identity(tmp_path: Path):
+    """README/.gitattributes are associated but do not move the composite hash."""
+    root = tmp_path / "dataset"
+    root.mkdir()
+    shard = root / "shard_00000.parquet"
+    shard.write_text("data\n")
+    readme = root / "README.md"
+    readme.write_text("# docs\n")
+
+    shard_src = ResolvedSource(
+        path=shard, exists=True, relative_key="shard_00000.parquet", source_root=root
+    )
+    readme_src = ResolvedSource(
+        path=readme, exists=True, relative_key="README.md", source_root=root
+    )
+    hashes = {str(shard): _file_hash(shard), str(readme): _file_hash(readme)}
+    builder = CompositeArtifactBuilder()
+
+    with_readme = builder.build_for_root(
+        root_path=root,
+        resolved_sources=[shard_src, readme_src],
+        hashes_by_path=hashes,
+        session_hash="s",
+        source_type=None,
+    )
+    without_readme = builder.build_for_root(
+        root_path=root,
+        resolved_sources=[shard_src],
+        hashes_by_path=hashes,
+        session_hash="s",
+        source_type=None,
+    )
+    assert with_readme is not None and without_readme is not None
+    assert with_readme.digest == without_readme.digest  # README excluded from identity
+    paths = [c["relative_path"] for c in with_readme.payload["components"]]
+    assert "README.md" not in paths
+
+
+def test_builder_digest_is_path_sensitive(tmp_path: Path):
+    """Same content at a different path -> different composite key (principle 4)."""
+    root = tmp_path / "ds"
+    root.mkdir()
+    f = root / "train.parquet"
+    f.write_text("x\n")
+    digest = _file_hash(f)
+
+    def build(rel: str) -> str:
+        result = CompositeArtifactBuilder().build_for_leaves(
+            root_path=str(root),
+            leaves=[
+                CompositeLeaf(relative_path=rel, digest=digest, size=2, component_type=None),
+                CompositeLeaf(
+                    relative_path="other.parquet", digest="aa" * 16, size=2, component_type=None
+                ),
+            ],
+            session_hash="s",
+            source_type=None,
+        )
+        assert result is not None
+        return result.digest
+
+    assert build("train/0.parquet") != build("validation/0.parquet")
 
 
 def test_builder_hashes_symlink_leaf_from_link_target_bytes(tmp_path: Path):
