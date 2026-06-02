@@ -1,7 +1,9 @@
 # Composite Identity: Anchors, Subsets, and the Hash Boundary
 
-Status: design note (pre-implementation). Captures the model agreed in design
-discussion so it is on record before any code moves.
+Status: living design note. Phases 1, 2, 4 (anchors, destination-driven put,
+register-time attribution) are implemented on `cg/composite-anchors-phase1` (PR #142,
+which absorbed #143); the **view-edge model** below supersedes the earlier
+selector-on-link approach and is the target for the next iteration.
 
 ## Summary
 
@@ -100,6 +102,11 @@ form the full-dataset composite over the entire manifest:
 
 ### Subset: view by default, node on demand
 
+> **Refined by [The view-edge model](#the-view-edge-model-supersedes-the-selector-on-link-decision):**
+> the "view" is a **bloom-carrying selection edge**, not a selector recorded on the
+> link. The text below is retained for the rationale (view-not-node, reproducibility
+> via the command, immutability); the *mechanism* is the view edge.
+
 A partial get is a **view** of the anchor, not a new dataset:
 
 - The get job links to the **anchor** and records a replayable **selector**
@@ -184,6 +191,112 @@ sha256 bloom — impossible, since sha256 cannot be derived from blake3. Rare (i
 have the blake3 you almost always had the bytes) and acceptable, but it is the price
 of the boundary and is recorded here as a known limitation.
 
+## The view-edge model (supersedes the selector-on-link decision)
+
+A refinement validated against the climbmix DAG: replace "record a selector on the
+job->anchor link" with a uniform, composable construct. It resolves the DAG issues —
+a run showing 100 shard inputs *and* the composite (prune), and "which subset / a
+bloom on the job" — and the `--limit` selector weakness, in one move.
+
+### Leaves are the only nodes; selections are bloom-carrying edges
+
+- **Leaf** — a content-addressed file blob, referenced by its *origin digest* (sha256
+  for HF). Leaves are the only graph *nodes*.
+- A **view** is a *selection edge*: it points at a parent (another view, an anchor, or
+  the repo) and carries **only a bloom** over the leaves it selects from that parent.
+  It is an edge, not a job-like vertex, and it stores **no explicit leaf list and no
+  selector** — just the bloom.
+- The **anchor is itself a view**: it selects the dataset's identity-bearing leaves out
+  of the HF repo (dropping boilerplate). It additionally carries the dataset's
+  `sha256-tree` key (its content-addressed identity), because the anchor *is* the
+  reusable dataset that gets cited; subordinate views need no tree key of their own.
+
+Views compose — an edge linking to an edge, bottoming out at the repo's enumerable
+manifest:
+
+    job(process.py) ──consumes(bloom/100)──▶ climbmix anchor ──selects(bloom/6543)──▶ repo@commit ──▶ leaves
+
+The run has **one** input edge (the consumes view), whose bloom says which 100 of the
+anchor's 6543 leaves it touched. The anchor's own selects-edge bloom covers all 6543.
+No per-shard edges; no subset list anywhere.
+
+### Why the edge carries *only* a bloom
+
+The exact selected set is never stored on the edge, because it is both **recoverable**
+and **replayable** without it:
+
+- **Recover** (enumerate): test the *parent's* leaves against the edge's bloom — the
+  parent is the candidate universe, the bloom is the filter; this bottoms out at the
+  fully-enumerable repo manifest. Modulo the bloom false-positive rate.
+- **Replay** (reproduce): the recorded command (`roar get … --limit N` at a pinned
+  commit) re-materializes the exact set. The command, not the edge, is the replay
+  source of truth.
+- **Test** ("was leaf X used?"): hash X into the edge bloom — O(1), the common query.
+
+Because the bloom is built from the **actual** materialized/consumed leaves (not a
+`first:N` rule), there is no selector to drift from structural detection — this is what
+dissolves the selector-weakness finding. A bloom over the same leaf set with the same
+parameters is byte-identical, so identical selections dedup naturally.
+
+### The view-edge record (schema)
+
+One edge type, reused for both relations:
+
+    view_edge {
+      relation:  consumes | subset_of          # job->view, or view->parent
+      target:    <parent_digest> | <repo@commit>
+      bloom:     { filter_base64, bits, hashes, version }   # over the selected leaves
+      count:     { selected, parent_total }     # UI sugar (e.g. 100 / 6543) — NOT identity
+    }
+
+The bloom is the entire selection payload; `count` is display only. An input link is
+therefore no longer just `(job, artifact, path)`.
+
+### Bloom contract (authoritative — what every reader, incl. glaas-site, must match)
+
+    key    = f"{algorithm}:{digest}"     # e.g. "sha256:054ddb…", lowercase hex; algorithm per leaf family
+    seed   = blake3( b"roar:composite-membership:v1\0" + key ).digest()
+    h1, h2 = uint64_le(seed[0:8]), uint64_le(seed[8:16]);  if h2 == 0: h2 = 1
+    bit_i  = (h1 + i*h2) % bits           for i in range(hashes)
+    member iff every bit_i is set
+
+The component record carries `componentAlgorithm` — use it; do not assume blake3 or omit
+the prefix. (Querying the bare digest or `blake3:<sha256>` against an `sha256` bloom is
+a guaranteed false negative — the cause of the "definitely not a member" DAG bug.)
+
+### How each command emits / composes views
+
+- **`get hf://… [--limit N]`** — registers/links the **anchor** (selects identity leaves
+  from the repo; `sha256-tree` key + bloom over all leaves, free from the manifest).
+  When only part is materialized, the get job's view bloom covers the downloaded
+  leaves. The blake3<->sha256 crosswalk is stored **locally only**.
+- **`run`** — `consumes` a view over the anchor; its bloom is built from the leaves the
+  tracer observed (resolved to origin digests via the local crosswalk). The per-shard
+  input edges are pruned into this one view; the bloom records which.
+- **`put` -> S3/GCS** — forms a `blake3-tree` view (destination-natural) over the
+  published files; if they were got from HF, that view `subset_of` the HF anchor via
+  the crosswalk (the get->put bridge).
+- **`register`** — serializes the lineage's view edges; publishes leaves under their
+  **origin digest only** (never the crosswalk pair — see F1).
+
+### What this supersedes
+
+- "Selector mirrored into a structured field on the job->anchor link" (Decisions §2)
+  -> replaced by the **bloom-carrying view edge**: no stored selector; the command is
+  the replay truth and the bloom answers membership.
+- The Phase-4 job->anchor *attribution* edge -> becomes the `consumes` **view** edge
+  (anchor target + subset bloom), with the redundant component inputs pruned.
+
+### Related fixes surfaced alongside (separate from the model)
+
+- **F1** — stop publishing the crosswalk `sha256`; leaves carry only their origin digest
+  on the published side.
+- **F2** — preserve `component_algorithm` when the lineage path rebuilds a bloom
+  (`registration.py:184`), or the bloom is keyed `blake3:<sha256>` for fully-stored HF
+  anchors.
+- **glaas component links** — a component digest is a *leaf*, not an artifact; do not
+  link it to `/artifact/<digest>` (resolves by primary hash only -> 404).
+
 ## Change surfaces
 
 How much each surface moves. The point of the design is that **GLaaS barely
@@ -254,12 +367,11 @@ Resolved:
    the anchor plus a selector; no subset composite is formed. This removes the
    `85ad83fe`-style orphans entirely: *what dataset is this?* -> the anchor; *what did
    this job pull?* -> the selector + the local shard artifacts.
-2. **Selector = the recorded command, mirrored into a structured field.** The
-   `roar get ... --limit 2` command at a pinned commit already re-derives the exact
-   shards (and an explicit-path get lists them). Lift it into a small structured field
-   on the job->anchor link (`{anchor, selector: "first:2"}`) so it is queryable
-   without parsing the command. The bloom stays an accelerator, never truth; store an
-   explicit leaf list only for a non-replayable selector.
+2. **Selector = the recorded command, mirrored into a structured field.**
+   **SUPERSEDED** by [The view-edge model](#the-view-edge-model-supersedes-the-selector-on-link-decision):
+   the subset lives as a **bloom on the view edge**, not a selector field on the link.
+   The recorded command remains the replay source of truth; the bloom answers
+   membership; no explicit selector/leaf-list is stored on the edge.
 3. **"Complete" = digest + non-zero size + bloom present.** Because components are
    capped, "all components stored" is never true for large datasets, so idempotency
    must not gate on component count — the stored list is a display sample; the bloom
