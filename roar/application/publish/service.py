@@ -393,6 +393,27 @@ def _run_git(path: Path, *args: str) -> str | None:
         return None
 
 
+def _attribute_jobs_to_anchors_for_lineage(*, roar_dir: Path, lineage: Any, logger: Any) -> int:
+    """Materialize job -> dataset-anchor edges for the jobs in a collected lineage.
+
+    Opens its own DB context so the persisted edges are visible to a fresh lineage
+    collection. Returns the number of edges added.
+    """
+    from .anchor_attribution import attribute_jobs_to_anchors
+
+    job_ids: list[int] = []
+    for job in getattr(lineage, "jobs", []) or []:
+        raw_id = job.get("id") if isinstance(job, dict) else None
+        if isinstance(raw_id, int):
+            job_ids.append(raw_id)
+        elif isinstance(raw_id, str) and raw_id.isdigit():
+            job_ids.append(int(raw_id))
+    if not job_ids:
+        return 0
+    with create_database_context(roar_dir) as attr_db:
+        return attribute_jobs_to_anchors(db_ctx=attr_db, job_ids=job_ids, logger=logger)
+
+
 def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageResponse:
     """Run the `roar register` application workflow."""
     from ...publish_auth import PublishAuthError
@@ -435,6 +456,32 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         )
         if collected_lineage is None:
             return RegisterLineageResponse(success=False, error=error)
+
+        # Materialize job -> dataset-anchor edges from the local crosswalk (a run that
+        # read got-from-HF shards is attributed to the dataset it consumed), then
+        # re-read the lineage so the bundle carries them. Best-effort: never blocks a
+        # registration.
+        if not request.dry_run:
+            try:
+                anchor_added = _attribute_jobs_to_anchors_for_lineage(
+                    roar_dir=request.roar_dir,
+                    lineage=collected_lineage.lineage,
+                    logger=logger,
+                )
+                if anchor_added:
+                    collected_lineage, error = collect_register_lineage(
+                        target=resolved_target,
+                        roar_dir=request.roar_dir,
+                        cwd=request.cwd,
+                        lineage_collector=runtime.lineage_collector,
+                        session_service=runtime.session_service,
+                        logger=logger,
+                        dry_run=request.dry_run,
+                    )
+                    if collected_lineage is None:
+                        return RegisterLineageResponse(success=False, error=error)
+            except Exception as exc:  # attribution is best-effort
+                logger.debug("anchor attribution skipped: %s", exc)
 
         try:
             if request.dry_run:
