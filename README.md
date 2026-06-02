@@ -260,25 +260,31 @@ roar build pip install -e .
 
 Use for setup that should run before the main pipeline (compiling, installing).
 
-### `roar auth`
+### `roar login`
 
-Manage SSH-key-based GLaaS registration settings.
+Authenticate with GLaaS and store your global login state for attributed publishing and project access. **This is the recommended way to sign in** — `roar login` starts a browser/device login flow (sign in with GitHub) and can then unlock private or project-scoped publication in repositories that use `roar scope`.
 
 ```bash
-roar auth register    # Show SSH public key for registration
-roar auth test        # Test connection to GLaaS server
+roar login
+roar login --force
+roar login --token-file ~/.config/roar/auth.json
+```
+
+### `roar auth`
+
+SSH-key authentication for GLaaS — an alternative to `roar login` for CI or headless machines where a browser isn't available.
+
+```bash
+roar auth key         # Show your SSH public key
+roar auth test        # Test connection + authentication
 roar auth status      # Show current auth status
 ```
 
-To register SSH auth with GLaaS:
+To register an SSH key with GLaaS:
 
-1. Run `roar auth register` to display your public key
-2. Sign up at <https://glaas.ai> where you can paste your public key
+1. Run `roar auth key` to display your public key
+2. Add it at <https://glaas.ai/settings/ssh-key> (sign in with GitHub if prompted)
 3. Run `roar auth test` to verify
-
-### `roar login`
-
-Authenticate with GLaaS and store your global login state for attributed publishing and project access. By default, `roar login` starts a browser/device login flow and can then unlock private or project-scoped publication in repositories that use `roar scope`.
 
 ```bash
 roar login
@@ -619,15 +625,18 @@ The server provides:
 # Set the GLaaS server URL
 roar config set glaas.url http://localhost:8000
 
-# Show your SSH key (copy to GLaaS web UI)
-roar auth register
+# Sign in (recommended): browser/device login
+roar login
+
+# Or, for CI/headless: show your SSH key, add it at <glaas>/settings/ssh-key
+roar auth key
 
 # Test authentication
 roar auth test
 ```
 
 > [!TIP]
-> Roar activity can be registered without authentication. Unauthenticated registrations are attributed to a public "anonymous" user, but are not guaranteed persistence. For persistent attribution, we recommend setting up `roar auth`.
+> Roar activity can be registered without authentication. Unauthenticated registrations are attributed to a public "anonymous" user, but are not guaranteed persistence. For persistent attribution, sign in with `roar login` (or `roar auth` for CI/headless).
 
 ## Development
 

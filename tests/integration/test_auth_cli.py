@@ -112,6 +112,41 @@ def test_auth_register_prints_public_key(temp_git_repo: Path, ssh_keypair: Path)
     assert f"Path: {pubkey_path}" in result.stdout
 
 
+def test_auth_key_copy_recommends_login_and_avoids_signup_verb(
+    temp_git_repo: Path, ssh_keypair: Path
+) -> None:
+    # The website is GitHub sign-in, not SSH-key "sign up"; and browser
+    # login is the recommended default. Guard the corrected copy.
+    result = _run_roar_auth(
+        "key",
+        cwd=temp_git_repo,
+        env_overrides={"ROAR_SSH_KEY": str(ssh_keypair)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "sign up" not in result.stdout.lower()
+    # Points at the deep-linkable key page and recommends browser login.
+    assert "/settings/ssh-key" in result.stdout
+    assert "roar login" in result.stdout
+
+
+def test_auth_key_url_follows_dev_api(temp_git_repo: Path, ssh_keypair: Path) -> None:
+    # Pointed at a dev API, the key-registration link must follow to dev
+    # (derived web URL), not hardcode prod glaas.ai.
+    result = _run_roar_auth(
+        "key",
+        cwd=temp_git_repo,
+        env_overrides={
+            "ROAR_SSH_KEY": str(ssh_keypair),
+            "ROAR_GLAAS__URL": "https://api.dev.glaas.ai",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "https://dev.glaas.ai/settings/ssh-key" in result.stdout
+    assert "https://glaas.ai/settings/ssh-key" not in result.stdout
+
+
 def test_auth_status_prefers_env_glaas_url(
     temp_git_repo: Path,
     ssh_keypair: Path,
@@ -177,9 +212,9 @@ def test_auth_test_surfaces_unauthorized_response(
     combined_output = f"{result.stdout}\n{result.stderr}"
     assert result.returncode != 0
     assert "Authentication failed: Unknown key" in combined_output
-    # Error must direct the user to the actual key-registration URL and
-    # mention the browser-based alternative. The old copy pointed at
-    # https://glaas.ai (homepage) which doesn't accept key paste.
-    assert "https://glaas.ai/login" in combined_output
+    # Error must direct the user to the deep-linkable key page and mention the
+    # browser-based alternative. The old copy pointed at https://glaas.ai
+    # (homepage) which doesn't accept key paste.
+    assert "https://glaas.ai/settings/ssh-key" in combined_output
     assert "roar login" in combined_output
     assert fake_glaas_auth_server.last_authorization is not None

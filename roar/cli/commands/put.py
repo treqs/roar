@@ -29,11 +29,15 @@ def _preview_hash(value: str | None) -> str | None:
     return f"{value[:12]}..." if len(value) > 12 else value
 
 
-def _resolve_glaas_web_url() -> str:
-    """Load the GLaaS web URL lazily for success output."""
-    from ...integrations.config import config_get
+def _resolve_glaas_web_url(*, start_dir: str | None = None) -> str:
+    """Load the GLaaS web URL lazily for success output.
 
-    return config_get("glaas.web_url") or "https://glaas.ai"
+    Uses the raw config path so the URL is derived from ``glaas.url`` when
+    ``glaas.web_url`` isn't explicitly set (avoids prod links on a dev API).
+    """
+    from ...integrations.config.raw import get_raw_glaas_web_url
+
+    return get_raw_glaas_web_url(start_dir=start_dir) or "https://glaas.ai"
 
 
 @click.command("put")
@@ -259,7 +263,7 @@ def put(
                     err=True,
                 )
 
-    web_url = _resolve_glaas_web_url()
+    web_url = _resolve_glaas_web_url(start_dir=str(ctx.repo_root or ctx.cwd))
     session_hash = response.session_hash or ""
     session_url = response.session_url or (f"{web_url}/dag/{session_hash}" if session_hash else "")
     if session_url:
