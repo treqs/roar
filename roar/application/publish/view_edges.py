@@ -142,6 +142,69 @@ def resolve_consumed_view_edges(
     return view_edges, subsumed
 
 
+def _get_by_any_hash(artifacts_repo: Any, digest: str) -> dict[str, Any] | None:
+    for algorithm in ("blake3", "composite-sha256", "composite-blake3", "sha256"):
+        artifact = artifacts_repo.get_by_hash(digest, algorithm=algorithm)
+        if artifact:
+            return artifact
+    return artifacts_repo.get_by_hash(digest)
+
+
+def resolve_view_edges_for_job(
+    *,
+    db_ctx: Any,
+    input_hashes: list[str],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Resolve a job's input *hashes* into ``consumes`` view edges + hashes to prune.
+
+    Works from the collected-lineage hashes (not artifact ids). Returns
+    ``(view_edges, prune_hashes)`` — the second being input hashes that collapse into a
+    view edge (the consumed shards) plus any anchor composite hash linked as a plain
+    input (the view edge replaces it).
+    """
+    artifacts_repo: Any = optional_repo(db_ctx, "artifacts")
+    composites_repo: Any = optional_repo(db_ctx, "composites")
+    if artifacts_repo is None or composites_repo is None:
+        return [], set()
+
+    by_anchor: dict[str, dict[str, set[str]]] = {}
+    prune: set[str] = set()
+    for digest in input_hashes:
+        artifact = _get_by_any_hash(artifacts_repo, digest)
+        if not artifact:
+            continue
+        # An anchor composite linked as a plain input (from attribution) is replaced by
+        # the view edge.
+        if _primary_composite_digest(artifact):
+            prune.add(digest)
+            continue
+        sha256_digest = _origin_sha256(artifact)
+        if not sha256_digest:
+            continue
+        for anchor_id in composites_repo.find_by_component_digest(sha256_digest, "sha256"):
+            bucket = by_anchor.setdefault(anchor_id, {"sha256": set(), "shards": set()})
+            bucket["sha256"].add(sha256_digest)
+            bucket["shards"].add(digest)
+
+    view_edges: list[dict[str, Any]] = []
+    for anchor_id, bucket in by_anchor.items():
+        anchor = artifacts_repo.get(anchor_id)
+        anchor_digest = _primary_composite_digest(anchor)
+        if not anchor_digest:
+            continue
+        view_edges.append(
+            build_view_edge(
+                relation="consumes",
+                anchor_digest=anchor_digest,
+                anchor_total=_anchor_total(anchor),
+                consumed_sha256=sorted(bucket["sha256"]),
+            )
+        )
+        prune |= bucket["shards"]
+
+    return view_edges, prune
+
+
 def _primary_composite_digest(artifact: dict[str, Any] | None) -> str | None:
     """The anchor's ``composite-*`` digest (the view edge's target hash)."""
     if not artifact:

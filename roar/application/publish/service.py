@@ -414,6 +414,42 @@ def _attribute_jobs_to_anchors_for_lineage(*, roar_dir: Path, lineage: Any, logg
         return attribute_jobs_to_anchors(db_ctx=attr_db, job_ids=job_ids, logger=logger)
 
 
+def _prepare_view_edges_for_lineage(
+    *, roar_dir: Path, lineage: Any, logger: Any
+) -> dict[str, list[Any]]:
+    """Compute consumes view edges for each job and prune the subsumed inputs in-place.
+
+    For every job, resolves its crosswalk inputs into one view edge per dataset anchor
+    (a bloom over the consumed leaves) and removes the subsumed shard inputs — and any
+    anchor linked as a plain input — from the bundle so they are not pushed as plain
+    inputs. The anchor composite remains in ``lineage.artifacts`` (already collected) so
+    it is still registered. Returns ``{job_uid: [view_edge, ...]}`` to push after the
+    main registration.
+    """
+    from .view_edges import resolve_view_edges_for_job
+
+    jobs = getattr(lineage, "jobs", []) or []
+    if not jobs:
+        return {}
+    view_edges_by_job: dict[str, list[Any]] = {}
+    with create_database_context(roar_dir) as db:
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            job_uid = job.get("job_uid")
+            input_hashes = list(job.get("_input_hashes") or [])
+            if not job_uid or not input_hashes:
+                continue
+            edges, prune = resolve_view_edges_for_job(db_ctx=db, input_hashes=input_hashes)
+            if not edges:
+                continue
+            view_edges_by_job[str(job_uid)] = edges
+            job["_input_hashes"] = [h for h in input_hashes if h not in prune]
+            if isinstance(job.get("_inputs"), list):
+                job["_inputs"] = [i for i in job["_inputs"] if i.get("hash") not in prune]
+    return view_edges_by_job
+
+
 def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageResponse:
     """Run the `roar register` application workflow."""
     from ...publish_auth import PublishAuthError
@@ -482,6 +518,20 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
                         return RegisterLineageResponse(success=False, error=error)
             except Exception as exc:  # attribution is best-effort
                 logger.debug("anchor attribution skipped: %s", exc)
+
+        # Collapse a job's anchor-membership into one consumes view edge (a bloom over
+        # the consumed leaves) and prune the subsumed inputs from the bundle. Pushed
+        # after the main registration. Best-effort.
+        view_edges_by_job: dict[str, list[Any]] = {}
+        if not request.dry_run:
+            try:
+                view_edges_by_job = _prepare_view_edges_for_lineage(
+                    roar_dir=request.roar_dir,
+                    lineage=collected_lineage.lineage,
+                    logger=logger,
+                )
+            except Exception as exc:  # view-edge prep is best-effort
+                logger.debug("view-edge preparation skipped: %s", exc)
 
         try:
             if request.dry_run:
@@ -571,6 +621,19 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             confirm_callback=request.confirm_callback,
             prepared=prepared,
         )
+
+        # Push the consumes view edges now that the jobs + the anchor composite are
+        # registered. Best-effort: never fails an otherwise-successful registration.
+        if result.success and view_edges_by_job:
+            for job_uid, edges in view_edges_by_job.items():
+                try:
+                    _push_result, push_error = runtime.glaas_client.register_job_view_edges(
+                        job_uid, edges
+                    )
+                    if push_error:
+                        logger.debug("view-edge push failed for %s: %s", job_uid, push_error)
+                except Exception as exc:  # best-effort
+                    logger.debug("view-edge push skipped for %s: %s", job_uid, exc)
 
         warnings: list[str] = []
         if tag_push_warning:

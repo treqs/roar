@@ -151,6 +151,56 @@ def test_full_anchor_includes_nonlfs_over_budget(tmp_path: Path) -> None:
     assert "lfs_only_mb" not in notices  # no exclusion -> no warning
 
 
+def test_view_edge_resolution_from_real_get_db(tmp_path: Path) -> None:
+    """get -> DB (anchor + crosswalk); resolving a run's shard input yields a consumes
+    view edge over the anchor (bloom contains the shard) and prunes the shard input."""
+    import base64
+
+    from roar.application.get.requests import GetRequest
+    from roar.application.get.service import get_artifacts
+    from roar.application.publish.composite_builder import CompositeArtifactBuilder
+    from roar.application.publish.view_edges import resolve_view_edges_for_job
+    from roar.db.context import create_database_context
+
+    shard0 = b"PAR1-aaaa" * 200
+    shard1 = b"PAR1-bbbb" * 200
+    backend = _FakeHFBackend({"shard_00000.parquet": shard0, "shard_00001.parquet": shard1})
+    roar_dir = tmp_path / ".roar"
+    req = GetRequest(
+        source="hf://datasets/fake/ds/",
+        destination=tmp_path / "data",
+        roar_dir=roar_dir,
+        cwd=tmp_path,
+        repo_root=tmp_path,
+    )
+    with patch("roar.application.get.service.resolve_download_backend", return_value=backend):
+        assert get_artifacts(req).success
+
+    shard0_sha = hashlib.sha256(shard0).hexdigest()
+    with create_database_context(roar_dir) as ctx:
+        art = ctx.artifacts.get_by_path(str(tmp_path / "data" / "shard_00000.parquet"))
+        shard0_blake3 = next(h["digest"] for h in art["hashes"] if h["algorithm"] == "blake3")
+        edges, prune = resolve_view_edges_for_job(db_ctx=ctx, input_hashes=[shard0_blake3])
+
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge["relation"] == "consumes"
+    assert edge["parent_total"] == 2  # the full dataset
+    assert edge["selected_count"] == 1
+    assert prune == {shard0_blake3}  # the shard collapses into the view edge
+
+    # The view bloom contains the consumed shard's origin sha256 (keyed for glaas-api).
+    builder = CompositeArtifactBuilder()
+    raw = base64.b64decode(edge["bloom"]["bloom_filter_base64"])
+    bits, nhash = edge["bloom"]["bloom_bits"], edge["bloom"]["bloom_hashes"]
+    h1, h2 = builder._bloom_hash_pair(f"sha256:{shard0_sha}".encode())
+    if h2 == 0:
+        h2 = 1
+    assert all(
+        (raw[((h1 + i * h2) % bits) // 8] >> (((h1 + i * h2) % bits) % 8)) & 1 for i in range(nhash)
+    )
+
+
 def test_fake_hf_get_anchor_crosswalk_then_attribution(tmp_path: Path) -> None:
     from roar.application.get.requests import GetRequest
     from roar.application.get.service import get_artifacts
