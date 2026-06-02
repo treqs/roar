@@ -66,8 +66,9 @@ from ..decorators import require_init
     "--limit",
     type=int,
     default=None,
-    help="For a dataset/prefix, download only the first N data files (subset get). "
-    "Like full datasets, a subset composite needs >=2 data files (N=1 forms none).",
+    help="For a dataset/prefix, download only the first N data files. The dataset's "
+    "composite-sha256 anchor is still formed over the full manifest (a dataset needs "
+    ">=2 data files to be a composite); --limit only bounds what is materialized.",
 )
 @click.pass_obj
 @require_init

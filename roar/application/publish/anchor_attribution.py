@@ -18,10 +18,32 @@ existing register machinery propagates it to GLaaS unchanged.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ...core.interfaces.logger import ILogger
 from ...db.context import optional_repo
+
+
+def _crosswalk_sha256(artifact: dict[str, Any]) -> str | None:
+    """The shard's origin sha256 from the local crosswalk.
+
+    `roar get` stores it in the artifact's metadata (``origin``) rather than as a
+    published hash (see F1 / the hash boundary). Falls back to a ``sha256`` hash for
+    crosswalk rows registered before that change.
+    """
+    raw = artifact.get("metadata")
+    if isinstance(raw, str) and raw:
+        try:
+            origin = (json.loads(raw) or {}).get("origin") or {}
+        except (ValueError, TypeError):
+            origin = {}
+        if origin.get("algorithm") == "sha256" and isinstance(origin.get("digest"), str):
+            return origin["digest"]
+    for hash_row in artifact.get("hashes") or []:
+        if hash_row.get("algorithm") == "sha256" and isinstance(hash_row.get("digest"), str):
+            return hash_row["digest"]
+    return None
 
 
 def attribute_jobs_to_anchors(*, db_ctx: Any, job_ids: list[int], logger: ILogger) -> int:
@@ -51,27 +73,24 @@ def attribute_jobs_to_anchors(*, db_ctx: Any, job_ids: list[int], logger: ILogge
             artifact = artifacts_repo.get(input_artifact_id)
             if not artifact:
                 continue
-            for hash_row in artifact.get("hashes", []):
-                if hash_row.get("algorithm") != "sha256":
+            sha256_digest = _crosswalk_sha256(artifact)
+            if not sha256_digest:
+                continue
+            for anchor_id in composites_repo.find_by_component_digest(sha256_digest, "sha256"):
+                # Never attribute an input to itself, to an already-linked input,
+                # or to an anchor resolved earlier in this pass.
+                if (
+                    anchor_id == input_artifact_id
+                    or anchor_id in existing_artifact_ids
+                    or anchor_id in resolved_anchors
+                ):
                     continue
-                sha256_digest = hash_row.get("digest")
-                if not sha256_digest:
+                anchor = artifacts_repo.get(anchor_id)
+                if not anchor:
                     continue
-                for anchor_id in composites_repo.find_by_component_digest(sha256_digest, "sha256"):
-                    # Never attribute an input to itself, to an already-linked input,
-                    # or to an anchor resolved earlier in this pass.
-                    if (
-                        anchor_id == input_artifact_id
-                        or anchor_id in existing_artifact_ids
-                        or anchor_id in resolved_anchors
-                    ):
-                        continue
-                    anchor = artifacts_repo.get(anchor_id)
-                    if not anchor:
-                        continue
-                    resolved_anchors[anchor_id] = (
-                        anchor.get("first_seen_path") or anchor.get("path") or anchor_id
-                    )
+                resolved_anchors[anchor_id] = (
+                    anchor.get("first_seen_path") or anchor.get("path") or anchor_id
+                )
 
         for anchor_id, anchor_path in resolved_anchors.items():
             jobs_repo.add_input(job_id, anchor_id, anchor_path)

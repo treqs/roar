@@ -360,18 +360,25 @@ def _form_get_composite(*, db_ctx, backend):
 
 
 def _register_get_crosswalk_rows(*, db_ctx, backend, downloaded_files) -> None:
-    """Register each downloaded shard as a local artifact carrying both hashes.
+    """Register each downloaded shard as a local artifact with its blake3 + a crosswalk.
 
-    The shard is stored with its ``blake3`` (computed during transfer, the local
-    rename-stable identity) and its ``sha256`` (the HF LFS oid, the anchor's leaf
-    identity). This is the **local crosswalk cache**: a later run that reads the shard
-    is recognized by ``blake3`` and can be resolved to its ``sha256`` — and thus to
-    anchor membership — without re-hashing or re-downloading. It is local-only and
-    never published; the ``blake3 <-> sha256`` pair stays off GLaaS by design.
+    The shard's published identity is its ``blake3`` (computed during transfer, the
+    local rename-stable identity). Its ``sha256`` (the HF LFS oid, the anchor's leaf
+    identity) is the **local crosswalk**: a later run that reads the shard is recognized
+    by ``blake3`` and resolved to its ``sha256`` — and thus to anchor membership —
+    without re-hashing.
+
+    The crosswalk ``sha256`` is stored in the artifact's **metadata**, not as a second
+    hash, because registration never serializes metadata but does serialize all hashes:
+    publishing ``blake3`` and ``sha256`` on one artifact would assert the cross-algo
+    pairing on GLaaS, which the hash-boundary design forbids. Keeping it in metadata
+    means no registration path (batch, bearer, or offline package) can leak it.
 
     The shards are not job outputs (the get job links to the anchor); these rows exist
     purely so downstream attribution can bridge the two hash planes locally.
     """
+    import json
+
     sha256_by_path = getattr(backend, "_sha256_by_path", None)
     if sha256_by_path is None:
         return  # not an HF backend
@@ -384,14 +391,11 @@ def _register_get_crosswalk_rows(*, db_ctx, backend, downloaded_files) -> None:
         sha256_digest = oid_map.get(remote_key)
         if sha256_digest is None:
             continue  # non-LFS / unknown — no published sha256 to cross-walk
-        # A downloaded shard is a local file artifact, not an `hf` composite — GLaaS
-        # only accepts `hf` source_type for composites, and a regular file registered
-        # with source_type="hf" is rejected. Leave it unset (local materialization);
-        # its HF provenance is carried by the anchor + the get job metadata.
         db_ctx.artifacts.register(
-            hashes={"blake3": str(blake3_digest), "sha256": sha256_digest},
+            hashes={"blake3": str(blake3_digest)},
             size=int(file_info.size or 0),
             path=file_info.local_path,
+            metadata=json.dumps({"origin": {"algorithm": "sha256", "digest": sha256_digest}}),
         )
 
 

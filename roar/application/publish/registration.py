@@ -180,6 +180,10 @@ def build_lineage_membership_index_payload(
             component_type = component_type_raw if isinstance(component_type_raw, str) else None
             leaf_kind_raw = component.get("leaf_kind")
             leaf_kind = leaf_kind_raw if isinstance(leaf_kind_raw, str) else "file"
+            algorithm_raw = component.get("component_algorithm")
+            algorithm = (
+                algorithm_raw if isinstance(algorithm_raw, str) and algorithm_raw else "blake3"
+            )
             leaves.append(
                 CompositeLeaf(
                     relative_path=str(component.get("relative_path") or ""),
@@ -187,6 +191,7 @@ def build_lineage_membership_index_payload(
                     size=_normalize_component_size(component.get("component_size")),
                     component_type=component_type,
                     leaf_kind=leaf_kind,
+                    component_algorithm=algorithm,
                 )
             )
 

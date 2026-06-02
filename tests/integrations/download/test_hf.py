@@ -213,7 +213,9 @@ def test_get_prefix_limit_excludes_boilerplate_and_caps():
 @pytest.mark.skipif(not _online(), reason="no network")
 @_tolerate_hf_flakiness
 def test_live_subset_composite_is_distinct_first_n():
-    """A subset get forms its own composite-sha256 over the first N data files."""
+    """Distinct leaf sets yield distinct composite-sha256 keys (content-addressing):
+    first:4 != first:5 != the full anchor. (`roar get --limit N` forms the full-dataset
+    anchor, not a subset composite — this exercises the builder's identity property.)"""
     import mimetypes
 
     from roar.application.publish.composite_builder import CompositeArtifactBuilder, CompositeLeaf

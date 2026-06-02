@@ -170,16 +170,19 @@ def _materialize_with_backend(tmp_path: Path, *, composite, backend):
     return db_ctx
 
 
-def test_composite_get_registers_dual_hash_crosswalk_row(tmp_path: Path) -> None:
+def test_composite_get_registers_crosswalk_row_blake3_only(tmp_path: Path) -> None:
+    import json
+
     backend = MagicMock()
     backend._sha256_by_path.return_value = {"train-0.parquet": "f" * 64}
     db_ctx = _materialize_with_backend(
         tmp_path, composite=("comp-id", "hf://datasets/openai/gsm8k", "d" * 64), backend=backend
     )
-    # The downloaded shard is registered locally with BOTH its blake3 (transfer) and
-    # its sha256 (HF oid) — the local crosswalk cache.
+    # The shard publishes its blake3 only; the crosswalk sha256 (HF oid) lives in
+    # metadata, never as a second hash — so no registration path can leak it (F1).
     _, kwargs = db_ctx.artifacts.register.call_args
-    assert kwargs["hashes"] == {"blake3": "a" * 64, "sha256": "f" * 64}
+    assert kwargs["hashes"] == {"blake3": "a" * 64}
+    assert json.loads(kwargs["metadata"])["origin"] == {"algorithm": "sha256", "digest": "f" * 64}
 
 
 def test_non_composite_get_registers_no_crosswalk(tmp_path: Path) -> None:
