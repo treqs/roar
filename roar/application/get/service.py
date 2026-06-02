@@ -166,20 +166,30 @@ def _materialize_get_result(
             error=transfer_result.error,
         )
 
+    # Form the full-dataset *anchor* composite *before* recording the job so the job
+    # links to the anchor rather than to individual leaf files. A partial get is
+    # recorded as a *view* of the anchor (the selector below), never as its own subset
+    # composite. Best-effort: a composite never makes-or-breaks the get.
+    composite: tuple[str, str, str] | None = None
+    try:
+        composite = _form_get_composite(db_ctx=db_ctx, backend=backend)
+    except Exception as exc:  # composite formation is best-effort; never fail a get
+        get_logger().debug("get composite formation skipped: %s", exc)
+
+    # A partial get (`--limit N`) materializes only the first N data files; record that
+    # as a replayable selector over the anchor rather than minting a subset composite.
+    selector = (
+        f"first:{request.limit}" if request.limit is not None and request.limit >= 0 else None
+    )
+    anchor_digest = composite[2] if composite is not None else None
     metadata_json = _build_get_operation_metadata_json(
         request=request,
         parsed_source=parsed_source,
         downloaded_files=transfer_result.downloaded_files,
         git_commit=git_commit,
+        anchor=anchor_digest,
+        selector=selector,
     )
-    # Form the dataset composite *before* recording the job so the job can link
-    # to the composite rather than to its individual leaf files. Best-effort:
-    # a composite never makes-or-breaks the get.
-    composite: tuple[str, str] | None = None
-    try:
-        composite = _form_get_composite(db_ctx=db_ctx, backend=backend, limit=request.limit)
-    except Exception as exc:  # composite formation is best-effort; never fail a get
-        get_logger().debug("get composite formation skipped: %s", exc)
 
     recorder = LocalJobRecorder()
     if composite is not None:
@@ -213,7 +223,7 @@ def _materialize_get_result(
     )
 
     if composite is not None:
-        composite_artifact_id, composite_root_label = composite
+        composite_artifact_id, composite_root_label, _anchor_digest = composite
         db_ctx.jobs.add_output(job_id, composite_artifact_id, composite_root_label)
 
     return GetResponse(
@@ -225,20 +235,21 @@ def _materialize_get_result(
     )
 
 
-def _form_get_composite(*, db_ctx, backend, limit: int | None = None):
-    """Form + register a composite for an HF dataset get (boundary-time, local).
+def _form_get_composite(*, db_ctx, backend):
+    """Form + register the full-dataset *anchor* composite for an HF get.
 
-    Builds a ``composite-sha256`` over the dataset's data + format-declared meta
-    (LFS sha256 from the HF manifest; identity-bearing non-LFS files re-hashed),
-    excluding repo/format boilerplate, and registers it locally with the HF
-    coordinates in metadata. When ``limit`` is set the composite is the
-    first-N-files *subset* (matching the downloaded subset), tagged subset-of the
-    full dataset. Skips non-HF backends and anything that isn't a >=2-file dataset.
+    Builds the canonical ``sha256-tree`` over the dataset's data + format-declared
+    meta (LFS sha256 from the HF manifest; identity-bearing non-LFS files re-hashed
+    within a byte budget), excluding repo/format boilerplate, and registers it locally
+    with the HF coordinates in metadata. The anchor is the full dataset at this commit
+    regardless of how many files this get actually downloaded: a partial get is
+    recorded by the caller as a *view* of the anchor (job link + selector), never as
+    its own subset composite. Skips non-HF backends and anything that isn't a >=2-file
+    structural dataset.
 
-    Returns ``(artifact_id, root_label)`` for the caller to link as the get job's
-    output, or ``None`` when no composite forms. The leaf files are recorded as the
-    composite's components, not as standalone job outputs — a get job links to the
-    composite, not to its subfiles.
+    Returns ``(artifact_id, root_label, digest)`` for the caller to link as the get
+    job's output, or ``None`` when no composite forms. The leaf files are the anchor's
+    components, not standalone job outputs — a get job links to the anchor.
     """
     import json
     import mimetypes
@@ -276,8 +287,6 @@ def _form_get_composite(*, db_ctx, backend, limit: int | None = None):
     # byte budget so a pile of small non-LFS files can't trigger a huge fetch.
     _NONLFS_REHASH_BUDGET = 64 * 1024 * 1024
     identity = sorted((f for f in files if _rel(f.path) not in boilerplate), key=lambda f: f.path)
-    if limit is not None and limit >= 0:
-        identity = identity[:limit]  # subset: first N data files (matches the download)
     nonlfs_identity = [f for f in identity if not (f.is_lfs and f.sha256)]
     rehash_nonlfs = sum(f.size for f in nonlfs_identity) <= _NONLFS_REHASH_BUDGET
     sha256_of = getattr(backend, "sha256_of", None)
@@ -306,10 +315,8 @@ def _form_get_composite(*, db_ctx, backend, limit: int | None = None):
 
     coords = coords_attr
     root_label = f"hf://{coords['repo_type']}/{coords['repo']}@{coords['commit']}"
-    is_subset = limit is not None and limit >= 0
-    label = f"{root_label}#first:{limit}" if is_subset else root_label
     result = CompositeArtifactBuilder().build_for_leaves(
-        root_path=label,
+        root_path=root_label,
         leaves=leaves,
         session_hash="",
         source_type="hf",
@@ -319,21 +326,12 @@ def _form_get_composite(*, db_ctx, backend, limit: int | None = None):
 
     metadata_payload: dict[str, Any] = {
         "composite": {
-            "root_path": label,
+            "root_path": root_label,
             "component_count_total": result.component_count_total,
             "component_count_stored": result.component_count_stored,
         },
         "hf": coords,
     }
-    if is_subset:
-        # The subset's identity is its own sha256-tree; record that it is a subset of
-        # the full dataset at this commit (the full composite is derivable from the
-        # manifest). The membership-stitch to the full composite is the job->composite
-        # layer (future); here we record the relation as metadata.
-        metadata_payload["subset_of"] = {
-            "dataset": root_label,
-            "selector": f"first:{limit}",
-        }
     metadata = json.dumps(metadata_payload)
     artifact_id, _created = db_ctx.artifacts.register(
         hashes={result.payload["hashes"][0]["algorithm"]: result.digest},
@@ -350,7 +348,7 @@ def _form_get_composite(*, db_ctx, backend, limit: int | None = None):
             component_count_total=result.component_count_total,
             membership_index=result.payload.get("membership_index"),
         )
-    return artifact_id, root_label
+    return artifact_id, root_label, result.digest
 
 
 def _build_get_command(request: GetRequest) -> str:
@@ -382,20 +380,27 @@ def _build_get_operation_metadata_json(
     parsed_source,
     downloaded_files: list[GetDownloadedFile],
     git_commit: str | None,
+    anchor: str | None = None,
+    selector: str | None = None,
 ) -> str:
     artifact_urls: dict[str, str] = {}
     for file_info in downloaded_files:
         artifact_urls[file_info.local_path] = file_info.remote_url
 
-    return build_operation_metadata_json(
-        "get",
-        {
-            "source": request.source,
-            "source_type": parsed_source.scheme,
-            "message": request.message,
-            "artifacts": artifact_urls,
-            "git_commit": git_commit,
-            "git_tag": None,
-            "timestamp": time.time(),
-        },
-    )
+    payload: dict[str, Any] = {
+        "source": request.source,
+        "source_type": parsed_source.scheme,
+        "message": request.message,
+        "artifacts": artifact_urls,
+        "git_commit": git_commit,
+        "git_tag": None,
+        "timestamp": time.time(),
+    }
+    # A partial get is a view of the full-dataset anchor: record the anchor's
+    # sha256-tree digest and the replayable selector so the subset is queryable
+    # without minting a separate subset composite.
+    if anchor is not None:
+        payload["anchor"] = anchor
+    if selector is not None:
+        payload["selector"] = selector
+    return build_operation_metadata_json("get", payload)

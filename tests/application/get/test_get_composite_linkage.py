@@ -104,12 +104,28 @@ def _materialize(tmp_path: Path, *, composite):
 
 
 def test_composite_get_links_composite_not_subfiles(tmp_path: Path) -> None:
-    db_ctx, recorder = _materialize(tmp_path, composite=("comp-id", "hf://datasets/openai/gsm8k"))
+    db_ctx, recorder = _materialize(
+        tmp_path, composite=("comp-id", "hf://datasets/openai/gsm8k", "d" * 64)
+    )
     # The job is recorded with NO per-file outputs...
     _, kwargs = recorder.record.call_args
     assert kwargs["output_artifacts"] == []
-    # ...and the composite is the single linked output.
+    # ...and the anchor is the single linked output.
     db_ctx.jobs.add_output.assert_called_once_with(1, "comp-id", "hf://datasets/openai/gsm8k")
+
+
+def test_composite_get_records_anchor_and_selector_view(tmp_path: Path) -> None:
+    import json
+
+    _db_ctx, recorder = _materialize(
+        tmp_path, composite=("comp-id", "hf://datasets/openai/gsm8k", "d" * 64)
+    )
+    _, kwargs = recorder.record.call_args
+    meta = json.loads(kwargs["metadata"])["get"]
+    # A `--limit 2` get is recorded as a `first:2` view over the anchor digest, not a
+    # subset composite.
+    assert meta["anchor"] == "d" * 64
+    assert meta["selector"] == "first:2"
 
 
 def test_non_composite_get_links_files(tmp_path: Path) -> None:
