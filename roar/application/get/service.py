@@ -225,6 +225,14 @@ def _materialize_get_result(
     if composite is not None:
         composite_artifact_id, composite_root_label, _anchor_digest = composite
         db_ctx.jobs.add_output(job_id, composite_artifact_id, composite_root_label)
+        try:
+            _register_get_crosswalk_rows(
+                db_ctx=db_ctx,
+                backend=backend,
+                downloaded_files=transfer_result.downloaded_files,
+            )
+        except Exception as exc:  # crosswalk is best-effort; never fail a get
+            get_logger().debug("get crosswalk registration skipped: %s", exc)
 
     return GetResponse(
         success=True,
@@ -349,6 +357,39 @@ def _form_get_composite(*, db_ctx, backend):
             membership_index=result.payload.get("membership_index"),
         )
     return artifact_id, root_label, result.digest
+
+
+def _register_get_crosswalk_rows(*, db_ctx, backend, downloaded_files) -> None:
+    """Register each downloaded shard as a local artifact carrying both hashes.
+
+    The shard is stored with its ``blake3`` (computed during transfer, the local
+    rename-stable identity) and its ``sha256`` (the HF LFS oid, the anchor's leaf
+    identity). This is the **local crosswalk cache**: a later run that reads the shard
+    is recognized by ``blake3`` and can be resolved to its ``sha256`` — and thus to
+    anchor membership — without re-hashing or re-downloading. It is local-only and
+    never published; the ``blake3 <-> sha256`` pair stays off GLaaS by design.
+
+    The shards are not job outputs (the get job links to the anchor); these rows exist
+    purely so downstream attribution can bridge the two hash planes locally.
+    """
+    sha256_by_path = getattr(backend, "_sha256_by_path", None)
+    if sha256_by_path is None:
+        return  # not an HF backend
+    oid_map = sha256_by_path()  # {manifest_path: sha256}
+    for file_info in downloaded_files:
+        remote_key = getattr(file_info, "remote_key", None)
+        blake3_digest = file_info.hash
+        if not remote_key or not blake3_digest:
+            continue
+        sha256_digest = oid_map.get(remote_key)
+        if sha256_digest is None:
+            continue  # non-LFS / unknown — no published sha256 to cross-walk
+        db_ctx.artifacts.register(
+            hashes={"blake3": str(blake3_digest), "sha256": sha256_digest},
+            size=int(file_info.size or 0),
+            path=file_info.local_path,
+            source_type="hf",
+        )
 
 
 def _build_get_command(request: GetRequest) -> str:
