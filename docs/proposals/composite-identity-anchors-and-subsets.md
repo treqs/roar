@@ -243,11 +243,18 @@ parameters is byte-identical, so identical selections dedup naturally.
 One edge type, reused for both relations:
 
     view_edge {
-      relation:  consumes | subset_of          # job->view, or view->parent
+      relation:  consumes | produces | subset_of   # job<-view (input), job->view (output), view->parent
       target:    <parent_digest> | <repo@commit>
       bloom:     { filter_base64, bits, hashes, version }   # over the selected leaves
       count:     { selected, parent_total }     # UI sugar (e.g. 100 / 6543) — NOT identity
     }
+
+A view edge is **symmetric across a job's I/O**: `consumes` attaches an *input* view
+(a job read a subset of a dataset), `produces` attaches an *output* view (a job wrote
+a subset/dataset). The view itself is identical either way — only which side of the
+job it sits on differs. A *produced* view is the same object a downstream job
+*consumes* (same digest/bloom, dedup'd), so outputs feed inputs through one construct;
+a produced dataset with no upstream parent simply *is* a new anchor.
 
 The bloom is the entire selection payload; `count` is display only. An input link is
 therefore no longer just `(job, artifact, path)`.
@@ -267,13 +274,15 @@ a guaranteed false negative — the cause of the "definitely not a member" DAG b
 ### How each command emits / composes views
 
 - **`get hf://… [--limit N]`** — registers/links the **anchor** (selects identity leaves
-  from the repo; `sha256-tree` key + bloom over all leaves, free from the manifest).
-  When only part is materialized, the get job's view bloom covers the downloaded
-  leaves. The blake3<->sha256 crosswalk is stored **locally only**.
-- **`run`** — `consumes` a view over the anchor; its bloom is built from the leaves the
-  tracer observed (resolved to origin digests via the local crosswalk). The per-shard
-  input edges are pruned into this one view; the bloom records which.
-- **`put` -> S3/GCS** — forms a `blake3-tree` view (destination-natural) over the
+  from the repo; `sha256-tree` key + bloom over all leaves, free from the manifest) and
+  **produces** a view (output edge) whose bloom covers the downloaded leaves,
+  `subset_of` the anchor. The blake3<->sha256 crosswalk is stored **locally only**.
+- **`run`** — **consumes** an input view over each dataset it reads (bloom built from
+  the leaves the tracer observed, resolved to origin digests via the local crosswalk;
+  the per-shard input edges prune into this one view), and **produces** an output view
+  for any dataset it writes (e.g. tokenized shards) — a new anchor or a `subset_of`
+  some parent.
+- **`put` -> S3/GCS** — **produces** a `blake3-tree` view (destination-natural) over the
   published files; if they were got from HF, that view `subset_of` the HF anchor via
   the crosswalk (the get->put bridge).
 - **`register`** — serializes the lineage's view edges; publishes leaves under their
