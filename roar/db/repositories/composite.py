@@ -120,6 +120,26 @@ class SQLAlchemyCompositeRepository:
         rows = self._session.execute(query).scalars().all()
         return [self._component_to_dict(row) for row in rows]
 
+    def find_by_component_digest(self, digest: str, algorithm: str = "sha256") -> list[str]:
+        """Composite artifact ids whose *stored* components include this leaf digest.
+
+        Used to attribute a job that read a single shard back to the dataset anchor it
+        belongs to. Matches only stored components (capped at the builder's stored
+        limit), so a shard beyond the cap of a very large dataset will not match here;
+        bloom-based membership is the follow-up for that case.
+        """
+        rows = (
+            self._session.execute(
+                select(CompositeArtifactComponent.composite_artifact_id)
+                .where(CompositeArtifactComponent.component_digest == digest.lower())
+                .where(CompositeArtifactComponent.component_algorithm == algorithm)
+                .distinct()
+            )
+            .scalars()
+            .all()
+        )
+        return list(rows)
+
     def get_membership_index(self, artifact_id: str) -> dict[str, Any] | None:
         row = self._session.get(CompositeMembershipIndex, artifact_id)
         if row is None:
