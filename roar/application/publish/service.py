@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -414,6 +415,39 @@ def _attribute_jobs_to_anchors_for_lineage(*, roar_dir: Path, lineage: Any, logg
         return attribute_jobs_to_anchors(db_ctx=attr_db, job_ids=job_ids, logger=logger)
 
 
+def _load_remote_job_uid_mapping(*, roar_dir: Path, session_id: Any) -> dict[str, str]:
+    """Return the ``{local_job_uid: remote_job_uid}`` map registration persisted.
+
+    GLaaS stores jobs under publication-scoped remote UIDs (see
+    ``remote_job_uids.build_remote_publication_job_uid``); registration records the
+    local->remote mapping under ``roar.remote_publication.glaas.jobs`` in the session
+    metadata. Returns an empty map (callers fall back to the local UID) on any miss.
+    """
+    if session_id is None:
+        return {}
+    try:
+        with create_database_context(roar_dir) as db:
+            session = db.sessions.get(session_id)
+    except Exception:
+        return {}
+    if not session:
+        return {}
+    raw = session.get("metadata")
+    if isinstance(raw, str) and raw:
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    jobs = (
+        ((raw.get("roar") or {}).get("remote_publication") or {}).get("glaas") or {}
+    ).get("jobs")
+    if not isinstance(jobs, dict):
+        return {}
+    return {str(k): str(v) for k, v in jobs.items() if isinstance(v, str) and v}
+
+
 def _prepare_view_edges_for_lineage(
     *, roar_dir: Path, lineage: Any, logger: Any
 ) -> dict[str, list[Any]]:
@@ -623,17 +657,29 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         )
 
         # Push the consumes view edges now that the jobs + the anchor composite are
-        # registered. Best-effort: never fails an otherwise-successful registration.
+        # registered. The view edges are keyed by *local* job UID, but GLaaS stores jobs
+        # under publication-scoped *remote* UIDs; translate via the mapping registration
+        # persisted to the session metadata. Best-effort: never fails an otherwise-
+        # successful registration.
         if result.success and view_edges_by_job:
-            for job_uid, edges in view_edges_by_job.items():
+            remote_uid_by_local = _load_remote_job_uid_mapping(
+                roar_dir=request.roar_dir, session_id=collected_lineage.session_id
+            )
+            for local_job_uid, edges in view_edges_by_job.items():
+                remote_job_uid = remote_uid_by_local.get(local_job_uid, local_job_uid)
                 try:
                     _push_result, push_error = runtime.glaas_client.register_job_view_edges(
-                        job_uid, edges
+                        remote_job_uid, edges
                     )
                     if push_error:
-                        logger.debug("view-edge push failed for %s: %s", job_uid, push_error)
+                        logger.debug(
+                            "view-edge push failed for %s (remote %s): %s",
+                            local_job_uid,
+                            remote_job_uid,
+                            push_error,
+                        )
                 except Exception as exc:  # best-effort
-                    logger.debug("view-edge push skipped for %s: %s", job_uid, exc)
+                    logger.debug("view-edge push skipped for %s: %s", local_job_uid, exc)
 
         warnings: list[str] = []
         if tag_push_warning:
