@@ -90,7 +90,7 @@ def auth(ctx: click.Context) -> None:
     handling). Use this SSH-key flow for CI or headless machines where a
     browser isn't available:
         1. Run 'roar auth key' to display your public key
-        2. Sign in at GLaaS (via GitHub) and add the key in your account settings
+        2. Add it at GLaaS /settings/ssh-key (sign in with GitHub if prompted)
         3. Run 'roar auth test' to verify
 
     \b
@@ -125,8 +125,8 @@ def _show_auth_key() -> None:
     click.echo(f"Key type: {key_type}")
     click.echo(f"Path: {path}")
     click.echo("")
-    click.echo(f"To register it: sign in at {web_url}/login (via GitHub), then add")
-    click.echo("this key in your account settings. Verify with 'roar auth test'.")
+    click.echo(f"To register it, add it at {web_url}/settings/ssh-key")
+    click.echo("(sign in with GitHub if prompted), then run 'roar auth test'.")
     click.echo("")
     click.echo("Most users don't need this — 'roar login' signs in via browser instead.")
 
@@ -235,8 +235,8 @@ def auth_test() -> None:
                 f"Authentication failed: {detail}\n\n"
                 "Your key isn't registered with GLaaS. Two ways to fix:\n"
                 "  1. Run `roar login` to sign in via browser (recommended).\n"
-                f"  2. Or sign in at {web_url}/login (via GitHub) and add this "
-                "key in your account settings."
+                f"  2. Or add the key at {web_url}/settings/ssh-key "
+                "(sign in with GitHub if prompted)."
             ) from e
         else:
             raise click.ClickException(f"Server error: {e.code}") from e
