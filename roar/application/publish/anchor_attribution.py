@@ -30,9 +30,9 @@ def attribute_jobs_to_anchors(*, db_ctx: Any, job_ids: list[int], logger: ILogge
     Returns the number of edges added (0 when nothing resolves), so the caller can
     decide whether the collected lineage needs to be re-read.
     """
-    artifacts_repo = optional_repo(db_ctx, "artifacts")
-    composites_repo = optional_repo(db_ctx, "composites")
-    jobs_repo = optional_repo(db_ctx, "jobs")
+    artifacts_repo: Any = optional_repo(db_ctx, "artifacts")
+    composites_repo: Any = optional_repo(db_ctx, "composites")
+    jobs_repo: Any = optional_repo(db_ctx, "jobs")
     if artifacts_repo is None or composites_repo is None or jobs_repo is None:
         return 0
 
