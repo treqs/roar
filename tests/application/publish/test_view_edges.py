@@ -74,3 +74,43 @@ def test_resolve_no_crosswalk_means_no_view_edges():
     edges, subsumed = resolve_consumed_view_edges(db_ctx=db, input_artifact_ids=["plain-1"])
     assert edges == []
     assert subsumed == set()
+
+
+def _bloom_member_raw(bloom: dict, key: bytes) -> bool:
+    builder = CompositeArtifactBuilder()
+    raw = base64.b64decode(bloom["bloom_filter_base64"])
+    bits, nhash = bloom["bloom_bits"], bloom["bloom_hashes"]
+    h1, h2 = builder._bloom_hash_pair(key)
+    if h2 == 0:
+        h2 = 1
+    return all((raw[((h1 + i * h2) % bits) // 8] >> (((h1 + i * h2) % bits) % 8)) & 1 for i in range(nhash))
+
+
+def test_view_edge_bloom_no_false_negatives_and_bounded_false_positives():
+    """Contract for the bloom-only view edge: every consumed leaf MUST be a member (no
+    false negatives, ever), and the false-positive rate of the members scan stays within
+    the configured 0.1% target (with margin). At the climbmix scale (100-of-thousands)
+    the members endpoint is therefore a *superset* preview, not an exact list — exact
+    selection comes from replaying the recorded command."""
+    import hashlib
+
+    from roar.application.publish.composite_builder import (
+        _BLOOM_TARGET_FALSE_POSITIVE_RATE as TARGET,
+    )
+
+    for k in (100, 1000):
+        consumed = [hashlib.sha256(f"leaf-{i}".encode()).hexdigest() for i in range(k)]
+        edge = build_view_edge(
+            relation="consumes", anchor_digest="d" * 64, anchor_total=k * 70, consumed_sha256=consumed
+        )
+        bloom = edge["bloom"]
+        # No false negatives: every consumed leaf is a member.
+        assert all(_bloom_member_raw(bloom, f"sha256:{d}".encode()) for d in consumed)
+        # False positives over a large disjoint non-member set stay under the target
+        # (3x margin absorbs sampling noise; the floor only makes small K *better*).
+        trials = 8000
+        fp = sum(
+            _bloom_member_raw(bloom, f"sha256:{hashlib.sha256(f'nonmember-{j}'.encode()).hexdigest()}".encode())
+            for j in range(trials)
+        )
+        assert fp / trials <= TARGET * 3, f"K={k}: FP rate {fp/trials:.4f} exceeds {TARGET*3}"
