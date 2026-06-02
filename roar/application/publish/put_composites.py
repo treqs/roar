@@ -236,8 +236,17 @@ def persist_local_put_composite_registration(
             composite=composite,
             dataset_identifiers=dataset_identifiers,
         )
+        # The composite algorithm is destination-driven, not hardcoded: the builder
+        # labels the digest `composite-{combiner}` from the leaf family — `blake3` for
+        # local bytes (S3/GCS puts, which impose no content hash) and `sha256` for a
+        # sha256-native source/destination. Mirror that label here so the local row
+        # matches the registered payload instead of always claiming `composite-blake3`.
+        algorithm = "composite-blake3"
+        payload_hashes = composite.payload.get("hashes") or []
+        if payload_hashes and isinstance(payload_hashes[0], dict):
+            algorithm = payload_hashes[0].get("algorithm") or algorithm
         local_artifact_id, _created = artifacts_repo.register(
-            hashes={"composite-blake3": composite.digest},
+            hashes={algorithm: composite.digest},
             size=int(composite.payload.get("size") or 0),
             path=composite.root_path,
             source_type=composite.payload.get("source_type"),

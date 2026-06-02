@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from roar.application.get.requests import GetRequest
+from roar.application.get.results import GetDownloadedFile
 from roar.application.get.service import (
     _build_get_command,
     _materialize_get_result,
@@ -104,12 +105,28 @@ def _materialize(tmp_path: Path, *, composite):
 
 
 def test_composite_get_links_composite_not_subfiles(tmp_path: Path) -> None:
-    db_ctx, recorder = _materialize(tmp_path, composite=("comp-id", "hf://datasets/openai/gsm8k"))
+    db_ctx, recorder = _materialize(
+        tmp_path, composite=("comp-id", "hf://datasets/openai/gsm8k", "d" * 64)
+    )
     # The job is recorded with NO per-file outputs...
     _, kwargs = recorder.record.call_args
     assert kwargs["output_artifacts"] == []
-    # ...and the composite is the single linked output.
+    # ...and the anchor is the single linked output.
     db_ctx.jobs.add_output.assert_called_once_with(1, "comp-id", "hf://datasets/openai/gsm8k")
+
+
+def test_composite_get_records_anchor_and_selector_view(tmp_path: Path) -> None:
+    import json
+
+    _db_ctx, recorder = _materialize(
+        tmp_path, composite=("comp-id", "hf://datasets/openai/gsm8k", "d" * 64)
+    )
+    _, kwargs = recorder.record.call_args
+    meta = json.loads(kwargs["metadata"])["get"]
+    # A `--limit 2` get is recorded as a `first:2` view over the anchor digest, not a
+    # subset composite.
+    assert meta["anchor"] == "d" * 64
+    assert meta["selector"] == "first:2"
 
 
 def test_non_composite_get_links_files(tmp_path: Path) -> None:
@@ -117,3 +134,55 @@ def test_non_composite_get_links_files(tmp_path: Path) -> None:
     _, kwargs = recorder.record.call_args
     assert len(kwargs["output_artifacts"]) == 2  # both parquet files
     db_ctx.jobs.add_output.assert_not_called()
+
+
+# ---- crosswalk cache rows (Gap B) ---------------------------------------------
+
+
+def _materialize_with_backend(tmp_path: Path, *, composite, backend):
+    db_ctx = MagicMock()
+    recorder = MagicMock()
+    recorder.record.return_value = (1, "uid")
+    transfer = GetTransferResult(
+        success=True,
+        downloaded_files=[
+            GetDownloadedFile(
+                remote_url="hf://datasets/openai/gsm8k/train-0.parquet",
+                local_path=str(tmp_path / "data/train-0.parquet"),
+                hash="a" * 64,
+                size=1000,
+                remote_key="train-0.parquet",
+            ),
+        ],
+    )
+    with (
+        patch("roar.application.get.service.LocalJobRecorder", return_value=recorder),
+        patch("roar.application.get.service._form_get_composite", return_value=composite),
+    ):
+        _materialize_get_result(
+            db_ctx=db_ctx,
+            request=_request(tmp_path, limit=2),
+            parsed_source=MagicMock(scheme="hf"),
+            transfer_result=transfer,
+            git_commit=None,
+            backend=backend,
+        )
+    return db_ctx
+
+
+def test_composite_get_registers_dual_hash_crosswalk_row(tmp_path: Path) -> None:
+    backend = MagicMock()
+    backend._sha256_by_path.return_value = {"train-0.parquet": "f" * 64}
+    db_ctx = _materialize_with_backend(
+        tmp_path, composite=("comp-id", "hf://datasets/openai/gsm8k", "d" * 64), backend=backend
+    )
+    # The downloaded shard is registered locally with BOTH its blake3 (transfer) and
+    # its sha256 (HF oid) — the local crosswalk cache.
+    _, kwargs = db_ctx.artifacts.register.call_args
+    assert kwargs["hashes"] == {"blake3": "a" * 64, "sha256": "f" * 64}
+
+
+def test_non_composite_get_registers_no_crosswalk(tmp_path: Path) -> None:
+    backend = MagicMock()
+    db_ctx = _materialize_with_backend(tmp_path, composite=None, backend=backend)
+    db_ctx.artifacts.register.assert_not_called()

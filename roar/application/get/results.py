@@ -11,6 +11,7 @@ class GetDownloadedFile:
     local_path: str
     hash: str | None = None
     size: int | None = None
+    remote_key: str | None = None  # full manifest path (joins to the LFS sha256 oid)
 
 
 @dataclass(frozen=True)
