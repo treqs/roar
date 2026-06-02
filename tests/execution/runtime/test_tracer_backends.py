@@ -407,3 +407,63 @@ def test_preflight_auto_backend_returns_first_passing_backend(tmp_path: Path) ->
     assert result.ok is True
     assert result.selected_backend == "preload"
     assert [item.backend for item in result.results] == ["ebpf", "preload"]
+
+
+def _ptrace_command_not_found(command: str) -> tracer_backends.TracerPreflightResult:
+    """Shape of a ptrace preflight that found+launched the tracer fine but the
+    user's target command does not resolve on PATH."""
+    return tracer_backends.TracerPreflightResult(
+        backend="ptrace",
+        ok=False,
+        summary=f"command not found: {command}",
+        command_checked=command,
+        checks=(
+            tracer_backends.PreflightCheck("binary", True, "/path/to/roar-tracer"),
+            tracer_backends.PreflightCheck("command", False, f"command not found: {command}"),
+        ),
+    )
+
+
+def test_suggestions_command_not_found_does_not_suggest_building_tracer() -> None:
+    """Regression: a missing *target command* must not produce 'Build the ptrace
+    tracer' / 'Check kernel ptrace policy' hints — the tracer is fine, the user
+    mistyped the command they wanted to run."""
+    result = _ptrace_command_not_found("gobbledegook")
+    suggestions = tracer_backends.suggestions_for_preflight_result(result)
+
+    joined = " ".join(suggestions).lower()
+    assert "gobbledegook" in joined
+    assert "path" in joined
+    # the misleading tracer-setup hints must be absent
+    assert not any("build the ptrace tracer" in s.lower() for s in suggestions)
+    assert not any("kernel ptrace policy" in s.lower() for s in suggestions)
+
+
+def test_suggestions_tracer_binary_missing_still_suggests_building() -> None:
+    """Contrast: when the *tracer binary* is genuinely missing, the build hint
+    is the right advice and must still appear."""
+    result = tracer_backends.TracerPreflightResult(
+        backend="ptrace",
+        ok=False,
+        summary="ptrace tracer not found",
+        command_checked="python",
+        checks=(tracer_backends.PreflightCheck("binary", False, "roar-tracer not found"),),
+    )
+    suggestions = tracer_backends.suggestions_for_preflight_result(result)
+    assert any("build the ptrace tracer" in s.lower() for s in suggestions)
+
+
+def test_suggestions_auto_command_not_found_is_command_oriented() -> None:
+    """Auto selection with a missing command surfaces the command hint, not a
+    pile of per-backend tracer-setup suggestions."""
+    auto = tracer_backends.AutoPreflightResult(
+        ok=False,
+        selected_backend=None,
+        summary="no usable tracer found",
+        command_checked="gobbledegook",
+        results=(_ptrace_command_not_found("gobbledegook"),),
+    )
+    suggestions = tracer_backends.suggestions_for_preflight_result(auto)
+    joined = " ".join(suggestions).lower()
+    assert "gobbledegook" in joined
+    assert not any("build the" in s.lower() for s in suggestions)

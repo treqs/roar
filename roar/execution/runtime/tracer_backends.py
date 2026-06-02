@@ -399,10 +399,52 @@ def backend_ready(package_path: Path, backend: str) -> tuple[bool, str]:
     return backend_readiness(package_path, backend).as_tuple()
 
 
+def _missing_command_name(result: PreflightResult) -> str | None:
+    """If preflight failed because the user's *target command* could not be
+    resolved on PATH, return the offending command name; otherwise None.
+
+    The `command` sub-check only runs after the tracer binary is found and
+    launched, so a failed `command` check means the tracer itself is fine —
+    the user just asked roar to run a command that doesn't exist. A missing
+    command blocks every backend, so for the auto result we treat any
+    backend reporting it as conclusive.
+    """
+    if isinstance(result, AutoPreflightResult):
+        for backend_result in result.results:
+            name = _missing_command_name(backend_result)
+            if name:
+                return name
+        return None
+    for check in result.checks:
+        if check.name == "command" and not check.ok:
+            # command_checked carries the unresolved name; fall back to the
+            # detail ("command not found: <name>") if it's somehow unset.
+            if result.command_checked:
+                return result.command_checked
+            detail = check.detail or ""
+            return detail.split("command not found:", 1)[-1].strip() or "the command"
+    return None
+
+
 def suggestions_for_preflight_result(result: PreflightResult) -> tuple[str, ...]:
     """Return concise, user-facing suggestions for a failed preflight result."""
     if result.ok:
         return ()
+
+    # A missing *target command* is a user mistake, not a tracer setup problem.
+    # Surface a command-oriented hint and skip the tracer build / kernel-policy
+    # suggestions entirely (those misled users into "rebuilding the tracer" when
+    # they'd merely mistyped the command they wanted to run).
+    missing_command = _missing_command_name(result)
+    if missing_command:
+        return _dedupe_suggestions(
+            [
+                f"Check the command: '{missing_command}' was not found on PATH.",
+                "Make sure it is installed and spelled correctly, or pass an absolute path. "
+                "This is the command you asked roar to run — the tracer itself is fine.",
+            ],
+            limit=4,
+        )
 
     if isinstance(result, AutoPreflightResult):
         suggestions: list[str] = [
