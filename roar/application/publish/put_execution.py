@@ -936,6 +936,18 @@ class PutService:
                 len(local_composite_outputs),
             )
 
+        # get->put continuity: if any published file was got from HF (carries a
+        # crosswalk sha256 matching a known dataset anchor), link the source anchor as
+        # an input of the put job. This bridges the put's blake3 S3 composite to its
+        # HF-source sha256 anchor at the job level — no sha256 computed at put, neither
+        # composite mutated. Best-effort; never blocks a put.
+        try:
+            from .anchor_attribution import attribute_jobs_to_anchors
+
+            attribute_jobs_to_anchors(db_ctx=self._db, job_ids=[job_id], logger=self._logger)
+        except Exception as exc:  # pragma: no cover - defensive best effort
+            self._logger.debug("put anchor attribution skipped: %s", exc)
+
     def _register_put_job_with_glaas(
         self,
         coordinator: RegistrationCoordinator,
