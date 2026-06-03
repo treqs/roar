@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -53,6 +55,20 @@ def _read(report: dict) -> set[str]:
     return paths
 
 
+def _latest_job_inputs(roar_dir: Path) -> set[str]:
+    conn = sqlite3.connect(roar_dir / "roar.db")
+    try:
+        row = conn.execute("SELECT id FROM jobs ORDER BY id DESC LIMIT 1").fetchone()
+        assert row is not None, "no job recorded"
+        rows = conn.execute(
+            "SELECT path FROM job_inputs WHERE job_id = ? ORDER BY path",
+            (int(row[0]),),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {str(row[0]) for row in rows}
+
+
 def test_splice_file_to_pipe_records_source_as_read(tmp_path: Path) -> None:
     """A file->pipe splice moves bytes from the file without read(2)."""
     tracer = _ensure_ptrace_tracer()
@@ -92,3 +108,33 @@ if bytes_moved <= 0 or payload != b"hello via splice":
 
     read = _read(report)
     assert str(src.resolve()) in read, f"splice source not marked read; read={sorted(read)}"
+
+
+def test_roar_run_ptrace_cat_records_splice_source_input(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+) -> None:
+    cat = shutil.which("cat")
+    if cat is None:
+        pytest.skip("cat is required for this product-path regression")
+
+    src = temp_git_repo / "input.txt"
+    src.write_text("hello via cat\n", encoding="utf-8")
+    git_commit("add cat input fixture")
+
+    result = roar_cli(
+        "run",
+        "--tracer",
+        "ptrace",
+        "--no-tracer-fallback",
+        cat,
+        src.name,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"roar run failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
+
+    inputs = _latest_job_inputs(temp_git_repo / ".roar")
+    assert str(src.resolve()) in inputs, f"cat input missing from job_inputs: {sorted(inputs)}"
