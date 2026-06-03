@@ -8,7 +8,9 @@ from roar.application.publish.put_execution import _upload_progress_message
 
 def test_download_progress_message():
     assert _download_progress_message(0, 100, 0) == "Downloading 0/100 files · 0.00 GB"
-    assert _download_progress_message(47, 100, 4_310_000_000) == "Downloading 47/100 files · 4.31 GB"
+    assert (
+        _download_progress_message(47, 100, 4_310_000_000) == "Downloading 47/100 files · 4.31 GB"
+    )
 
 
 def test_upload_progress_message():
