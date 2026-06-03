@@ -24,18 +24,25 @@ def build_view_edge(
     relation: str,
     anchor_digest: str,
     anchor_total: int,
-    consumed_sha256: list[str],
+    consumed_digests: list[str],
+    component_algorithm: str = "sha256",
 ) -> dict[str, Any]:
-    """Build a view-edge payload (a bloom over the consumed sha256 leaves)."""
+    """Build a view-edge payload (a bloom over the consumed leaves).
+
+    The bloom is keyed by ``{component_algorithm}:{digest}`` — ``sha256`` for HF datasets
+    (crosswalk leaves) and ``blake3`` for local/``put``-registered datasets whose
+    components are blake3-keyed. glaas-api tests membership with the same per-component
+    algorithm, so either keying resolves.
+    """
     leaves = [
         CompositeLeaf(
             relative_path="",
             digest=digest,
             size=0,
             component_type=None,
-            component_algorithm="sha256",
+            component_algorithm=component_algorithm,
         )
-        for digest in consumed_sha256
+        for digest in consumed_digests
     ]
     membership = CompositeArtifactBuilder()._build_membership_index_base(leaves)
     return {
@@ -47,9 +54,17 @@ def build_view_edge(
             "bloom_hashes": membership["bloom_hashes"],
             "bloom_version": membership["bloom_version"],
         },
-        "selected_count": len(consumed_sha256),
+        "selected_count": len(consumed_digests),
         "parent_total": anchor_total,
     }
+
+
+def _blake3_digest(artifact: dict[str, Any]) -> str | None:
+    """The artifact's blake3 hash (the native key of a local/``put`` composite leaf)."""
+    for hash_row in artifact.get("hashes") or []:
+        if hash_row.get("algorithm") == "blake3" and isinstance(hash_row.get("digest"), str):
+            return hash_row["digest"]
+    return None
 
 
 def _origin_sha256(artifact: dict[str, Any]) -> str | None:
@@ -105,22 +120,34 @@ def resolve_consumed_view_edges(
     if artifacts_repo is None or composites_repo is None:
         return [], set()
 
-    # anchor_id -> {"sha256": set, "subsumed": set of input artifact ids}
-    by_anchor: dict[str, dict[str, set[str]]] = {}
+    # anchor_id -> {"algorithm": str, "leaves": set, "subsumed": set of input artifact ids}
+    by_anchor: dict[str, dict[str, Any]] = {}
     for artifact_id in input_artifact_ids:
         artifact = artifacts_repo.get(artifact_id)
         if not artifact:
             continue
+        # sha256 (HF crosswalk) first, then blake3 (local/``put`` native leaf key).
+        candidates = []
         sha256_digest = _origin_sha256(artifact)
-        if not sha256_digest:
-            continue
-        anchors = composites_repo.find_by_component_digest(sha256_digest, "sha256")
-        for anchor_id in anchors:
-            if anchor_id == artifact_id:
-                continue
-            bucket = by_anchor.setdefault(anchor_id, {"sha256": set(), "subsumed": set()})
-            bucket["sha256"].add(sha256_digest)
-            bucket["subsumed"].add(artifact_id)
+        if sha256_digest:
+            candidates.append((sha256_digest, "sha256"))
+        blake3_digest = _blake3_digest(artifact)
+        if blake3_digest:
+            candidates.append((blake3_digest, "blake3"))
+        for leaf_digest, algorithm in candidates:
+            anchors = composites_repo.find_by_component_digest(leaf_digest, algorithm)
+            matched_any = False
+            for anchor_id in anchors:
+                if anchor_id == artifact_id:
+                    continue
+                bucket = by_anchor.setdefault(
+                    anchor_id, {"algorithm": algorithm, "leaves": set(), "subsumed": set()}
+                )
+                bucket["leaves"].add(leaf_digest)
+                bucket["subsumed"].add(artifact_id)
+                matched_any = True
+            if matched_any:
+                break
 
     view_edges: list[dict[str, Any]] = []
     subsumed: set[str] = set()
@@ -134,7 +161,8 @@ def resolve_consumed_view_edges(
                 relation="consumes",
                 anchor_digest=anchor_digest,
                 anchor_total=_anchor_total(anchor),
-                consumed_sha256=sorted(bucket["sha256"]),
+                consumed_digests=sorted(bucket["leaves"]),
+                component_algorithm=bucket["algorithm"],
             )
         )
         subsumed |= bucket["subsumed"]
@@ -167,8 +195,21 @@ def resolve_view_edges_for_job(
     if artifacts_repo is None or composites_repo is None:
         return [], set()
 
-    by_anchor: dict[str, dict[str, set[str]]] = {}
+    # anchor_id -> {"algorithm": str, "leaves": set, "shards": set}
+    by_anchor: dict[str, dict[str, Any]] = {}
     prune: set[str] = set()
+
+    def _attribute(leaf_digest: str, algorithm: str, input_digest: str) -> bool:
+        matched = False
+        for anchor_id in composites_repo.find_by_component_digest(leaf_digest, algorithm):
+            bucket = by_anchor.setdefault(
+                anchor_id, {"algorithm": algorithm, "leaves": set(), "shards": set()}
+            )
+            bucket["leaves"].add(leaf_digest)
+            bucket["shards"].add(input_digest)
+            matched = True
+        return matched
+
     for digest in input_hashes:
         artifact = _get_by_any_hash(artifacts_repo, digest)
         if not artifact:
@@ -178,13 +219,14 @@ def resolve_view_edges_for_job(
         if _primary_composite_digest(artifact):
             prune.add(digest)
             continue
+        # HF datasets: resolve the shard via its crosswalk sha256. Local/``put`` datasets:
+        # the leaf is blake3-keyed and the run's input hash *is* that blake3 digest.
         sha256_digest = _origin_sha256(artifact)
-        if not sha256_digest:
-            continue
-        for anchor_id in composites_repo.find_by_component_digest(sha256_digest, "sha256"):
-            bucket = by_anchor.setdefault(anchor_id, {"sha256": set(), "shards": set()})
-            bucket["sha256"].add(sha256_digest)
-            bucket["shards"].add(digest)
+        matched = bool(sha256_digest) and _attribute(sha256_digest, "sha256", digest)
+        if not matched:
+            blake3_digest = _blake3_digest(artifact)
+            if blake3_digest:
+                _attribute(blake3_digest, "blake3", digest)
 
     view_edges: list[dict[str, Any]] = []
     for anchor_id, bucket in by_anchor.items():
@@ -197,7 +239,8 @@ def resolve_view_edges_for_job(
                 relation="consumes",
                 anchor_digest=anchor_digest,
                 anchor_total=_anchor_total(anchor),
-                consumed_sha256=sorted(bucket["sha256"]),
+                consumed_digests=sorted(bucket["leaves"]),
+                component_algorithm=bucket["algorithm"],
             )
         )
         prune |= bucket["shards"]
