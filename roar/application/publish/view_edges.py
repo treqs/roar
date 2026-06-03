@@ -13,7 +13,7 @@ input edges collapse into it.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from ...db.context import optional_repo
 from .composite_builder import CompositeArtifactBuilder, CompositeLeaf
@@ -102,74 +102,6 @@ def _anchor_total(artifact: dict[str, Any] | None) -> int:
     return 0
 
 
-def resolve_consumed_view_edges(
-    *,
-    db_ctx: Any,
-    input_artifact_ids: list[str],
-) -> tuple[list[dict[str, Any]], set[str]]:
-    """Resolve a job's crosswalk inputs into ``consumes`` view edges.
-
-    Groups the inputs that carry a crosswalk sha256 by the anchor whose stored
-    components include that sha256, builds one view-edge bloom per anchor over the
-    consumed leaves, and returns ``(view_edges, subsumed_artifact_ids)`` — the second
-    being the input artifact ids that collapse into a view edge and should be pruned
-    from the plain inputs.
-    """
-    artifacts_repo: Any = optional_repo(db_ctx, "artifacts")
-    composites_repo: Any = optional_repo(db_ctx, "composites")
-    if artifacts_repo is None or composites_repo is None:
-        return [], set()
-
-    # anchor_id -> {"algorithm": str, "leaves": set, "subsumed": set of input artifact ids}
-    by_anchor: dict[str, dict[str, Any]] = {}
-    for artifact_id in input_artifact_ids:
-        artifact = artifacts_repo.get(artifact_id)
-        if not artifact:
-            continue
-        # sha256 (HF crosswalk) first, then blake3 (local/``put`` native leaf key).
-        candidates = []
-        sha256_digest = _origin_sha256(artifact)
-        if sha256_digest:
-            candidates.append((sha256_digest, "sha256"))
-        blake3_digest = _blake3_digest(artifact)
-        if blake3_digest:
-            candidates.append((blake3_digest, "blake3"))
-        for leaf_digest, algorithm in candidates:
-            anchors = composites_repo.find_by_component_digest(leaf_digest, algorithm)
-            matched_any = False
-            for anchor_id in anchors:
-                if anchor_id == artifact_id:
-                    continue
-                bucket = by_anchor.setdefault(
-                    anchor_id, {"algorithm": algorithm, "leaves": set(), "subsumed": set()}
-                )
-                bucket["leaves"].add(leaf_digest)
-                bucket["subsumed"].add(artifact_id)
-                matched_any = True
-            if matched_any:
-                break
-
-    view_edges: list[dict[str, Any]] = []
-    subsumed: set[str] = set()
-    for anchor_id, bucket in by_anchor.items():
-        anchor = artifacts_repo.get(anchor_id)
-        anchor_digest = _primary_composite_digest(anchor)
-        if not anchor_digest:
-            continue
-        view_edges.append(
-            build_view_edge(
-                relation="consumes",
-                anchor_digest=anchor_digest,
-                anchor_total=_anchor_total(anchor),
-                consumed_digests=sorted(bucket["leaves"]),
-                component_algorithm=bucket["algorithm"],
-            )
-        )
-        subsumed |= bucket["subsumed"]
-
-    return view_edges, subsumed
-
-
 def _get_by_any_hash(artifacts_repo: Any, digest: str) -> dict[str, Any] | None:
     for algorithm in ("blake3", "composite-sha256", "composite-blake3", "sha256"):
         artifact = artifacts_repo.get_by_hash(digest, algorithm=algorithm)
@@ -182,7 +114,7 @@ def resolve_view_edges_for_job(
     *,
     db_ctx: Any,
     input_hashes: list[str],
-    relation: str = "consumes",
+    relation: Literal["consumes", "produces"] = "consumes",
 ) -> tuple[list[dict[str, Any]], set[str]]:
     """Resolve a job's leaf *hashes* into view edges + hashes to prune.
 
@@ -193,6 +125,15 @@ def resolve_view_edges_for_job(
     it as a component. Returns ``(view_edges, prune_hashes)`` — the second being the leaf
     hashes that collapse into a view edge plus any anchor composite hash linked as a plain
     input/output (the view edge replaces it).
+
+    BOUNDARY: matching uses ``find_by_component_digest``, which only knows the anchor's
+    *stored* components (capped at ``_MAX_STORED_COMPONENTS`` = 1000). For a dataset with
+    more leaves than the cap, the tail beyond 1000 won't match here, so those leaf hashes
+    are not pruned and remain as plain edges alongside the view edge. The bloom membership
+    index covers the full set, but it is probabilistic (a ~0.1% false-positive rate would
+    wrongly prune unrelated leaves), so it is deliberately NOT consulted for pruning.
+    Tightening this for >1000-leaf datasets (exact pruning at formation time, where the
+    full leaf set is known) is tracked as follow-up.
     """
     artifacts_repo: Any = optional_repo(db_ctx, "artifacts")
     composites_repo: Any = optional_repo(db_ctx, "composites")

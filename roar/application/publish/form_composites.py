@@ -82,6 +82,10 @@ def _manifest_root(path: str) -> str | None:
     Anchors on the exact markers ``composite.detect`` keys off, so what register forms a
     root for is precisely what ``detect`` will classify as a dataset.
     """
+    # A dataset rooted at the recording cwd (root == "") is intentionally not formed:
+    # `_outermost` drops empty roots and `_under` can't host members relative to "". In
+    # practice run-recorded paths are repo-relative with a containing dir, so this only
+    # skips the degenerate "dataset is the whole working tree" case.
     base = posixpath.basename(path)
     if base in (".zgroup", ".zarray", "zarr.json"):
         return posixpath.dirname(path)

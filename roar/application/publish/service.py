@@ -7,7 +7,7 @@ import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ...core.logging import get_logger
 from .requests import (
@@ -394,6 +394,18 @@ def _run_git(path: Path, *args: str) -> str | None:
         return None
 
 
+def _collect_db_job_ids(lineage: Any) -> list[int]:
+    """The integer DB job ids of a collected lineage's jobs (skips non-numeric)."""
+    job_ids: list[int] = []
+    for job in getattr(lineage, "jobs", []) or []:
+        raw_id = job.get("id") if isinstance(job, dict) else None
+        if isinstance(raw_id, int):
+            job_ids.append(raw_id)
+        elif isinstance(raw_id, str) and raw_id.isdigit():
+            job_ids.append(int(raw_id))
+    return job_ids
+
+
 def _attribute_jobs_to_anchors_for_lineage(*, roar_dir: Path, lineage: Any, logger: Any) -> int:
     """Materialize job -> dataset-anchor edges for the jobs in a collected lineage.
 
@@ -402,13 +414,7 @@ def _attribute_jobs_to_anchors_for_lineage(*, roar_dir: Path, lineage: Any, logg
     """
     from .anchor_attribution import attribute_jobs_to_anchors
 
-    job_ids: list[int] = []
-    for job in getattr(lineage, "jobs", []) or []:
-        raw_id = job.get("id") if isinstance(job, dict) else None
-        if isinstance(raw_id, int):
-            job_ids.append(raw_id)
-        elif isinstance(raw_id, str) and raw_id.isdigit():
-            job_ids.append(int(raw_id))
+    job_ids = _collect_db_job_ids(lineage)
     if not job_ids:
         return 0
     with create_database_context(roar_dir) as attr_db:
@@ -423,13 +429,7 @@ def _form_lineage_composites_for_lineage(*, roar_dir: Path, lineage: Any, logger
     """
     from .lineage_composite_formation import form_lineage_composites
 
-    job_ids: list[int] = []
-    for job in getattr(lineage, "jobs", []) or []:
-        raw_id = job.get("id") if isinstance(job, dict) else None
-        if isinstance(raw_id, int):
-            job_ids.append(raw_id)
-        elif isinstance(raw_id, str) and raw_id.isdigit():
-            job_ids.append(int(raw_id))
+    job_ids = _collect_db_job_ids(lineage)
     if not job_ids:
         return 0
     with create_database_context(roar_dir) as form_db:
@@ -497,10 +497,11 @@ def _prepare_view_edges_for_lineage(
             if not job_uid:
                 continue
             edges: list[Any] = []
-            for relation, hashes_key, items_key in (
+            sides: tuple[tuple[Literal["consumes", "produces"], str, str], ...] = (
                 ("consumes", "_input_hashes", "_inputs"),
                 ("produces", "_output_hashes", "_outputs"),
-            ):
+            )
+            for relation, hashes_key, items_key in sides:
                 hashes = list(job.get(hashes_key) or [])
                 if not hashes:
                     continue

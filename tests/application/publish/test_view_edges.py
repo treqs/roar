@@ -8,11 +8,16 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from roar.application.publish.composite_builder import CompositeArtifactBuilder
-from roar.application.publish.view_edges import (
-    build_view_edge,
-    resolve_consumed_view_edges,
-    resolve_view_edges_for_job,
-)
+from roar.application.publish.view_edges import build_view_edge, resolve_view_edges_for_job
+
+
+def _hash_db(artifacts: dict, anchors_by_id: dict, find):
+    """A db_ctx whose artifacts resolve by hash (leaves) and by id (anchors)."""
+    db = SimpleNamespace(artifacts=MagicMock(), composites=MagicMock())
+    db.artifacts.get_by_hash.side_effect = lambda digest, algorithm=None: artifacts.get(digest)
+    db.artifacts.get.side_effect = lambda aid: anchors_by_id.get(aid)
+    db.composites.find_by_component_digest.side_effect = find
+    return db
 
 
 def _bloom_member(bloom: dict, algorithm: str, digest: str) -> bool:
@@ -44,32 +49,31 @@ def test_build_view_edge_bloom_contains_consumed_leaves():
     assert _bloom_member(edge["bloom"], "blake3", a) is False
 
 
-def test_resolve_consumed_view_edges_groups_by_anchor_and_prunes():
-    shard_sha = "s" * 64
-    db = SimpleNamespace(
-        artifacts=MagicMock(),
-        composites=MagicMock(),
-    )
-    db.artifacts.get.side_effect = lambda aid: {
-        "shard-1": {
-            "hashes": [{"algorithm": "blake3", "digest": "b" * 64}],
-            "metadata": json.dumps({"origin": {"algorithm": "sha256", "digest": shard_sha}}),
+def test_resolve_consumes_view_edge_via_sha256_crosswalk_and_prunes():
+    shard_blake3, shard_sha = "b" * 64, "s" * 64
+    db = _hash_db(
+        artifacts={
+            shard_blake3: {
+                "hashes": [{"algorithm": "blake3", "digest": shard_blake3}],
+                "metadata": json.dumps({"origin": {"algorithm": "sha256", "digest": shard_sha}}),
+            }
         },
-        "anchor-1": {
-            "hashes": [{"algorithm": "composite-sha256", "digest": "d" * 64}],
-            "component_count": 6543,
+        anchors_by_id={
+            "anchor-1": {
+                "hashes": [{"algorithm": "composite-sha256", "digest": "d" * 64}],
+                "component_count": 6543,
+            }
         },
-    }.get(aid)
-    db.composites.find_by_component_digest.side_effect = lambda digest, algo="sha256": (
-        ["anchor-1"] if digest == shard_sha else []
+        find=lambda digest, algo="sha256": ["anchor-1"] if digest == shard_sha else [],
     )
 
-    edges, subsumed = resolve_consumed_view_edges(db_ctx=db, input_artifact_ids=["shard-1"])
+    edges, prune = resolve_view_edges_for_job(db_ctx=db, input_hashes=[shard_blake3])
     assert len(edges) == 1
+    assert edges[0]["relation"] == "consumes"
     assert edges[0]["target_hash"] == "d" * 64
     assert edges[0]["parent_total"] == 6543
     assert edges[0]["selected_count"] == 1
-    assert subsumed == {"shard-1"}
+    assert prune == {shard_blake3}
     assert _bloom_member(edges[0]["bloom"], "sha256", shard_sha) is True
 
 
@@ -78,23 +82,24 @@ def test_resolve_blake3_leaf_for_local_put_composite():
     no sha256 crosswalk — resolves via the leaf's native blake3 key, and the view bloom
     is blake3-keyed (so glaas-api membership resolves)."""
     leaf_blake3 = "a" * 64
-    db = SimpleNamespace(artifacts=MagicMock(), composites=MagicMock())
-    db.artifacts.get.side_effect = lambda aid: {
-        "leaf-1": {"hashes": [{"algorithm": "blake3", "digest": leaf_blake3}]},  # no origin sha256
-        "zarr-anchor": {
-            "hashes": [{"algorithm": "composite-blake3", "digest": "c" * 64}],
-            "component_count": 8,
+    db = _hash_db(
+        artifacts={leaf_blake3: {"hashes": [{"algorithm": "blake3", "digest": leaf_blake3}]}},
+        anchors_by_id={
+            "zarr-anchor": {
+                "hashes": [{"algorithm": "composite-blake3", "digest": "c" * 64}],
+                "component_count": 8,
+            }
         },
-    }.get(aid)
-    db.composites.find_by_component_digest.side_effect = lambda digest, algo="sha256": (
-        ["zarr-anchor"] if digest == leaf_blake3 and algo == "blake3" else []
+        find=lambda digest, algo="sha256": (
+            ["zarr-anchor"] if digest == leaf_blake3 and algo == "blake3" else []
+        ),
     )
 
-    edges, subsumed = resolve_consumed_view_edges(db_ctx=db, input_artifact_ids=["leaf-1"])
+    edges, prune = resolve_view_edges_for_job(db_ctx=db, input_hashes=[leaf_blake3])
     assert len(edges) == 1
     assert edges[0]["target_hash"] == "c" * 64
     assert edges[0]["parent_total"] == 8
-    assert subsumed == {"leaf-1"}
+    assert prune == {leaf_blake3}
     # Bloom is keyed by blake3, not sha256.
     assert _bloom_member(edges[0]["bloom"], "blake3", leaf_blake3) is True
     assert _bloom_member(edges[0]["bloom"], "sha256", leaf_blake3) is False
@@ -141,12 +146,15 @@ def test_resolve_produces_view_edge_for_run_written_dataset():
 
 
 def test_resolve_no_crosswalk_means_no_view_edges():
-    db = SimpleNamespace(artifacts=MagicMock(), composites=MagicMock())
-    db.artifacts.get.return_value = {"hashes": [{"algorithm": "blake3", "digest": "b" * 64}]}
-    db.composites.find_by_component_digest.return_value = []
-    edges, subsumed = resolve_consumed_view_edges(db_ctx=db, input_artifact_ids=["plain-1"])
+    plain = "b" * 64
+    db = _hash_db(
+        artifacts={plain: {"hashes": [{"algorithm": "blake3", "digest": plain}]}},
+        anchors_by_id={},
+        find=lambda digest, algo="sha256": [],
+    )
+    edges, prune = resolve_view_edges_for_job(db_ctx=db, input_hashes=[plain])
     assert edges == []
-    assert subsumed == set()
+    assert prune == set()
 
 
 def _bloom_member_raw(bloom: dict, key: bytes) -> bool:
