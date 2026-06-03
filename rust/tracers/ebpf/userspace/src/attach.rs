@@ -12,9 +12,14 @@ const TRACEFS_ROOTS: &[&str] = &["/sys/kernel/tracing", "/sys/kernel/debug/traci
 /// running kernel (e.g. `sys_enter_open` on aarch64, which has no `open()`
 /// syscall — only `openat()`).
 fn tracepoint_available(category: &str, tp: &str) -> bool {
-    TRACEFS_ROOTS
-        .iter()
-        .any(|root| Path::new(root).join("events").join(category).join(tp).join("id").exists())
+    TRACEFS_ROOTS.iter().any(|root| {
+        Path::new(root)
+            .join("events")
+            .join(category)
+            .join(tp)
+            .join("id")
+            .exists()
+    })
 }
 
 /// Attach a tracepoint program. Returns `Ok(true)` if attached, `Ok(false)` if
