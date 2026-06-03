@@ -429,7 +429,12 @@ class CompositeArtifactBuilder:
     def _resolve_component_size(path: Path, leaf_kind: str) -> int:
         if leaf_kind == "symlink":
             return len(CompositeArtifactBuilder._symlink_target_bytes(path))
-        return path.stat().st_size
+        # register-time formation works from recorded (path, hash) metadata; the live
+        # file may be gone. Size is not part of the composite identity, so fall back to 0.
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
 
     @staticmethod
     def _symlink_target_digest(path: Path) -> str | None:

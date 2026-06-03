@@ -415,6 +415,38 @@ def _attribute_jobs_to_anchors_for_lineage(*, roar_dir: Path, lineage: Any, logg
         return attribute_jobs_to_anchors(db_ctx=attr_db, job_ids=job_ids, logger=logger)
 
 
+def _form_lineage_composites_for_lineage(*, roar_dir: Path, lineage: Any, logger: Any) -> int:
+    """Form composites from each job's recorded inputs/outputs in a collected lineage.
+
+    Opens its own DB context so the persisted composites + job edges are visible to a
+    fresh lineage collection. Returns the number of edges added.
+    """
+    from .lineage_composite_formation import form_lineage_composites
+
+    job_ids: list[int] = []
+    for job in getattr(lineage, "jobs", []) or []:
+        raw_id = job.get("id") if isinstance(job, dict) else None
+        if isinstance(raw_id, int):
+            job_ids.append(raw_id)
+        elif isinstance(raw_id, str) and raw_id.isdigit():
+            job_ids.append(int(raw_id))
+    if not job_ids:
+        return 0
+    with create_database_context(roar_dir) as form_db:
+        return form_lineage_composites(db_ctx=form_db, job_ids=job_ids, logger=logger)
+
+
+def _prune_composite_output_leaves_for_lineage(*, roar_dir: Path, lineage: Any, logger: Any) -> int:
+    """Drop loose leaves subsumed by a composite output from a collected lineage bundle."""
+    from .lineage_composite_formation import prune_composite_output_leaves
+
+    jobs = getattr(lineage, "jobs", []) or []
+    if not jobs:
+        return 0
+    with create_database_context(roar_dir) as prune_db:
+        return prune_composite_output_leaves(db_ctx=prune_db, lineage_jobs=jobs, logger=logger)
+
+
 def _load_remote_job_uid_mapping(*, roar_dir: Path, session_id: Any) -> dict[str, str]:
     """Return the ``{local_job_uid: remote_job_uid}`` map registration persisted.
 
@@ -527,18 +559,23 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         if collected_lineage is None:
             return RegisterLineageResponse(success=False, error=error)
 
-        # Materialize job -> dataset-anchor edges from the local crosswalk (a run that
-        # read got-from-HF shards is attributed to the dataset it consumed), then
-        # re-read the lineage so the bundle carries them. Best-effort: never blocks a
-        # registration.
         if not request.dry_run:
             try:
+                # Roll structured datasets a run produced/consumed (Zarr, LeRobot, ...)
+                # up into composites, then attribute jobs to dataset anchors via the get
+                # crosswalk. Both mutate the local DB; if either added edges, re-read the
+                # lineage so the bundle carries them. Best-effort: never blocks a register.
+                formed_composites = _form_lineage_composites_for_lineage(
+                    roar_dir=request.roar_dir,
+                    lineage=collected_lineage.lineage,
+                    logger=logger,
+                )
                 anchor_added = _attribute_jobs_to_anchors_for_lineage(
                     roar_dir=request.roar_dir,
                     lineage=collected_lineage.lineage,
                     logger=logger,
                 )
-                if anchor_added:
+                if formed_composites or anchor_added:
                     collected_lineage, error = collect_register_lineage(
                         target=resolved_target,
                         roar_dir=request.roar_dir,
@@ -552,6 +589,19 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
                         return RegisterLineageResponse(success=False, error=error)
             except Exception as exc:  # attribution is best-effort
                 logger.debug("anchor attribution skipped: %s", exc)
+
+        # A producer that wrote a structured dataset registers the composite as its
+        # output, not the composite PLUS its loose leaves: drop the subsumed leaves from
+        # the bundle (the local DB record stays complete). Best-effort.
+        if not request.dry_run:
+            try:
+                _prune_composite_output_leaves_for_lineage(
+                    roar_dir=request.roar_dir,
+                    lineage=collected_lineage.lineage,
+                    logger=logger,
+                )
+            except Exception as exc:  # output pruning is best-effort
+                logger.debug("composite output pruning skipped: %s", exc)
 
         # Collapse a job's anchor-membership into one consumes view edge (a bloom over
         # the consumed leaves) and prune the subsumed inputs from the bundle. Pushed
