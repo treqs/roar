@@ -222,7 +222,7 @@ def resolve_view_edges_for_job(
         # HF datasets: resolve the shard via its crosswalk sha256. Local/``put`` datasets:
         # the leaf is blake3-keyed and the run's input hash *is* that blake3 digest.
         sha256_digest = _origin_sha256(artifact)
-        matched = bool(sha256_digest) and _attribute(sha256_digest, "sha256", digest)
+        matched = _attribute(sha256_digest, "sha256", digest) if sha256_digest else False
         if not matched:
             blake3_digest = _blake3_digest(artifact)
             if blake3_digest:

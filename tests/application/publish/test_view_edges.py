@@ -18,7 +18,9 @@ def _bloom_member(bloom: dict, algorithm: str, digest: str) -> bool:
     h1, h2 = builder._bloom_hash_pair(f"{algorithm}:{digest}".encode())
     if h2 == 0:
         h2 = 1
-    return all((raw[((h1 + i * h2) % bits) // 8] >> (((h1 + i * h2) % bits) % 8)) & 1 for i in range(nhash))
+    return all(
+        (raw[((h1 + i * h2) % bits) // 8] >> (((h1 + i * h2) % bits) % 8)) & 1 for i in range(nhash)
+    )
 
 
 def test_build_view_edge_bloom_contains_consumed_leaves():
@@ -54,8 +56,8 @@ def test_resolve_consumed_view_edges_groups_by_anchor_and_prunes():
             "component_count": 6543,
         },
     }.get(aid)
-    db.composites.find_by_component_digest.side_effect = (
-        lambda digest, algo="sha256": ["anchor-1"] if digest == shard_sha else []
+    db.composites.find_by_component_digest.side_effect = lambda digest, algo="sha256": (
+        ["anchor-1"] if digest == shard_sha else []
     )
 
     edges, subsumed = resolve_consumed_view_edges(db_ctx=db, input_artifact_ids=["shard-1"])
@@ -80,10 +82,8 @@ def test_resolve_blake3_leaf_for_local_put_composite():
             "component_count": 8,
         },
     }.get(aid)
-    db.composites.find_by_component_digest.side_effect = (
-        lambda digest, algo="sha256": ["zarr-anchor"]
-        if digest == leaf_blake3 and algo == "blake3"
-        else []
+    db.composites.find_by_component_digest.side_effect = lambda digest, algo="sha256": (
+        ["zarr-anchor"] if digest == leaf_blake3 and algo == "blake3" else []
     )
 
     edges, subsumed = resolve_consumed_view_edges(db_ctx=db, input_artifact_ids=["leaf-1"])
@@ -112,7 +112,9 @@ def _bloom_member_raw(bloom: dict, key: bytes) -> bool:
     h1, h2 = builder._bloom_hash_pair(key)
     if h2 == 0:
         h2 = 1
-    return all((raw[((h1 + i * h2) % bits) // 8] >> (((h1 + i * h2) % bits) % 8)) & 1 for i in range(nhash))
+    return all(
+        (raw[((h1 + i * h2) % bits) // 8] >> (((h1 + i * h2) % bits) % 8)) & 1 for i in range(nhash)
+    )
 
 
 def test_view_edge_bloom_no_false_negatives_and_bounded_false_positives():
@@ -130,7 +132,10 @@ def test_view_edge_bloom_no_false_negatives_and_bounded_false_positives():
     for k in (100, 1000):
         consumed = [hashlib.sha256(f"leaf-{i}".encode()).hexdigest() for i in range(k)]
         edge = build_view_edge(
-            relation="consumes", anchor_digest="d" * 64, anchor_total=k * 70, consumed_digests=consumed
+            relation="consumes",
+            anchor_digest="d" * 64,
+            anchor_total=k * 70,
+            consumed_digests=consumed,
         )
         bloom = edge["bloom"]
         # No false negatives: every consumed leaf is a member.
@@ -139,7 +144,9 @@ def test_view_edge_bloom_no_false_negatives_and_bounded_false_positives():
         # (3x margin absorbs sampling noise; the floor only makes small K *better*).
         trials = 8000
         fp = sum(
-            _bloom_member_raw(bloom, f"sha256:{hashlib.sha256(f'nonmember-{j}'.encode()).hexdigest()}".encode())
+            _bloom_member_raw(
+                bloom, f"sha256:{hashlib.sha256(f'nonmember-{j}'.encode()).hexdigest()}".encode()
+            )
             for j in range(trials)
         )
-        assert fp / trials <= TARGET * 3, f"K={k}: FP rate {fp/trials:.4f} exceeds {TARGET*3}"
+        assert fp / trials <= TARGET * 3, f"K={k}: FP rate {fp / trials:.4f} exceeds {TARGET * 3}"

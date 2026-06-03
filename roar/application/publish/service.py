@@ -440,9 +440,9 @@ def _load_remote_job_uid_mapping(*, roar_dir: Path, session_id: Any) -> dict[str
             return {}
     if not isinstance(raw, dict):
         return {}
-    jobs = (
-        ((raw.get("roar") or {}).get("remote_publication") or {}).get("glaas") or {}
-    ).get("jobs")
+    jobs = (((raw.get("roar") or {}).get("remote_publication") or {}).get("glaas") or {}).get(
+        "jobs"
+    )
     if not isinstance(jobs, dict):
         return {}
     return {str(k): str(v) for k, v in jobs.items() if isinstance(v, str) and v}
