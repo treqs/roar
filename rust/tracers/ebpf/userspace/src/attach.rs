@@ -78,6 +78,10 @@ fn attach_all_tracepoints(bpf: &mut Ebpf) -> Result<()> {
         "sys_exit_copy_file_range",
     )?;
 
+    // splice
+    attach_tp(bpf, "sys_enter_splice", "syscalls", "sys_enter_splice")?;
+    attach_tp(bpf, "sys_exit_splice", "syscalls", "sys_exit_splice")?;
+
     // rename / link path publication
     attach_tp(bpf, "sys_enter_rename", "syscalls", "sys_enter_rename")?;
     attach_tp(bpf, "sys_exit_rename", "syscalls", "sys_exit_rename")?;
