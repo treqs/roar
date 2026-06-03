@@ -22,9 +22,9 @@ use tracer_schema::ProcessInfo;
 
 use arch::{
     SYS_CHDIR, SYS_CLOSE, SYS_COPY_FILE_RANGE, SYS_DUP2, SYS_DUP3, SYS_FCHDIR, SYS_LINK,
-    SYS_LINKAT, SYS_MMAP, SYS_OPEN, SYS_OPENAT, SYS_PREAD64, SYS_PREADV, SYS_PREADV2,
-    SYS_PWRITE64, SYS_PWRITEV, SYS_PWRITEV2, SYS_READ, SYS_READV, SYS_RENAME, SYS_RENAMEAT,
-    SYS_RENAMEAT2, SYS_SENDFILE, SYS_WRITE, SYS_WRITEV,
+    SYS_LINKAT, SYS_MMAP, SYS_OPEN, SYS_OPENAT, SYS_PREAD64, SYS_PREADV, SYS_PREADV2, SYS_PWRITE64,
+    SYS_PWRITEV, SYS_PWRITEV2, SYS_READ, SYS_READV, SYS_RENAME, SYS_RENAMEAT, SYS_RENAMEAT2,
+    SYS_SENDFILE, SYS_SPLICE, SYS_WRITE, SYS_WRITEV,
 };
 
 #[derive(Serialize)]
@@ -42,6 +42,13 @@ struct PreflightResult {
     command_checked: Option<String>,
     warnings: Vec<String>,
     checks: Vec<PreflightCheck>,
+}
+
+#[derive(Debug)]
+struct PendingTransfer {
+    in_fd: i32,
+    out_path: Option<String>,
+    thread_id: u32,
 }
 
 fn preflight_check(name: &str, ok: bool, detail: impl Into<Option<String>>) -> PreflightCheck {
@@ -91,6 +98,7 @@ struct TracerState {
     awaiting_exit: HashSet<i32>, // PIDs waiting for syscall exit stop
     pending_opens: HashMap<i32, (String, u64)>, // pid -> (path, flags)
     pending_writes: HashMap<i32, (String, u32)>, // tid -> (path, thread_id)
+    pending_transfers: HashMap<i32, PendingTransfer>, // tid -> fd transfer pending confirmation
     pending_path_writes: HashMap<i32, (String, Option<u32>)>, // pid -> (destination path, thread_id)
     pending_closes: HashMap<i32, i32>, // pid -> fd (close syscalls pending confirmation)
     pending_dups: HashMap<i32, i32>,   // pid -> old_fd captured at dup{2,3} entry
@@ -110,6 +118,7 @@ impl TracerState {
             awaiting_exit: HashSet::new(),
             pending_opens: HashMap::new(),
             pending_writes: HashMap::new(),
+            pending_transfers: HashMap::new(),
             pending_path_writes: HashMap::new(),
             pending_closes: HashMap::new(),
             pending_dups: HashMap::new(),
@@ -201,6 +210,7 @@ fn needs_exit_stop(syscall_num: u64) -> bool {
             | SYS_PWRITEV2
             | SYS_SENDFILE
             | SYS_COPY_FILE_RANGE
+            | SYS_SPLICE
             | SYS_RENAME
             | SYS_LINK
             | SYS_RENAMEAT
@@ -213,12 +223,7 @@ fn needs_exit_stop(syscall_num: u64) -> bool {
     )
 }
 
-fn handle_syscall_entry(
-    pid: Pid,
-    syscall_num: u64,
-    regs: &arch::Regs,
-    state: &mut TracerState,
-) {
+fn handle_syscall_entry(pid: Pid, syscall_num: u64, regs: &arch::Regs, state: &mut TracerState) {
     let pid_raw = pid.as_raw();
     let pid_u32 = u32::try_from(pid_raw).ok();
 
@@ -273,29 +278,19 @@ fn handle_syscall_entry(
             // sendfile(out_fd, in_fd, ...) - reads from in_fd (arg1), writes to out_fd (arg0)
             let out_fd = arch::arg0(regs) as i32;
             let in_fd = arch::arg1(regs) as i32;
-            if let Some(pid_u32) = pid_u32 {
-                state
-                    .fd_tracker
-                    .mark_read_with_thread(pid_u32, in_fd, pid_u32);
-                // Track write as pending - confirm at exit if bytes > 0
-                if let Some(path) = state.fd_tracker.path_for_fd(pid_u32, out_fd).cloned() {
-                    state.pending_writes.insert(pid_raw, (path, pid_u32));
-                }
-            }
+            capture_pending_transfer(pid_raw, pid_u32, in_fd, out_fd, state);
         }
         SYS_COPY_FILE_RANGE => {
             // copy_file_range(fd_in, ..., fd_out, ...) - reads from fd_in (arg0), writes to fd_out (arg4)
             let in_fd = arch::arg0(regs) as i32;
             let out_fd = arch::arg4(regs) as i32;
-            if let Some(pid_u32) = pid_u32 {
-                state
-                    .fd_tracker
-                    .mark_read_with_thread(pid_u32, in_fd, pid_u32);
-                // Track write as pending - confirm at exit if bytes > 0
-                if let Some(path) = state.fd_tracker.path_for_fd(pid_u32, out_fd).cloned() {
-                    state.pending_writes.insert(pid_raw, (path, pid_u32));
-                }
-            }
+            capture_pending_transfer(pid_raw, pid_u32, in_fd, out_fd, state);
+        }
+        SYS_SPLICE => {
+            // splice(fd_in, ..., fd_out, ...) - reads from fd_in (arg0), writes to fd_out (arg2)
+            let in_fd = arch::arg0(regs) as i32;
+            let out_fd = arch::arg2(regs) as i32;
+            capture_pending_transfer(pid_raw, pid_u32, in_fd, out_fd, state);
         }
         SYS_MMAP => {
             // mmap(addr, len, prot, flags, fd, offset)
@@ -321,12 +316,16 @@ fn handle_syscall_entry(
 
                         // Any file-backed mmap is a read
                         if prot & 1 != 0 {
-                            state.fd_tracker.mark_read_with_thread(pid_u32, fd_i32, pid_u32);
+                            state
+                                .fd_tracker
+                                .mark_read_with_thread(pid_u32, fd_i32, pid_u32);
                         }
                         // Only MAP_SHARED + PROT_WRITE is a real write (changes go to disk)
                         // MAP_PRIVATE writes are copy-on-write and don't modify the file
                         if is_shared && (prot & 2 != 0) {
-                            state.fd_tracker.mark_written_with_thread(pid_u32, fd_i32, pid_u32);
+                            state
+                                .fd_tracker
+                                .mark_written_with_thread(pid_u32, fd_i32, pid_u32);
                         }
                     }
                 }
@@ -383,12 +382,7 @@ fn handle_syscall_entry(
     }
 }
 
-fn handle_syscall_exit(
-    pid: Pid,
-    syscall_num: u64,
-    regs: &arch::Regs,
-    state: &mut TracerState,
-) {
+fn handle_syscall_exit(pid: Pid, syscall_num: u64, regs: &arch::Regs, state: &mut TracerState) {
     let pid_raw = pid.as_raw();
     let pid_u32 = u32::try_from(pid_raw).ok();
     let ret_val = arch::ret_val(regs);
@@ -429,14 +423,29 @@ fn handle_syscall_exit(
                 }
             }
         }
-        SYS_WRITE | SYS_PWRITE64 | SYS_WRITEV | SYS_PWRITEV | SYS_PWRITEV2 | SYS_SENDFILE
-        | SYS_COPY_FILE_RANGE => {
+        SYS_WRITE | SYS_PWRITE64 | SYS_WRITEV | SYS_PWRITEV | SYS_PWRITEV2 => {
             // Only count as written if bytes were actually written (ret_val > 0)
             if let Some((path, thread_id)) = state.pending_writes.remove(&pid_raw) {
                 if ret_val > 0 {
                     state
                         .fd_tracker
                         .mark_path_written_with_thread(path, thread_id);
+                }
+            }
+        }
+        SYS_SENDFILE | SYS_COPY_FILE_RANGE | SYS_SPLICE => {
+            if let Some(transfer) = state.pending_transfers.remove(&pid_raw) {
+                if ret_val > 0 {
+                    state.fd_tracker.mark_read_with_thread(
+                        transfer.thread_id,
+                        transfer.in_fd,
+                        transfer.thread_id,
+                    );
+                    if let Some(path) = transfer.out_path {
+                        state
+                            .fd_tracker
+                            .mark_path_written_with_thread(path, transfer.thread_id);
+                    }
                 }
             }
         }
@@ -470,6 +479,26 @@ fn handle_syscall_exit(
             }
         }
         _ => {}
+    }
+}
+
+fn capture_pending_transfer(
+    pid_raw: i32,
+    pid_u32: Option<u32>,
+    in_fd: i32,
+    out_fd: i32,
+    state: &mut TracerState,
+) {
+    if let Some(pid_u32) = pid_u32 {
+        let out_path = state.fd_tracker.path_for_fd(pid_u32, out_fd).cloned();
+        state.pending_transfers.insert(
+            pid_raw,
+            PendingTransfer {
+                in_fd,
+                out_path,
+                thread_id: pid_u32,
+            },
+        );
     }
 }
 
