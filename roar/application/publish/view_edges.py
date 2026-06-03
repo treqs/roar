@@ -182,13 +182,17 @@ def resolve_view_edges_for_job(
     *,
     db_ctx: Any,
     input_hashes: list[str],
+    relation: str = "consumes",
 ) -> tuple[list[dict[str, Any]], set[str]]:
-    """Resolve a job's input *hashes* into ``consumes`` view edges + hashes to prune.
+    """Resolve a job's leaf *hashes* into view edges + hashes to prune.
 
-    Works from the collected-lineage hashes (not artifact ids). Returns
-    ``(view_edges, prune_hashes)`` — the second being input hashes that collapse into a
-    view edge (the consumed shards) plus any anchor composite hash linked as a plain
-    input (the view edge replaces it).
+    Works from the collected-lineage hashes (not artifact ids). ``relation`` is the side
+    being resolved: ``consumes`` over a job's input hashes (a run that read part of a
+    dataset) or ``produces`` over its output hashes (a run that wrote one). The resolution
+    is identical either way — each leaf is matched to the anchor composite(s) that carry
+    it as a component. Returns ``(view_edges, prune_hashes)`` — the second being the leaf
+    hashes that collapse into a view edge plus any anchor composite hash linked as a plain
+    input/output (the view edge replaces it).
     """
     artifacts_repo: Any = optional_repo(db_ctx, "artifacts")
     composites_repo: Any = optional_repo(db_ctx, "composites")
@@ -236,7 +240,7 @@ def resolve_view_edges_for_job(
             continue
         view_edges.append(
             build_view_edge(
-                relation="consumes",
+                relation=relation,
                 anchor_digest=anchor_digest,
                 anchor_total=_anchor_total(anchor),
                 consumed_digests=sorted(bucket["leaves"]),

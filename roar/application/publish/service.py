@@ -436,17 +436,6 @@ def _form_lineage_composites_for_lineage(*, roar_dir: Path, lineage: Any, logger
         return form_lineage_composites(db_ctx=form_db, job_ids=job_ids, logger=logger)
 
 
-def _prune_composite_output_leaves_for_lineage(*, roar_dir: Path, lineage: Any, logger: Any) -> int:
-    """Drop loose leaves subsumed by a composite output from a collected lineage bundle."""
-    from .lineage_composite_formation import prune_composite_output_leaves
-
-    jobs = getattr(lineage, "jobs", []) or []
-    if not jobs:
-        return 0
-    with create_database_context(roar_dir) as prune_db:
-        return prune_composite_output_leaves(db_ctx=prune_db, lineage_jobs=jobs, logger=logger)
-
-
 def _load_remote_job_uid_mapping(*, roar_dir: Path, session_id: Any) -> dict[str, str]:
     """Return the ``{local_job_uid: remote_job_uid}`` map registration persisted.
 
@@ -483,14 +472,16 @@ def _load_remote_job_uid_mapping(*, roar_dir: Path, session_id: Any) -> dict[str
 def _prepare_view_edges_for_lineage(
     *, roar_dir: Path, lineage: Any, logger: Any
 ) -> dict[str, list[Any]]:
-    """Compute consumes view edges for each job and prune the subsumed inputs in-place.
+    """Compute consumes/produces view edges per job and prune the subsumed leaves in-place.
 
-    For every job, resolves its crosswalk inputs into one view edge per dataset anchor
-    (a bloom over the consumed leaves) and removes the subsumed shard inputs — and any
-    anchor linked as a plain input — from the bundle so they are not pushed as plain
-    inputs. The anchor composite remains in ``lineage.artifacts`` (already collected) so
-    it is still registered. Returns ``{job_uid: [view_edge, ...]}`` to push after the
-    main registration.
+    A job that read part of a dataset gets a ``consumes`` view edge over its inputs; a job
+    that wrote one gets a ``produces`` view edge over its outputs. Each edge is a bloom
+    over the touched leaves referencing the anchor composite; the subsumed leaf hashes —
+    and any anchor linked as a plain input/output — are removed from the bundle so the job
+    links the dataset *view* (job -> view -> anchor -> leaves), not the loose leaves or the
+    anchor directly. The anchor composite stays in ``lineage.artifacts`` (already
+    collected) so it is still registered. Returns ``{job_uid: [view_edge, ...]}`` to push
+    after the main registration.
     """
     from .view_edges import resolve_view_edges_for_job
 
@@ -503,16 +494,27 @@ def _prepare_view_edges_for_lineage(
             if not isinstance(job, dict):
                 continue
             job_uid = job.get("job_uid")
-            input_hashes = list(job.get("_input_hashes") or [])
-            if not job_uid or not input_hashes:
+            if not job_uid:
                 continue
-            edges, prune = resolve_view_edges_for_job(db_ctx=db, input_hashes=input_hashes)
-            if not edges:
-                continue
-            view_edges_by_job[str(job_uid)] = edges
-            job["_input_hashes"] = [h for h in input_hashes if h not in prune]
-            if isinstance(job.get("_inputs"), list):
-                job["_inputs"] = [i for i in job["_inputs"] if i.get("hash") not in prune]
+            edges: list[Any] = []
+            for relation, hashes_key, items_key in (
+                ("consumes", "_input_hashes", "_inputs"),
+                ("produces", "_output_hashes", "_outputs"),
+            ):
+                hashes = list(job.get(hashes_key) or [])
+                if not hashes:
+                    continue
+                resolved, prune = resolve_view_edges_for_job(
+                    db_ctx=db, input_hashes=hashes, relation=relation
+                )
+                if not resolved:
+                    continue
+                edges.extend(resolved)
+                job[hashes_key] = [h for h in hashes if h not in prune]
+                if isinstance(job.get(items_key), list):
+                    job[items_key] = [i for i in job[items_key] if i.get("hash") not in prune]
+            if edges:
+                view_edges_by_job[str(job_uid)] = edges
     return view_edges_by_job
 
 
@@ -590,22 +592,9 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             except Exception as exc:  # attribution is best-effort
                 logger.debug("anchor attribution skipped: %s", exc)
 
-        # A producer that wrote a structured dataset registers the composite as its
-        # output, not the composite PLUS its loose leaves: drop the subsumed leaves from
-        # the bundle (the local DB record stays complete). Best-effort.
-        if not request.dry_run:
-            try:
-                _prune_composite_output_leaves_for_lineage(
-                    roar_dir=request.roar_dir,
-                    lineage=collected_lineage.lineage,
-                    logger=logger,
-                )
-            except Exception as exc:  # output pruning is best-effort
-                logger.debug("composite output pruning skipped: %s", exc)
-
-        # Collapse a job's anchor-membership into one consumes view edge (a bloom over
-        # the consumed leaves) and prune the subsumed inputs from the bundle. Pushed
-        # after the main registration. Best-effort.
+        # Collapse each job's dataset membership into consumes/produces view edges (a
+        # bloom over the touched leaves) and prune the subsumed leaves from the bundle.
+        # Pushed after the main registration. Best-effort.
         view_edges_by_job: dict[str, list[Any]] = {}
         if not request.dry_run:
             try:

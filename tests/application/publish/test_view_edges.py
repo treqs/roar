@@ -8,7 +8,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from roar.application.publish.composite_builder import CompositeArtifactBuilder
-from roar.application.publish.view_edges import build_view_edge, resolve_consumed_view_edges
+from roar.application.publish.view_edges import (
+    build_view_edge,
+    resolve_consumed_view_edges,
+    resolve_view_edges_for_job,
+)
 
 
 def _bloom_member(bloom: dict, algorithm: str, digest: str) -> bool:
@@ -94,6 +98,46 @@ def test_resolve_blake3_leaf_for_local_put_composite():
     # Bloom is keyed by blake3, not sha256.
     assert _bloom_member(edges[0]["bloom"], "blake3", leaf_blake3) is True
     assert _bloom_member(edges[0]["bloom"], "sha256", leaf_blake3) is False
+
+
+def test_resolve_produces_view_edge_for_run_written_dataset():
+    """A run that WROTE a structured dataset gets a ``produces`` view edge over its output
+    leaves, targeting the anchor composite; the leaves and the directly-linked anchor are
+    pruned (job -> produces view -> anchor -> leaves, symmetric with a consumer)."""
+    leaf_a, leaf_b, anchor = "a" * 64, "b" * 64, "e" * 64
+    arts = {
+        leaf_a: {"hashes": [{"algorithm": "blake3", "digest": leaf_a}]},
+        leaf_b: {"hashes": [{"algorithm": "blake3", "digest": leaf_b}]},
+        anchor: {
+            "hashes": [{"algorithm": "composite-blake3", "digest": anchor}],
+            "component_count": 12,
+        },
+    }
+
+    def _get_by_hash(digest, algorithm=None):
+        art = arts.get(digest)
+        if art is None or algorithm is None:
+            return art
+        return art if art["hashes"][0]["algorithm"] == algorithm else None
+
+    db = SimpleNamespace(artifacts=MagicMock(), composites=MagicMock())
+    db.artifacts.get_by_hash.side_effect = _get_by_hash
+    db.artifacts.get.side_effect = lambda aid: arts[anchor] if aid == "zarr-anchor" else None
+    db.composites.find_by_component_digest.side_effect = lambda digest, algo="sha256": (
+        ["zarr-anchor"] if digest in (leaf_a, leaf_b) and algo == "blake3" else []
+    )
+
+    edges, prune = resolve_view_edges_for_job(
+        db_ctx=db, input_hashes=[leaf_a, leaf_b, anchor], relation="produces"
+    )
+    assert len(edges) == 1
+    assert edges[0]["relation"] == "produces"
+    assert edges[0]["target_hash"] == anchor
+    assert edges[0]["parent_total"] == 12
+    assert edges[0]["selected_count"] == 2
+    # Both produced leaves and the directly-linked anchor collapse out of the bundle.
+    assert prune == {leaf_a, leaf_b, anchor}
+    assert _bloom_member(edges[0]["bloom"], "blake3", leaf_a) is True
 
 
 def test_resolve_no_crosswalk_means_no_view_edges():

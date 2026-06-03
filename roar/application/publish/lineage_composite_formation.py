@@ -8,10 +8,12 @@ This module closes that gap at ``roar register`` time, symmetrically with how
 For each job it runs the shared :func:`form_composites` core over the job's leaf inputs
 and (separately) its leaf outputs, persists any detected dataset as a local composite
 artifact (``kind=composite`` via :meth:`composites.upsert_details`), and links it to the
-job — a produced dataset becomes an output edge, a consumed one an input edge. The
-register flow then re-collects the lineage, so the existing bundle-registration and
-view-edge machinery surface the composite unchanged (a partial reader of the same
-dataset resolves a ``consumes`` view edge against these components).
+job — a produced dataset as an output, a consumed one as an input. That link is only the
+vehicle that carries the anchor into the re-collected bundle: view-edge prep then
+collapses it into a ``produces``/``consumes`` view edge, so the final shape is
+``job -> dataset view -> anchor composite -> leaves`` (symmetric with a partial reader,
+and with a ``get`` from HF). The loose leaves become the anchor's components, not direct
+job edges.
 
 Only self-declaring, manifest-bearing structures are formed here (``declared=False`` —
 see the form_composites policy): a directory of loose parquet a run happened to touch is
@@ -68,63 +70,6 @@ def form_lineage_composites(*, db_ctx: Any, job_ids: list[int], logger: ILogger)
                     job_id,
                 )
     return added
-
-
-def prune_composite_output_leaves(*, db_ctx: Any, lineage_jobs: list[Any], logger: ILogger) -> int:
-    """Drop loose leaves subsumed by a composite output from the registration bundle.
-
-    Mirrors how view-edge prep prunes consumed leaf *inputs*: a producer job that wrote a
-    structured dataset should register the composite as its output, not the dataset as a
-    composite PLUS its loose leaves. Operates on the collected bundle (``job["_outputs"]``
-    / ``job["_output_hashes"]``) only — the local DB record stays complete. A leaf is
-    subsumed when its output path falls under a composite output's root.
-    """
-    jobs_repo: Any = optional_repo(db_ctx, "jobs")
-    if jobs_repo is None:
-        return 0
-
-    pruned = 0
-    for job in lineage_jobs:
-        if not isinstance(job, dict):
-            continue
-        job_id = _job_db_id(job)
-        if job_id is None:
-            continue
-        rows = jobs_repo.get_outputs(job_id)
-        roots = [r.get("path") for r in rows if r.get("kind") == "composite" and r.get("path")]
-        if not roots:
-            continue
-        subsumed = {
-            r.get("artifact_hash")
-            for r in rows
-            if r.get("kind") != "composite"
-            and r.get("artifact_hash")
-            and any(_path_under(r.get("path") or "", root) for root in roots)
-        }
-        if not subsumed:
-            continue
-        before = len(job.get("_output_hashes") or [])
-        job["_output_hashes"] = [h for h in (job.get("_output_hashes") or []) if h not in subsumed]
-        if isinstance(job.get("_outputs"), list):
-            job["_outputs"] = [o for o in job["_outputs"] if o.get("hash") not in subsumed]
-        removed = before - len(job["_output_hashes"])
-        if removed:
-            pruned += removed
-            logger.debug("Pruned %d subsumed leaf outputs from job %s", removed, job_id)
-    return pruned
-
-
-def _job_db_id(job: dict[str, Any]) -> int | None:
-    raw_id = job.get("id")
-    if isinstance(raw_id, int):
-        return raw_id
-    if isinstance(raw_id, str) and raw_id.isdigit():
-        return int(raw_id)
-    return None
-
-
-def _path_under(path: str, root: str) -> bool:
-    return path == root or path.startswith(root.rstrip("/") + "/")
 
 
 def _leaf_items(rows: list[dict[str, Any]]) -> list[tuple[str, str]]:

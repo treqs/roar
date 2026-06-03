@@ -13,10 +13,7 @@ import hashlib
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from roar.application.publish.lineage_composite_formation import (
-    form_lineage_composites,
-    prune_composite_output_leaves,
-)
+from roar.application.publish.lineage_composite_formation import form_lineage_composites
 
 
 def _h(name: str) -> str:
@@ -102,57 +99,6 @@ def test_loose_parquets_form_nothing_at_register():
     shards = [_row("out/s/part-0.parquet"), _row("out/s/part-1.parquet")]
     db = _repos(_db(inputs={}, outputs={1: shards}))
     assert form_lineage_composites(db_ctx=db, job_ids=[1], logger=MagicMock()) == 0
-
-
-def test_prune_composite_output_leaves_keeps_only_the_composite():
-    # After a Zarr composite is formed as an output, the loose leaves under its root are
-    # pruned from the bundle so the producer job shows ONLY the composite.
-    rows = [
-        {"path": "out/x.zarr/.zgroup", "artifact_hash": _h("a"), "kind": None},
-        {"path": "out/x.zarr/0", "artifact_hash": _h("b"), "kind": None},
-        {"path": "out/x.zarr", "artifact_hash": _h("comp"), "kind": "composite"},
-        {"path": "out/model.pt", "artifact_hash": _h("m"), "kind": None},  # unrelated, kept
-    ]
-    jobs = MagicMock()
-    jobs.get_outputs.side_effect = lambda jid: rows
-    db = SimpleNamespace(jobs=jobs)
-    import roar.application.publish.lineage_composite_formation as mod
-
-    mod.optional_repo = lambda ctx, name: getattr(ctx, name)  # type: ignore[attr-defined]
-
-    job = {
-        "id": 9,
-        "_output_hashes": [_h("a"), _h("b"), _h("comp"), _h("m")],
-        "_outputs": [
-            {"hash": _h("a"), "path": "out/x.zarr/.zgroup"},
-            {"hash": _h("b"), "path": "out/x.zarr/0"},
-            {"hash": _h("comp"), "path": "out/x.zarr"},
-            {"hash": _h("m"), "path": "out/model.pt"},
-        ],
-    }
-    pruned = prune_composite_output_leaves(db_ctx=db, lineage_jobs=[job], logger=MagicMock())
-
-    assert pruned == 2
-    # Composite + unrelated output remain; the two Zarr leaves are gone.
-    assert job["_output_hashes"] == [_h("comp"), _h("m")]
-    assert {o["hash"] for o in job["_outputs"]} == {_h("comp"), _h("m")}
-
-
-def test_prune_noop_without_composite_outputs():
-    rows = [
-        {"path": "out/a.bin", "artifact_hash": _h("a"), "kind": None},
-        {"path": "out/b.bin", "artifact_hash": _h("b"), "kind": None},
-    ]
-    jobs = MagicMock()
-    jobs.get_outputs.side_effect = lambda jid: rows
-    db = SimpleNamespace(jobs=jobs)
-    import roar.application.publish.lineage_composite_formation as mod
-
-    mod.optional_repo = lambda ctx, name: getattr(ctx, name)  # type: ignore[attr-defined]
-
-    job = {"id": 1, "_output_hashes": [_h("a"), _h("b")], "_outputs": []}
-    assert prune_composite_output_leaves(db_ctx=db, lineage_jobs=[job], logger=MagicMock()) == 0
-    assert job["_output_hashes"] == [_h("a"), _h("b")]
 
 
 def test_existing_composite_rows_are_skipped_idempotent():
