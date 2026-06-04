@@ -14,6 +14,24 @@ _AuthMode = Literal["unknown", "authenticated", "anonymous"]
 _AUTH_MODE_BY_BASE_URL: dict[str, _AuthMode] = {}
 _AUTH_MODE_LOCK = Lock()
 
+# Sent on every GLaaS request so the server can identify the client version (e.g. to
+# warn pre-0.3.4 clients, which omit artifact sizes on the staged-link path). Absence of
+# this header marks a legacy client.
+_ROAR_VERSION_HEADER = "X-Roar-Version"
+_ROAR_VERSION: str | None = None
+
+
+def _roar_version() -> str:
+    global _ROAR_VERSION
+    if _ROAR_VERSION is None:
+        try:
+            from importlib.metadata import version
+
+            _ROAR_VERSION = version("roar-cli")
+        except Exception:
+            _ROAR_VERSION = "unknown"
+    return _ROAR_VERSION
+
 
 def _get_logger():
     from ...core.logging import get_logger
@@ -115,6 +133,7 @@ def probe_auth_header(
     request_url = f"{normalized}{_AUTH_PROBE_PATH}"
     req = urllib.request.Request(request_url, method="GET")
     req.add_header("Authorization", auth_header)
+    req.add_header(_ROAR_VERSION_HEADER, _roar_version())
 
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -177,6 +196,7 @@ def request_json(
             len(request_body) if request_body else 0,
         )
         req = urllib.request.Request(request_url, data=request_body, method=request_method)
+        req.add_header(_ROAR_VERSION_HEADER, _roar_version())
         if auth_value:
             req.add_header("Authorization", auth_value)
         if request_body:
