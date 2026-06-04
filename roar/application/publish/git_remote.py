@@ -358,6 +358,5 @@ def warn_if_ssh_passphrase_prompt_likely(repo_root: Path | str, remote: str) -> 
 
     return (
         f"Pushing roar tags to '{remote}' over SSH may prompt for your key passphrase.\n"
-        "Tip: run `ssh-add` first to cache it in your ssh-agent and avoid repeated prompts "
-        "(or set `roar config set git.push_tags_on_register never` to skip the push)."
+        "Tip: run `ssh-add` first to cache it in your ssh-agent and avoid repeated prompts."
     )
