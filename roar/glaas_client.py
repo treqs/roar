@@ -4,6 +4,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import click
+
 from .auth_store import auth_store_path, is_auth_state_expired, load_auth_state, save_auth_state
 from .glaas_auth import (
     GlaasAuthError,
@@ -60,11 +62,29 @@ def _resolve_access_token(access_token: str | None) -> str:
     if auth_state is None or not auth_state.access_token:
         raise GlaasClientError("Not logged in. Run `roar login` before linking a project.")
 
+    token, _refreshed = ensure_fresh_access_token(auth_state)
+    return token
+
+
+def ensure_fresh_access_token(auth_state) -> tuple[str, bool]:
+    """Return a usable access token, refreshing it first if it's expiring/expired.
+
+    Returns ``(access_token, refreshed)``. When the token is within the refresh
+    window and a refresh token is present, it's renewed (and the renewal is
+    surfaced to the user). Raises ``GlaasClientError`` — pointing at
+    ``roar login`` — when the token is expired and cannot be refreshed, so a
+    caller never unknowingly rides on a dead session.
+    """
     if _should_refresh(auth_state):
-        return _refresh_stored_access_token(auth_state)
+        try:
+            return _refresh_stored_access_token(auth_state), True
+        except GlaasClientError as exc:
+            raise GlaasClientError(f"{exc}. Run `roar login` to re-authenticate.") from exc
     if is_auth_state_expired(auth_state):
-        raise GlaasClientError("Session expired. Run `roar login`.")
-    return auth_state.access_token
+        raise GlaasClientError(
+            "Session expired and no refresh token is available. Run `roar login`."
+        )
+    return auth_state.access_token, False
 
 
 def _should_refresh(auth_state) -> bool:
@@ -123,6 +143,9 @@ def _refresh_stored_access_token(auth_state) -> str:
         "user": user_payload,
     }
     save_auth_state(updated_raw)
+    # Surface the silent renewal so a freshly-refreshed token doesn't read as a
+    # bug next to a `roar whoami` that just reported the session "expired".
+    click.echo("Session refreshed.", err=True)
     return token_response.access_token
 
 
