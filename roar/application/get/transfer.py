@@ -17,7 +17,13 @@ from pathlib import Path
 from ...core.logging import get_logger
 from ...db.hashing import hash_files_blake3
 from ...integrations.download.base import DownloadBackend, Source
+from ...presenters.spinner import Spinner
 from .results import GetDownloadedFile, GetDryRunItem
+
+
+def _download_progress_message(done: int, total: int, downloaded_bytes: int) -> str:
+    """Status line for the download spinner, e.g. ``Downloading 47/100 · 4.31 GB``."""
+    return f"Downloading {done}/{total} files · {downloaded_bytes / 1e9:.2f} GB"
 
 
 @dataclass
@@ -169,7 +175,10 @@ class GetService:
         prefix = self._source.key
         self._logger.debug("Listing keys under prefix: %s", prefix)
 
-        keys = self._backend.list_keys(prefix)
+        # Listing a large repo (e.g. HF datasets paginate thousands of files) can take
+        # several seconds before the first byte downloads.
+        with Spinner("Fetching manifest..."):
+            keys = self._backend.list_keys(prefix)
         if not keys:
             return GetTransferResult(
                 success=False,
@@ -274,13 +283,21 @@ class GetService:
         expected_hash: str | None = None,
     ) -> GetTransferResult:
         downloaded_files: list[GetDownloadedFile] = []
+        total = len(pending_downloads)
         try:
-            for pending in pending_downloads:
-                self._download_to_tmp(pending)
+            # Downloads are the long pole of a get (multi-GB datasets); show a live
+            # N/M + cumulative-bytes counter so the terminal isn't dead for minutes.
+            downloaded_bytes = 0
+            with Spinner(_download_progress_message(0, total, 0)) as spin:
+                for index, pending in enumerate(pending_downloads, start=1):
+                    self._download_to_tmp(pending)
+                    downloaded_bytes += pending.tmp_path.stat().st_size
+                    spin.update(_download_progress_message(index, total, downloaded_bytes))
 
-            hashes_by_tmp_path = self._hash_files_batch(
-                [entry.tmp_path for entry in pending_downloads]
-            )
+            with Spinner(f"Hashing {total} file(s)..."):
+                hashes_by_tmp_path = self._hash_files_batch(
+                    [entry.tmp_path for entry in pending_downloads]
+                )
 
             for entry in pending_downloads:
                 key = str(entry.tmp_path)
