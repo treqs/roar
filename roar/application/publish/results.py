@@ -35,6 +35,9 @@ class RegisterLineageResponse:
     links_created: int = 0
     # User-set labels synced to GLaaS during this register.
     labels_synced: int = 0
+    # True when the whole lineage was already on GLaaS (a no-op re-register):
+    # roar reused the existing DAG instead of failing on duplicate jobs.
+    already_registered: bool = False
     error: str | None = None
     secrets_detected: list[str] = field(default_factory=list)
     secrets_redacted: bool = False

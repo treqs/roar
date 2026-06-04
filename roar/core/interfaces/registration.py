@@ -87,6 +87,10 @@ class BatchRegistrationResult:
     # User labels synced to GLaaS during this registration (non-``roar.*``
     # label keys across the published entities).
     labels_synced: int = 0
+    # Set when the whole lineage was already registered under one existing DAG
+    # (a full re-register): the existing DAG hash. The caller skips finalize and
+    # reuses this hash instead of failing on duplicate jobs.
+    already_registered_session_hash: str | None = None
 
 
 @runtime_checkable

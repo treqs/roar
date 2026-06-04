@@ -295,6 +295,18 @@ def register(
         click.echo(f"  Session:  {session_url}")
         if response.artifact_hash:
             click.echo(f"  Artifact: {web_url}/artifact/{response.artifact_hash}")
+    elif response.already_registered:
+        # The whole lineage was already on GLaaS — a no-op re-register. Say so
+        # plainly (it's not a fresh publish) and surface any label updates.
+        for warning in response.warnings:
+            click.echo(f"Warning: {warning}", err=True)
+        _render_tag_summary(response.tag_summary)
+        click.echo(f"Already registered on GLaaS: {target}")
+        click.echo(f"  Session: {session_preview}")
+        click.echo(f"  Labels: {response.labels_synced}")
+        click.echo("")
+        click.echo("GLaaS:")
+        click.echo(f"  Session:  {session_url}")
     else:
         for warning in response.warnings:
             click.echo(f"Warning: {warning}", err=True)

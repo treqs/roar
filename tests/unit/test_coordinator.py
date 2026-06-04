@@ -369,3 +369,62 @@ class TestRegisterLineageUnderRegistrationSession:
 
         assert any("Boom" in e for e in result.errors)
         mock_job_service.link_job_artifacts_under_registration_session.assert_called_once()
+
+
+def _reg_session_coordinator(batch_counts):
+    """A coordinator whose job batch returns the given counts (1 success job)."""
+    from unittest.mock import MagicMock
+
+    from roar.core.interfaces.registration import JobLinkResult
+
+    session_service = MagicMock()
+    artifact_service = MagicMock()
+    job_service = MagicMock()
+    job_service.create_jobs_batch_under_registration_session.return_value = (
+        [JobRegistrationResult(success=True, job_uid="job-001")],
+        batch_counts,
+    )
+    job_service.link_job_artifacts_under_registration_session.return_value = JobLinkResult(
+        success=True, job_uid="job-001"
+    )
+    coordinator = RegistrationCoordinator(
+        session_service=session_service,
+        artifact_service=artifact_service,
+        job_service=job_service,
+        logger=MagicMock(),
+    )
+    return coordinator, artifact_service, job_service
+
+
+def test_full_re_register_short_circuits_to_existing_dag() -> None:
+    coordinator, artifact_service, job_service = _reg_session_coordinator(
+        {"created": 0, "existing": 0, "already_registered": ["dag-hash-abc"]}
+    )
+    result = coordinator.register_lineage_under_registration_session(
+        registration_session_id="reg-1",
+        git_context=GitContext(repo="r", commit="c", branch="main"),
+        jobs=[{"job_uid": "job-001", "_inputs": [{"hash": "in1", "path": "/in"}]}],
+        artifacts=[{"hashes": [{"algorithm": "blake3", "digest": "in1"}], "size": 1}],
+    )
+    assert result.already_registered_session_hash == "dag-hash-abc"
+    assert result.session_registered is True
+    assert result.jobs_failed == 0
+    # No staging / linking for an already-registered lineage.
+    artifact_service.register_batch_under_registration_session.assert_not_called()
+    job_service.link_job_artifacts_under_registration_session.assert_not_called()
+
+
+def test_partial_overlap_returns_clean_conflict_error() -> None:
+    coordinator, artifact_service, _ = _reg_session_coordinator(
+        {"created": 1, "existing": 0, "already_registered": ["dag-hash-x"]}
+    )
+    result = coordinator.register_lineage_under_registration_session(
+        registration_session_id="reg-1",
+        git_context=GitContext(repo="r", commit="c", branch="main"),
+        jobs=[{"job_uid": "job-001"}],
+        artifacts=[],
+    )
+    assert result.already_registered_session_hash is None
+    assert result.jobs_failed >= 1
+    assert any("already registered" in e for e in result.errors)
+    artifact_service.register_batch_under_registration_session.assert_not_called()

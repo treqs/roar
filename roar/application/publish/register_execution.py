@@ -122,6 +122,7 @@ class RegisterResult:
     artifacts_registered: int = 0
     links_created: int = 0
     labels_synced: int = 0
+    already_registered: bool = False
     error: str | None = None
     secrets_detected: list[str] = field(default_factory=list)
     secrets_redacted: bool = False
@@ -298,6 +299,7 @@ class RegisterService:
         finalized_session_hash = session_hash
         finalized_session_url = prepared.session_url
         finalize_failed = False
+        already_registered = False
         with Spinner("Publishing lineage to GLaaS...") as spin:
             refresh_job_artifact_references(lineage.jobs, lineage.artifacts)
 
@@ -317,7 +319,25 @@ class RegisterService:
                 )
                 registration_errors.extend(batch_result.errors)
 
-                if batch_result.jobs_failed == 0 and batch_result.links_failed == 0:
+                if batch_result.already_registered_session_hash:
+                    # Full re-register: this lineage is already on GLaaS. Skip
+                    # finalize (nothing new to stage) and reuse the existing DAG,
+                    # but still sync labels — the usual reason to re-register.
+                    already_registered = True
+                    finalized_session_hash = batch_result.already_registered_session_hash
+                    finalized_session_url = None
+                    if session_id is not None:
+                        with create_database_context(roar_dir) as db_ctx:
+                            batch_result.labels_synced = sync_publish_labels(
+                                glaas_client=self.glaas_client,
+                                db_ctx=db_ctx,
+                                session_id=session_id,
+                                session_hash=finalized_session_hash,
+                                jobs=remote_registration_jobs,
+                                artifacts=lineage.artifacts,
+                                errors=registration_errors,
+                            )
+                elif batch_result.jobs_failed == 0 and batch_result.links_failed == 0:
                     spin.update("Finalizing lineage...")
                     finalize_result = (
                         self.coordinator.session_service.finalize_registration_session(
@@ -491,6 +511,7 @@ class RegisterService:
             artifacts_registered=total_artifacts_registered,
             links_created=batch_result.links_created,
             labels_synced=batch_result.labels_synced,
+            already_registered=already_registered,
             error="; ".join(registration_errors) if registration_errors else None,
             secrets_detected=detected_secrets,
             secrets_redacted=bool(detected_secrets),

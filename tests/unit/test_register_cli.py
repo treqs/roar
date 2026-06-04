@@ -383,3 +383,28 @@ def test_register_cli_renders_warnings_above_summary(tmp_path: Path) -> None:
     # Actionable info is intact in the rendered warning.
     assert "git push" in result.output
     assert "Permission denied (publickey)" in result.output
+
+
+def test_register_cli_renders_already_registered(tmp_path: Path) -> None:
+    """A full re-register reports a no-op clearly, not a fresh publish."""
+    runner = CliRunner()
+    response = RegisterLineageResponse(
+        success=True,
+        session_hash="0123456789abcdef0123456789abcdef",
+        already_registered=True,
+        labels_synced=2,
+    )
+    with (
+        patch("roar.cli.commands.register.register_lineage_target", return_value=response),
+        patch(
+            "roar.cli.commands.register._resolve_glaas_web_url",
+            return_value="https://glaas.example",
+        ),
+    ):
+        result = runner.invoke(register, ["model.pkl", "--yes"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert "Already registered on GLaaS: model.pkl" in result.output
+    assert "Registered lineage for:" not in result.output
+    assert "Labels: 2" in result.output
+    assert "https://glaas.example/dag/0123456789abcdef0123456789abcdef" in result.output
