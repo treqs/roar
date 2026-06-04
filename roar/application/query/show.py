@@ -338,10 +338,16 @@ def _build_job_summary(db_ctx, job: dict[str, Any]) -> ShowJobSummary:
 
 def _build_job_artifact_summary(artifact: dict[str, Any]) -> ShowJobArtifactSummary:
     path = str(artifact["path"])
+    kind = cast(str | None, artifact.get("kind"))
+    # A composite's "path" is a logical identifier (often a remote hf://… URI),
+    # not a local file, and its components may be intentionally only partially
+    # materialized (e.g. `roar get --limit`). A filesystem presence check is
+    # meaningless and would always read "(missing)", so skip it (present=None).
+    present = None if kind == "composite" else _path_present(path)
     return ShowJobArtifactSummary(
         path=path,
         artifact_id=str(artifact["artifact_id"]),
-        kind=cast(str | None, artifact.get("kind")),
+        kind=kind,
         component_count=cast(int | None, artifact.get("component_count")),
         size=int(artifact["size"]),
         hashes=[
@@ -351,7 +357,7 @@ def _build_job_artifact_summary(artifact: dict[str, Any]) -> ShowJobArtifactSumm
             )
             for hash_entry in cast(list[dict[str, Any]], artifact.get("hashes", []))
         ],
-        present=_path_present(path),
+        present=present,
     )
 
 
