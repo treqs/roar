@@ -82,7 +82,11 @@ def export_registration_package(
             error="No tracked jobs found in the active session.",
         )
 
-    git_context = resolve_roar_git_context(request.cwd, logger=logger)
+    from ...integrations.config import config_get
+
+    git_context = resolve_roar_git_context(
+        request.cwd, logger=logger, configured_remote=config_get("git.remote")
+    )
     with create_database_context(request.roar_dir) as db_ctx:
         package, encoded = build_registration_package(
             session=session,

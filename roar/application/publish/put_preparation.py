@@ -60,10 +60,13 @@ def prepare_put_execution(
         raise ValueError("No active session")
 
     session_id = int(active_session["id"])
+    from ...integrations.config import config_get
+
     git_context = resolve_roar_git_context(
         repo_root,
         logger=logger,
         git_commit=git_commit,
+        configured_remote=config_get("git.remote"),
     )
     runtime_dict = getattr(runtime, "__dict__", {})
     remote_registry = coerce_remote_registry(
