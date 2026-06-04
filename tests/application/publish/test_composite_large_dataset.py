@@ -44,7 +44,9 @@ def test_tail_leaf_beyond_upload_cap_resolves_and_prunes(tmp_path: Path):
     assert result is not None
     # Local build keeps every component; the upload copy is capped.
     assert result.component_count_stored == _N
-    assert len(builder.cap_payload_for_upload(result.payload)["components"]) <= _MAX_STORED_COMPONENTS
+    assert (
+        len(builder.cap_payload_for_upload(result.payload)["components"]) <= _MAX_STORED_COMPONENTS
+    )
 
     tail_digest = f"{_TAIL:064x}"
     roar_dir = tmp_path / ".roar"
