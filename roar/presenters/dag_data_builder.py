@@ -48,10 +48,16 @@ class DagDataBuilder:
 
         all_artifacts, artifacts_by_path = self._collect_artifacts(steps_by_number)
         output_path_to_step = self._map_output_paths(all_artifacts)
+        output_artifact_to_step = self._map_output_artifact_ids(all_artifacts)
         artifact_consumers = self._collect_consumers(steps_by_number, all_artifacts)
 
         nodes = self._build_nodes(
-            steps_to_show, steps_by_number, stale_steps, output_path_to_step, expanded
+            steps_to_show,
+            steps_by_number,
+            stale_steps,
+            output_path_to_step,
+            output_artifact_to_step,
+            expanded,
         )
 
         step_states = self._propagate_superseded(nodes, expanded)
@@ -214,6 +220,21 @@ class DagDataBuilder:
             output_path_to_step[artifact_info["path"]] = artifact_info["producer_step"]
         return output_path_to_step
 
+    def _map_output_artifact_ids(self, all_artifacts: dict[str, dict]) -> dict[str, int]:
+        """Map output artifact ids to their producer step numbers.
+
+        Edges keyed by artifact id (not just path) so a dependency is detected
+        even when the only artifact shared between two steps is a composite —
+        e.g. a `roar get` whose sole recorded output is the dataset composite,
+        consumed by a downstream step. Composite paths are logical (``hf://``…),
+        so path matching alone would miss the edge.
+        """
+        return {
+            artifact_id: artifact_info["producer_step"]
+            for artifact_id, artifact_info in all_artifacts.items()
+            if artifact_id
+        }
+
     def _collect_consumers(
         self,
         steps_by_number: dict[int, list[dict]],
@@ -244,6 +265,7 @@ class DagDataBuilder:
         steps_by_number: dict[int, list[dict]],
         stale_steps: set[int],
         output_path_to_step: dict[str, int],
+        output_artifact_to_step: dict[str, int],
         expanded: bool,
     ) -> list[dict]:
         """Build node data for each step to show."""
@@ -261,17 +283,29 @@ class DagDataBuilder:
             primitive_inputs = [inp for inp in inputs if inp.get("kind") != "composite"]
             primitive_outputs = [out for out in outputs if out.get("kind") != "composite"]
 
-            # Calculate consumed count (inputs that came from other tracked jobs)
+            # Calculate consumed count (inputs that came from other tracked jobs).
+            # Match by artifact id first so composite inputs (whose path is a
+            # logical hf://… URI, not a local file) still link to their producer;
+            # fall back to path matching for inputs without a tracked id.
             consumed = 0
             dependencies: list[int] = []
-            for inp in primitive_inputs:
-                path = inp.get("path") or inp.get("first_seen_path")
-                if path and path in output_path_to_step:
-                    producer_step = output_path_to_step[path]
-                    if producer_step != step_number and producer_step < step_number:
-                        consumed += 1
-                        if producer_step not in dependencies:
-                            dependencies.append(producer_step)
+            for inp in inputs:
+                producer_step: int | None = None
+                artifact_id = str(inp.get("artifact_id") or "")
+                if artifact_id and artifact_id in output_artifact_to_step:
+                    producer_step = output_artifact_to_step[artifact_id]
+                else:
+                    path = inp.get("path") or inp.get("first_seen_path")
+                    if path and path in output_path_to_step:
+                        producer_step = output_path_to_step[path]
+                if (
+                    producer_step is not None
+                    and producer_step != step_number
+                    and producer_step < step_number
+                ):
+                    consumed += 1
+                    if producer_step not in dependencies:
+                        dependencies.append(producer_step)
 
             # Determine state
             is_latest = step == latest_by_step.get(step_number)
