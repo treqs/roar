@@ -29,8 +29,12 @@ class RegisterLineageResponse:
     session_url: str | None = None
     artifact_hash: str = ""
     jobs_registered: int = 0
+    # Jobs that were already registered under this session (re-register/resume).
+    jobs_existing: int = 0
     artifacts_registered: int = 0
     links_created: int = 0
+    # User-set labels synced to GLaaS during this register.
+    labels_synced: int = 0
     error: str | None = None
     secrets_detected: list[str] = field(default_factory=list)
     secrets_redacted: bool = False

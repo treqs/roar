@@ -80,6 +80,13 @@ class BatchRegistrationResult:
     links_created: int
     links_failed: int
     errors: list[str]
+    # Jobs that were already staged under this registration session (a
+    # re-register / resume). Counted separately from ``jobs_created`` so the
+    # CLI can report "Jobs: 0 (4 already registered)".
+    jobs_existing: int = 0
+    # User labels synced to GLaaS during this registration (non-``roar.*``
+    # label keys across the published entities).
+    labels_synced: int = 0
 
 
 @runtime_checkable

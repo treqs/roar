@@ -700,10 +700,17 @@ class GlaasClient:
         self,
         registration_session_id: str,
         jobs: list,
-    ) -> tuple[list, list, str | None]:
-        """Register multiple staged jobs under a registration session."""
+    ) -> tuple[list, list, str | None, dict[str, int]]:
+        """Register multiple staged jobs under a registration session.
+
+        Returns ``(job_ids, errors, overall_error, counts)`` where ``counts``
+        carries the server's ``created``/``existing`` split so callers can
+        distinguish newly-registered jobs from ones that were already staged
+        under this registration session (a re-register / resume).
+        """
+        zero_counts = {"created": 0, "existing": 0}
         if not jobs:
-            return [], [], None
+            return [], [], None, dict(zero_counts)
 
         body_jobs: list[dict[str, Any]] = []
         for job in jobs:
@@ -723,10 +730,14 @@ class GlaasClient:
             allow_auth_fallback=False,
         )
         if error:
-            return [], [error] * len(jobs), error
+            return [], [error] * len(jobs), error, dict(zero_counts)
         if result is None:
-            return [], [], None
-        return result.get("job_ids", []), result.get("errors", []), None
+            return [], [], None, dict(zero_counts)
+        counts = {
+            "created": int(result.get("created_count", 0) or 0),
+            "existing": int(result.get("existing_count", 0) or 0),
+        }
+        return result.get("job_ids", []), result.get("errors", []), None, counts
 
     def register_job_inputs(
         self,

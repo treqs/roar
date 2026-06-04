@@ -261,9 +261,10 @@ class TestRegisterLineageUnderRegistrationSession:
     @pytest.fixture
     def mock_job_service(self):
         service = MagicMock()
-        service.create_jobs_batch_under_registration_session.return_value = [
-            JobRegistrationResult(success=True, job_uid="job-001"),
-        ]
+        service.create_jobs_batch_under_registration_session.return_value = (
+            [JobRegistrationResult(success=True, job_uid="job-001")],
+            {"created": 1, "existing": 0},
+        )
         service.link_job_artifacts_under_registration_session.return_value = JobLinkResult(
             success=True,
             job_uid="job-001",
