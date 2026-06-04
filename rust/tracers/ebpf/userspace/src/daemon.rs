@@ -520,8 +520,7 @@ mod tests {
             arg0,
             arg1,
         };
-        let mut buf =
-            Vec::with_capacity(4 + std::mem::size_of::<roar_ebpf_common::SmallEvent>());
+        let mut buf = Vec::with_capacity(4 + std::mem::size_of::<roar_ebpf_common::SmallEvent>());
         buf.extend_from_slice(&roar_ebpf_common::TAG_SMALL.to_ne_bytes());
         let event_bytes = unsafe {
             std::slice::from_raw_parts(
@@ -601,14 +600,7 @@ mod tests {
         state.deregister(1);
         let _ = state.get_report(1);
 
-        let event = small_event_bytes(
-            100,
-            100,
-            roar_ebpf_common::EventType::Write,
-            16,
-            3,
-            0,
-        );
+        let event = small_event_bytes(100, 100, roar_ebpf_common::EventType::Write, 16, 3, 0);
         // Should not panic.
         state.process_event(&event);
         assert!(state.runs.is_empty());
