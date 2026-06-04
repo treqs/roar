@@ -33,7 +33,13 @@ def test_composite_only_output_creates_dependency_edge() -> None:
         "path": "/data/shard_00000.parquet",
         "hashes": [{"algorithm": "blake3", "digest": "aaaa"}],
     }
-    step1 = {"id": 1, "step_number": 1, "timestamp": 1.0, "command": "roar get hf://…", "job_type": "get"}
+    step1 = {
+        "id": 1,
+        "step_number": 1,
+        "timestamp": 1.0,
+        "command": "roar get hf://…",
+        "job_type": "get",
+    }
     step2 = {"id": 2, "step_number": 2, "timestamp": 2.0, "command": "b3sum *", "job_type": None}
     steps_by_number = {1: [step1], 2: [step2]}
 
