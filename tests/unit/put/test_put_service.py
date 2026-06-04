@@ -486,9 +486,12 @@ class TestPutService:
             )
 
         assert result.success is True
-        assert spinner_cls.call_count == 2
-        assert spinner_cls.call_args_list[0].args == ("Publishing lineage to GLaaS...",)
-        assert spinner_cls.call_args_list[1].args == ("Finalizing lineage links...",)
+        # Hash + upload progress spinners precede the two publish-phase spinners.
+        assert spinner_cls.call_count == 4
+        assert spinner_cls.call_args_list[0].args == ("Hashing 1 file(s)...",)
+        assert spinner_cls.call_args_list[1].args == ("Uploading 0/1 files · 0.00 GB",)
+        assert spinner_cls.call_args_list[2].args == ("Publishing lineage to GLaaS...",)
+        assert spinner_cls.call_args_list[3].args == ("Finalizing lineage links...",)
 
     def test_put_prepared_stores_urls_in_job_metadata(self, tmp_path: Path) -> None:
         model_file = tmp_path / "model.pt"
