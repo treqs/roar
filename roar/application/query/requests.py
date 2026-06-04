@@ -37,6 +37,11 @@ class StatusQueryRequest:
 
 
 @dataclass(frozen=True)
+class DbStatusQueryRequest:
+    roar_dir: Path
+
+
+@dataclass(frozen=True)
 class LineageQueryRequest:
     roar_dir: Path
     cwd: Path

@@ -53,6 +53,13 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "Sessions",
     ),
     CommandSpec(
+        "db",
+        "roar.cli.commands.db",
+        "db",
+        "Inspect the local database (size, contents, sync, hygiene)",
+        "Setup and Admin",
+    ),
+    CommandSpec(
         "pop",
         "roar.cli.commands.pop",
         "pop",
