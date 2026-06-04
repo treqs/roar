@@ -93,6 +93,61 @@ def test_register_cli_prints_next_steps_for_artifacts(tmp_path: Path) -> None:
     assert f"roar reproduce {artifact_hash}" in result.output
 
 
+def test_register_cli_summary_reports_new_jobs_and_labels(tmp_path: Path) -> None:
+    """A fresh register lists plain job counts and the synced user-label count."""
+    runner = CliRunner()
+    response = RegisterLineageResponse(
+        success=True,
+        session_hash="0123456789abcdef0123456789abcdef",
+        jobs_registered=4,
+        jobs_existing=0,
+        artifacts_registered=22,
+        links_created=16,
+        labels_synced=3,
+    )
+
+    with (
+        patch("roar.cli.commands.register.register_lineage_target", return_value=response),
+        patch(
+            "roar.cli.commands.register._resolve_glaas_web_url",
+            return_value="https://glaas.example",
+        ),
+    ):
+        result = runner.invoke(register, ["metrics.json", "--yes"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert "Jobs: 4" in result.output
+    assert "already registered" not in result.output
+    assert "Labels: 3" in result.output
+
+
+def test_register_cli_summary_calls_out_already_registered_jobs(tmp_path: Path) -> None:
+    """A re-register shows 0 new jobs and how many were already registered."""
+    runner = CliRunner()
+    response = RegisterLineageResponse(
+        success=True,
+        session_hash="0123456789abcdef0123456789abcdef",
+        jobs_registered=0,
+        jobs_existing=4,
+        artifacts_registered=22,
+        links_created=16,
+        labels_synced=0,
+    )
+
+    with (
+        patch("roar.cli.commands.register.register_lineage_target", return_value=response),
+        patch(
+            "roar.cli.commands.register._resolve_glaas_web_url",
+            return_value="https://glaas.example",
+        ),
+    ):
+        result = runner.invoke(register, ["metrics.json", "--yes"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert "Jobs: 0 (4 already registered)" in result.output
+    assert "Labels: 0" in result.output
+
+
 def test_register_cli_prefers_returned_session_url(tmp_path: Path) -> None:
     runner = CliRunner()
     response = RegisterLineageResponse(

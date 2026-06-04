@@ -89,6 +89,20 @@ def test_build_job_system_labels_derives_common_runtime_tracker_and_dataset_fiel
     assert roar["composites"]["0"]["root_path"] == "/repo/outputs/dataset"
 
 
+def test_build_job_system_labels_projects_frozen_roar_version() -> None:
+    labels = build_job_system_labels(
+        {"job_type": "run", "metadata": {"roar_version": "0.3.4rc1", "git": {"commit": "abc"}}}
+    )
+    # roar.version is the producing version, projected from the frozen job-metadata field.
+    assert labels["roar"]["version"] == "0.3.4rc1"
+
+
+def test_build_job_system_labels_omits_roar_version_when_not_captured() -> None:
+    # Jobs recorded by an older roar have no captured version -> no roar.version label.
+    labels = build_job_system_labels({"job_type": "run", "metadata": {"git": {"commit": "abc"}}})
+    assert "version" not in labels["roar"]
+
+
 def test_omit_display_system_labels_removes_roar_root_only() -> None:
     metadata = {
         "name": "preprocess",

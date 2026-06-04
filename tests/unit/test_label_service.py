@@ -12,8 +12,29 @@ from roar.application.labels import (
     _published_remote_session_hash,
     build_reconcile_payload_for_current_lineage,
     collect_label_sync_payloads,
+    count_user_labels,
 )
 from roar.core.label_origins import build_current_key_origins
+
+
+def test_count_user_labels_excludes_roar_namespace() -> None:
+    """Only user-set keys count; reserved ``roar.*`` system labels are ignored."""
+    payloads = [
+        # job with one system namespace + two user labels
+        {"metadata": {"roar": {"run_version": "0.3.4"}, "stage": "train", "owner": "chris"}},
+        # artifact with a single user label
+        {"metadata": {"i_love_roar": "yes"}},
+        # entity with only system labels contributes nothing
+        {"metadata": {"roar": {"reproducible": True}}},
+        # defensive: non-dict metadata is skipped
+        {"metadata": None},
+    ]
+
+    assert count_user_labels(payloads) == 3
+
+
+def test_count_user_labels_empty() -> None:
+    assert count_user_labels([]) == 0
 
 
 def test_reject_reserved_keys_blocks_system_managed_dataset_labels() -> None:

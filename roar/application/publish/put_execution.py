@@ -52,6 +52,11 @@ from .put_composites import (
 from .results import PutCompositeRegistration, PutDryRunItem, PutUploadedFile
 
 
+def _upload_progress_message(done: int, total: int, uploaded_bytes: int) -> str:
+    """Status line for the upload spinner, e.g. ``Uploading 12/100 files · 1.10 GB``."""
+    return f"Uploading {done}/{total} files · {uploaded_bytes / 1e9:.2f} GB"
+
+
 @dataclass
 class PutResult:
     """Result of a put operation."""
@@ -201,43 +206,51 @@ class PutService:
         uploads: list[_UploadedArtifact] = []
         composite_registrations: list[dict[str, Any]] = []
         lineage_composite_registrations: list[dict[str, Any]] = []
-        hashes_by_path = self._hash_files_batch([source.path for source in resolved])
+        with Spinner(f"Hashing {len(resolved)} file(s)..."):
+            hashes_by_path = self._hash_files_batch([source.path for source in resolved])
 
-        for i, source in enumerate(resolved):
-            file_path = source.path
+        # Uploads are the long pole of a put (multi-GB artifacts to S3/GCS); show a
+        # live N/M + cumulative-bytes counter rather than a dead terminal.
+        total = len(resolved)
+        uploaded_bytes = 0
+        with Spinner(_upload_progress_message(0, total, 0)) as spin:
+            for i, source in enumerate(resolved):
+                file_path = source.path
 
-            # Hashes are computed in one batch call up front.
-            file_hash = hashes_by_path.get(str(file_path))
-            if not file_hash:
-                raise OSError(f"Failed to hash file: {file_path}")
-            self._logger.debug(
-                "File %d/%d: %s, blake3=%s",
-                i + 1,
-                len(resolved),
-                file_path.name,
-                file_hash[:12],
-            )
-
-            # Find or create artifact
-            artifact_id = self._find_or_create_artifact(file_path, file_hash)
-            self._logger.debug("Artifact: id=%s, path=%s", artifact_id, file_path)
-
-            # Use relative_key from resolver (relative to source dir for dirs, filename for files)
-            remote_key = source.relative_key or file_path.name
-            self._logger.debug("Remote key: %s", remote_key)
-
-            # Upload to backend
-            remote_url = self._backend.upload(file_path, remote_key)
-            self._logger.debug("Uploaded: %s -> %s", file_path.name, remote_url)
-
-            uploads.append(
-                _UploadedArtifact(
-                    local_path=str(file_path),
-                    remote_url=remote_url,
-                    artifact_id=artifact_id,
-                    hash=file_hash,
+                # Hashes are computed in one batch call up front.
+                file_hash = hashes_by_path.get(str(file_path))
+                if not file_hash:
+                    raise OSError(f"Failed to hash file: {file_path}")
+                self._logger.debug(
+                    "File %d/%d: %s, blake3=%s",
+                    i + 1,
+                    total,
+                    file_path.name,
+                    file_hash[:12],
                 )
-            )
+
+                # Find or create artifact
+                artifact_id = self._find_or_create_artifact(file_path, file_hash)
+                self._logger.debug("Artifact: id=%s, path=%s", artifact_id, file_path)
+
+                # Use relative_key from resolver (relative to source dir for dirs, filename for files)
+                remote_key = source.relative_key or file_path.name
+                self._logger.debug("Remote key: %s", remote_key)
+
+                # Upload to backend
+                remote_url = self._backend.upload(file_path, remote_key)
+                self._logger.debug("Uploaded: %s -> %s", file_path.name, remote_url)
+
+                uploads.append(
+                    _UploadedArtifact(
+                        local_path=str(file_path),
+                        remote_url=remote_url,
+                        artifact_id=artifact_id,
+                        hash=file_hash,
+                    )
+                )
+                uploaded_bytes += file_path.stat().st_size
+                spin.update(_upload_progress_message(i + 1, total, uploaded_bytes))
 
         # Derive downstream views from the single uploads list
         uploaded_files = [
@@ -935,6 +948,18 @@ class PutService:
                 "Linked %d composite artifact(s) as job outputs",
                 len(local_composite_outputs),
             )
+
+        # get->put continuity: if any published file was got from HF (carries a
+        # crosswalk sha256 matching a known dataset anchor), link the source anchor as
+        # an input of the put job. This bridges the put's blake3 S3 composite to its
+        # HF-source sha256 anchor at the job level — no sha256 computed at put, neither
+        # composite mutated. Best-effort; never blocks a put.
+        try:
+            from .anchor_attribution import attribute_jobs_to_anchors
+
+            attribute_jobs_to_anchors(db_ctx=self._db, job_ids=[job_id], logger=self._logger)
+        except Exception as exc:  # pragma: no cover - defensive best effort
+            self._logger.debug("put anchor attribution skipped: %s", exc)
 
     def _register_put_job_with_glaas(
         self,

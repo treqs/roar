@@ -270,7 +270,7 @@ def test_export_registration_package_writes_package_without_glaas_client(
     monkeypatch.setattr(
         module,
         "resolve_roar_git_context",
-        lambda _cwd, logger: GitContext(repo="repo", commit="deadbeef", branch="main"),
+        lambda _cwd, **_kwargs: GitContext(repo="repo", commit="deadbeef", branch="main"),
     )
     monkeypatch.setattr(GlaasClient, "__init__", fail_glaas_client)
 

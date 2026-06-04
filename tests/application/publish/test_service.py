@@ -677,3 +677,45 @@ def test_put_artifacts_dry_run_skips_backend_runtime_and_service(tmp_path: Path)
     bootstrap.assert_not_called()
     prepare_put_git.assert_not_called()
     finalize_put_git.assert_not_called()
+
+
+def test_load_remote_job_uid_mapping_reads_persisted_glaas_jobs(tmp_path: Path) -> None:
+    """The view-edge push must address GLaaS jobs by their publication-scoped *remote*
+    UID, not the local UID; registration persists that map under
+    ``roar.remote_publication.glaas.jobs`` and the loader returns it (regression: the
+    push previously used the local UID and 404'd)."""
+    import json
+
+    from roar.application.publish.service import _load_remote_job_uid_mapping
+    from roar.db.context import create_database_context
+
+    roar_dir = tmp_path / ".roar"
+    with create_database_context(roar_dir) as db:
+        session_id = db.sessions.create(make_active=True)
+        db.sessions.update_metadata(
+            session_id,
+            json.dumps(
+                {
+                    "roar": {
+                        "remote_publication": {
+                            "glaas": {"jobs": {"e013c57b": "1ca8de8f29c8ec70c0031a10c3e91e5d"}}
+                        }
+                    }
+                }
+            ),
+        )
+
+    mapping = _load_remote_job_uid_mapping(roar_dir=roar_dir, session_id=session_id)
+    assert mapping == {"e013c57b": "1ca8de8f29c8ec70c0031a10c3e91e5d"}
+
+
+def test_load_remote_job_uid_mapping_missing_metadata_returns_empty(tmp_path: Path) -> None:
+    from roar.application.publish.service import _load_remote_job_uid_mapping
+    from roar.db.context import create_database_context
+
+    roar_dir = tmp_path / ".roar"
+    with create_database_context(roar_dir) as db:
+        session_id = db.sessions.create(make_active=True)
+
+    assert _load_remote_job_uid_mapping(roar_dir=roar_dir, session_id=session_id) == {}
+    assert _load_remote_job_uid_mapping(roar_dir=roar_dir, session_id=None) == {}

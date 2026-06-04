@@ -624,6 +624,64 @@ fn try_sys_exit_copy_file_range(ctx: &TracePointContext) -> Result<(), i64> {
     Ok(())
 }
 
+// ── splice ───────────────────────────────────────────────────────────────────
+// splice(fd_in, off_in, fd_out, off_out, len, flags)
+
+#[tracepoint]
+pub fn sys_enter_splice(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_enter_splice(&ctx);
+    0
+}
+
+fn try_sys_enter_splice(ctx: &TracePointContext) -> Result<(), i64> {
+    let pid = current_pid();
+    if !pid_tracked(pid) {
+        return Ok(());
+    }
+    let fd_in = unsafe { read_sys_enter_arg(ctx, 0)? };
+    let fd_out = unsafe { read_sys_enter_arg(ctx, 2)? }; // arg2, not arg1 (arg1 is off_in*)
+    stash_two_fd_entry(roar_ebpf_common::syscall_nr::SPLICE, fd_in, fd_out)
+}
+
+#[tracepoint]
+pub fn sys_exit_splice(ctx: TracePointContext) -> u32 {
+    let _ = try_sys_exit_splice(&ctx);
+    0
+}
+
+fn try_sys_exit_splice(ctx: &TracePointContext) -> Result<(), i64> {
+    let pid = current_pid();
+    if !pid_tracked(pid) {
+        return Ok(());
+    }
+
+    let key = current_pid_tgid();
+    let args = unsafe { PENDING_ARGS.get(&key).ok_or(1i64)? };
+    let fd_in = args.arg0;
+    let fd_out = args.arg1;
+
+    let ret = unsafe { read_sys_exit_ret(ctx)? };
+
+    let _ = PENDING_ARGS.remove(&key);
+
+    if ret <= 0 {
+        return Ok(());
+    }
+
+    // Emit Splice event: arg0=fd_in, arg1=fd_out, ret_val=bytes
+    emit_small(&SmallEvent {
+        pid,
+        thread_id: bpf_get_current_pid_tgid() as u32,
+        event_type: EventType::Splice as u16,
+        _pad: 0,
+        ret_val: ret,
+        arg0: fd_in,
+        arg1: fd_out,
+    });
+
+    Ok(())
+}
+
 // ── rename / link path publication ──────────────────────────────────────────
 // File-publication syscalls make their destination path visible as a produced file.
 

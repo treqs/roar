@@ -14,9 +14,16 @@ def resolve_repo_url_or_local_uri(
     vcs: GitVCSProvider,
     repo_root: str,
     logger: Any | None = None,
+    configured_remote: str | None = None,
 ) -> str:
-    """Resolve remote URL, falling back to local file:// repo URI."""
-    remote_url = vcs.get_remote_url(repo_root)
+    """Resolve remote URL, falling back to local file:// repo URI.
+
+    ``configured_remote`` (from ``git.remote``) is preferred when set; otherwise
+    the canonical remote is resolved (origin, else the sole remote) rather than
+    assuming ``origin`` — so a repo whose only remote is named e.g. ``treqs``
+    records that URL instead of a local ``file://`` path.
+    """
+    remote_url = vcs.get_remote_url(repo_root, configured=configured_remote)
     if remote_url:
         return remote_url
 
@@ -30,7 +37,11 @@ def resolve_repo_url_or_local_uri(
     return fallback_uri
 
 
-def resolve_git_context(repo_root: Path, git_commit: str | None = None) -> GitContext:
+def resolve_git_context(
+    repo_root: Path,
+    git_commit: str | None = None,
+    configured_remote: str | None = None,
+) -> GitContext:
     """Resolve git context from a repository path."""
     try:
         vcs = GitVCSProvider()
@@ -39,7 +50,7 @@ def resolve_git_context(repo_root: Path, git_commit: str | None = None) -> GitCo
             return GitContext(repo=None, commit=git_commit, branch=None)
 
         return GitContext(
-            repo=resolve_repo_url_or_local_uri(vcs, root),
+            repo=resolve_repo_url_or_local_uri(vcs, root, configured_remote=configured_remote),
             commit=git_commit or vcs.get_commit_hash(root),
             branch=vcs.get_branch(root),
         )

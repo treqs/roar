@@ -31,7 +31,12 @@ from pathlib import Path
 from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
 from ..git import build_roar_git_tag_name, create_roar_git_tag
-from .git_remote import GitRemoteError, push_roar_tags, resolve_canonical_remote
+from .git_remote import (
+    GitRemoteError,
+    push_roar_tags,
+    resolve_canonical_remote,
+    warn_if_ssh_passphrase_prompt_likely,
+)
 from .results import RegisterTagSummary
 
 
@@ -144,6 +149,13 @@ def ensure_roar_tags_pushed(
         remote = resolve_canonical_remote(repo_root, configured_remote)
     except GitRemoteError as exc:
         raise TagPushError(str(exc)) from exc
+
+    # The push below inherits stdin, so a passphrase-protected SSH key not in
+    # ssh-agent makes git prompt mid-register with no context. Predict that
+    # (best-effort) and tell the user *why* a password is about to be asked for.
+    passphrase_hint = warn_if_ssh_passphrase_prompt_likely(repo_root, remote)
+    if passphrase_hint:
+        logger.warning(passphrase_hint)
 
     try:
         push_roar_tags(repo_root, remote, [tag for _, tag in pairs])

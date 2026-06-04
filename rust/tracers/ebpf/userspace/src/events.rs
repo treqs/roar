@@ -26,6 +26,7 @@ fn event_type_from_u16(v: u16) -> Option<EventType> {
         12 => Some(EventType::Rename),
         13 => Some(EventType::Clone),
         14 => Some(EventType::Exec),
+        15 => Some(EventType::Splice),
         _ => None,
     }
 }
@@ -156,6 +157,16 @@ fn process_small_event(state: &mut TracerState, event: &SmallEvent) {
                 state.handle_write_with_thread(pid, out_fd, bytes, thread_id);
             }
         }
+        EventType::Splice => {
+            // arg0 = in_fd, arg1 = out_fd, ret_val = bytes
+            if event.ret_val > 0 {
+                let in_fd = event.arg0 as i32;
+                let out_fd = event.arg1 as i32;
+                let bytes = event.ret_val as u64;
+                state.handle_read_with_thread(pid, in_fd, bytes, thread_id);
+                state.handle_write_with_thread(pid, out_fd, bytes, thread_id);
+            }
+        }
         _ => {
             log::warn!("unexpected small event type: {etype:?}");
         }
@@ -248,6 +259,7 @@ mod tests {
         assert_eq!(event_type_from_u16(0), Some(EventType::OpenExit));
         assert_eq!(event_type_from_u16(2), Some(EventType::Read));
         assert_eq!(event_type_from_u16(14), Some(EventType::Exec));
+        assert_eq!(event_type_from_u16(15), Some(EventType::Splice));
     }
 
     #[test]
@@ -503,6 +515,28 @@ mod tests {
     }
 
     #[test]
+    fn test_splice_event() {
+        let mut state = TracerState::new(None);
+        state.handle_open(1, 3, "/tmp/src.txt".to_string(), 0);
+        state.handle_open(1, 4, "/tmp/dst.txt".to_string(), 0);
+
+        let event = SmallEvent {
+            pid: 1,
+            thread_id: 11,
+            event_type: EventType::Splice as u16,
+            _pad: 0,
+            ret_val: 1024,
+            arg0: 3, // in_fd
+            arg1: 4, // out_fd
+        };
+
+        process_small_event(&mut state, &event);
+
+        assert!(state.fd.fd_state.get(&(1, 3)).unwrap().was_read);
+        assert!(state.fd.fd_state.get(&(1, 4)).unwrap().was_written);
+    }
+
+    #[test]
     fn test_dup_event() {
         let mut state = TracerState::new(None);
         state.handle_open(1, 3, "/tmp/test.txt".to_string(), 0);
@@ -678,7 +712,10 @@ mod tests {
         process_small_event(&mut state, &event);
 
         let fd_state = state.fd.fd_state.get(&(1, 3)).unwrap();
-        assert!(!fd_state.was_read, "O_TRUNC fd should suppress read classification");
+        assert!(
+            !fd_state.was_read,
+            "O_TRUNC fd should suppress read classification"
+        );
 
         let summary = state.fd.build_summary();
         assert!(summary.read_files.is_empty());

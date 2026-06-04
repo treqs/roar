@@ -61,7 +61,8 @@ impl TracerState {
             return;
         }
         if let Ok(cwd) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
-            self.cwd_cache.insert(pid, cwd.to_string_lossy().into_owned());
+            self.cwd_cache
+                .insert(pid, cwd.to_string_lossy().into_owned());
         }
     }
 

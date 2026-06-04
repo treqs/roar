@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ...core.logging import get_logger
 from .requests import (
@@ -393,6 +394,131 @@ def _run_git(path: Path, *args: str) -> str | None:
         return None
 
 
+def _collect_db_job_ids(lineage: Any) -> list[int]:
+    """The integer DB job ids of a collected lineage's jobs (skips non-numeric)."""
+    job_ids: list[int] = []
+    for job in getattr(lineage, "jobs", []) or []:
+        raw_id = job.get("id") if isinstance(job, dict) else None
+        if isinstance(raw_id, int):
+            job_ids.append(raw_id)
+        elif isinstance(raw_id, str) and raw_id.isdigit():
+            job_ids.append(int(raw_id))
+    return job_ids
+
+
+def _attribute_jobs_to_anchors_for_lineage(*, roar_dir: Path, lineage: Any, logger: Any) -> int:
+    """Materialize job -> dataset-anchor edges for the jobs in a collected lineage.
+
+    Opens its own DB context so the persisted edges are visible to a fresh lineage
+    collection. Returns the number of edges added.
+    """
+    from .anchor_attribution import attribute_jobs_to_anchors
+
+    job_ids = _collect_db_job_ids(lineage)
+    if not job_ids:
+        return 0
+    with create_database_context(roar_dir) as attr_db:
+        return attribute_jobs_to_anchors(db_ctx=attr_db, job_ids=job_ids, logger=logger)
+
+
+def _form_lineage_composites_for_lineage(*, roar_dir: Path, lineage: Any, logger: Any) -> int:
+    """Form composites from each job's recorded inputs/outputs in a collected lineage.
+
+    Opens its own DB context so the persisted composites + job edges are visible to a
+    fresh lineage collection. Returns the number of edges added.
+    """
+    from .lineage_composite_formation import form_lineage_composites
+
+    job_ids = _collect_db_job_ids(lineage)
+    if not job_ids:
+        return 0
+    with create_database_context(roar_dir) as form_db:
+        return form_lineage_composites(db_ctx=form_db, job_ids=job_ids, logger=logger)
+
+
+def _load_remote_job_uid_mapping(*, roar_dir: Path, session_id: Any) -> dict[str, str]:
+    """Return the ``{local_job_uid: remote_job_uid}`` map registration persisted.
+
+    GLaaS stores jobs under publication-scoped remote UIDs (see
+    ``remote_job_uids.build_remote_publication_job_uid``); registration records the
+    local->remote mapping under ``roar.remote_publication.glaas.jobs`` in the session
+    metadata. Returns an empty map (callers fall back to the local UID) on any miss.
+    """
+    if session_id is None:
+        return {}
+    try:
+        with create_database_context(roar_dir) as db:
+            session = db.sessions.get(session_id)
+    except Exception:
+        return {}
+    if not session:
+        return {}
+    raw = session.get("metadata")
+    if isinstance(raw, str) and raw:
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    jobs = (((raw.get("roar") or {}).get("remote_publication") or {}).get("glaas") or {}).get(
+        "jobs"
+    )
+    if not isinstance(jobs, dict):
+        return {}
+    return {str(k): str(v) for k, v in jobs.items() if isinstance(v, str) and v}
+
+
+def _prepare_view_edges_for_lineage(
+    *, roar_dir: Path, lineage: Any, logger: Any
+) -> dict[str, list[Any]]:
+    """Compute consumes/produces view edges per job and prune the subsumed leaves in-place.
+
+    A job that read part of a dataset gets a ``consumes`` view edge over its inputs; a job
+    that wrote one gets a ``produces`` view edge over its outputs. Each edge is a bloom
+    over the touched leaves referencing the anchor composite; the subsumed leaf hashes —
+    and any anchor linked as a plain input/output — are removed from the bundle so the job
+    links the dataset *view* (job -> view -> anchor -> leaves), not the loose leaves or the
+    anchor directly. The anchor composite stays in ``lineage.artifacts`` (already
+    collected) so it is still registered. Returns ``{job_uid: [view_edge, ...]}`` to push
+    after the main registration.
+    """
+    from .view_edges import resolve_view_edges_for_job
+
+    jobs = getattr(lineage, "jobs", []) or []
+    if not jobs:
+        return {}
+    view_edges_by_job: dict[str, list[Any]] = {}
+    with create_database_context(roar_dir) as db:
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            job_uid = job.get("job_uid")
+            if not job_uid:
+                continue
+            edges: list[Any] = []
+            sides: tuple[tuple[Literal["consumes", "produces"], str, str], ...] = (
+                ("consumes", "_input_hashes", "_inputs"),
+                ("produces", "_output_hashes", "_outputs"),
+            )
+            for relation, hashes_key, items_key in sides:
+                hashes = list(job.get(hashes_key) or [])
+                if not hashes:
+                    continue
+                resolved, prune = resolve_view_edges_for_job(
+                    db_ctx=db, input_hashes=hashes, relation=relation
+                )
+                if not resolved:
+                    continue
+                edges.extend(resolved)
+                job[hashes_key] = [h for h in hashes if h not in prune]
+                if isinstance(job.get(items_key), list):
+                    job[items_key] = [i for i in job[items_key] if i.get("hash") not in prune]
+            if edges:
+                view_edges_by_job[str(job_uid)] = edges
+    return view_edges_by_job
+
+
 def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageResponse:
     """Run the `roar register` application workflow."""
     from ...publish_auth import PublishAuthError
@@ -435,6 +561,51 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         )
         if collected_lineage is None:
             return RegisterLineageResponse(success=False, error=error)
+
+        if not request.dry_run:
+            try:
+                # Roll structured datasets a run produced/consumed (Zarr, LeRobot, ...)
+                # up into composites, then attribute jobs to dataset anchors via the get
+                # crosswalk. Both mutate the local DB; if either added edges, re-read the
+                # lineage so the bundle carries them. Best-effort: never blocks a register.
+                formed_composites = _form_lineage_composites_for_lineage(
+                    roar_dir=request.roar_dir,
+                    lineage=collected_lineage.lineage,
+                    logger=logger,
+                )
+                anchor_added = _attribute_jobs_to_anchors_for_lineage(
+                    roar_dir=request.roar_dir,
+                    lineage=collected_lineage.lineage,
+                    logger=logger,
+                )
+                if formed_composites or anchor_added:
+                    collected_lineage, error = collect_register_lineage(
+                        target=resolved_target,
+                        roar_dir=request.roar_dir,
+                        cwd=request.cwd,
+                        lineage_collector=runtime.lineage_collector,
+                        session_service=runtime.session_service,
+                        logger=logger,
+                        dry_run=request.dry_run,
+                    )
+                    if collected_lineage is None:
+                        return RegisterLineageResponse(success=False, error=error)
+            except Exception as exc:  # attribution is best-effort
+                logger.debug("anchor attribution skipped: %s", exc)
+
+        # Collapse each job's dataset membership into consumes/produces view edges (a
+        # bloom over the touched leaves) and prune the subsumed leaves from the bundle.
+        # Pushed after the main registration. Best-effort.
+        view_edges_by_job: dict[str, list[Any]] = {}
+        if not request.dry_run:
+            try:
+                view_edges_by_job = _prepare_view_edges_for_lineage(
+                    roar_dir=request.roar_dir,
+                    lineage=collected_lineage.lineage,
+                    logger=logger,
+                )
+            except Exception as exc:  # view-edge prep is best-effort
+                logger.debug("view-edge preparation skipped: %s", exc)
 
         try:
             if request.dry_run:
@@ -525,6 +696,31 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             prepared=prepared,
         )
 
+        # Push the consumes view edges now that the jobs + the anchor composite are
+        # registered. The view edges are keyed by *local* job UID, but GLaaS stores jobs
+        # under publication-scoped *remote* UIDs; translate via the mapping registration
+        # persisted to the session metadata. Best-effort: never fails an otherwise-
+        # successful registration.
+        if result.success and view_edges_by_job:
+            remote_uid_by_local = _load_remote_job_uid_mapping(
+                roar_dir=request.roar_dir, session_id=collected_lineage.session_id
+            )
+            for local_job_uid, edges in view_edges_by_job.items():
+                remote_job_uid = remote_uid_by_local.get(local_job_uid, local_job_uid)
+                try:
+                    _push_result, push_error = runtime.glaas_client.register_job_view_edges(
+                        remote_job_uid, edges
+                    )
+                    if push_error:
+                        logger.debug(
+                            "view-edge push failed for %s (remote %s): %s",
+                            local_job_uid,
+                            remote_job_uid,
+                            push_error,
+                        )
+                except Exception as exc:  # best-effort
+                    logger.debug("view-edge push skipped for %s: %s", local_job_uid, exc)
+
         warnings: list[str] = []
         if tag_push_warning:
             warnings.append(tag_push_warning)
@@ -535,8 +731,10 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             session_url=result.session_url,
             artifact_hash=result.artifact_hash,
             jobs_registered=result.jobs_registered,
+            jobs_existing=result.jobs_existing,
             artifacts_registered=result.artifacts_registered,
             links_created=result.links_created,
+            labels_synced=result.labels_synced,
             error=result.error,
             secrets_detected=list(result.secrets_detected),
             secrets_redacted=result.secrets_redacted,

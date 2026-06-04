@@ -178,7 +178,9 @@ def test_prepare_register_execution_skips_git_tagging_and_glaas_on_dry_run(tmp_p
 
     assert prepared.git_tag_name is None
     assert prepared.git_tag_repo_root is None
-    config_get.assert_not_called()
+    # git.remote is read to resolve the repo URL (the only config read in prep,
+    # even on a dry run); no other config is consulted.
+    config_get.assert_called_once_with("git.remote")
     ensure_clean.assert_not_called()
     assert prepare_session.call_args.kwargs["register_with_glaas"] is False
 

@@ -348,6 +348,58 @@ def test_build_lineage_membership_index_payload_rebuilds_full_component_bloom() 
     assert payload["bloom_version"] == 1
 
 
+def test_build_lineage_membership_index_payload_preserves_sha256_algorithm() -> None:
+    # F2: a fully-stored HF anchor rebuilt from lineage must key the bloom by the
+    # component algorithm (sha256), not the CompositeLeaf default (blake3).
+    import base64
+
+    builder = CompositeArtifactBuilder()
+    digest = "0" * 64
+    payload = build_lineage_membership_index_payload(
+        composite_builder=builder,
+        membership_index={
+            "total_components": 2,
+            "stored_components": 2,
+            "bloom_filter_base64": "AQ==",
+            "bloom_bits": 2048,
+            "bloom_hashes": 12,
+            "bloom_version": 1,
+        },
+        component_count_total=2,
+        components=[
+            {
+                "relative_path": "shard_00000.parquet",
+                "leaf_kind": "file",
+                "component_algorithm": "sha256",
+                "component_digest": digest,
+                "component_size": 1,
+            },
+            {
+                "relative_path": "shard_00001.parquet",
+                "leaf_kind": "file",
+                "component_algorithm": "sha256",
+                "component_digest": "1" * 64,
+                "component_size": 1,
+            },
+        ],
+    )
+
+    bloom = base64.b64decode(payload["bloom_filter_base64"])
+    bits, nhash = payload["bloom_bits"], payload["bloom_hashes"]
+
+    def member(key: str) -> bool:
+        h1, h2 = builder._bloom_hash_pair(key.encode())
+        if h2 == 0:
+            h2 = 1
+        return all(
+            (bloom[((h1 + i * h2) % bits) // 8] >> (((h1 + i * h2) % bits) % 8)) & 1
+            for i in range(nhash)
+        )
+
+    assert member(f"sha256:{digest}") is True  # keyed by the component algorithm
+    assert member(f"blake3:{digest}") is False  # the pre-fix mis-keying
+
+
 def test_build_lineage_membership_index_payload_rejects_partial_component_set() -> None:
     with pytest.raises(ValueError, match="missing required bloom fields"):
         build_lineage_membership_index_payload(

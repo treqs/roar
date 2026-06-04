@@ -390,10 +390,16 @@ class JobRegistrationService(IJobRegistrar):
         jobs: list[dict],
         registration_session_id: str,
         git_context: GitContext,
-    ) -> list[JobRegistrationResult]:
-        """Create multiple staged jobs under a remote registration session."""
+    ) -> tuple[list[JobRegistrationResult], dict[str, int]]:
+        """Create multiple staged jobs under a remote registration session.
+
+        Returns ``(results, counts)`` where ``counts`` is the server's
+        ``created``/``existing`` split for the jobs that reached GLaaS, letting
+        callers report how many jobs were newly registered vs already staged.
+        """
+        zero_counts = {"created": 0, "existing": 0}
         if not jobs:
-            return []
+            return [], dict(zero_counts)
 
         results: list[JobRegistrationResult | None] = [None] * len(jobs)
         payloads: list[dict] = []
@@ -460,7 +466,7 @@ class JobRegistrationService(IJobRegistrar):
             payload_indices.append(i)
 
         if not payloads:
-            return [r for r in results if r is not None]
+            return [r for r in results if r is not None], dict(zero_counts)
 
         self._logger.debug(
             "Batch registering %d jobs under registration session %s",
@@ -468,7 +474,12 @@ class JobRegistrationService(IJobRegistrar):
             registration_session_id,
         )
 
-        job_ids, errors, overall_error = self.client.register_jobs_batch_under_registration_session(
+        (
+            job_ids,
+            errors,
+            overall_error,
+            counts,
+        ) = self.client.register_jobs_batch_under_registration_session(
             registration_session_id=registration_session_id,
             jobs=payloads,
         )
@@ -500,7 +511,7 @@ class JobRegistrationService(IJobRegistrar):
             sum(1 for r in results if r and not r.success),
         )
 
-        return [r for r in results if r is not None]
+        return [r for r in results if r is not None], counts
 
     def link_job_artifacts(
         self,

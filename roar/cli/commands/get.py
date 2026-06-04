@@ -14,6 +14,7 @@ from pathlib import Path
 import click
 
 from ...application.get import GetRequest, get_artifacts
+from ...integrations.download.base import DownloadError
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -66,8 +67,16 @@ from ..decorators import require_init
     "--limit",
     type=int,
     default=None,
-    help="For a dataset/prefix, download only the first N data files (subset get). "
-    "Like full datasets, a subset composite needs >=2 data files (N=1 forms none).",
+    help="For a dataset/prefix, download only the first N data files. The dataset's "
+    "composite-sha256 anchor is still formed over the full manifest (a dataset needs "
+    ">=2 data files to be a composite); --limit only bounds what is materialized.",
+)
+@click.option(
+    "--full-anchor",
+    is_flag=True,
+    help="Include identity-bearing non-LFS files (e.g. dataset metadata) in the anchor "
+    "even past the 64 MB budget. Downloads them; without this they are excluded from "
+    "the anchor's identity (LFS-only) when over budget.",
 )
 @click.pass_obj
 @require_init
@@ -83,6 +92,7 @@ def get(
     dry_run: bool,
     step_name: str | None,
     limit: int | None,
+    full_anchor: bool,
 ) -> None:
     """Download artifacts from cloud storage and record in the local DAG.
 
@@ -148,6 +158,7 @@ def get(
                 tag=tag,
                 step_name=step_name,
                 limit=limit,
+                full_anchor=full_anchor,
             )
         )
     except FileExistsError as e:
@@ -157,6 +168,8 @@ def get(
     except ValueError as e:
         raise click.ClickException(str(e)) from e
     except ImportError as e:
+        raise click.ClickException(str(e)) from e
+    except DownloadError as e:
         raise click.ClickException(str(e)) from e
 
     if dry_run:
@@ -173,6 +186,18 @@ def get(
         click.echo(f"Created git tag: {response.git_tag}")
     for warning in response.warnings:
         click.echo(f"Warning: {warning}", err=True)
+
+    if response.anchor_lfs_only_mb is not None:
+        from .._format import make_hint_printer
+
+        _caps, hint = make_hint_printer()
+        click.echo(
+            f"Warning: dataset anchor formed over LFS files only — "
+            f"{response.anchor_lfs_only_mb:.0f} MB of non-LFS identity files (e.g. metadata) "
+            f"exceed the 64 MB budget and are excluded from the dataset's identity.",
+            err=True,
+        )
+        hint("re-run with `roar get --full-anchor` to include them (downloads the metadata).")
 
     count = len(response.downloaded_files)
     click.echo(f"Downloaded {count} file(s) from {response.source}")

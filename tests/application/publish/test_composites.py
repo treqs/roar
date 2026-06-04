@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from roar.application.publish.composite_builder import CompositeBuildResult
@@ -11,7 +12,45 @@ from roar.application.publish.metadata import (
     build_publish_composite_dataset_metadata_json,
     build_put_operation_metadata_json,
 )
+from roar.application.publish.put_composites import persist_local_put_composite_registration
 from roar.application.publish.source_resolution import ResolvedSource
+
+
+def _persist_and_capture_algorithm(payload_algorithm: str | None) -> str:
+    """Run the local put-composite persist and return the algorithm it registered."""
+    hashes = [{"algorithm": payload_algorithm}] if payload_algorithm is not None else []
+    composite = CompositeBuildResult(
+        root_path="/data/ds",
+        digest="a" * 64,
+        payload={"size": 10, "hashes": hashes, "components": [], "source_type": None},
+        component_count_total=2,
+        component_count_stored=2,
+    )
+    artifacts_repo = MagicMock()
+    artifacts_repo.register.return_value = ("artifact-id", True)
+    db_ctx = SimpleNamespace(artifacts=artifacts_repo, composites=MagicMock())
+    persist_local_put_composite_registration(
+        db_ctx=db_ctx,
+        composite=composite,
+        composite_registration={},
+        dataset_identifiers=None,
+        logger=MagicMock(),
+    )
+    _, kwargs = artifacts_repo.register.call_args
+    return next(iter(kwargs["hashes"]))
+
+
+def test_put_persist_uses_payload_algorithm_sha256() -> None:
+    # A sha256-leaf composite (sha256-native source/destination) registers locally as
+    # composite-sha256, not a hardcoded composite-blake3.
+    assert _persist_and_capture_algorithm("composite-sha256") == "composite-sha256"
+
+
+def test_put_persist_defaults_to_blake3() -> None:
+    # Local bytes (S3/GCS puts) keep composite-blake3 — the destination imposes no
+    # content hash. Also covers a payload missing the algorithm label.
+    assert _persist_and_capture_algorithm("composite-blake3") == "composite-blake3"
+    assert _persist_and_capture_algorithm(None) == "composite-blake3"
 
 
 def test_build_publish_composite_results_groups_roots_in_sorted_order(tmp_path: Path) -> None:
