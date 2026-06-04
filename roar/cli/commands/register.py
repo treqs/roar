@@ -11,7 +11,7 @@ import json
 import click
 
 from ...application.publish.requests import RegisterLineageRequest
-from ...application.publish.results import RegisterTagSummary
+from ...application.publish.results import RegisterLineageResponse, RegisterTagSummary
 from ...application.publish.service import register_lineage_target
 from ..context import RoarContext
 from ..decorators import require_init
@@ -25,6 +25,18 @@ from ..publish_intent import (
 def _preview_hash(value: str) -> str:
     """Shorten hashes in command summaries."""
     return f"{value[:12]}..." if len(value) > 12 else value
+
+
+def _format_jobs_line(response: RegisterLineageResponse) -> str:
+    """Render the Jobs summary count, calling out already-registered jobs.
+
+    On a re-register the jobs already exist under the session, so newly-created
+    count is 0; surface the rest as "0 (4 already registered)" instead of an
+    ambiguous "4".
+    """
+    if response.jobs_existing:
+        return f"{response.jobs_registered} ({response.jobs_existing} already registered)"
+    return str(response.jobs_registered)
 
 
 def _resolve_glaas_web_url(*, start_dir: str | None = None) -> str:
@@ -289,9 +301,10 @@ def register(
         _render_tag_summary(response.tag_summary)
         click.echo(f"Registered lineage for: {target}")
         click.echo(f"  Session: {session_preview}")
-        click.echo(f"  Jobs: {response.jobs_registered}")
+        click.echo(f"  Jobs: {_format_jobs_line(response)}")
         click.echo(f"  Artifacts: {response.artifacts_registered}")
         click.echo(f"  Links: {response.links_created}")
+        click.echo(f"  Labels: {response.labels_synced}")
         if response.secrets_redacted:
             click.echo(f"  Secrets redacted: {len(response.secrets_detected)} types")
 

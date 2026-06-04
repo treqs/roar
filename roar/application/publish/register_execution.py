@@ -118,8 +118,10 @@ class RegisterResult:
     session_url: str | None = None
     artifact_hash: str = ""
     jobs_registered: int = 0
+    jobs_existing: int = 0
     artifacts_registered: int = 0
     links_created: int = 0
+    labels_synced: int = 0
     error: str | None = None
     secrets_detected: list[str] = field(default_factory=list)
     secrets_redacted: bool = False
@@ -353,7 +355,7 @@ class RegisterService:
                                         )
                                     )
                                     if session_id is not None:
-                                        sync_publish_labels(
+                                        batch_result.labels_synced = sync_publish_labels(
                                             glaas_client=self.glaas_client,
                                             db_ctx=db_ctx,
                                             session_id=session_id,
@@ -373,7 +375,7 @@ class RegisterService:
                                 )
                         elif session_id is not None:
                             with create_database_context(roar_dir) as db_ctx:
-                                sync_publish_labels(
+                                batch_result.labels_synced = sync_publish_labels(
                                     glaas_client=self.glaas_client,
                                     db_ctx=db_ctx,
                                     session_id=session_id,
@@ -479,8 +481,10 @@ class RegisterService:
             session_url=finalized_session_url,
             artifact_hash=artifact_hash,
             jobs_registered=batch_result.jobs_created,
+            jobs_existing=batch_result.jobs_existing,
             artifacts_registered=total_artifacts_registered,
             links_created=batch_result.links_created,
+            labels_synced=batch_result.labels_synced,
             error="; ".join(registration_errors) if registration_errors else None,
             secrets_detected=detected_secrets,
             secrets_redacted=bool(detected_secrets),
