@@ -267,20 +267,29 @@ class RegistrationCoordinator(IRegistrationCoordinator):
 
         # Phase 2: Create jobs (no I/O links)
         job_uids_created: list[str] = []
+        jobs_existing = 0
         if jobs:
-            batch_results = self.job_service.create_jobs_batch_under_registration_session(
-                jobs=jobs,
-                registration_session_id=registration_session_id,
-                git_context=git_context,
+            batch_results, batch_counts = (
+                self.job_service.create_jobs_batch_under_registration_session(
+                    jobs=jobs,
+                    registration_session_id=registration_session_id,
+                    git_context=git_context,
+                )
             )
             for result in batch_results:
                 if result.success:
-                    jobs_created += 1
+                    # Successful jobs (newly-created OR already-staged) are all
+                    # eligible for Phase 4 linking; the created/existing split
+                    # comes from the server counts below.
                     job_uids_created.append(result.job_uid)
                 else:
                     jobs_failed += 1
                     if result.error:
                         errors.append(f"Job {result.job_uid}: {result.error}")
+            # Server reports how many of the staged jobs were newly created vs
+            # already present under this registration session (a re-register).
+            jobs_created = batch_counts.get("created", 0)
+            jobs_existing = batch_counts.get("existing", 0)
 
         self._logger.debug(
             "Registration-session job staging complete: %d created, %d failed",
@@ -345,6 +354,7 @@ class RegistrationCoordinator(IRegistrationCoordinator):
             session_registered=True,
             jobs_created=jobs_created,
             jobs_failed=jobs_failed,
+            jobs_existing=jobs_existing,
             artifacts_registered=artifacts_registered,
             artifacts_failed=artifacts_failed,
             links_created=links_created,

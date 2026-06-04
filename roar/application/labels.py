@@ -512,6 +512,22 @@ def collect_label_sync_payloads(
     return payloads
 
 
+def count_user_labels(payloads: list[dict[str, Any]]) -> int:
+    """Count user-set labels across label-sync payloads.
+
+    System labels live under the reserved ``roar`` namespace key; every other
+    top-level metadata key is a user label (e.g. ``roar label set ... key=val``).
+    Sums those across all entities so the CLI can report how many user labels
+    were synced during a register.
+    """
+    total = 0
+    for payload in payloads:
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            total += sum(1 for key in metadata if key != "roar")
+    return total
+
+
 def build_reconcile_payload_for_current_lineage(
     db_ctx: _RemoteLabelMutationDatabaseContext,
     *,

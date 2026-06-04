@@ -809,6 +809,8 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             )
             job_ids = []
             errors: list[str] = []
+            created_count = 0
+            existing_count = 0
             for job in jobs:
                 job_uid = job.get("job_uid")
                 if isinstance(job_uid, str) and job_uid:
@@ -821,6 +823,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                         errors.append(conflict)
                         continue
 
+                    already_present = job_uid in session_state["jobs"]
                     stored_job = session_state["jobs"].setdefault(
                         job_uid,
                         {"inputs": [], "outputs": []},
@@ -835,12 +838,25 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                                 "metadata": _parse_metadata_object(job.get("metadata")),
                             }
                         )
+                    if already_present:
+                        existing_count += 1
+                    else:
+                        created_count += 1
                     job_ids.append(self.server.allocate_job_id())
                     errors.append("")
                 else:
+                    created_count += 1
                     job_ids.append(self.server.allocate_job_id())
                     errors.append("")
-            self._write_json(200, {"job_ids": job_ids, "errors": errors})
+            self._write_json(
+                200,
+                {
+                    "job_ids": job_ids,
+                    "errors": errors,
+                    "created_count": created_count,
+                    "existing_count": existing_count,
+                },
+            )
             return
 
         reg_job_match = re.fullmatch(r"/api/v1/registration-sessions/([^/]+)/jobs", self.path)

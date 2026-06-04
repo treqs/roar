@@ -8,7 +8,7 @@ from typing import Any
 from ...core.digests import is_composite_algorithm
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
-from ..labels import collect_label_sync_payloads
+from ..labels import collect_label_sync_payloads, count_user_labels
 from .remote_registry import RemoteRegistryTransport, coerce_remote_registry
 
 _VALID_REMOTE_SOURCE_TYPES = {"s3", "gs", "https", "hf"}
@@ -359,7 +359,7 @@ def register_publish_lineage(
     labels_are_safe_to_sync = batch_result.jobs_failed == 0 and batch_result.artifacts_failed == 0
 
     if session_id is not None and db_ctx is not None and labels_are_safe_to_sync:
-        sync_publish_labels(
+        batch_result.labels_synced = sync_publish_labels(
             remote_registry=resolved_remote_registry,
             db_ctx=db_ctx,
             session_id=session_id,
@@ -433,8 +433,13 @@ def sync_publish_labels(
     jobs: list[dict[str, Any]],
     artifacts: list[dict[str, Any]],
     errors: list[str] | None = None,
-) -> None:
-    """Sync current local labels for published entities to GLaaS."""
+) -> int:
+    """Sync current local labels for published entities to GLaaS.
+
+    Returns the number of user-set labels synced (non-``roar.*`` label keys
+    across the published entities); ``0`` if nothing was synced or the sync
+    failed.
+    """
     payloads = collect_label_sync_payloads(
         db_ctx,
         session_id=session_id,
@@ -443,7 +448,7 @@ def sync_publish_labels(
         artifacts=artifacts,
     )
     if not payloads:
-        return
+        return 0
 
     resolved_remote_registry = coerce_remote_registry(
         remote_registry=remote_registry,
@@ -451,8 +456,12 @@ def sync_publish_labels(
     )
 
     _label_result, label_error = resolved_remote_registry.sync_labels(payloads)
-    if label_error and errors is not None:
-        errors.append(f"Label sync failed: {label_error}")
+    if label_error:
+        if errors is not None:
+            errors.append(f"Label sync failed: {label_error}")
+        return 0
+
+    return count_user_labels(payloads)
 
 
 def extract_composite_digest(hashes: list[dict[str, str]]) -> str | None:
