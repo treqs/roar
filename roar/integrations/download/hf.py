@@ -98,9 +98,7 @@ class HFDownloadBackend(DownloadBackend):
         except urllib.error.HTTPError as exc:
             raise self._describe_http_error(exc) from exc
         except urllib.error.URLError as exc:
-            raise DownloadError(
-                f"Could not reach Hugging Face at {_HF}: {exc.reason}"
-            ) from exc
+            raise DownloadError(f"Could not reach Hugging Face at {_HF}: {exc.reason}") from exc
 
     def _describe_http_error(self, exc: urllib.error.HTTPError) -> DownloadError:
         """Turn an HF API HTTP error into an actionable, user-facing message."""
