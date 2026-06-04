@@ -10,7 +10,7 @@ import json
 import time
 from typing import Any
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.orm import Session
 
 from ...core.interfaces.repositories import LabelRepository
@@ -38,6 +38,14 @@ class SQLAlchemyLabelRepository(LabelRepository):
             .limit(1)
         ).scalar_one_or_none()
         return self._label_to_dict(row) if row else None
+
+    def mark_synced(self, label_ids: list[int], synced_at: float) -> None:
+        """Stamp ``synced_at`` on the given label rows (pushed to GLaaS)."""
+        ids = [int(i) for i in label_ids if i is not None]
+        if not ids:
+            return
+        self._session.execute(update(Label).where(Label.id.in_(ids)).values(synced_at=synced_at))
+        self._session.flush()
 
     def get_history(
         self,
