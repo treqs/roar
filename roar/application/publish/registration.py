@@ -124,11 +124,16 @@ def build_lineage_composite_candidate(
     if metadata is not None:
         payload["metadata"] = metadata
 
+    # The local component set is complete (so prune/membership resolution is exact); cap
+    # the *upload* copy to bound the GLaaS payload + paid storage. The membership bloom
+    # (over all leaves) and component_count_total survive the cap.
+    payload = composite_builder.cap_payload_for_upload(payload)
+
     return CompositeRegistrationCandidate(
         hash=composite_digest,
         root_path=str(root_path),
         component_count_total=component_count_total,
-        component_count_stored=len(components),
+        component_count_stored=len(payload.get("components") or []),
         payload=payload,
     )
 

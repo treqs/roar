@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from ...application.publish.composite_builder import CompositeBuildResult
+from ...application.publish.composite_builder import (
+    CompositeArtifactBuilder,
+    CompositeBuildResult,
+)
 from ...application.publish.metadata import (
     build_local_publish_composite_metadata_json,
     build_publish_composite_dataset_metadata_json,
@@ -169,8 +172,11 @@ def register_put_composites_with_glaas(
         glaas_client=glaas_client,
     )
 
+    upload_capper = CompositeArtifactBuilder()
     for composite in composite_results:
-        payload = dict(composite.payload)
+        # Cap the *upload* copy (bounds GLaaS payload + paid storage); the full component
+        # set is persisted locally below via persist_local_put_composite_registration.
+        payload = upload_capper.cap_payload_for_upload(dict(composite.payload))
         metadata_json = build_publish_composite_dataset_metadata_json(
             root_path=composite.root_path,
             dataset_identifiers=dataset_identifiers,
@@ -187,7 +193,8 @@ def register_put_composites_with_glaas(
             "root_path": composite.root_path,
             "hash": composite.digest,
             "component_count_total": composite.component_count_total,
-            "component_count_stored": composite.component_count_stored,
+            # what GLaaS actually stored (the capped upload), not the full local set.
+            "component_count_stored": len(payload.get("components") or []),
         }
         if error:
             composite_registration["registered"] = False

@@ -319,44 +319,61 @@ class CompositeArtifactBuilder:
         source_type: str | None,
         session_hash: str,
     ) -> dict[str, Any]:
-        total_components = len(leaves)
-        max_candidate_count = min(total_components, self._max_stored_components)
-        total_size = sum(leaf.size for leaf in leaves)
+        """The FULL composite payload — every leaf is a stored component.
 
-        bloom_membership_base = self._build_membership_index_base(leaves)
+        The GLaaS upload is bounded separately by :meth:`cap_payload_for_upload` (payload
+        size + paid GLaaS storage). Locally we keep the complete component set so
+        membership/prune resolution (``find_by_component_digest``) is exact for any
+        dataset size, including >1000-leaf stores.
+        """
+        membership = self._build_membership_index_base(leaves)  # stored_components = total
+        return {
+            "hash": composite_digest,
+            "hashes": [{"algorithm": composite_algorithm, "digest": composite_digest}],
+            "size": sum(leaf.size for leaf in leaves),
+            "source_type": source_type,
+            "session_hash": session_hash,
+            "component_count_total": len(leaves),
+            "components": [self._component_payload(leaf) for leaf in leaves],
+            "membership_index": membership,
+        }
 
-        def build_with_count(stored_count: int) -> dict[str, Any]:
-            payload: dict[str, Any] = {
-                "hash": composite_digest,
-                "hashes": [{"algorithm": composite_algorithm, "digest": composite_digest}],
-                "size": total_size,
-                "source_type": source_type,
-                "session_hash": session_hash,
-                "component_count_total": total_components,
-                "components": [self._component_payload(leaf) for leaf in leaves[:stored_count]],
-            }
-            membership = dict(bloom_membership_base)
-            membership["stored_components"] = stored_count
-            payload["membership_index"] = membership
+    def cap_payload_for_upload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Bound a composite payload for the GLaaS upload (wire size + paid storage).
+
+        Returns a copy whose stored ``components`` are capped to ``_max_stored_components``
+        and to ``_max_payload_bytes`` (binary search), with ``stored_components`` updated
+        to match. The membership bloom — which covers ALL leaves — and
+        ``component_count_total`` are left intact, so a query against the uploaded anchor
+        still resolves every component. The full component list is kept locally; only this
+        wire/GLaaS copy is bounded.
+        """
+        components = payload.get("components") or []
+        membership = payload.get("membership_index") or {}
+        max_candidate = min(len(components), self._max_stored_components)
+        if max_candidate <= 0:
             return payload
 
-        best_payload = build_with_count(max_candidate_count)
-        if self._payload_size(best_payload) <= self._max_payload_bytes:
-            return best_payload
+        def with_count(stored_count: int) -> dict[str, Any]:
+            capped = dict(payload)
+            capped["components"] = components[:stored_count]
+            capped["membership_index"] = {**membership, "stored_components": stored_count}
+            return capped
 
-        low = 1
-        high = max_candidate_count
-        best_fit_payload = build_with_count(1)
+        best = with_count(max_candidate)
+        if self._payload_size(best) <= self._max_payload_bytes:
+            return best
+
+        low, high = 1, max_candidate
+        best = with_count(1)
         while low <= high:
             mid = (low + high) // 2
-            payload = build_with_count(mid)
-            if self._payload_size(payload) <= self._max_payload_bytes:
-                best_fit_payload = payload
-                low = mid + 1
+            candidate = with_count(mid)
+            if self._payload_size(candidate) <= self._max_payload_bytes:
+                best, low = candidate, mid + 1
             else:
                 high = mid - 1
-
-        return best_fit_payload
+        return best
 
     def _collect_leaves(
         self,
