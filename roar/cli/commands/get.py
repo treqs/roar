@@ -14,6 +14,7 @@ from pathlib import Path
 import click
 
 from ...application.get import GetRequest, get_artifacts
+from ...integrations.download.base import DownloadError
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -157,6 +158,8 @@ def get(
     except ValueError as e:
         raise click.ClickException(str(e)) from e
     except ImportError as e:
+        raise click.ClickException(str(e)) from e
+    except DownloadError as e:
         raise click.ClickException(str(e)) from e
 
     if dry_run:

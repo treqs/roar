@@ -301,3 +301,72 @@ def test_live_lfs_download_verifies_sha256():
     import hashlib
 
     assert hashlib.sha256((d / "f.bin").read_bytes()).hexdigest() == lfs.sha256
+
+
+# --- error mapping (offline) -------------------------------------------------
+# A failed HF metadata request must surface as a clean, actionable DownloadError
+# (rendered by the CLI without a traceback), not a raw urllib HTTPError/URLError.
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        url="https://huggingface.co/api/datasets/x/revision/main",
+        code=code,
+        msg="boom",
+        hdrs=None,  # type: ignore[arg-type]
+        fp=None,
+    )
+
+
+def test_malformed_url_404_raises_actionable_download_error(monkeypatch):
+    """The reported case: an `hf://huggingface.co/...` URL 404s with a hint."""
+    from roar.integrations.download.base import DownloadError
+
+    backend = HFDownloadBackend(
+        parse_source("hf://huggingface.co/datasets/karpathy/climbmix-400b-shuffle")
+    )
+
+    def _raise(*_a, **_k):
+        raise _http_error(404)
+
+    monkeypatch.setattr("roar.integrations.download.hf.urllib.request.urlopen", _raise)
+
+    with pytest.raises(DownloadError) as exc:
+        _ = backend.commit  # triggers the revision API call
+
+    msg = str(exc.value)
+    assert "not found" in msg
+    # The parsed repo reveals the mistake (host segment left in the path).
+    assert "huggingface.co/datasets" in msg
+    assert "hf://datasets/<owner>/<name>" in msg
+
+
+def test_403_raises_auth_download_error(monkeypatch):
+    from roar.integrations.download.base import DownloadError
+
+    backend = HFDownloadBackend(parse_source("hf://datasets/owner/private"))
+    monkeypatch.setattr(backend, "_token", None)
+    monkeypatch.setattr(
+        "roar.integrations.download.hf.urllib.request.urlopen",
+        lambda *_a, **_k: (_ for _ in ()).throw(_http_error(403)),
+    )
+
+    with pytest.raises(DownloadError) as exc:
+        _ = backend.commit
+    msg = str(exc.value)
+    assert "Access denied" in msg and "403" in msg
+    assert "HF_TOKEN" in msg  # token hint when none is set
+
+
+def test_network_error_raises_download_error(monkeypatch):
+    from roar.integrations.download.base import DownloadError
+
+    backend = HFDownloadBackend(parse_source("hf://datasets/owner/name"))
+    monkeypatch.setattr(
+        "roar.integrations.download.hf.urllib.request.urlopen",
+        lambda *_a, **_k: (_ for _ in ()).throw(urllib.error.URLError("name resolution failed")),
+    )
+
+    with pytest.raises(DownloadError) as exc:
+        _ = backend.commit
+    assert "Could not reach Hugging Face" in str(exc.value)
