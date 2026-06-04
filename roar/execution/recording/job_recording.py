@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
+from ... import __version__ as _ROAR_VERSION
 from ...application.system_labels import refresh_job_system_labels
 from .dataset_identifier import DatasetIdentifierInferer
 
@@ -378,6 +379,11 @@ class ExecutionJobRecorder:
         dataset_hint_paths: list[str] | None = None,
     ) -> str | None:
         metadata: dict[str, Any] = {}
+
+        # Freeze the roar version that produced this job. Captured at run-record time so
+        # the derived `roar.version` system label reflects the producer, not whatever roar
+        # later re-derives the labels (e.g. on put). See system_labels.build_job_system_labels.
+        metadata["roar_version"] = _ROAR_VERSION
 
         if prov.get("executables", {}).get("packages"):
             metadata["packages"] = prov["executables"]["packages"]
