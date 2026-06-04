@@ -175,5 +175,5 @@ def test_resolve_roar_git_context_uses_shared_transfer_resolution() -> None:
         ctx = resolve_roar_git_context(Path("/tmp/repo"), logger=logger)
 
     assert ctx is resolve_git_context.return_value
-    resolve_git_context.assert_called_once_with(Path("/tmp/repo"), None)
+    resolve_git_context.assert_called_once_with(Path("/tmp/repo"), None, configured_remote=None)
     logger.debug.assert_any_call("Resolving git context from %s", Path("/tmp/repo"))

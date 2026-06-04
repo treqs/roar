@@ -72,15 +72,10 @@ class GitVCSProvider(BaseVCSProvider):
                 .strip()
             )
 
-        # Remote URL (origin)
-        with contextlib.suppress(subprocess.CalledProcessError, FileNotFoundError):
-            info.remote_url = (
-                subprocess.check_output(
-                    ["git", "remote", "get-url", "origin"], cwd=repo_root, stderr=subprocess.DEVNULL
-                )
-                .decode()
-                .strip()
-            )
+        # Remote URL — canonical remote (configured/origin/sole), not assumed
+        # to be named "origin", so a repo whose only remote is e.g. "treqs"
+        # records the real URL instead of falling back to a local file:// path.
+        info.remote_url = self.get_remote_url(repo_root)
 
         # Check for uncommitted changes
         clean, changes = self.get_status(repo_root)
@@ -199,12 +194,51 @@ class GitVCSProvider(BaseVCSProvider):
         except (subprocess.CalledProcessError, FileNotFoundError):
             return None
 
-    def get_remote_url(self, repo_root: str, remote: str = "origin") -> str | None:
-        """Get the URL for a remote."""
+    def list_remotes(self, repo_root: str) -> list[str]:
+        """Names of the configured git remotes (empty if none / not a repo)."""
+        try:
+            raw = subprocess.check_output(
+                ["git", "remote"], cwd=repo_root, stderr=subprocess.DEVNULL
+            ).decode()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return []
+        return [line.strip() for line in raw.splitlines() if line.strip()]
+
+    def resolve_remote_name(self, repo_root: str, configured: str | None = None) -> str | None:
+        """Pick the remote whose URL best identifies this repo.
+
+        Mirrors the tag-push canonical-remote heuristic so the recorded
+        ``git_repo`` matches where tags are actually pushed: the configured
+        ``git.remote`` if present, else ``origin``, else the sole remote when
+        there's exactly one (e.g. a repo whose only remote is named ``treqs``).
+        Returns ``None`` when it's genuinely ambiguous (multiple remotes, no
+        ``origin``, none configured) so the caller can fall back.
+        """
+        remotes = self.list_remotes(repo_root)
+        if configured and configured in remotes:
+            return configured
+        if "origin" in remotes:
+            return "origin"
+        if len(remotes) == 1:
+            return remotes[0]
+        return None
+
+    def get_remote_url(
+        self, repo_root: str, remote: str | None = None, configured: str | None = None
+    ) -> str | None:
+        """Get the URL for a remote.
+
+        With an explicit ``remote`` name, fetches that one. Otherwise resolves
+        the canonical remote via :meth:`resolve_remote_name` (honoring an
+        optional ``configured`` ``git.remote``) instead of assuming ``origin``.
+        """
+        name = remote or self.resolve_remote_name(repo_root, configured)
+        if name is None:
+            return None
         try:
             return (
                 subprocess.check_output(
-                    ["git", "remote", "get-url", remote], cwd=repo_root, stderr=subprocess.DEVNULL
+                    ["git", "remote", "get-url", name], cwd=repo_root, stderr=subprocess.DEVNULL
                 )
                 .decode()
                 .strip()
