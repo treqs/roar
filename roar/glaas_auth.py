@@ -316,6 +316,42 @@ def fetch_access_context_via_auth_api(glaas_api_url: str, *, access_token: str) 
     return data
 
 
+def check_access_token_live(glaas_api_url: str, *, access_token: str) -> bool | None:
+    """Check whether the auth API still accepts an access token.
+
+    Returns ``True`` if the token is live, ``False`` if the API definitively
+    rejects it (HTTP 401/403), and ``None`` when liveness can't be determined
+    (server unreachable, transport error, or an unexpected response). Callers
+    treat ``None`` conservatively — i.e. don't force a re-login on a transient
+    blip — so only a definitive rejection should change behavior.
+    """
+    token = access_token.strip()
+    if not token:
+        return False
+
+    base_url = glaas_api_url.rstrip("/")
+    endpoints = (
+        f"{base_url}/api/v1/auth/access-context",
+        f"{base_url}/api/v1/user/access-context",  # legacy path, tried only on 404
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    for index, endpoint in enumerate(endpoints):
+        try:
+            _request_json(endpoint, method="GET", headers=headers)
+            return True
+        except _GlaasApiResponseError as exc:
+            if exc.status in (401, 403):
+                return False
+            if exc.status == 404 and index == 0:
+                continue  # endpoint moved; fall back to the legacy path
+            return None
+        except GlaasAuthError:
+            return None
+
+    return None
+
+
 class _GlaasApiResponseError(GlaasAuthError):
     def __init__(self, status: int, payload: dict[str, Any] | None) -> None:
         self.status = status
