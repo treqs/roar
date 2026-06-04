@@ -75,6 +75,22 @@ def load_publish_auth_context(
         db_user_id = auth_state.user.db_user_id
 
     ssh_auth_available = _has_ssh_auth_credentials()
+
+    # Proactively renew an expiring/expired bearer so register doesn't ride on a
+    # token `roar whoami` already calls "expired" (which then reads as a bug when
+    # it works anyway). If it can't be refreshed, drop it for an SSH fallback when
+    # available, else fail clearly toward `roar login` rather than sending a dead
+    # token.
+    if auth_state is not None and access_token:
+        from .glaas_client import GlaasClientError, ensure_fresh_access_token
+
+        try:
+            access_token, _refreshed = ensure_fresh_access_token(auth_state)
+        except GlaasClientError as exc:
+            if ssh_auth_available:
+                access_token = None
+            else:
+                raise PublishAuthError(str(exc)) from exc
     binding = None if allow_public_without_binding else _load_repo_binding(start_dir)
     repo_scope = None if allow_public_without_binding else load_repo_scope(start_dir)
     if binding and not access_token and not ssh_auth_available:
