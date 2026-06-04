@@ -40,7 +40,7 @@ def test_fetch_access_context_rejects_expired_stored_session(
         ),
     )
 
-    with pytest.raises(GlaasClientError, match=r"Session expired\. Run `roar login`\."):
+    with pytest.raises(GlaasClientError, match=r"Session expired.*Run `roar login`\."):
         fetch_access_context("https://api.treqs.ai")
 
 
@@ -159,3 +159,81 @@ def test_fetch_access_context_reports_refresh_failure(
 
     with pytest.raises(GlaasClientError, match="Session refresh failed: refresh rejected"):
         fetch_access_context("https://api.treqs.ai")
+
+
+# --- ensure_fresh_access_token: refresh / error / pass-through ---------------
+
+
+def _auth(refresh_token, expires_at, access_token="tok"):
+    return SimpleNamespace(
+        refresh_token=refresh_token,
+        expires_at=expires_at,
+        access_token=access_token,
+        client_id="roar-cli",
+        provider="treqs-device",
+        issuer=None,
+    )
+
+
+def test_ensure_fresh_returns_token_unchanged_when_valid() -> None:
+    auth = _auth(refresh_token="r", expires_at="2099-01-01T00:00:00Z")
+    token, refreshed = treqs_client.ensure_fresh_access_token(auth)
+    assert (token, refreshed) == ("tok", False)
+
+
+def test_ensure_fresh_refreshes_near_expiry(monkeypatch) -> None:
+    auth = _auth(refresh_token="r", expires_at="2020-01-01T00:00:00Z")  # expired + refresh token
+    monkeypatch.setattr(treqs_client, "_refresh_stored_access_token", lambda a: "new-tok")
+    token, refreshed = treqs_client.ensure_fresh_access_token(auth)
+    assert (token, refreshed) == ("new-tok", True)
+
+
+def test_ensure_fresh_errors_to_login_when_expired_without_refresh_token() -> None:
+    auth = _auth(refresh_token=None, expires_at="2020-01-01T00:00:00Z")
+    with pytest.raises(GlaasClientError, match=r"Session expired.*Run `roar login`\."):
+        treqs_client.ensure_fresh_access_token(auth)
+
+
+def test_ensure_fresh_wraps_refresh_failure_with_login_hint(monkeypatch) -> None:
+    auth = _auth(refresh_token="r", expires_at="2020-01-01T00:00:00Z")
+
+    def _boom(_a):
+        raise GlaasClientError("Session refresh failed: rejected")
+
+    monkeypatch.setattr(treqs_client, "_refresh_stored_access_token", _boom)
+    with pytest.raises(GlaasClientError, match=r"refresh failed.*Run `roar login`"):
+        treqs_client.ensure_fresh_access_token(auth)
+
+
+def test_refresh_surfaces_session_refreshed_notice(
+    xdg_config_home: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    save_auth_state(
+        {
+            "version": 1,
+            "provider": "treqs-device",
+            "access_token": "old",
+            "refresh_token": "refresh-token",
+            "expires_at": "2020-01-01T00:00:00Z",
+            "user": {"sub": "u"},
+        }
+    )
+    monkeypatch.setattr(
+        treqs_client,
+        "refresh_access_token",
+        lambda api_url, refresh_token, client_id="roar-cli": SimpleNamespace(
+            access_token="fresh",
+            refresh_token="fresh-refresh",
+            refresh_expires_at="2031-01-01T00:00:00Z",
+            expires_in=3600,
+            provider="treqs-device",
+            issuer=None,
+            client_id="roar-cli",
+            id_token=None,
+            raw_data={},
+        ),
+    )
+    auth = treqs_client.load_auth_state()
+    token, refreshed = treqs_client.ensure_fresh_access_token(auth)
+    assert (token, refreshed) == ("fresh", True)
+    assert "Session refreshed." in capsys.readouterr().err
