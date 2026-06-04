@@ -12,9 +12,14 @@ const TRACEFS_ROOTS: &[&str] = &["/sys/kernel/tracing", "/sys/kernel/debug/traci
 /// running kernel (e.g. `sys_enter_open` on aarch64, which has no `open()`
 /// syscall — only `openat()`).
 fn tracepoint_available(category: &str, tp: &str) -> bool {
-    TRACEFS_ROOTS
-        .iter()
-        .any(|root| Path::new(root).join("events").join(category).join(tp).join("id").exists())
+    TRACEFS_ROOTS.iter().any(|root| {
+        Path::new(root)
+            .join("events")
+            .join(category)
+            .join(tp)
+            .join("id")
+            .exists()
+    })
 }
 
 /// Attach a tracepoint program. Returns `Ok(true)` if attached, `Ok(false)` if
@@ -77,6 +82,10 @@ fn attach_all_tracepoints(bpf: &mut Ebpf) -> Result<()> {
         "syscalls",
         "sys_exit_copy_file_range",
     )?;
+
+    // splice
+    attach_tp(bpf, "sys_enter_splice", "syscalls", "sys_enter_splice")?;
+    attach_tp(bpf, "sys_exit_splice", "syscalls", "sys_exit_splice")?;
 
     // rename / link path publication
     attach_tp(bpf, "sys_enter_rename", "syscalls", "sys_enter_rename")?;

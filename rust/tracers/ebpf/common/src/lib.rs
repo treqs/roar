@@ -25,6 +25,7 @@ pub enum EventType {
     Rename = 12,
     Clone = 13,
     Exec = 14,
+    Splice = 15,
 }
 
 // --- BPF event structs (shared between kernel and userspace) ---
@@ -101,6 +102,7 @@ pub mod syscall_nr {
     pub const OPENAT: u64 = 257;
     pub const RENAMEAT: u64 = 264;
     pub const LINKAT: u64 = 265;
+    pub const SPLICE: u64 = 275;
     pub const DUP3: u64 = 292;
     pub const PREADV: u64 = 295;
     pub const PWRITEV: u64 = 296;

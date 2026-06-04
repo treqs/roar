@@ -32,6 +32,7 @@ mod imp {
     pub const SYS_OPENAT: u64 = 257;
     pub const SYS_RENAMEAT: u64 = 264;
     pub const SYS_LINKAT: u64 = 265;
+    pub const SYS_SPLICE: u64 = 275;
     pub const SYS_DUP3: u64 = 292;
     pub const SYS_PREADV: u64 = 295;
     pub const SYS_PWRITEV: u64 = 296;
@@ -60,6 +61,7 @@ mod imp {
         SYS_OPENAT,
         SYS_RENAMEAT,
         SYS_LINKAT,
+        SYS_SPLICE,
         SYS_DUP3,
         SYS_PREADV,
         SYS_PWRITEV,
@@ -129,6 +131,7 @@ mod imp {
     pub const SYS_PREADV: u64 = 69;
     pub const SYS_PWRITEV: u64 = 70;
     pub const SYS_SENDFILE: u64 = 71;
+    pub const SYS_SPLICE: u64 = 76;
     pub const SYS_MMAP: u64 = 222;
     pub const SYS_RENAMEAT2: u64 = 276;
     pub const SYS_COPY_FILE_RANGE: u64 = 285;
@@ -147,6 +150,7 @@ mod imp {
         SYS_WRITEV,
         SYS_DUP3,
         SYS_SENDFILE,
+        SYS_SPLICE,
         SYS_CHDIR,
         SYS_FCHDIR,
         SYS_OPENAT,
