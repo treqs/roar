@@ -58,10 +58,16 @@ def resolve_roar_git_context(
     *,
     logger: ILogger,
     git_commit: str | None = None,
+    configured_remote: str | None = None,
 ) -> GitContext:
-    """Resolve git context for roar workflows using the shared git integration."""
+    """Resolve git context for roar workflows using the shared git integration.
+
+    ``configured_remote`` (typically ``git.remote``) is preferred when picking
+    the repo URL so the recorded source matches where tags are pushed; falls
+    back to ``origin`` / the sole remote when unset.
+    """
     logger.debug("Resolving git context from %s", path)
-    ctx = resolve_git_context(path, git_commit)
+    ctx = resolve_git_context(path, git_commit, configured_remote=configured_remote)
     logger.debug(
         "Git context resolved: repo=%s, commit=%s, branch=%s",
         ctx.repo,

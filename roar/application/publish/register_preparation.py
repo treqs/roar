@@ -42,7 +42,11 @@ def prepare_register_execution(
     lineage: LineageData | None = None,
 ) -> PreparedRegisterExecution:
     """Resolve the local context needed to execute a register workflow."""
-    git_context = resolve_roar_git_context(cwd, logger=logger)
+    from ...integrations.config import config_get
+
+    git_context = resolve_roar_git_context(
+        cwd, logger=logger, configured_remote=config_get("git.remote")
+    )
 
     git_tag_name: str | None = None
     git_tag_repo_root: Path | None = None
