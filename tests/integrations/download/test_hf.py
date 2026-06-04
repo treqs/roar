@@ -33,12 +33,28 @@ def _tolerate_hf_flakiness(fn):
     """
     import functools
 
+    from roar.integrations.download.base import DownloadError
+
+    transient_http = (429, 500, 502, 503, 504)
+
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
+        except DownloadError as exc:
+            # The HF backend wraps transient HTTP/network failures as a
+            # DownloadError but preserves the original via ``raise … from`` —
+            # inspect the cause so a 429/5xx/network blip still skips, not fails.
+            cause = exc.__cause__
+            if isinstance(cause, urllib.error.HTTPError):
+                if cause.code in transient_http:
+                    pytest.skip(f"huggingface.co transient HTTP {cause.code}")
+                raise  # a real 404/401/403 is a genuine failure, not flakiness
+            if isinstance(cause, urllib.error.URLError):
+                pytest.skip(f"huggingface.co network error: {cause.reason}")
+            raise
         except urllib.error.HTTPError as exc:
-            if exc.code in (429, 500, 502, 503, 504):
+            if exc.code in transient_http:
                 pytest.skip(f"huggingface.co transient HTTP {exc.code}")
             raise
         except urllib.error.URLError as exc:
@@ -403,3 +419,36 @@ def test_network_error_raises_download_error(monkeypatch):
     with pytest.raises(DownloadError) as exc:
         _ = backend.commit
     assert "Could not reach Hugging Face" in str(exc.value)
+
+
+# --- _tolerate_hf_flakiness: tolerates DownloadError-wrapped transients --------
+
+
+def test_tolerate_skips_downloaderror_wrapping_transient_429() -> None:
+    from roar.integrations.download.base import DownloadError
+
+    cause = urllib.error.HTTPError("u", 429, "too many requests", {}, None)  # type: ignore[arg-type]
+    err = DownloadError("Hugging Face API error (HTTP 429) for dataset 'x'")
+    err.__cause__ = cause
+
+    @_tolerate_hf_flakiness
+    def boom():
+        raise err
+
+    with pytest.raises(pytest.skip.Exception):
+        boom()
+
+
+def test_tolerate_reraises_downloaderror_wrapping_404() -> None:
+    from roar.integrations.download.base import DownloadError
+
+    cause = urllib.error.HTTPError("u", 404, "not found", {}, None)  # type: ignore[arg-type]
+    err = DownloadError("Hugging Face dataset not found")
+    err.__cause__ = cause
+
+    @_tolerate_hf_flakiness
+    def boom():
+        raise err
+
+    with pytest.raises(DownloadError):
+        boom()
