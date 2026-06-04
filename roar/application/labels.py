@@ -512,6 +512,50 @@ def collect_label_sync_payloads(
     return payloads
 
 
+def collect_current_label_ids(
+    db_ctx: _LabelSyncDatabaseContext,
+    *,
+    session_id: int | None,
+    jobs: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
+) -> list[int]:
+    """Row ids of the current labels for the entities being published.
+
+    Parallels ``collect_label_sync_payloads`` so the same labels that get pushed
+    to GLaaS are the ones stamped ``synced_at`` afterwards.
+    """
+    ids: list[int] = []
+
+    def _add(current: Any) -> None:
+        if (
+            isinstance(current, dict)
+            and isinstance(current.get("metadata"), dict)
+            and isinstance(current.get("id"), int)
+        ):
+            ids.append(current["id"])
+
+    if session_id is not None:
+        _add(db_ctx.labels.get_current("dag", session_id=session_id))
+
+    seen_jobs: set[int] = set()
+    for job in jobs:
+        job_id = job.get("id")
+        if not isinstance(job_id, int) or job_id in seen_jobs:
+            continue
+        seen_jobs.add(job_id)
+        _add(db_ctx.labels.get_current("job", job_id=job_id))
+
+    seen_artifacts: set[str] = set()
+    for artifact in artifacts:
+        artifact_id = artifact.get("id")
+        if not isinstance(artifact_id, str) or not artifact_id or artifact_id in seen_artifacts:
+            continue
+        seen_artifacts.add(artifact_id)
+        _add(db_ctx.labels.get_current("artifact", artifact_id=artifact_id))
+
+    return ids
+
+
 def count_user_labels(payloads: list[dict[str, Any]]) -> int:
     """Count user-set labels across label-sync payloads.
 

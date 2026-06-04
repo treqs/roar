@@ -9,7 +9,7 @@ import secrets
 import time
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from ...core.interfaces.repositories import ArtifactRepository
@@ -368,6 +368,16 @@ class SQLAlchemyArtifactRepository(ArtifactRepository):
             current.append(uploaded_to)
             artifact.uploaded_to = json.dumps(current)
             self._session.flush()
+
+    def mark_synced(self, artifact_ids: list[str], synced_at: float) -> None:
+        """Stamp ``synced_at`` on the given artifacts (pushed to GLaaS)."""
+        ids = [str(i) for i in artifact_ids if i]
+        if not ids:
+            return
+        self._session.execute(
+            update(Artifact).where(Artifact.id.in_(ids)).values(synced_at=synced_at)
+        )
+        self._session.flush()
 
     def get_locations(self, artifact_id: str) -> list[dict[str, str]]:
         """
