@@ -764,6 +764,20 @@ class GlaasClient:
         )
         return result, error
 
+    def register_job_view_edges(
+        self,
+        job_uid: str,
+        view_edges: list[dict],
+    ) -> tuple[dict | None, str | None]:
+        """Register view edges (consumes/produces selections of composite anchors).
+
+        Posts to the job-link endpoint, which accepts a ``view_edges`` array. Each edge
+        is ``{relation, target_hash, bloom, selected_count, parent_total}``. Returns
+        ``(result, error)``; result contains ``view_edges_linked``.
+        """
+        body: dict[str, Any] = {"view_edges": view_edges}
+        return self._request("POST", f"/api/v1/jobs/{job_uid}/artifacts", body)
+
     def register_job_inputs_under_registration_session(
         self,
         registration_session_id: str,

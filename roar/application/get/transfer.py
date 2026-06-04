@@ -262,6 +262,7 @@ class GetService:
             local_path=str(pending.local_path),
             hash=file_hash,
             size=file_size,
+            remote_key=pending.remote_key,
         )
 
     def _build_dry_run_result(

@@ -17,6 +17,13 @@ import posixpath
 from dataclasses import dataclass
 
 # Repo/git boilerplate present everywhere — never data, never identity-bearing.
+#
+# IDENTITY CONTRACT: this set is excluded from every composite digest (both the get
+# sha256-tree and the put/register blake3-tree paths derive their exclusions from
+# `detect().boilerplate`). It is therefore part of the `roar:{combiner}-tree:v1` digest
+# domain: changing a member silently re-digests existing datasets and breaks the
+# put-export <-> get-import identity guarantee. Any edit here MUST bump the tree domain
+# version (v1 -> v2) in `canonical.py` and `composite_builder.py`.
 BOILERPLATE = frozenset({".gitattributes", ".gitignore", "README.md", "LICENSE", ".DS_Store"})
 
 

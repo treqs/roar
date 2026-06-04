@@ -196,13 +196,13 @@ def test_builder_caps_stored_components_and_emits_membership_index(tmp_path: Pat
     )
 
     assert result is not None
+    # The built (local) payload keeps EVERY component — resolution must be exact.
     assert result.component_count_total == 5
-    assert result.component_count_stored == 3
-    assert len(result.payload["components"]) == 3
-    assert result.payload["component_count_total"] == 5
+    assert result.component_count_stored == 5
+    assert len(result.payload["components"]) == 5
     membership = result.payload["membership_index"]
     assert membership["total_components"] == 5
-    assert membership["stored_components"] == 3
+    assert membership["stored_components"] == 5
     assert membership["bloom_bits"] == 2048
     assert membership["bloom_hashes"] == 12
     assert membership["bloom_version"] == 1
@@ -210,6 +210,14 @@ def test_builder_caps_stored_components_and_emits_membership_index(tmp_path: Pat
     bloom_filter = base64.b64decode(membership["bloom_filter_base64"])
     assert len(bloom_filter) == membership["bloom_bits"] // 8
     assert any(byte != 0 for byte in bloom_filter)
+
+    # The UPLOAD copy is capped to max_stored_components; the bloom (over all 5) and the
+    # total are preserved so the uploaded anchor still resolves every component.
+    capped = builder.cap_payload_for_upload(result.payload)
+    assert len(capped["components"]) == 3
+    assert capped["component_count_total"] == 5
+    assert capped["membership_index"]["stored_components"] == 3
+    assert capped["membership_index"]["bloom_filter_base64"] == membership["bloom_filter_base64"]
 
 
 def test_builder_payload_size_cap_reduces_stored_components(tmp_path: Path):
@@ -231,7 +239,7 @@ def test_builder_payload_size_cap_reduces_stored_components(tmp_path: Path):
         )
         hashes[str(file_path)] = _file_hash(file_path)
 
-    # Intentionally tiny payload cap to force stored component reduction.
+    # Intentionally tiny payload cap to force stored component reduction on UPLOAD.
     builder = CompositeArtifactBuilder(max_stored_components=1000, max_payload_bytes=4096)
     result = builder.build_for_root(
         root_path=root,
@@ -242,10 +250,22 @@ def test_builder_payload_size_cap_reduces_stored_components(tmp_path: Path):
     )
 
     assert result is not None
+    # Local build keeps all 120 components (no payload-size cap locally).
     assert result.component_count_total == 120
-    assert result.component_count_stored < 120
-    membership = result.payload["membership_index"]
-    assert membership["stored_components"] == result.component_count_stored
+    assert result.component_count_stored == 120
+    assert len(result.payload["components"]) == 120
+
+    # The upload copy is shrunk to fit the payload-byte budget; total + bloom intact.
+    capped = builder.cap_payload_for_upload(result.payload)
+    assert len(capped["components"]) < 120
+    assert builder._payload_size(capped) <= 4096
+    assert capped["component_count_total"] == 120
+    membership = capped["membership_index"]
+    assert membership["stored_components"] == len(capped["components"])
+    assert (
+        membership["bloom_filter_base64"]
+        == result.payload["membership_index"]["bloom_filter_base64"]
+    )
 
 
 def test_bloom_parameters_target_point_one_percent_false_positive_rate():

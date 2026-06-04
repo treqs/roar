@@ -24,6 +24,29 @@ def _online() -> bool:
         return False
 
 
+def _tolerate_hf_flakiness(fn):
+    """Skip (not fail) a live HF test on rate-limiting or transient HF/network errors.
+
+    A ``429 Too Many Requests`` or ``5xx`` from huggingface.co in CI means the test
+    *could not run*, not that the behavior is wrong — surfacing it as a failure (with
+    ``maxfail=1``) would halt the whole suite on an external hiccup.
+    """
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (429, 500, 502, 503, 504):
+                pytest.skip(f"huggingface.co transient HTTP {exc.code}")
+            raise
+        except urllib.error.URLError as exc:
+            pytest.skip(f"huggingface.co network error: {exc.reason}")
+
+    return wrapper
+
+
 # --- offline: URL parsing --------------------------------------------------
 def test_parse_dataset_url():
     assert parse_hf_url("hf://datasets/karpathy/climbmix-400b-shuffle") == (
@@ -78,6 +101,7 @@ LIBERO = "hf://datasets/physical-intelligence/libero/meta"
 
 
 @pytest.mark.skipif(not _online(), reason="no network")
+@_tolerate_hf_flakiness
 def test_live_commit_and_manifest_have_sha256():
     b = HFDownloadBackend(parse_source(LIBERO))
     assert len(b.commit) == 40
@@ -89,6 +113,7 @@ def test_live_commit_and_manifest_have_sha256():
 
 
 @pytest.mark.skipif(not _online(), reason="no network")
+@_tolerate_hf_flakiness
 def test_live_sha256_of_nonlfs_meta_changes_composite_identity():
     """Identity-bearing non-LFS meta/ files are re-hashed into the composite, so the
     LFS+meta key differs from the LFS-only key (meta is part of identity)."""
@@ -129,6 +154,7 @@ def test_live_sha256_of_nonlfs_meta_changes_composite_identity():
 
 
 @pytest.mark.skipif(not _online(), reason="no network")
+@_tolerate_hf_flakiness
 def test_live_list_keys_scoped_to_subpath():
     b = HFDownloadBackend(parse_source(LIBERO))
     keys = b.list_keys("")
@@ -138,6 +164,7 @@ def test_live_list_keys_scoped_to_subpath():
 
 
 @pytest.mark.skipif(not _online(), reason="no network")
+@_tolerate_hf_flakiness
 def test_live_manifest_composite_sha256_matches_anchor():
     """The sha256-tree over an HF dataset's LFS oids is the composite-sha256 key that
     `roar get` forms — pinned against the esm2 anchor."""
@@ -184,8 +211,11 @@ def test_get_prefix_limit_excludes_boilerplate_and_caps():
 
 
 @pytest.mark.skipif(not _online(), reason="no network")
+@_tolerate_hf_flakiness
 def test_live_subset_composite_is_distinct_first_n():
-    """A subset get forms its own composite-sha256 over the first N data files."""
+    """Distinct leaf sets yield distinct composite-sha256 keys (content-addressing):
+    first:4 != first:5 != the full anchor. (`roar get --limit N` forms the full-dataset
+    anchor, not a subset composite — this exercises the builder's identity property.)"""
     import mimetypes
 
     from roar.application.publish.composite_builder import CompositeArtifactBuilder, CompositeLeaf
@@ -226,6 +256,7 @@ def test_live_subset_composite_is_distinct_first_n():
     not Path("~/.hf_token").expanduser().exists() and not os.environ.get("HF_TOKEN"),
     reason="no HF token",
 )
+@_tolerate_hf_flakiness
 def test_live_put_equals_get_symmetry():
     """put == get: the composite built from the actual file bytes (put-style, sha256
     of content) equals the composite get forms from HF's published oids. The key is
@@ -275,6 +306,7 @@ def test_live_put_equals_get_symmetry():
 
 
 @pytest.mark.skipif(not _online(), reason="no network")
+@_tolerate_hf_flakiness
 def test_live_download_and_exists():
     b = HFDownloadBackend(parse_source(LIBERO))
     d = Path(tempfile.mkdtemp())
@@ -289,6 +321,7 @@ def test_live_download_and_exists():
     not Path("~/.hf_token").expanduser().exists() and not os.environ.get("HF_TOKEN"),
     reason="no HF token",
 )
+@_tolerate_hf_flakiness
 def test_live_lfs_download_verifies_sha256():
     """Downloading an LFS file verifies its bytes against the published sha256."""
     b = HFDownloadBackend(parse_source("hf://datasets/physical-intelligence/libero"))

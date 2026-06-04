@@ -124,11 +124,16 @@ def build_lineage_composite_candidate(
     if metadata is not None:
         payload["metadata"] = metadata
 
+    # The local component set is complete (so prune/membership resolution is exact); cap
+    # the *upload* copy to bound the GLaaS payload + paid storage. The membership bloom
+    # (over all leaves) and component_count_total survive the cap.
+    payload = composite_builder.cap_payload_for_upload(payload)
+
     return CompositeRegistrationCandidate(
         hash=composite_digest,
         root_path=str(root_path),
         component_count_total=component_count_total,
-        component_count_stored=len(components),
+        component_count_stored=len(payload.get("components") or []),
         payload=payload,
     )
 
@@ -180,6 +185,10 @@ def build_lineage_membership_index_payload(
             component_type = component_type_raw if isinstance(component_type_raw, str) else None
             leaf_kind_raw = component.get("leaf_kind")
             leaf_kind = leaf_kind_raw if isinstance(leaf_kind_raw, str) else "file"
+            algorithm_raw = component.get("component_algorithm")
+            algorithm = (
+                algorithm_raw if isinstance(algorithm_raw, str) and algorithm_raw else "blake3"
+            )
             leaves.append(
                 CompositeLeaf(
                     relative_path=str(component.get("relative_path") or ""),
@@ -187,6 +196,7 @@ def build_lineage_membership_index_payload(
                     size=_normalize_component_size(component.get("component_size")),
                     component_type=component_type,
                     leaf_kind=leaf_kind,
+                    component_algorithm=algorithm,
                 )
             )
 

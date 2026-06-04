@@ -11,6 +11,7 @@ class GetDownloadedFile:
     local_path: str
     hash: str | None = None
     size: int | None = None
+    remote_key: str | None = None  # full manifest path (joins to the LFS sha256 oid)
 
 
 @dataclass(frozen=True)
@@ -33,3 +34,6 @@ class GetResponse:
     git_tag: str | None = None
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
+    # MB of non-LFS identity files excluded from the anchor (over budget, no
+    # --full-anchor); None when the anchor is complete. Drives the CLI warning + hint.
+    anchor_lfs_only_mb: float | None = None
