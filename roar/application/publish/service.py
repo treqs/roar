@@ -735,6 +735,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             artifacts_registered=result.artifacts_registered,
             links_created=result.links_created,
             labels_synced=result.labels_synced,
+            already_registered=result.already_registered,
             error=result.error,
             secrets_detected=list(result.secrets_detected),
             secrets_redacted=result.secrets_redacted,

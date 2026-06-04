@@ -291,6 +291,49 @@ class RegistrationCoordinator(IRegistrationCoordinator):
             jobs_created = batch_counts.get("created", 0)
             jobs_existing = batch_counts.get("existing", 0)
 
+            # Jobs this user already registered+finalized under other DAG(s).
+            already_registered = [h for h in batch_counts.get("already_registered", []) if h]
+            if already_registered:
+                distinct = sorted(set(already_registered))
+                staged_new = jobs_created + jobs_existing
+                already_count = max(len(job_uids_created) - staged_new, 0)
+                if staged_new == 0 and len(distinct) == 1:
+                    # Full re-register: every job is already registered under one
+                    # DAG. Skip Phase 3/4 + finalize; the caller reuses that DAG.
+                    return BatchRegistrationResult(
+                        session_registered=True,
+                        jobs_created=0,
+                        jobs_failed=0,
+                        jobs_existing=0,
+                        artifacts_registered=0,
+                        artifacts_failed=0,
+                        links_created=0,
+                        links_failed=0,
+                        errors=[],
+                        already_registered_session_hash=distinct[0],
+                    )
+                # Partial overlap (some new + some already elsewhere) or jobs
+                # spanning multiple DAGs — can't form one DAG without a job
+                # belonging to two.
+                dag_word = "DAG" if len(distinct) == 1 else "DAGs"
+                job_word = "job" if already_count == 1 else "jobs"
+                return BatchRegistrationResult(
+                    session_registered=False,
+                    jobs_created=jobs_created,
+                    jobs_failed=max(already_count, 1),
+                    jobs_existing=jobs_existing,
+                    artifacts_registered=0,
+                    artifacts_failed=0,
+                    links_created=0,
+                    links_failed=0,
+                    errors=[
+                        f"This lineage overlaps work already on GLaaS: {already_count} of its "
+                        f"{job_word} are already registered under {len(distinct)} other {dag_word}. "
+                        "roar can't yet register a lineage that extends or merges existing ones "
+                        "(a job can belong to only one DAG)."
+                    ],
+                )
+
         self._logger.debug(
             "Registration-session job staging complete: %d created, %d failed",
             jobs_created,

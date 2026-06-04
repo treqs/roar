@@ -390,14 +390,15 @@ class JobRegistrationService(IJobRegistrar):
         jobs: list[dict],
         registration_session_id: str,
         git_context: GitContext,
-    ) -> tuple[list[JobRegistrationResult], dict[str, int]]:
+    ) -> tuple[list[JobRegistrationResult], dict[str, Any]]:
         """Create multiple staged jobs under a remote registration session.
 
         Returns ``(results, counts)`` where ``counts`` is the server's
-        ``created``/``existing`` split for the jobs that reached GLaaS, letting
-        callers report how many jobs were newly registered vs already staged.
+        ``created``/``existing`` split plus ``already_registered`` (DAG hashes of
+        jobs this user already registered+finalized), letting callers tell a
+        resume, a full re-register, and a partial superset apart.
         """
-        zero_counts = {"created": 0, "existing": 0}
+        zero_counts: dict[str, Any] = {"created": 0, "existing": 0, "already_registered": []}
         if not jobs:
             return [], dict(zero_counts)
 
