@@ -358,3 +358,48 @@ def test_build_show_summary_does_not_remote_fallback_when_disabled(tmp_path: Pat
             show_module.build_show_summary(_request(tmp_path, full_hash))
 
     lookup_remote.assert_not_called()
+
+
+def test_job_artifact_summary_skips_presence_check_for_composites() -> None:
+    # A composite's "path" is a logical hf://… URI and its components may be
+    # only partially materialized, so presence is left unknown (no "(missing)").
+    summary = show_module._build_job_artifact_summary(
+        {
+            "path": "hf://datasets/owner/name@abc",
+            "artifact_id": "aid-composite",
+            "kind": "composite",
+            "component_count": 6543,
+            "size": 600_000_000_000,
+            "hashes": [{"algorithm": "composite-sha256", "digest": "92fe50"}],
+        }
+    )
+    assert summary.present is None
+
+
+def test_job_artifact_summary_marks_missing_local_primitive(tmp_path: Path) -> None:
+    missing_path = str(tmp_path / "gone.parquet")
+    summary = show_module._build_job_artifact_summary(
+        {
+            "path": missing_path,
+            "artifact_id": "aid-primitive",
+            "kind": "primitive",
+            "size": 10,
+            "hashes": [{"algorithm": "blake3", "digest": "abc"}],
+        }
+    )
+    assert summary.present is False
+
+
+def test_job_artifact_summary_present_for_existing_primitive(tmp_path: Path) -> None:
+    f = tmp_path / "here.parquet"
+    f.write_text("x")
+    summary = show_module._build_job_artifact_summary(
+        {
+            "path": str(f),
+            "artifact_id": "aid-primitive",
+            "kind": "primitive",
+            "size": 1,
+            "hashes": [{"algorithm": "blake3", "digest": "abc"}],
+        }
+    )
+    assert summary.present is True
