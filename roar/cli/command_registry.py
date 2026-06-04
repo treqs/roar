@@ -158,6 +158,13 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "Setup and Admin",
     ),
     CommandSpec(
+        "db",
+        "roar.cli.commands.db",
+        "db",
+        "Inspect the local database (size, contents, sync, hygiene)",
+        "Setup and Admin",
+    ),
+    CommandSpec(
         "filter",
         "roar.cli.commands.filter",
         "filter_group",
