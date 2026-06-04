@@ -1,10 +1,11 @@
+
 [build-system]
 requires = ["maturin>=1.11.5,<2.0"]
 build-backend = "maturin"
 
 [project]
 name = "roar-cli"
-version = "0.3.4rc1"
+version = "0.3.4"
 description = "Reproducibility and provenance tracker for ML training pipelines"
 authors = [
     { name="TReqs Team", email="info@treqs.ai" }
