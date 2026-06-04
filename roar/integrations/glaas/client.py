@@ -700,15 +700,16 @@ class GlaasClient:
         self,
         registration_session_id: str,
         jobs: list,
-    ) -> tuple[list, list, str | None, dict[str, int]]:
+    ) -> tuple[list, list, str | None, dict[str, Any]]:
         """Register multiple staged jobs under a registration session.
 
         Returns ``(job_ids, errors, overall_error, counts)`` where ``counts``
-        carries the server's ``created``/``existing`` split so callers can
-        distinguish newly-registered jobs from ones that were already staged
-        under this registration session (a re-register / resume).
+        carries the server's ``created``/``existing`` split plus
+        ``already_registered`` (the distinct DAG hashes of jobs already
+        registered+finalized by this user), so callers can tell a re-register /
+        resume, a full re-register, and a partial superset apart.
         """
-        zero_counts = {"created": 0, "existing": 0}
+        zero_counts: dict[str, Any] = {"created": 0, "existing": 0, "already_registered": []}
         if not jobs:
             return [], [], None, dict(zero_counts)
 
@@ -733,9 +734,12 @@ class GlaasClient:
             return [], [error] * len(jobs), error, dict(zero_counts)
         if result is None:
             return [], [], None, dict(zero_counts)
-        counts = {
+        counts: dict[str, Any] = {
             "created": int(result.get("created_count", 0) or 0),
             "existing": int(result.get("existing_count", 0) or 0),
+            "already_registered": [
+                str(h) for h in (result.get("already_registered_session_hashes") or []) if h
+            ],
         }
         return result.get("job_ids", []), result.get("errors", []), None, counts
 
