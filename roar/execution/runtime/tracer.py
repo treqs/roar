@@ -110,20 +110,21 @@ class TracerService:
         if not command:
             return []
 
-        target_python = command[0]
-
-        # Fast path: if the target Python is the same executable roar-cli
-        # itself runs under, we know the ABI matches by construction — skip
-        # the probe subprocess entirely. Avoids a Python-startup-per-run on
-        # platforms where that startup is slow (macOS framework Python),
-        # which on tight test budgets is the difference between passing and
-        # timing out.
+        # Resolve to an absolute interpreter path up front so the ABI probe and the
+        # `uv pip install --python` target agree. A bare name like "python" is resolved
+        # here against PATH (the env the run executes in), but `uv --python python` uses
+        # uv's OWN discovery — which can pick a different interpreter (e.g. a 3.13 venv),
+        # installing wrong-ABI wheels into the runtime tree. Pinning the absolute path
+        # keeps the probe and the install on the same interpreter.
         try:
-            resolved_target = shutil.which(target_python) or target_python
-            if os.path.realpath(resolved_target) == os.path.realpath(sys.executable):
-                return []
+            target_python = shutil.which(command[0]) or command[0]
         except OSError:
-            pass  # fall through to the full probe
+            target_python = command[0]
+
+        # Fast path: if the target Python is the same executable roar-cli itself runs
+        # under, the ABI matches by construction — skip the probe subprocess entirely.
+        if os.path.realpath(target_python) == os.path.realpath(sys.executable):
+            return []
 
         try:
             from roar import __version__ as roar_version
