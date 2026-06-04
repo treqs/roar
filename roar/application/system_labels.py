@@ -132,6 +132,10 @@ def _determine_operation_kind(job: Mapping[str, Any], metadata: dict[str, Any]) 
 
 
 def _populate_run_build_common_labels(roar: dict[str, Any], metadata: dict[str, Any]) -> None:
+    # The producing roar version, frozen into job metadata at run-record time. Projected
+    # here (never read live) so the label stays immutable across later re-derivation.
+    _set_nested_value(roar, ["version"], metadata.get("roar_version"))
+
     git = metadata.get("git")
     if isinstance(git, dict):
         _set_nested_value(roar, ["git", "commit"], git.get("commit"))
