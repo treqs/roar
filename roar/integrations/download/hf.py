@@ -24,7 +24,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from .base import DownloadBackend, Source
+from .base import DownloadBackend, DownloadError, Source
 
 _HF = "https://huggingface.co"
 
@@ -92,8 +92,39 @@ class HFDownloadBackend(DownloadBackend):
         return urllib.request.Request(url, headers=headers)
 
     def _get_json(self, url: str):
-        with urllib.request.urlopen(self._request(url), timeout=60) as resp:
-            return json.loads(resp.read()), dict(resp.headers)
+        try:
+            with urllib.request.urlopen(self._request(url), timeout=60) as resp:
+                return json.loads(resp.read()), dict(resp.headers)
+        except urllib.error.HTTPError as exc:
+            raise self._describe_http_error(exc) from exc
+        except urllib.error.URLError as exc:
+            raise DownloadError(
+                f"Could not reach Hugging Face at {_HF}: {exc.reason}"
+            ) from exc
+
+    def _describe_http_error(self, exc: urllib.error.HTTPError) -> DownloadError:
+        """Turn an HF API HTTP error into an actionable, user-facing message."""
+        kind = self._repo_type.rstrip("s")  # datasets -> dataset, models -> model
+        if exc.code == 404:
+            return DownloadError(
+                f"Hugging Face {kind} not found: '{self._repo}' (ref '{self._ref}').\n"
+                f"Check the hf:// URL — expected 'hf://{self._repo_type}/<owner>/<name>' "
+                "(or 'hf://<owner>/<name>' for a model), with no 'huggingface.co' host "
+                f"segment in the path. Parsed repo from your URL: '{self._repo}'."
+            )
+        if exc.code in (401, 403):
+            hint = (
+                "It may be private or gated — request access on the Hub."
+                if self._token is not None
+                else "If it's private or gated, set HF_TOKEN (or ~/.hf_token) and retry."
+            )
+            return DownloadError(
+                f"Access denied (HTTP {exc.code}) for Hugging Face {kind} '{self._repo}'. {hint}"
+            )
+        return DownloadError(
+            f"Hugging Face API error (HTTP {exc.code}) for {kind} '{self._repo}' "
+            f"(ref '{self._ref}')."
+        )
 
     # --- pinning + listing ------------------------------------------------
     @property
