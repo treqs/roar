@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from ...core.digests import is_composite_algorithm
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import BatchRegistrationResult, GitContext
-from ..labels import collect_label_sync_payloads, count_user_labels
+from ..labels import (
+    collect_current_label_ids,
+    collect_label_sync_payloads,
+    count_user_labels,
+)
 from .remote_registry import RemoteRegistryTransport, coerce_remote_registry
 
 _VALID_REMOTE_SOURCE_TYPES = {"s3", "gs", "https", "hf"}
@@ -470,6 +475,16 @@ def sync_publish_labels(
         if errors is not None:
             errors.append(f"Label sync failed: {label_error}")
         return 0
+
+    # Stamp the just-synced labels so `roar db` reflects them. Best-effort: a
+    # read-only ctx (no mark_synced) or a write hiccup must not fail the sync.
+    mark_synced = getattr(getattr(db_ctx, "labels", None), "mark_synced", None)
+    if callable(mark_synced):
+        label_ids = collect_current_label_ids(
+            db_ctx, session_id=session_id, jobs=jobs, artifacts=artifacts
+        )
+        if label_ids:
+            mark_synced(label_ids, time.time())
 
     return count_user_labels(payloads)
 

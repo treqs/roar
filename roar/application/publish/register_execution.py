@@ -465,6 +465,12 @@ class RegisterService:
                         finalized_session_hash=finalized_session_hash,
                         jobs=remote_registration_jobs,
                     )
+                    mark_lineage_synced(
+                        db_ctx=db_ctx,
+                        session_id=session_id,
+                        jobs=lineage.jobs,
+                        artifacts=lineage.artifacts,
+                    )
             except Exception as exc:  # pragma: no cover - defensive durability best effort
                 self._logger.warning(
                     "Failed to persist GLaaS publication mapping for session %s: %s",
@@ -493,6 +499,29 @@ class RegisterService:
     @staticmethod
     def _extract_registration_hashes(artifact: dict[str, Any]) -> list[dict[str, str]]:
         return normalize_registration_hashes(artifact, fallback_to_hash=True)
+
+
+def mark_lineage_synced(
+    *,
+    db_ctx: Any,
+    session_id: int,
+    jobs: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
+    now: float | None = None,
+) -> None:
+    """Stamp ``synced_at`` on the session, jobs, and artifacts pushed to GLaaS.
+
+    Called only on a fully-successful register (no failed jobs/artifacts), so the
+    whole registered lineage is known to be on GLaaS. This is what makes
+    ``roar db``'s "synced" counts reflect reality.
+    """
+    synced_at = time.time() if now is None else now
+    db_ctx.sessions.mark_synced([session_id], synced_at)
+    db_ctx.jobs.mark_synced([j["id"] for j in jobs if isinstance(j.get("id"), int)], synced_at)
+    db_ctx.artifacts.mark_synced(
+        [a["id"] for a in artifacts if isinstance(a.get("id"), str) and a.get("id")],
+        synced_at,
+    )
 
 
 def persist_glaas_publication_mapping(

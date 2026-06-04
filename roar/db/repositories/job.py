@@ -9,7 +9,7 @@ import os
 import secrets
 from typing import Any
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from ...core.interfaces.logger import ILogger
@@ -202,6 +202,14 @@ class SQLAlchemyJobRepository(JobRepository):
         if not job:
             raise ValueError(f"Job not found: {job_id}")
         job.metadata_ = metadata
+        self._session.flush()
+
+    def mark_synced(self, job_ids: list[int], synced_at: float) -> None:
+        """Stamp ``synced_at`` on the given jobs (pushed to GLaaS)."""
+        ids = [int(i) for i in job_ids if i is not None]
+        if not ids:
+            return
+        self._session.execute(update(Job).where(Job.id.in_(ids)).values(synced_at=synced_at))
         self._session.flush()
 
     def add_input(

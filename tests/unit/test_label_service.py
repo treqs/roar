@@ -301,3 +301,31 @@ def test_collect_label_sync_payloads_prefers_remote_job_uid_when_present() -> No
             "key_origins": {"phase": "user"},
         }
     ]
+
+
+def test_collect_current_label_ids_picks_labeled_entities() -> None:
+    from types import SimpleNamespace
+
+    from roar.application.labels import collect_current_label_ids
+
+    # Stub label repo: dag + job 7 + artifact 'a1' have labels; job 8 / artifact 'a2' don't.
+    current = {
+        ("dag", None, None): {"id": 100, "metadata": {"k": "v"}},
+        ("job", 7, None): {"id": 101, "metadata": {"k": "v"}},
+        ("job", 8, None): None,
+        ("artifact", None, "a1"): {"id": 102, "metadata": {"k": "v"}},
+        ("artifact", None, "a2"): None,  # no current label → skipped
+    }
+
+    def get_current(entity_type, *, session_id=None, job_id=None, artifact_id=None):
+        return current.get((entity_type, job_id, artifact_id))
+
+    db_ctx = SimpleNamespace(labels=SimpleNamespace(get_current=get_current))
+
+    ids = collect_current_label_ids(
+        db_ctx,
+        session_id=1,
+        jobs=[{"id": 7}, {"id": 8}, {"id": 7}],  # dup job 7 deduped
+        artifacts=[{"id": "a1"}, {"id": "a2"}],
+    )
+    assert sorted(ids) == [100, 101, 102]

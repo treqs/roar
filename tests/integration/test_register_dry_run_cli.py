@@ -187,6 +187,25 @@ def test_register_publishes_local_lineage_with_fake_glaas(
     assert len(registered_jobs) == 1
     assert registered_jobs[0]["job_type"] == "run"
 
+    # A successful register stamps synced_at on the lineage it pushed, so
+    # `roar db` reflects what's on GLaaS.
+    assert (
+        _query_rows(temp_git_repo, "SELECT COUNT(*) AS n FROM sessions WHERE synced_at IS NULL")[0][
+            "n"
+        ]
+        == 0
+    )
+    assert (
+        _query_rows(temp_git_repo, "SELECT COUNT(*) AS n FROM jobs WHERE synced_at IS NULL")[0]["n"]
+        == 0
+    )
+    assert (
+        _query_rows(
+            temp_git_repo, "SELECT COUNT(*) AS n FROM artifacts WHERE synced_at IS NOT NULL"
+        )[0]["n"]
+        > 0
+    )
+
 
 def test_register_can_republish_same_local_session_after_additional_run_with_fake_glaas(
     temp_git_repo: Path,

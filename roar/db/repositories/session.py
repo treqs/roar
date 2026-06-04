@@ -232,6 +232,16 @@ class SQLAlchemySessionRepository(SessionRepository):
         session.metadata_ = metadata
         self._session.flush()
 
+    def mark_synced(self, session_ids: list[int], synced_at: float) -> None:
+        """Stamp ``synced_at`` on the given sessions (pushed to GLaaS)."""
+        ids = [int(i) for i in session_ids if i is not None]
+        if not ids:
+            return
+        self._session.execute(
+            update(Session).where(Session.id.in_(ids)).values(synced_at=synced_at)
+        )
+        self._session.flush()
+
     def get_by_hash(self, session_hash: str) -> dict[str, Any] | None:
         """
         Get a session by its content hash.
