@@ -13,6 +13,15 @@ from urllib.parse import urlparse
 SUPPORTED_SOURCE_SCHEMES = {"s3", "gs", "http", "https", "hf"}
 
 
+class DownloadError(Exception):
+    """A user-facing download failure (bad URL, missing/inaccessible remote, etc.).
+
+    Raised by download backends when a remote request fails in a way the user
+    can act on. The CLI renders the message verbatim (no traceback), so the
+    message should be a complete, actionable sentence.
+    """
+
+
 @dataclass
 class Source:
     """Parsed source URL."""
