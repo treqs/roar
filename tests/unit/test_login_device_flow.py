@@ -259,6 +259,118 @@ def test_login_prompts_before_replacing_existing_session(monkeypatch, tmp_path: 
             }
         },
     )
+    # Existing token is still live server-side, so login should prompt.
+    monkeypatch.setattr(
+        "roar.cli.commands.login.check_access_token_live",
+        lambda api_url, access_token: True,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        login,
+        ["--token-file", str(token_file)],
+        env={"XDG_CONFIG_HOME": str(tmp_path / "xdg"), "GLAAS_API_URL": "https://api.glaas.ai"},
+        input="n\n",
+    )
+
+    assert result.exit_code != 0
+    assert "Already logged in as existing-user." in result.output
+    assert "Login cancelled; existing session preserved." in result.output
+
+
+def test_login_reauths_when_existing_token_rejected(monkeypatch, tmp_path: Path) -> None:
+    """A locally-valid session whose token the server rejects should not prompt.
+
+    Instead login proceeds to a fresh sign-in, so the user doesn't get stuck on
+    a dead token that would 401 their next register.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    save_auth_state(
+        {
+            "version": 1,
+            "provider": "treqs-device",
+            "access_token": "dead-token",
+            "expires_at": "2030-01-01T00:00:00Z",  # locally valid, but dead server-side
+            "user": {"sub": "existing-sub", "username": "existing-user"},
+        }
+    )
+
+    token_file = tmp_path / "token-file.json"
+    token_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "provider": "treqs-cognito",
+                "access_token": "fresh-token",
+                "refresh_token": "fresh-refresh-token",
+                "user": {"sub": "stale-sub", "username": "stale-user"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "roar.cli.commands.login.fetch_access_context_via_auth_api",
+        lambda api_url, access_token: {
+            "user": {
+                "id": "user-123",
+                "sub": "server-sub",
+                "email": "trevor@example.com",
+                "username": "trevor",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "roar.cli.commands.login.check_access_token_live",
+        lambda api_url, access_token: False,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        login,
+        ["--token-file", str(token_file)],
+        env={"XDG_CONFIG_HOME": str(tmp_path / "xdg"), "GLAAS_API_URL": "https://api.glaas.ai"},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Already logged in" not in result.output
+    assert "Existing session has expired; signing in again." in result.output
+    stored_auth = json.loads((tmp_path / "xdg" / "roar" / "auth.json").read_text(encoding="utf-8"))
+    assert stored_auth["access_token"] == "fresh-token"
+
+
+def test_login_keeps_session_when_liveness_unknown(monkeypatch, tmp_path: Path) -> None:
+    """An indeterminate liveness check (server unreachable) is treated conservatively.
+
+    The existing session is preserved and login still prompts, rather than
+    forcing a re-login on a transient network blip.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    save_auth_state(
+        {
+            "version": 1,
+            "provider": "treqs-device",
+            "access_token": "existing-token",
+            "expires_at": "2030-01-01T00:00:00Z",
+            "user": {"sub": "existing-sub", "username": "existing-user"},
+        }
+    )
+
+    token_file = tmp_path / "token-file.json"
+    token_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "provider": "treqs-cognito",
+                "access_token": "access-token",
+                "user": {"sub": "stale-sub", "username": "stale-user"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "roar.cli.commands.login.check_access_token_live",
+        lambda api_url, access_token: None,
+    )
 
     runner = CliRunner()
     result = runner.invoke(
@@ -327,3 +439,72 @@ def _make_response_error(status: int, payload: dict[str, object]):
     import roar.glaas_auth as glaas_auth
 
     return glaas_auth._GlaasApiResponseError(status, payload)
+
+
+def test_check_access_token_live_true_when_api_accepts(monkeypatch) -> None:
+    import roar.glaas_auth as glaas_auth
+
+    monkeypatch.setattr(
+        glaas_auth,
+        "_request_json",
+        lambda url, *, method, headers=None: {"success": True, "data": {"user": {}}},
+    )
+
+    assert glaas_auth.check_access_token_live("https://api.example", access_token="t") is True
+
+
+def test_check_access_token_live_false_on_401(monkeypatch) -> None:
+    import roar.glaas_auth as glaas_auth
+
+    def _reject(url: str, *, method: str, headers=None):
+        raise _make_response_error(401, {"error": {"message": "expired"}})
+
+    monkeypatch.setattr(glaas_auth, "_request_json", _reject)
+
+    assert glaas_auth.check_access_token_live("https://api.example", access_token="t") is False
+
+
+def test_check_access_token_live_none_on_transport_error(monkeypatch) -> None:
+    import roar.glaas_auth as glaas_auth
+
+    def _unreachable(url: str, *, method: str, headers=None):
+        raise glaas_auth.GlaasAuthError("Failed to reach auth API")
+
+    monkeypatch.setattr(glaas_auth, "_request_json", _unreachable)
+
+    assert glaas_auth.check_access_token_live("https://api.example", access_token="t") is None
+
+
+def test_check_access_token_live_none_on_unexpected_status(monkeypatch) -> None:
+    import roar.glaas_auth as glaas_auth
+
+    def _server_error(url: str, *, method: str, headers=None):
+        raise _make_response_error(500, {"error": {"message": "boom"}})
+
+    monkeypatch.setattr(glaas_auth, "_request_json", _server_error)
+
+    assert glaas_auth.check_access_token_live("https://api.example", access_token="t") is None
+
+
+def test_check_access_token_live_falls_back_to_legacy_on_404(monkeypatch) -> None:
+    import roar.glaas_auth as glaas_auth
+
+    calls: list[str] = []
+
+    def _request_json(url: str, *, method: str, headers=None):
+        calls.append(url)
+        if url.endswith("/api/v1/auth/access-context"):
+            raise _make_response_error(404, {})
+        return {"success": True, "data": {"user": {}}}
+
+    monkeypatch.setattr(glaas_auth, "_request_json", _request_json)
+
+    assert glaas_auth.check_access_token_live("https://api.example", access_token="t") is True
+    assert calls[0].endswith("/api/v1/auth/access-context")
+    assert calls[1].endswith("/api/v1/user/access-context")
+
+
+def test_check_access_token_live_false_for_blank_token() -> None:
+    import roar.glaas_auth as glaas_auth
+
+    assert glaas_auth.check_access_token_live("https://api.example", access_token="   ") is False

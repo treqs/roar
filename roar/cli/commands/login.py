@@ -16,6 +16,7 @@ from ...auth_store import (
 from ...glaas_auth import (
     GlaasAuthError,
     build_auth_state_from_device_login,
+    check_access_token_live,
     fetch_access_context_via_auth_api,
     open_browser,
     poll_device_token,
@@ -59,7 +60,7 @@ def login(
         _require_dev_email_feature_flag()
 
     resolved_api_url = resolve_auth_api_url(auth_api_url)
-    _confirm_session_replacement(force=force)
+    _confirm_session_replacement(force=force, glaas_api_url=resolved_api_url)
 
     if token_file is not None:
         raw_data = _load_auth_state_from_token_file(token_file, glaas_api_url=resolved_api_url)
@@ -147,12 +148,23 @@ def _load_auth_state_from_token_file(token_file: Path, *, glaas_api_url: str) ->
     return raw_data
 
 
-def _confirm_session_replacement(*, force: bool) -> None:
+def _confirm_session_replacement(*, force: bool, glaas_api_url: str) -> None:
     if force:
         return
 
     existing = load_auth_state()
     if existing is None or is_auth_state_expired(existing):
+        return
+
+    # The local expires_at can lag the server: it may be unset (some login
+    # paths leave it None, which is otherwise treated as "never expires") or
+    # still in the future after the token was invalidated server-side (e.g. a
+    # GLaaS redeploy / secret rotation). Confirm the token is actually live so
+    # we don't tell the user "Already logged in" and then have their next
+    # `roar register` fail with HTTP 401. A None result (server unreachable,
+    # transient error) is treated conservatively — keep the existing session.
+    if check_access_token_live(glaas_api_url, access_token=existing.access_token) is False:
+        click.echo("Existing session has expired; signing in again.")
         return
 
     identity = existing.user.username or existing.user.email or existing.user.sub or "unknown"
