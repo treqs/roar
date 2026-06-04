@@ -283,6 +283,48 @@ class TestEnsureRoarTagsPushed:
         )
         assert f"roar/{head[:8]}" in remote_refs
 
+    def test_auto_logs_ssh_passphrase_hint_before_push(
+        self, repo: Path, bare_remote: Path, monkeypatch
+    ) -> None:
+        """When a passphrase prompt is predicted, the hint is logged and the
+        push still proceeds (the prediction only annotates — it never blocks)."""
+        _git(repo, "remote", "add", "origin", str(bare_remote))
+        head = _git(repo, "rev-parse", "HEAD").strip()
+
+        import roar.application.publish.register_tag_push as rtp
+
+        monkeypatch.setattr(
+            rtp,
+            "warn_if_ssh_passphrase_prompt_likely",
+            lambda repo_root, remote: "needs your SSH key passphrase",
+        )
+
+        warnings: list[str] = []
+
+        class _CapturingLogger(NullLogger):
+            def warning(self, message: str, *args: object, **kwargs: object) -> None:
+                warnings.append(message)
+
+        result = ensure_roar_tags_pushed(
+            repo_root=repo,
+            session_commit=head,
+            session_tag_name=f"roar/{head[:8]}",
+            lineage=None,
+            dry_run=False,
+            tagging_enabled=True,
+            configured_remote=None,
+            push_mode="auto",
+            logger=_CapturingLogger(),
+        )
+
+        assert any("passphrase" in w for w in warnings)
+        # Push still happened despite the heads-up.
+        assert result.remote == "origin"
+        remote_refs = subprocess.check_output(
+            ["git", "ls-remote", "--tags", str(bare_remote)], text=True
+        )
+        assert f"roar/{head[:8]}" in remote_refs
+
     def test_auto_pushes_session_plus_job_tags(self, repo: Path, bare_remote: Path) -> None:
         _git(repo, "remote", "add", "origin", str(bare_remote))
         # Make a second commit to use as a "previous job" commit.
