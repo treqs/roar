@@ -11,6 +11,8 @@ or roar register.
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -19,6 +21,8 @@ from ...db.hashing import hash_files_blake3
 from ...integrations.download.base import DownloadBackend, Source
 from ...presenters.spinner import Spinner
 from .results import GetDownloadedFile, GetDryRunItem
+
+_DEFAULT_DOWNLOAD_WORKERS = 8
 
 
 def _download_progress_message(done: int, total: int, downloaded_bytes: int) -> str:
@@ -288,11 +292,36 @@ class GetService:
             # Downloads are the long pole of a get (multi-GB datasets); show a live
             # N/M + cumulative-bytes counter so the terminal isn't dead for minutes.
             downloaded_bytes = 0
+            workers = min(_DEFAULT_DOWNLOAD_WORKERS, total)
             with Spinner(_download_progress_message(0, total, 0)) as spin:
-                for index, pending in enumerate(pending_downloads, start=1):
-                    self._download_to_tmp(pending)
-                    downloaded_bytes += pending.tmp_path.stat().st_size
-                    spin.update(_download_progress_message(index, total, downloaded_bytes))
+                if workers <= 1:
+                    for index, pending in enumerate(pending_downloads, start=1):
+                        self._download_to_tmp(pending)
+                        downloaded_bytes += pending.tmp_path.stat().st_size
+                        spin.update(_download_progress_message(index, total, downloaded_bytes))
+                else:
+                    lock = threading.Lock()
+                    done = 0
+                    errors: list[BaseException] = []
+                    with ThreadPoolExecutor(max_workers=workers) as executor:
+                        futures = {
+                            executor.submit(self._download_to_tmp, pending): pending
+                            for pending in pending_downloads
+                        }
+                        for future in as_completed(futures):
+                            exc = future.exception()
+                            if exc is not None:
+                                errors.append(exc)
+                            else:
+                                pending = futures[future]
+                                with lock:
+                                    done += 1
+                                    downloaded_bytes += pending.tmp_path.stat().st_size
+                                    spin.update(
+                                        _download_progress_message(done, total, downloaded_bytes)
+                                    )
+                    if errors:
+                        raise errors[0]
 
             with Spinner(f"Hashing {total} file(s)..."):
                 hashes_by_tmp_path = self._hash_files_batch(
