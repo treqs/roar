@@ -16,6 +16,14 @@ from roar.execution.runtime.inject.support import is_suppressed
 _ORIGINAL_ENVIRON_GET_ATTR = "_original_get"
 _ENVIRON_GET_METHOD_NAME = "get"
 
+# roar injects its own variables (ROAR_WRAP, ROAR_EXECUTION_BACKEND,
+# ROAR_RUNTIME_PYTHONPATH_ACTIVE, ...) into the traced process environment.
+# roar's own injected machinery reads them back through the patched
+# environ.get, which would otherwise record them as if the user's code had
+# read them. They describe roar's plumbing, not the workload, so exclude this
+# reserved namespace from captured lineage. See issue #164.
+_ROAR_INTERNAL_ENV_PREFIX = "ROAR_"
+
 
 class RuntimeImportObserver(Protocol):
     """Minimal protocol for the runtime import controller."""
@@ -170,7 +178,7 @@ class RuntimeInjectionTracker:
         return module
 
     def patched_environ_get(self, key, default=None):
-        if key in self._environ:
+        if key in self._environ and not key.startswith(_ROAR_INTERNAL_ENV_PREFIX):
             self.env_reads[key] = self._environ[key]
         return self._original_environ_get(key, default)
 
