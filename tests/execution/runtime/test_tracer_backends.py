@@ -407,3 +407,27 @@ def test_preflight_auto_backend_returns_first_passing_backend(tmp_path: Path) ->
     assert result.ok is True
     assert result.selected_backend == "preload"
     assert [item.backend for item in result.results] == ["ebpf", "preload"]
+
+
+def test_preflight_failed_on_missing_command_detects_command_check() -> None:
+    result = tracer_backends.TracerPreflightResult(
+        "ptrace",
+        False,
+        "command not found: abc",
+        checks=(tracer_backends.PreflightCheck("command", False, "command not found: abc"),),
+    )
+    assert tracer_backends.preflight_failed_on_missing_command(result) is True
+
+
+def test_preflight_failed_on_missing_command_ignores_tracer_failures() -> None:
+    # A tracer that failed for its own reasons (not a missing command).
+    result = tracer_backends.TracerPreflightResult(
+        "ebpf",
+        False,
+        "attach failed",
+        checks=(
+            tracer_backends.PreflightCheck("command", True, "/usr/bin/python3"),
+            tracer_backends.PreflightCheck("load_and_attach", False, "missing tracepoint"),
+        ),
+    )
+    assert tracer_backends.preflight_failed_on_missing_command(result) is False

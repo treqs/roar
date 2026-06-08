@@ -10,6 +10,7 @@ from typing import Any, Literal, cast
 
 import click
 
+from ...core.exceptions import CommandNotFoundError
 from ...core.models.run import RunContext
 from ...execution.framework.registry import get_execution_backend
 from ...execution.runtime.errors import ExecutionSetupError
@@ -194,6 +195,11 @@ def execute_and_report(
     backend = get_execution_backend(backend_name)
     try:
         result = backend.host_execution.execute(run_ctx)
+    except CommandNotFoundError as exc:
+        # Nothing ran: report it like a shell would (clean line, exit 127),
+        # with no lineage job, done line, or register hints.
+        ConsolePresenter().print_error(exc.message)
+        return ExecutionReport(exit_code=exc.exit_code, setup_error=True)
     except ExecutionSetupError as exc:
         click.echo(str(exc), err=True)
         return ExecutionReport(exit_code=1, setup_error=True)

@@ -3,6 +3,7 @@
 __all__ = [
     "CloudDownloadError",
     "CloudUploadError",
+    "CommandNotFoundError",
     "ConfigFileError",
     "ConfigValidationError",
     "DatabaseConnectionError",
@@ -32,6 +33,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     # exceptions
     "CloudDownloadError": (".exceptions", "CloudDownloadError"),
     "CloudUploadError": (".exceptions", "CloudUploadError"),
+    "CommandNotFoundError": (".exceptions", "CommandNotFoundError"),
     "ConfigFileError": (".exceptions", "ConfigFileError"),
     "ConfigValidationError": (".exceptions", "ConfigValidationError"),
     "DatabaseConnectionError": (".exceptions", "DatabaseConnectionError"),

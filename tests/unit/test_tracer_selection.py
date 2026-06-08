@@ -2,7 +2,9 @@
 
 from unittest.mock import MagicMock, patch
 
-from roar.core.exceptions import TracerPreflightError
+import pytest
+
+from roar.core.exceptions import CommandNotFoundError, TracerPreflightError
 from roar.execution.runtime import tracer_backends
 from roar.execution.runtime.tracer import TracerService
 
@@ -154,6 +156,85 @@ class TestTracerSelection:
                 assert "failures=" not in exc.message
             else:
                 raise AssertionError("expected TracerPreflightError")
+
+    def test_resolve_execution_candidates_raises_command_not_found(self, tmp_path):
+        """A failed `command` check means the command is missing, not the tracer."""
+        svc = _make_service(tmp_path)
+        command_check = tracer_backends.PreflightCheck("command", False, "command not found: abc")
+        with (
+            patch.object(svc, "_get_tracer_mode", return_value="auto"),
+            patch.object(svc, "_get_fallback_enabled", return_value=True),
+            patch.object(
+                svc,
+                "_get_tracer_candidates",
+                return_value=[
+                    ("preload", "/bin/roar-tracer-preload"),
+                    ("ptrace", "/bin/roar-tracer"),
+                ],
+            ),
+            patch.object(
+                svc,
+                "_preflight_candidate",
+                side_effect=[
+                    tracer_backends.TracerPreflightResult(
+                        "preload", False, "command not found: abc", checks=(command_check,)
+                    ),
+                    tracer_backends.TracerPreflightResult(
+                        "ptrace", False, "command not found: abc", checks=(command_check,)
+                    ),
+                ],
+            ),
+            pytest.raises(CommandNotFoundError) as excinfo,
+        ):
+            svc.resolve_execution_candidates(["abc"])
+
+        assert excinfo.value.command_name == "abc"
+        assert excinfo.value.exit_code == 127
+        # Clean message — no tracer-build "Next steps".
+        assert excinfo.value.message == "command not found: abc"
+        assert "Next steps" not in excinfo.value.message
+
+    def test_resolve_execution_candidates_missing_command_takes_priority_over_tracer(
+        self, tmp_path
+    ):
+        """If one backend can't load but another proves the command is missing,
+        report the missing command rather than the tracer failure."""
+        svc = _make_service(tmp_path)
+        with (
+            patch.object(svc, "_get_tracer_mode", return_value="auto"),
+            patch.object(svc, "_get_fallback_enabled", return_value=True),
+            patch.object(
+                svc,
+                "_get_tracer_candidates",
+                return_value=[("ebpf", "/bin/roar-tracer-ebpf"), ("ptrace", "/bin/roar-tracer")],
+            ),
+            patch.object(
+                svc,
+                "_preflight_candidate",
+                side_effect=[
+                    # ebpf fails before it can check the command
+                    tracer_backends.TracerPreflightResult(
+                        "ebpf",
+                        False,
+                        "missing capabilities",
+                        checks=(tracer_backends.PreflightCheck("static_readiness", False, "caps"),),
+                    ),
+                    # ptrace gets far enough to find the command is absent
+                    tracer_backends.TracerPreflightResult(
+                        "ptrace",
+                        False,
+                        "command not found: abc",
+                        checks=(
+                            tracer_backends.PreflightCheck(
+                                "command", False, "command not found: abc"
+                            ),
+                        ),
+                    ),
+                ],
+            ),
+            pytest.raises(CommandNotFoundError),
+        ):
+            svc.resolve_execution_candidates(["abc"])
 
     def test_execute_raises_preflight_error_before_spawning_process(self, tmp_path):
         svc = _make_service(tmp_path)
