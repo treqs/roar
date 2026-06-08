@@ -137,7 +137,11 @@ class RunCoordinator:
             return runtime_observations
 
         # Execute via tracer
-        from ...core.exceptions import TracerNotFoundError, TracerPreflightError
+        from ...core.exceptions import (
+            CommandNotFoundError,
+            TracerNotFoundError,
+            TracerPreflightError,
+        )
 
         proxy_active = "proxy" in self._runtime_resources.active_resource_names()
         try:
@@ -146,6 +150,12 @@ class RunCoordinator:
                 tracer_mode_override=ctx.tracer_mode,
                 fallback_enabled_override=ctx.tracer_fallback,
             )
+        except CommandNotFoundError as e:
+            # The command doesn't exist — nothing ran. Clean up and let the
+            # caller print a one-line error instead of a job summary.
+            stop_runtime_resources(e.exit_code)
+            self.logger.debug("Command not found before execution: %s", e)
+            raise
         except (TracerNotFoundError, TracerPreflightError) as e:
             from ...core.models.run import RunResult
 
