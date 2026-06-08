@@ -82,3 +82,109 @@ class TestGetCpuInfoLinux:
         # /proc/cpuinfo value (with clock speed) is preferred over lscpu's.
         assert result["model"] == "Intel(R) Xeon(R) Platinum 8259CL CPU @ 2.50GHz"
         assert result["architecture"] == "x86_64"
+
+
+class TestRuntimeCacheSchemaVersion:
+    """The hardware cache is invalidated generically when its schema version
+    changes, so improvements to *any* collected field reach existing projects
+    instead of serving stale values. See issue #165 (CPU model on aarch64)."""
+
+    def _make_inputs(self):
+        from roar.core.models.provenance import PythonInjectData, TracerData
+
+        tracer = TracerData(
+            opened_files=[],
+            read_files=[],
+            written_files=[],
+            processes=[],
+            start_time=0.0,
+            end_time=1.0,
+        )
+        return PythonInjectData(modules_files=[]), tracer
+
+    def _service(self, tmp_path):
+        from roar.execution.provenance.runtime_collector import RuntimeCollectorService
+
+        svc = RuntimeCollectorService(cache_dir=str(tmp_path))
+        svc._logger = MagicMock()
+        return svc
+
+    def test_save_cache_records_schema_version(self, tmp_path):
+        import json
+
+        from roar.execution.provenance import runtime_collector as rc
+
+        svc = self._service(tmp_path)
+        svc._save_cache("fp", {"cpu": {"model": "x"}})
+
+        written = json.loads((tmp_path / "runtime_cache.json").read_text())
+        assert written["schema_version"] == rc._CACHE_SCHEMA_VERSION
+
+    def test_stale_schema_version_forces_recollection(self, tmp_path):
+        """A cache with the right fingerprint but an old/missing schema version
+        is treated as a miss and re-collected — not served."""
+        import json
+
+        from roar.execution.provenance import runtime_collector as rc
+
+        svc = self._service(tmp_path)
+        python_data, tracer_data = self._make_inputs()
+
+        # Pre-seed a stale cache: matching fingerprint, but no schema_version
+        # and a CPU dict missing the model (the pre-fix shape).
+        (tmp_path / "runtime_cache.json").write_text(
+            json.dumps(
+                {
+                    "fingerprint": "FIXED",
+                    "data": {"cpu": {"count": 4}, "gpu": None, "cuda": None, "vm": None},
+                }
+            )
+        )
+
+        fresh_cpu = {"count": 4, "model": "Neoverse-N1"}
+        with (
+            patch.object(svc, "_hardware_fingerprint", return_value="FIXED"),
+            patch.object(svc, "_get_cpu_info", return_value=fresh_cpu) as cpu_mock,
+            patch.object(svc, "_get_gpu_info", return_value=None),
+            patch.object(svc, "_get_cuda_info", return_value=None),
+            patch.object(svc, "_get_vm_info", return_value=None),
+        ):
+            result = svc.collect(python_data, tracer_data, {})
+
+        # Re-collected despite the matching fingerprint...
+        cpu_mock.assert_called_once()
+        assert result.cpu == fresh_cpu
+        # ...and the cache was rewritten with the current schema version.
+        rewritten = json.loads((tmp_path / "runtime_cache.json").read_text())
+        assert rewritten["schema_version"] == rc._CACHE_SCHEMA_VERSION
+        assert rewritten["data"]["cpu"] == fresh_cpu
+
+    def test_matching_schema_version_is_a_cache_hit(self, tmp_path):
+        """A cache with matching fingerprint *and* schema version is served
+        without re-collecting."""
+        import json
+
+        from roar.execution.provenance import runtime_collector as rc
+
+        svc = self._service(tmp_path)
+        python_data, tracer_data = self._make_inputs()
+
+        cached_cpu = {"count": 4, "model": "Cached-CPU"}
+        (tmp_path / "runtime_cache.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": rc._CACHE_SCHEMA_VERSION,
+                    "fingerprint": "FIXED",
+                    "data": {"cpu": cached_cpu, "gpu": None, "cuda": None, "vm": None},
+                }
+            )
+        )
+
+        with (
+            patch.object(svc, "_hardware_fingerprint", return_value="FIXED"),
+            patch.object(svc, "_get_cpu_info") as cpu_mock,
+        ):
+            result = svc.collect(python_data, tracer_data, {})
+
+        cpu_mock.assert_not_called()
+        assert result.cpu == cached_cpu
