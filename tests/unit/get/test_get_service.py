@@ -159,6 +159,63 @@ def test_prefix_no_files_returns_error(tmp_path: Path) -> None:
     assert "No files found" in result.error
 
 
+def test_parallel_prefix_download_all_files_present(tmp_path: Path) -> None:
+    """Parallel download path (>1 worker) produces same results as sequential."""
+    backend = NoOpDownloadBackend(bucket="my-bucket")
+    n = 10  # enough to trigger ThreadPoolExecutor path (workers = min(8, 10) = 8)
+    for i in range(n):
+        backend.seed(f"shards/shard_{i:05d}.pt", f"data {i}".encode())
+    source = Source(
+        scheme="s3",
+        bucket="my-bucket",
+        key="shards",
+        original_url="s3://my-bucket/shards/",
+    )
+    service = GetService(backend=backend, source=source, repo_root=tmp_path)
+
+    dest = tmp_path / "out"
+    result = service.get(destination=dest, is_prefix=True)
+
+    assert result.success is True
+    assert len(result.downloaded_files) == n
+    for i in range(n):
+        p = dest / f"shard_{i:05d}.pt"
+        assert p.exists(), f"missing {p}"
+        assert p.read_bytes() == f"data {i}".encode()
+
+
+def test_parallel_download_error_propagates(tmp_path: Path) -> None:
+    """An error in one thread causes the overall get to raise."""
+    import threading
+
+    call_count = 0
+    lock = threading.Lock()
+
+    class FlakyBackend(NoOpDownloadBackend):
+        def download(self, remote_key: str, local_path: Path) -> None:
+            nonlocal call_count
+            with lock:
+                call_count += 1
+                n = call_count
+            if n == 3:
+                raise OSError("simulated network error")
+            super().download(remote_key, local_path)
+
+    backend = FlakyBackend(bucket="my-bucket")
+    for i in range(10):
+        backend.seed(f"shards/shard_{i:05d}.pt", b"data")
+    source = Source(
+        scheme="s3",
+        bucket="my-bucket",
+        key="shards",
+        original_url="s3://my-bucket/shards/",
+    )
+    service = GetService(backend=backend, source=source, repo_root=tmp_path)
+
+    with pytest.raises(OSError, match="simulated network error"):
+        service.get(destination=tmp_path / "out", is_prefix=True)
+
+
 def test_prefix_hashes_all_files_in_single_batch_call(tmp_path: Path) -> None:
     import blake3
 
