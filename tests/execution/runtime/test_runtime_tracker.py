@@ -81,6 +81,41 @@ def test_runtime_tracker_excludes_roar_runtime_pythonpath_modules(tmp_path) -> N
     assert str(runtime_module) not in payload["modules_files"]
 
 
+def test_runtime_tracker_excludes_roar_internal_env_reads(tmp_path) -> None:
+    """roar's own injected vars must not leak into captured env_reads (issue #164)."""
+    log_path = tmp_path / "inject-log.json"
+    environ = {
+        "ROAR_WRAP": "1",
+        "ROAR_EXECUTION_BACKEND": "local",
+        "ROAR_RUNTIME_PYTHONPATH_ACTIVE": "/cache/site-packages",
+        "ROAR_LOG_FILE": str(log_path),
+        "HOME": "/home/ubuntu",
+    }
+
+    class _FakeController:
+        def handle_import(self, module_name: str, module) -> None:
+            return None
+
+    tracker = RuntimeInjectionTracker(
+        environ,
+        _FakeController(),
+        log_file=str(log_path),
+        inject_dir=str(tmp_path / "inject"),
+    )
+
+    # Read both a roar-internal var and a user var through the patched getter.
+    assert tracker.patched_environ_get("ROAR_WRAP") == "1"
+    assert tracker.patched_environ_get("ROAR_EXECUTION_BACKEND") == "local"
+    assert tracker.patched_environ_get("HOME") == "/home/ubuntu"
+    tracker.write_log()
+
+    payload = json.loads(log_path.read_text(encoding="utf-8"))
+    env_reads = payload["env_reads"]
+    # User-facing reads are kept; roar's reserved namespace is dropped.
+    assert env_reads == {"HOME": "/home/ubuntu"}
+    assert not any(key.startswith("ROAR_") for key in env_reads)
+
+
 def test_get_used_packages_returns_dict_for_known_module() -> None:
     import json as json_module
 
