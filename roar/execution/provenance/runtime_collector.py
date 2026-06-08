@@ -448,6 +448,10 @@ class RuntimeCollectorService:
                 for line in stdout.split("\n"):
                     if line.startswith("Architecture:"):
                         cpu_info["architecture"] = line.split(":")[1].strip()
+                    elif line.startswith("Model name:") and "model" not in cpu_info:
+                        # /proc/cpuinfo has no "model name" on aarch64; lscpu
+                        # reports it as "Model name:" on all architectures.
+                        cpu_info["model"] = line.split(":", 1)[1].strip()
                     elif line.startswith("CPU(s):"):
                         cpu_info["count"] = int(line.split(":")[1].strip())
                     elif line.startswith("Thread(s) per core:"):
