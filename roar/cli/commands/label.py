@@ -8,6 +8,7 @@ Usage:
     roar label show <dag|job|artifact> <target>
     roar label history <dag|job|artifact> <target>
     roar label sync [dag|job|artifact] [target]
+    roar label remote set <dag|job|artifact> <hash> key=value [...]
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import click
 
 from ...application.query.label import (
     copy_labels,
+    remote_set_labels,
     set_labels,
     show_labels,
     sync_labels,
@@ -31,6 +33,7 @@ from ...application.query.requests import (
     LabelShowRequest,
     LabelSyncRequest,
     LabelUnsetRequest,
+    RemoteLabelSetRequest,
 )
 from ..context import RoarContext
 from ..decorators import require_init
@@ -192,5 +195,44 @@ def label_history(ctx: RoarContext, entity_type: str, target: str) -> None:
             )
         )
     except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(rendered)
+
+
+@label.group("remote", invoke_without_command=True)
+@click.pass_context
+def label_remote(ctx: click.Context) -> None:
+    """Immediately write labels to remote GLaaS entities by hash."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+@label_remote.command("set")
+@click.argument("entity_type", type=_ENTITY_TYPE)
+@click.argument("target")
+@click.argument("pairs", nargs=-1, required=True)
+@click.pass_obj
+@require_init
+def label_remote_set(
+    ctx: RoarContext, entity_type: str, target: str, pairs: tuple[str, ...]
+) -> None:
+    """Write labels to a remote GLaaS entity by hash.
+
+    DAG labels are applied immediately via the GLaaS reconcile API.
+    Job and artifact support is not yet available.
+
+    Example:
+        roar label remote set dag <session-hash> experiment=baseline split=train
+    """
+    try:
+        rendered = remote_set_labels(
+            RemoteLabelSetRequest(
+                cwd=ctx.cwd,
+                entity_type=entity_type,
+                target=target,
+                pairs=pairs,
+            )
+        )
+    except (ValueError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(rendered)
