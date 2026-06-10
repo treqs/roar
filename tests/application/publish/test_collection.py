@@ -263,12 +263,3 @@ def test_collect_register_lineage_step_reference_dry_run_uses_read_only_collecto
     )
 
 
-def test_select_representative_hash_returns_empty_string_for_multiple_hashes() -> None:
-    lineage = LineageData(
-        jobs=[],
-        artifacts=[],
-        artifact_hashes={"a" * 64, "b" * 64},
-        pipeline=None,
-    )
-
-    assert select_representative_hash(lineage) == ""

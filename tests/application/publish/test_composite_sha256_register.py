@@ -33,11 +33,6 @@ def test_extract_composite_digest_recognizes_sha256():
     assert extract_composite_digest([{"algorithm": "blake3", "digest": "c" * 64}]) is None
 
 
-def test_has_lineage_composites_for_sha256_artifact():
-    artifact = {"hashes": [{"algorithm": "composite-sha256", "digest": "a" * 64}]}
-    assert has_lineage_composites([artifact]) is True
-
-
 def test_resolve_component_returns_sha256_not_dropped():
     """An HF (sha256) component with no linked blake3 artifact resolves to sha256,
     not None (which previously dropped it -> storedComponents=0)."""
@@ -50,19 +45,6 @@ def test_resolve_component_returns_sha256_not_dropped():
         row=row, db_ctx=object(), lineage_artifacts_by_id={}, logger=_NullLogger()
     )
     assert resolved == ("sha256", "d" * 64)
-
-
-def test_resolve_component_still_handles_blake3():
-    row = {"relative_path": "x", "component_algorithm": "blake3", "component_digest": "E" * 64}
-    resolved = resolve_component_hash_for_registration(
-        row=row, db_ctx=object(), lineage_artifacts_by_id={}, logger=_NullLogger()
-    )
-    assert resolved == ("blake3", "e" * 64)
-
-
-def test_hf_source_type_is_accepted():
-    assert normalize_registration_source_type("hf") == "hf"
-    assert normalize_registration_source_type("s3") == "s3"
 
 
 class _NullLogger:

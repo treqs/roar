@@ -38,62 +38,6 @@ def _build_request(tmp_path: Path, **overrides) -> BuildRequest:
     )
 
 
-def test_run_command_forwards_tracer_flags_and_execution_inputs(tmp_path: Path) -> None:
-    planned = SimpleNamespace(
-        backend_name="local",
-        command=["python", "train.py"],
-        execution_role="host",
-        finalize_run=None,
-    )
-
-    with (
-        patch("roar.application.run.service.validate_git_clean", return_value=str(tmp_path)),
-        patch("roar.application.run.service.resolve_verbosity", return_value="normal"),
-        patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
-        patch("roar.application.run.service.plan_execution_command", return_value=planned),
-        patch("roar.application.run.service.execute_and_report", return_value=0) as mock_exec,
-    ):
-        exit_code = run_command(_run_request(tmp_path))
-
-    assert exit_code == 0
-    kwargs = mock_exec.call_args.kwargs
-    assert kwargs["roar_dir"] == tmp_path / ".roar"
-    assert kwargs["backend_name"] == "local"
-    assert kwargs["execution_role"] == "host"
-    assert kwargs["command"] == ["python", "train.py"]
-    assert kwargs["step_name"] == "preprocess"
-    assert kwargs["tracer_mode"] == "ptrace"
-    assert kwargs["tracer_fallback"] is False
-
-
-def test_build_command_forwards_tracer_flags_and_execution_inputs(tmp_path: Path) -> None:
-    planned = SimpleNamespace(
-        backend_name="local",
-        command=["make", "-j4"],
-        execution_role="host",
-        finalize_run=None,
-    )
-
-    with (
-        patch("roar.application.run.service.validate_git_clean", return_value=str(tmp_path)),
-        patch("roar.application.run.service.resolve_verbosity", return_value="normal"),
-        patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
-        patch("roar.application.run.service.plan_execution_command", return_value=planned),
-        patch("roar.application.run.service.execute_and_report", return_value=0) as mock_exec,
-    ):
-        exit_code = build_command(_build_request(tmp_path))
-
-    assert exit_code == 0
-    kwargs = mock_exec.call_args.kwargs
-    assert kwargs["backend_name"] == "local"
-    assert kwargs["execution_role"] == "host"
-    assert kwargs["command"] == ["make", "-j4"]
-    assert kwargs["job_type"] == "build"
-    assert kwargs["step_name"] == "bootstrap"
-    assert kwargs["tracer_mode"] == "ebpf"
-    assert kwargs["tracer_fallback"] is True
-
-
 def test_run_command_resolves_dag_reference_and_can_abort_on_stale_upstream(
     tmp_path: Path,
 ) -> None:

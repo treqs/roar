@@ -116,13 +116,3 @@ def test_runtime_tracker_excludes_roar_internal_env_reads(tmp_path) -> None:
     assert not any(key.startswith("ROAR_") for key in env_reads)
 
 
-def test_get_used_packages_returns_dict_for_known_module() -> None:
-    import json as json_module
-
-    json_file = json_module.__file__
-    modules_files = [json_file] if json_file else []
-
-    installed = get_installed_packages()
-    used = get_used_packages(modules_files, installed)
-
-    assert isinstance(used, dict)

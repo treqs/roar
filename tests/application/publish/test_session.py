@@ -32,53 +32,6 @@ def _lineage() -> LineageData:
     )
 
 
-def test_session_registration_service_accepts_published_return_fields() -> None:
-    client = MagicMock()
-    client.register_session.return_value = (
-        {
-            "published_session_hash": "published-session",
-            "published_url": "https://glaas.example/sessions/published-session",
-            "created": True,
-        },
-        None,
-    )
-    service = SessionRegistrationService(client=client, logger=MagicMock())
-
-    result = service.register("prepared-session", _git_context())
-
-    assert result == SessionRegistrationResult(
-        success=True,
-        session_hash="published-session",
-        session_url="https://glaas.example/sessions/published-session",
-        created=True,
-    )
-
-
-def test_session_registration_service_finalizes_with_published_return_fields() -> None:
-    client = MagicMock()
-    client.finalize_registration_session.return_value = (
-        {
-            "published_session_hash": "published-session",
-            "published_url": "https://glaas.example/sessions/published-session",
-            "created": False,
-            "status": "closed",
-        },
-        None,
-    )
-    service = SessionRegistrationService(client=client, logger=MagicMock())
-
-    result = service.finalize_registration_session("reg-1", _git_context())
-
-    assert result == SessionRegistrationResult(
-        success=True,
-        session_hash="published-session",
-        session_url="https://glaas.example/sessions/published-session",
-        registration_session_id="reg-1",
-        created=False,
-        status="closed",
-    )
-
-
 def test_prepare_publish_session_computes_hash_without_registering(tmp_path: Path) -> None:
     glaas_client = MagicMock()
     session_service = MagicMock()

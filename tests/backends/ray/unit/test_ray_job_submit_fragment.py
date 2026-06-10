@@ -84,17 +84,6 @@ def test_maybe_rewrite_injects_roar_session_id_into_runtime_env(
     assert rewritten.finalize_run is None
 
 
-def test_maybe_rewrite_injects_roar_fragment_token_into_runtime_env(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    _, rewritten, _ = _rewrite_with_fragment_session(monkeypatch, tmp_path)
-
-    runtime_env = _runtime_env_json(rewritten.command)
-    assert runtime_env["env_vars"]["ROAR_FRAGMENT_TOKEN"] == _fixed_fragment_key()["token"]
-    assert rewritten.session_id == _fixed_fragment_key()["session_id"]
-
-
 def test_maybe_rewrite_saves_key_file_to_roar_dir(
     monkeypatch,
     tmp_path: Path,

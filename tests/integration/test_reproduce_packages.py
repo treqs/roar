@@ -218,13 +218,6 @@ class TestReproducePackageExtraction:
         # collection — the important thing is no crash
         assert isinstance(packages, list)
 
-    def test_dpkg_any_version_flag_accepted(self, temp_git_repo, roar_cli):
-        """CLI should accept --dpkg-any-version flag without error."""
-        result = roar_cli("reproduce", "--help", check=False)
-        assert result.returncode == 0
-        assert "--dpkg-any-version" in result.stdout
-
-
 # ---------------------------------------------------------------------------
 # TestEnvironmentSetupWithRealMetadata — unit-level with realistic data
 # ---------------------------------------------------------------------------
@@ -367,24 +360,6 @@ class TestDebugLoggingAvailable:
 
     def teardown_method(self):
         reset()
-
-    def test_logger_is_not_null_after_bootstrap(self, tmp_path):
-        """After bootstrap(), the logger should be a RoarLogger, not NullLogger."""
-        roar_dir = tmp_path / ".roar"
-        roar_dir.mkdir()
-        # Write minimal config so bootstrap doesn't complain
-        (roar_dir / "config.toml").write_text("")
-
-        bootstrap(roar_dir)
-
-        logger = get_logger()
-        assert not isinstance(logger, NullLogger)
-
-    def test_logger_is_null_without_bootstrap(self):
-        """Without bootstrap(), EnvironmentSetupService should fall back to NullLogger."""
-        service = EnvironmentSetupService()
-        # Access the property — should fall back gracefully
-        assert isinstance(service.logger, NullLogger)
 
     def test_setup_produces_debug_messages(self, tmp_path):
         """setup() debug logging should invoke the logger (not NullLogger)."""

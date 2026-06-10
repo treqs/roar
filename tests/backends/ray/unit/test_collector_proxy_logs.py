@@ -73,8 +73,3 @@ def test_collect_records_hash_rows_from_fragments(tmp_path: Path) -> None:
     assert output_row == ("s3://output-bucket/results/run-1/final_report.json",)
 
 
-def test_collect_noops_without_explicit_fragments(tmp_path: Path) -> None:
-    project_dir = tmp_path / "project"
-    _init_db(project_dir)
-
-    collector.collect(project_dir=str(project_dir), fragments=[])

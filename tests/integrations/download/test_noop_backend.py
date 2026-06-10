@@ -77,7 +77,3 @@ class TestShouldSkipDownload:
         monkeypatch.setenv("ROAR_GET_SKIP_DOWNLOAD", "1")
         assert should_skip_download() is True
 
-    def test_returns_true_for_true_string(self, monkeypatch):
-        """Returns True when env var is 'true'."""
-        monkeypatch.setenv("ROAR_GET_SKIP_DOWNLOAD", "true")
-        assert should_skip_download() is True

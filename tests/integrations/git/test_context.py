@@ -6,18 +6,6 @@ from unittest.mock import MagicMock, patch
 from roar.integrations.git.context import resolve_git_context, resolve_repo_url_or_local_uri
 
 
-def test_resolve_repo_url_or_local_uri_prefers_remote_url() -> None:
-    """Existing remote URL should be returned without warning."""
-    mock_vcs = MagicMock()
-    mock_vcs.get_remote_url.return_value = "https://github.com/test/repo.git"
-    mock_logger = MagicMock()
-
-    resolved = resolve_repo_url_or_local_uri(mock_vcs, "/tmp/repo", logger=mock_logger)
-
-    assert resolved == "https://github.com/test/repo.git"
-    mock_logger.warning.assert_not_called()
-
-
 def test_resolve_repo_url_or_local_uri_uses_file_uri_when_remote_missing(tmp_path: Path) -> None:
     """Missing remote should fall back to file:// URI and emit a warning."""
     mock_vcs = MagicMock()

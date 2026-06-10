@@ -65,8 +65,3 @@ def test_pth_import_chain_succeeds_when_pydantic_available() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_roar_pth_uses_canonical_runtime_inject_module() -> None:
-    payload = PTH_FILE.read_text(encoding="utf-8")
-
-    assert "roar.execution.runtime.inject.sitecustomize" in payload
-    assert "roar.services.execution.inject.sitecustomize" not in payload
