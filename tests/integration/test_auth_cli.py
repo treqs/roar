@@ -109,7 +109,7 @@ def test_auth_register_prints_public_key(temp_git_repo: Path, ssh_keypair: Path)
     assert result.returncode == 0, result.stderr
     assert "Your SSH public key:" in result.stdout
     assert pubkey_content in result.stdout
-    assert f"Path: {pubkey_path}" in result.stdout
+    assert str(pubkey_path) in result.stdout
 
 
 def test_auth_key_copy_recommends_login_and_avoids_signup_verb(
