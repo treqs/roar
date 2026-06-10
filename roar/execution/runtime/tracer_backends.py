@@ -465,6 +465,17 @@ def suggestions_for_preflight_result(result: PreflightResult) -> tuple[str, ...]
     return _dedupe_suggestions(suggestions, limit=4)
 
 
+def preflight_failed_on_missing_command(result: TracerPreflightResult) -> bool:
+    """True when a backend preflight failed because the target command is absent.
+
+    Tracers emit a structured ``command`` check (ok=False, detail
+    ``command not found: <cmd>``) when the command they were asked to trace
+    cannot be resolved. That is a property of the system, not the tracer, so
+    it lets callers distinguish "nothing to run" from "no usable tracer".
+    """
+    return any(check.name == "command" and not check.ok for check in result.checks)
+
+
 def _dedupe_suggestions(suggestions: Sequence[str], *, limit: int) -> tuple[str, ...]:
     seen: set[str] = set()
     unique: list[str] = []

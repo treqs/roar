@@ -472,6 +472,24 @@ class TracerPreflightError(RoarExecutionError):
         super().__init__(message, context=ctx, cause=cause)
 
 
+class CommandNotFoundError(RoarExecutionError):
+    """
+    The command passed to ``roar run`` does not exist.
+
+    Distinct from a tracer failure: the tracers are fine, there is simply
+    nothing to run. Surfaced as a clean one-line error (no tracer-build
+    instructions, no lineage job) and mirrors the shell's exit code 127 for
+    an unknown command.
+    """
+
+    exit_code: int = 127
+    recoverable: bool = False
+
+    def __init__(self, command_name: str, *, cause: Exception | None = None) -> None:
+        self.command_name = command_name
+        super().__init__(f"command not found: {command_name}", cause=cause)
+
+
 class ProcessExecutionError(RoarExecutionError):
     """
     Error during process execution.

@@ -11,7 +11,11 @@ import sys
 import time
 from pathlib import Path
 
-from ...core.exceptions import TracerNotFoundError, TracerPreflightError
+from ...core.exceptions import (
+    CommandNotFoundError,
+    TracerNotFoundError,
+    TracerPreflightError,
+)
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.run import ISignalHandler
 from ...core.models.run import TracerResult
@@ -345,6 +349,14 @@ class TracerService:
             if not fallback_enabled:
                 return [approved[0]]
             return approved
+
+        # If any backend got far enough to determine the command itself is
+        # missing, that's the real problem — not the tracers. Surface it as a
+        # clean "command not found" instead of tracer-build instructions.
+        if command and any(
+            tracer_backends.preflight_failed_on_missing_command(result) for result in failures
+        ):
+            raise CommandNotFoundError(command[0])
 
         failure_context = {"failures": [result.to_dict() for result in failures]}
         if mode == "auto":
