@@ -20,6 +20,10 @@ from ...core.interfaces.logger import ILogger
 from ...core.models.provenance import PythonInjectData, RuntimeInfo, TracerData
 
 _CACHE_FILENAME = "runtime_cache.json"
+# Bump when the shape/derivation of cached hardware info changes so existing
+# caches are re-collected instead of serving stale values. v2: CPU model now
+# falls back to lscpu (fixes "unknown" CPU on aarch64).
+_CACHE_SCHEMA_VERSION = 2
 
 
 class RuntimeCollectorService:
@@ -108,7 +112,14 @@ class RuntimeCollectorService:
             return
         try:
             with open(os.path.join(self._cache_dir, _CACHE_FILENAME), "w") as f:
-                json.dump({"fingerprint": fingerprint, "data": data}, f)
+                json.dump(
+                    {
+                        "schema_version": _CACHE_SCHEMA_VERSION,
+                        "fingerprint": fingerprint,
+                        "data": data,
+                    },
+                    f,
+                )
         except OSError:
             pass
 
@@ -142,7 +153,11 @@ class RuntimeCollectorService:
         fingerprint = self._hardware_fingerprint()
         cache = self._load_cache()
 
-        if cache and cache.get("fingerprint") == fingerprint:
+        if (
+            cache
+            and cache.get("fingerprint") == fingerprint
+            and cache.get("schema_version") == _CACHE_SCHEMA_VERSION
+        ):
             self.logger.debug("Runtime cache hit (fingerprint=%s)", fingerprint[:8])
             cached = cache["data"]
             cuda_info = cached.get("cuda")
@@ -448,6 +463,10 @@ class RuntimeCollectorService:
                 for line in stdout.split("\n"):
                     if line.startswith("Architecture:"):
                         cpu_info["architecture"] = line.split(":")[1].strip()
+                    elif line.startswith("Model name:") and "model" not in cpu_info:
+                        # /proc/cpuinfo has no "model name" on aarch64; lscpu
+                        # reports it as "Model name:" on all architectures.
+                        cpu_info["model"] = line.split(":", 1)[1].strip()
                     elif line.startswith("CPU(s):"):
                         cpu_info["count"] = int(line.split(":")[1].strip())
                     elif line.startswith("Thread(s) per core:"):
