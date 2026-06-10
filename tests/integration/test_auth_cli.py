@@ -126,7 +126,7 @@ def test_auth_key_copy_recommends_login_and_avoids_signup_verb(
     assert result.returncode == 0, result.stderr
     assert "sign up" not in result.stdout.lower()
     assert "sign in at" in result.stdout
-    assert "roar login" in result.stdout
+    assert "roar auth login" in result.stdout
 
 
 def test_auth_key_url_follows_dev_api(temp_git_repo: Path, ssh_keypair: Path) -> None:
