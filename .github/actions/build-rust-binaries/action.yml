@@ -16,6 +16,16 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-registry-
+
     - name: Install cargo-zigbuild and zig
       shell: bash
       run: |
