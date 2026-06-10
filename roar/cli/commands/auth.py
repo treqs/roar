@@ -304,6 +304,9 @@ def _do_auth_status() -> None:
         click.echo("Active method: none  (not authenticated)")
         click.echo("  Run `roar auth login` to sign in via browser.")
 
+    if server_reachable and not bearer_active and not ssh_active:
+        raise SystemExit(1)
+
 
 @auth.command("status")
 def auth_status() -> None:
