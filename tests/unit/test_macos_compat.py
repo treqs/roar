@@ -88,6 +88,7 @@ class TestPackageCollectorMacOS:
         )
         assert result == {}
 
+
 # ---------------------------------------------------------------------------
 # 3. build_tool_collector — dpkg guard on non-Linux
 # ---------------------------------------------------------------------------
@@ -152,6 +153,7 @@ class TestFiltersNoisePrefixes:
         assert is_noise_write("/private/var/db/something")
         assert is_noise_write("/private/var/run/something")
         assert is_noise_write("/private/var/log/something")
+
 
 # ---------------------------------------------------------------------------
 # 5. filters/files.py — .dylib and macOS system dirs

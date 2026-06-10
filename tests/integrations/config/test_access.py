@@ -1,11 +1,8 @@
 """Tests for proxy configuration model and config get/set."""
 
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from roar.integrations.config import (
-    CONFIGURABLE_KEYS,
-    ProxyConfig,
     RoarConfig,
     config_get,
     save_config,
@@ -75,7 +72,6 @@ class TestConfigGetDoesNotDiscoverBackends:
     """
 
     def test_non_backend_key_skips_to_dict(self) -> None:
-        from roar.integrations.config import config_get
 
         settings = _SettingsStub(
             backend_config_source={},
@@ -93,7 +89,6 @@ class TestConfigGetDoesNotDiscoverBackends:
         (e.g. ``[hints] enabled = false``), the raw-config walk must
         return it — also without touching ``to_dict()``.
         """
-        from roar.integrations.config import config_get
 
         settings = _SettingsStub(
             backend_config_source={"hints": {"enabled": False}},
@@ -112,7 +107,6 @@ class TestConfigGetDoesNotDiscoverBackends:
         when the user hasn't overridden them. Don't accidentally break
         the slow path for keys that need it.
         """
-        from roar.integrations.config import config_get
 
         settings = _SettingsStub(
             backend_config_source={},

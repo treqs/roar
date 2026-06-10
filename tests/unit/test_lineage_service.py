@@ -20,5 +20,3 @@ def test_resolve_artifact_by_hash_falls_back_to_composite_algorithm():
     assert artifact == {"id": "artifact-composite"}
     assert artifact_repo.get_by_hash.call_args_list[0].kwargs == {"algorithm": "blake3"}
     assert artifact_repo.get_by_hash.call_args_list[1].kwargs == {"algorithm": "composite-blake3"}
-
-

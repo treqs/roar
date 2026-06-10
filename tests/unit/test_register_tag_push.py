@@ -187,6 +187,7 @@ class TestDistinctJobCommits:
         )
         assert _distinct_job_commits(lineage, "aaa") == ["xxx"]
 
+
 # ---------------------------------------------------------------------------
 # ensure_roar_tags_pushed (end-to-end across modes)
 # ---------------------------------------------------------------------------
@@ -449,4 +450,3 @@ class TestCliRender:
         # The warning goes to stderr.
         assert "NOT pushed" in captured.err
         assert "will not resolve" in captured.err
-

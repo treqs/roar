@@ -12,7 +12,6 @@ import pytest
 
 from roar.core.exceptions import (
     GlaasApiError,
-    GlaasAuthError,
     GlaasConnectionError,
     GlaasNotConfiguredError,
 )
@@ -588,8 +587,10 @@ class TestParentJobUidPayload:
 class TestSessionReproductionWrapper:
     """Test thin client wrapper for lineage/session reproduction."""
 
+
 class TestCompositeAndLabelWrappers:
     """Test thin client wrappers for composite artifact endpoints."""
+
 
 class TestArtifactHashMapping:
     """Verify that register_job_inputs/outputs map internal hash keys to API payloads."""

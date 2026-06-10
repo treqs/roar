@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from roar.application.run.requests import BuildRequest, RunRequest
-from roar.application.run.service import build_command, run_command
+from roar.application.run.service import run_command
 
 
 def _run_request(tmp_path: Path, **overrides) -> RunRequest:

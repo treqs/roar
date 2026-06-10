@@ -11,8 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from roar.core.bootstrap import bootstrap, reset
-from roar.core.logging import NullLogger, get_logger
+from roar.core.bootstrap import reset
 from roar.execution.reproduction.environment_setup import EnvironmentSetupService
 
 from .fake_glaas import FakeGlaasServer
@@ -217,6 +216,7 @@ class TestReproducePackageExtraction:
         # packages may or may not be populated depending on provenance
         # collection — the important thing is no crash
         assert isinstance(packages, list)
+
 
 # ---------------------------------------------------------------------------
 # TestEnvironmentSetupWithRealMetadata — unit-level with realistic data

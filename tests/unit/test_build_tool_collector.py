@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from roar.execution.provenance.build_tool_collector import (
-    KNOWN_BUILD_TOOLS,
     BuildToolCollectorService,
 )
 
@@ -100,4 +99,3 @@ class TestBuildToolCollector:
         ]
         result = service.collect(processes, sys_prefix="/venv")
         assert result == {}
-

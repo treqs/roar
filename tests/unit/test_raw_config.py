@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from roar.integrations.config import config_get
 from roar.integrations.config.raw import (
     _derive_web_url_from_api,
     get_raw_glaas_web_url,
-    get_raw_registration_omit_config,
 )
 
 

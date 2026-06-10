@@ -48,6 +48,7 @@ class TestParseLogLinePutObject:
         assert entry.size_bytes == 42
         assert entry.etag == "abc123"
 
+
 class TestParseLogLineOtherOps:
     def test_complete_multipart_upload(self):
         line = "[S3:CompleteMultipartUpload] s3://bucket/large.pt  etag=composite-3"
@@ -63,6 +64,7 @@ class TestParseLogLineOtherOps:
         entry = parse_log_line(line)
         assert entry is not None
         assert entry.operation == "HeadObject"
+
 
 class TestParseLogLineMetadata:
     def test_full_metadata(self):

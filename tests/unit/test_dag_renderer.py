@@ -321,4 +321,3 @@ class TestDagRenderer:
 
 class TestDagNodeState:
     """Test DagNodeState enum values."""
-

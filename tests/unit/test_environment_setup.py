@@ -44,6 +44,7 @@ class TestEnvironmentSetupSkipsRoarInstallation:
         pipeline.run_steps = []
         return pipeline
 
+
 class TestCreateVenvGitignore:
     """Test that _create_venv creates .gitignore in the venv directory."""
 

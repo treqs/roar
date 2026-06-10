@@ -3,8 +3,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from roar.core.exceptions import TracerNotFoundError, TracerPreflightError
-from roar.execution.cluster.proxy import S3LogEntry
+from roar.core.exceptions import TracerPreflightError
 from roar.execution.runtime.coordinator import RunCoordinator
 from roar.execution.runtime.resources import RuntimeObservationBundle, RuntimeResourceStart
 
@@ -161,4 +160,3 @@ class TestRuntimeResourceLifecycle:
 
         assert result.exit_code == 1
         assert resource.stop_calls == [1]
-

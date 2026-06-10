@@ -31,6 +31,7 @@ class TestRenderSkill:
         out = render_skill("9.9.9")
         assert "<!-- roar version: 9.9.9 -->" in out
 
+
 class TestUpdateSkillFile:
     def test_create_when_missing(self):
         result = update_skill_file(None, version="1.0.0")

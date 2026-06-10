@@ -14,7 +14,6 @@ from roar.application.git import (
     finalize_register_git,
     prepare_put_git,
     resolve_git_state,
-    resolve_roar_git_context,
 )
 
 
@@ -162,5 +161,3 @@ def test_finalize_register_git_creates_tag_when_enabled(tmp_path: Path) -> None:
         )
 
     create_tag.assert_called_once_with(tmp_path, "roar/deadbeef")
-
-

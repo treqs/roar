@@ -216,8 +216,7 @@ def _git_repo_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     # Write user config directly to avoid two extra subprocess round-trips
     git_config = template / ".git" / "config"
     git_config.write_text(
-        git_config.read_text()
-        + "\n[user]\n\temail = test@example.com\n\tname = Test User\n"
+        git_config.read_text() + "\n[user]\n\temail = test@example.com\n\tname = Test User\n"
     )
 
     (template / ".gitignore").write_text(".roar/\n")

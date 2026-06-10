@@ -71,5 +71,3 @@ def test_collect_records_hash_rows_from_fragments(tmp_path: Path) -> None:
 
     assert hash_row == ("etag", "etag-final-123")
     assert output_row == ("s3://output-bucket/results/run-1/final_report.json",)
-
-

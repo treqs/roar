@@ -7,7 +7,6 @@ from roar.application.publish.collection import (
     CollectedRegisterLineage,
     collect_register_lineage,
     resolve_local_session_target,
-    select_representative_hash,
 )
 from roar.application.publish.targets import ResolvedRegisterTarget
 from roar.core.interfaces.lineage import LineageData
@@ -261,5 +260,3 @@ def test_collect_register_lineage_step_reference_dry_run_uses_read_only_collecto
         roar_dir=tmp_path / ".roar",
         job_type=None,
     )
-
-

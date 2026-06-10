@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
-from pathlib import Path
 
 from roar.telemetry import payload
 
@@ -87,5 +84,3 @@ def test_payload_builder_only_serializes_allowlisted_fields() -> None:
     ]
     for fragment in forbidden_fragments:
         assert fragment not in encoded
-
-

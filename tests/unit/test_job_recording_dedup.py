@@ -61,5 +61,3 @@ def test_recording_skips_duplicate_output_for_existing_job_path(tmp_path: Path) 
     assert output_count == 1
     assert after_artifacts == before_artifacts
     assert status == "completed"
-
-

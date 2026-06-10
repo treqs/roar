@@ -8,7 +8,6 @@ import pytest
 from roar.application.publish.session import PreparedPublishSession, prepare_publish_session
 from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import GitContext, SessionRegistrationResult
-from roar.integrations.glaas.registration.session import SessionRegistrationService
 
 
 def _git_context() -> GitContext:

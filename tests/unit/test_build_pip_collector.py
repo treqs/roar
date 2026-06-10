@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from roar.execution.provenance.build_pip_collector import (
-    KNOWN_PYTHON_BUILD_TOOLS,
     BuildPipCollectorService,
 )
 
@@ -121,4 +120,3 @@ class TestBuildPipCollector:
 
         result = service.collect(processes, sys_prefix="/venv")
         assert result == {"pip": "23.3.1"}
-

@@ -147,5 +147,3 @@ def test_warning_silent_when_only_tracked_modifications(
     buf = io.StringIO()
     emit_dirty_outputs_warning(repo_root=tmp_path, stream=buf, caps=_plain_caps(), quiet=False)
     assert buf.getvalue() == ""
-
-

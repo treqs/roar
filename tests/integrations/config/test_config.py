@@ -9,27 +9,18 @@ Tests verify:
 """
 
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib
-
 from roar.cli.commands.init import DEFAULT_CONFIG_TEMPLATE
 from roar.integrations.config import (
     CONFIGURABLE_KEYS,
-    VALID_HASH_ALGORITHMS,
     _get_default_config,
     config_get,
     config_set,
-    find_config_file,
     get_roar_dir,
     load_config,
-    load_settings,
     save_config,
 )
 
@@ -51,6 +42,7 @@ class TestRoarInit:
 
 class TestDefaultConfigTemplate:
     """Tests for the DEFAULT_CONFIG_TEMPLATE used by roar init."""
+
 
 class TestDefaultsMatchPydanticModels:
     """Verify that the init template defaults match Pydantic model defaults."""
@@ -241,6 +233,7 @@ class TestConfigurableKeys:
                 assert value == expected_default, (
                     f"{key}: got {value!r}, expected {expected_default!r}"
                 )
+
 
 class TestConfigSetValidation:
     def test_config_set_invalid_glaas_url_is_rejected(self, tmp_path: Path) -> None:

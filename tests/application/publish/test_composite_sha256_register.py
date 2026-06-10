@@ -4,12 +4,10 @@ as a composite, not silently drop it as a plain artifact."""
 from __future__ import annotations
 
 from roar.application.publish.lineage_composites import (
-    has_lineage_composites,
     resolve_component_hash_for_registration,
 )
 from roar.application.publish.registration import (
     extract_composite_digest,
-    normalize_registration_source_type,
 )
 from roar.core.digests import COMPOSITE_ALGORITHMS, is_composite_algorithm
 

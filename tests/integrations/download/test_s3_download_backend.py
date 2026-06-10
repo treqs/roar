@@ -4,7 +4,6 @@ Unit tests for S3 download backend.
 Tests use mocked boto3 to avoid requiring AWS credentials.
 """
 
-from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 from botocore.exceptions import ClientError

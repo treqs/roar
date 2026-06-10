@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from roar.cli import COMMAND_SPECS, LAZY_COMMANDS, cli
+from roar.cli import LAZY_COMMANDS, cli
 from roar.cli.command_registry import build_help_groups
 
 

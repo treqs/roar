@@ -3,10 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
-
 from roar.db.context import create_database_context
-from roar.db.models import Base
 from roar.db.schema import run_migrations
 
 

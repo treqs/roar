@@ -6,12 +6,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from roar.application.publish.register_preparation import (
-    PreparedRegisterExecution,
     prepare_register_execution,
 )
 from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import GitContext
-from roar.publish_auth import PublishAuthContext
 
 
 def _git_context(

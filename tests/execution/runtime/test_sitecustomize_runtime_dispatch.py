@@ -32,5 +32,3 @@ def test_tracking_open_skips_recording_when_suppressed(tmp_path) -> None:
         assert handle.read() == "hello"
 
     assert abs_path not in sitecustomize.opened_files
-
-

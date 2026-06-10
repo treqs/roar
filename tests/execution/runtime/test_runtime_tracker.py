@@ -5,8 +5,6 @@ import sys
 
 from roar.execution.runtime.inject.tracker import (
     RuntimeInjectionTracker,
-    get_installed_packages,
-    get_used_packages,
 )
 
 
@@ -114,5 +112,3 @@ def test_runtime_tracker_excludes_roar_internal_env_reads(tmp_path) -> None:
     # User-facing reads are kept; roar's reserved namespace is dropped.
     assert env_reads == {"HOME": "/home/ubuntu"}
     assert not any(key.startswith("ROAR_") for key in env_reads)
-
-

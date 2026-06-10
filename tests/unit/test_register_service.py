@@ -7,7 +7,7 @@ from roar.application.publish.job_preparation import (
     normalize_jobs_for_registration,
     order_jobs_for_registration,
 )
-from roar.application.publish.register_execution import RegisterResult, RegisterService
+from roar.application.publish.register_execution import RegisterService
 from roar.application.publish.register_preparation import PreparedRegisterExecution
 from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import BatchRegistrationResult, GitContext

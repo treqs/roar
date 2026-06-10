@@ -76,4 +76,3 @@ class TestShouldSkipDownload:
         """Returns True when env var is 1."""
         monkeypatch.setenv("ROAR_GET_SKIP_DOWNLOAD", "1")
         assert should_skip_download() is True
-

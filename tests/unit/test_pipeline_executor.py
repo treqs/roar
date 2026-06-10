@@ -60,6 +60,7 @@ class TestPipelineExecutorRoarExecutable:
         )
         assert wrapped == f"{roar_exe} run python script.py"
 
+
 class TestPipelineExecutorDetectRoarExecutable:
     """Test roar executable auto-detection."""
 

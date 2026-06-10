@@ -79,6 +79,7 @@ class TestBuildPackageFileMapPerf:
             f"Expected 'pytest' in pkg_versions, got: {list(fc._pkg_versions)[:10]}"
         )
 
+
 class TestClassifySitePackages:
     """Verify classify() correctly identifies site-packages files without dist.files."""
 

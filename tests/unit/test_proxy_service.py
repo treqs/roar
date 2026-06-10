@@ -238,5 +238,3 @@ class TestDaemonMethods:
             result = svc.get_daemon_status(tmp_path)
         assert result is None
         assert not (tmp_path / "proxy.json").exists()
-
-

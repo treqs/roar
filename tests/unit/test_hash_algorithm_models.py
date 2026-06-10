@@ -5,8 +5,6 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from roar.core.models.artifact import ArtifactHash
-from roar.core.models.glaas import ArtifactHashRequest
 from roar.core.models.run import RunArguments
 
 

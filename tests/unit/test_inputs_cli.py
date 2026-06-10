@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
-from roar.application.query.requests import InputsQueryRequest
 from roar.cli.commands.inputs import inputs
 
 

@@ -147,5 +147,3 @@ def test_tracer_enable_non_ebpf_gives_friendly_message(temp_git_repo: Path) -> N
     assert result.returncode != 0
     assert "works out of the box" in result.stderr
     assert "roar tracer check preload" in result.stderr
-
-

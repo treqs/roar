@@ -240,5 +240,3 @@ def test_label_sync_current_lineage_sends_all_user_managed_labels(
     sent = request["labels"]
     assert {label["entity_type"] for label in sent} == {"dag", "job", "artifact"}
     assert all("roar" not in label["metadata"] for label in sent)
-
-

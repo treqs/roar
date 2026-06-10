@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from roar.execution.recording.dataset_metadata import (
-    AUTO_DATASET_LABEL_KEYS,
     build_dataset_label_metadata,
     build_dataset_metadata,
     find_matching_identifier,
@@ -143,4 +142,3 @@ class TestBuildDatasetLabelMetadata:
                 "modality": "image",
             }
         }
-

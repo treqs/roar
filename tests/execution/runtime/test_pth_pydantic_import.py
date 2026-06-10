@@ -63,5 +63,3 @@ def test_pth_import_chain_succeeds_when_pydantic_available() -> None:
     result = _run_python(code)
 
     assert result.returncode == 0, result.stderr
-
-
