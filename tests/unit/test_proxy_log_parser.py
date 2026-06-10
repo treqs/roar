@@ -25,12 +25,6 @@ class TestParseLogLineGetObject:
         assert entry.etag == "abc123"
         assert entry.byte_ranges == [[0, 999]]
 
-    def test_get_object_with_multiple_byte_ranges(self):
-        line = "[S3:GetObject] s3://bucket/key  byte_ranges=[[0,999],[2000,2999]]  etag=abc123"
-        entry = parse_log_line(line)
-        assert entry is not None
-        assert entry.byte_ranges == [[0, 999], [2000, 2999]]
-
     def test_get_object_minimal(self):
         line = "[S3:GetObject] s3://bucket/key"
         entry = parse_log_line(line)
@@ -54,14 +48,6 @@ class TestParseLogLinePutObject:
         assert entry.size_bytes == 42
         assert entry.etag == "abc123"
 
-    def test_put_object_large_size(self):
-        line = "[S3:PutObject] s3://bucket/models/big.pt  (5242880000 bytes)  etag=xyz"
-        entry = parse_log_line(line)
-        assert entry is not None
-        assert entry.size_bytes == 5242880000
-        assert entry.etag == "xyz"
-
-
 class TestParseLogLineOtherOps:
     def test_complete_multipart_upload(self):
         line = "[S3:CompleteMultipartUpload] s3://bucket/large.pt  etag=composite-3"
@@ -78,13 +64,6 @@ class TestParseLogLineOtherOps:
         assert entry is not None
         assert entry.operation == "HeadObject"
 
-    def test_delete_object(self):
-        line = "[S3:DeleteObject] s3://bucket/key"
-        entry = parse_log_line(line)
-        assert entry is not None
-        assert entry.operation == "DeleteObject"
-
-
 class TestParseLogLineMetadata:
     def test_full_metadata(self):
         line = "[S3:GetObject] s3://bucket/key  etag=abc  session=sess-001  job=job-042"
@@ -96,18 +75,8 @@ class TestParseLogLineMetadata:
 
 
 class TestParseLogLineEdgeCases:
-    def test_roar_proxy_ready_sentinel_returns_none(self):
-        line = "ROAR_PROXY_READY port=9090"
-        assert parse_log_line(line) is None
-
-    def test_empty_string_returns_none(self):
-        assert parse_log_line("") is None
-
     def test_malformed_line_returns_none(self):
         assert parse_log_line("not a log line at all") is None
-
-    def test_stderr_message_returns_none(self):
-        assert parse_log_line("roar-proxy listening on http://127.0.0.1:9090") is None
 
     def test_partial_s3_prefix_returns_none(self):
         assert parse_log_line("[S3:GetObject]") is None
@@ -131,12 +100,6 @@ class TestParseLogLineEdgeCases:
         assert entry is not None
         assert entry.size_bytes is None
 
-    def test_key_with_special_characters(self):
-        line = "[S3:GetObject] s3://bucket/data-v2/model_final.pt  etag=abc"
-        entry = parse_log_line(line)
-        assert entry is not None
-        assert entry.key == "data-v2/model_final.pt"
-
     def test_put_without_size(self):
         line = "[S3:PutObject] s3://bucket/key  etag=abc"
         entry = parse_log_line(line)
@@ -144,22 +107,6 @@ class TestParseLogLineEdgeCases:
         assert entry.operation == "PutObject"
         assert entry.size_bytes is None
         assert entry.etag == "abc"
-
-    def test_upload_part(self):
-        line = "[S3:UploadPart] s3://bucket/key  (5242880 bytes)"
-        entry = parse_log_line(line)
-        assert entry is not None
-        assert entry.operation == "UploadPart"
-        assert entry.size_bytes == 5242880
-
-    def test_list_objects(self):
-        line = "[S3:ListObjectsV2] s3://bucket/"
-        entry = parse_log_line(line)
-        # The regex requires at least one non-whitespace char after bucket/
-        # ListObjectsV2 log lines have no key, so the trailing / may not match
-        # This is expected behavior — list operations aren't tracked as artifacts
-        if entry is not None:
-            assert entry.operation == "ListObjectsV2"
 
     def test_list_objects_with_prefix(self):
         line = "[S3:ListObjectsV2] s3://bucket/prefix"

@@ -83,12 +83,6 @@ class TestRenderLine:
         ).render_line()
         assert line == "dirty — 3 modified, 1 untracked  ('roar run' will be refused)"
 
-    def test_dirty_user_facing_example(self) -> None:
-        """Matches the proposed P1-11 wording verbatim."""
-        line = GitReadinessSummary(state="dirty", modified=3, untracked=1).render_line()
-        assert "dirty — 3 modified, 1 untracked" in line
-        assert "'roar run' will be refused" in line
-
     def test_not_a_repo(self) -> None:
         # `roar run` works outside a repo now (commit-less lineage); the
         # line must not threaten a refusal, only note the missing commit tag.

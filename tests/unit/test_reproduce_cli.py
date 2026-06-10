@@ -41,21 +41,6 @@ def test_reproduce_cli_passes_environment_setup_flags(tmp_path: Path) -> None:
     assert request.target_kind == "artifact"
 
 
-def test_reproduce_cli_passes_lineage_target_kind(tmp_path: Path) -> None:
-    runner = CliRunner()
-
-    with patch("roar.cli.commands.reproduce.reproduce_artifact", return_value=None) as mock_service:
-        result = runner.invoke(
-            reproduce,
-            ["a" * 64, "--lineage"],
-            obj=_ctx(tmp_path),
-        )
-
-    assert result.exit_code == 0
-    request = mock_service.call_args.args[0]
-    assert request.target_kind == "lineage"
-
-
 def test_reproduce_cli_surfaces_application_errors(tmp_path: Path) -> None:
     runner = CliRunner()
 

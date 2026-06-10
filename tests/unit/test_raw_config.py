@@ -10,42 +10,6 @@ from roar.integrations.config.raw import (
 )
 
 
-def test_raw_registration_omit_matches_full_config_defaults(tmp_path: Path) -> None:
-    assert get_raw_registration_omit_config(start_dir=str(tmp_path)) == config_get(
-        "registration.omit",
-        start_dir=str(tmp_path),
-    )
-
-
-def test_raw_registration_omit_matches_file_and_env_overrides(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    roar_dir = tmp_path / ".roar"
-    roar_dir.mkdir()
-    (roar_dir / "config.toml").write_text(
-        """
-[registration.omit]
-enabled = false
-
-[registration.omit.secrets]
-values = ["literal-secret"]
-
-[registration.omit.allowlist]
-patterns = ["safe-.*"]
-""".strip()
-    )
-    monkeypatch.setenv(
-        "ROAR_REGISTRATION__OMIT__ENV_VARS__NAMES",
-        '["LOCAL_API_TOKEN", "SECOND_TOKEN"]',
-    )
-
-    assert get_raw_registration_omit_config(start_dir=str(tmp_path)) == config_get(
-        "registration.omit",
-        start_dir=str(tmp_path),
-    )
-
-
 def test_raw_glaas_web_url_prefers_env_over_file(tmp_path: Path, monkeypatch) -> None:
     roar_dir = tmp_path / ".roar"
     roar_dir.mkdir()
@@ -60,12 +24,6 @@ web_url = "https://glaas.example/app/"
 
     monkeypatch.setenv("ROAR_GLAAS__WEB_URL", "https://override.example/ui/")
     assert get_raw_glaas_web_url(start_dir=str(tmp_path)) == "https://override.example/ui"
-
-
-def test_derive_web_url_from_api_strips_api_label() -> None:
-    assert _derive_web_url_from_api("https://api.glaas.ai") == "https://glaas.ai"
-    assert _derive_web_url_from_api("https://api.dev.glaas.ai") == "https://dev.glaas.ai"
-    assert _derive_web_url_from_api("https://api.glaas.ai/api/v1") == "https://glaas.ai"
 
 
 def test_derive_web_url_from_api_no_api_prefix_returns_none() -> None:

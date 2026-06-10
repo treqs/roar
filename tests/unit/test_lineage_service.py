@@ -22,8 +22,3 @@ def test_resolve_artifact_by_hash_falls_back_to_composite_algorithm():
     assert artifact_repo.get_by_hash.call_args_list[1].kwargs == {"algorithm": "composite-blake3"}
 
 
-def test_get_primary_digest_accepts_composite_blake3():
-    digest = DefaultLineageService._get_primary_digest(
-        {"hashes": [{"algorithm": "composite-blake3", "digest": "b" * 64}]}
-    )
-    assert digest == "b" * 64

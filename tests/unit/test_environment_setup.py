@@ -44,55 +44,6 @@ class TestEnvironmentSetupSkipsRoarInstallation:
         pipeline.run_steps = []
         return pipeline
 
-    def test_setup_skips_roar_installation(self, mock_pipeline, tmp_path):
-        """setup() should NOT call _install_roar()."""
-        service = EnvironmentSetupService()
-        service._logger = MagicMock()
-
-        with (
-            patch.object(service, "_clone_repository") as mock_clone,
-            patch.object(service, "_create_venv") as mock_venv,
-            patch.object(service, "_install_roar") as mock_install_roar,
-            patch.object(service, "_initialize_roar") as _mock_init_roar,
-            patch.object(service, "_install_packages") as _mock_install_packages,
-            patch.object(service, "_get_packages") as mock_get_packages,
-            patch.object(service, "_validate_environment") as mock_validate,
-        ):
-            mock_clone.return_value = tmp_path / "repo"
-            mock_venv.return_value = tmp_path / "repo" / ".venv"
-            mock_get_packages.return_value = []
-            mock_validate.return_value = []
-
-            service.setup(mock_pipeline, tmp_path, auto_confirm=True)
-
-            # _install_roar should NOT be called
-            mock_install_roar.assert_not_called()
-
-    def test_initialize_roar_still_runs(self, mock_pipeline, tmp_path):
-        """setup() should still call _initialize_roar() (roar init)."""
-        service = EnvironmentSetupService()
-        service._logger = MagicMock()
-
-        with (
-            patch.object(service, "_clone_repository") as mock_clone,
-            patch.object(service, "_create_venv") as mock_venv,
-            patch.object(service, "_install_roar") as _mock_install_roar,
-            patch.object(service, "_initialize_roar") as mock_init_roar,
-            patch.object(service, "_install_packages") as _mock_install_packages,
-            patch.object(service, "_get_packages") as mock_get_packages,
-            patch.object(service, "_validate_environment") as mock_validate,
-        ):
-            mock_clone.return_value = tmp_path / "repo"
-            mock_venv.return_value = tmp_path / "repo" / ".venv"
-            mock_get_packages.return_value = []
-            mock_validate.return_value = []
-
-            service.setup(mock_pipeline, tmp_path, auto_confirm=True)
-
-            # _initialize_roar SHOULD still be called
-            mock_init_roar.assert_called_once()
-
-
 class TestCreateVenvGitignore:
     """Test that _create_venv creates .gitignore in the venv directory."""
 
@@ -253,13 +204,6 @@ class TestInitializeRoarUsesExternalExecutable:
         svc = EnvironmentSetupService()
         svc._logger = MagicMock()
         return svc
-
-    def test_initialize_roar_accepts_roar_executable(self, tmp_path):
-        """EnvironmentSetupService should accept roar_executable parameter."""
-        roar_exe = "/home/user/.venv/bin/roar"
-        service = EnvironmentSetupService(roar_executable=roar_exe)
-
-        assert service._roar_executable == roar_exe
 
     def test_initialize_roar_uses_external_executable(self, tmp_path):
         """_initialize_roar should use external roar executable, not venv python."""

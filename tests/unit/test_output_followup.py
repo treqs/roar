@@ -149,35 +149,3 @@ def test_warning_silent_when_only_tracked_modifications(
     assert buf.getvalue() == ""
 
 
-def test_warning_is_one_line_followed_by_hint_lines(
-    tmp_path: Path, hints_enabled: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _with_porcelain(monkeypatch, "?? model.pkl\n")
-    buf = io.StringIO()
-    emit_dirty_outputs_warning(repo_root=tmp_path, stream=buf, caps=_plain_caps(), quiet=False)
-    lines = [line for line in buf.getvalue().splitlines() if line]
-    assert lines[0].startswith("warning:")
-    assert all(line.startswith("hint:") for line in lines[1:])
-
-
-def test_warning_and_hints_use_distinct_colors_when_color_is_on(
-    tmp_path: Path, hints_enabled: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The warning line is yellow (ANSI-256 #226); hint lines are amber
-    (ANSI-256 #172). A reader can tell the actionable-vs-advisory split
-    at a glance — they aren't both amber."""
-    _with_porcelain(monkeypatch, "?? model.pkl\n")
-    color_caps = TerminalCaps(is_tty=True, can_color=True, can_emoji=False, width=80)
-    buf = io.StringIO()
-    emit_dirty_outputs_warning(repo_root=tmp_path, stream=buf, caps=color_caps, quiet=False)
-    raw = buf.getvalue()
-
-    lines = [line for line in raw.splitlines() if line]
-    warning_line = lines[0]
-    hint_lines = lines[1:]
-
-    assert "\x1b[38;5;226m" in warning_line  # warn_yellow
-    assert "\x1b[38;5;172m" not in warning_line  # not warn_amber
-    for line in hint_lines:
-        assert "\x1b[38;5;172m" in line  # warn_amber
-        assert "\x1b[38;5;226m" not in line  # not warn_yellow

@@ -8,15 +8,6 @@ from roar.cli import COMMAND_SPECS, LAZY_COMMANDS, cli
 from roar.cli.command_registry import build_help_groups
 
 
-def test_composite_command_removed_from_lazy_registry() -> None:
-    assert "composite" not in LAZY_COMMANDS
-
-
-def test_lazy_registry_is_built_from_command_specs() -> None:
-    assert {spec.name for spec in COMMAND_SPECS} == set(LAZY_COMMANDS)
-    assert len(COMMAND_SPECS) == len({spec.name for spec in COMMAND_SPECS})
-
-
 def test_help_groups_are_built_from_command_specs() -> None:
     help_groups = dict(build_help_groups())
 

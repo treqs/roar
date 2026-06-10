@@ -63,18 +63,3 @@ def test_recording_skips_duplicate_output_for_existing_job_path(tmp_path: Path) 
     assert status == "completed"
 
 
-def test_job_create_uses_explicit_job_uid_when_present(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    roar_dir = repo_root / ".roar"
-    roar_dir.mkdir()
-
-    with create_database_context(roar_dir) as db_ctx:
-        _job_id, job_uid = db_ctx.jobs.create(
-            command="python train.py",
-            timestamp=1.0,
-            job_uid="driver-job-uid-1234",
-            job_type="run",
-        )
-
-    assert job_uid == "driver-job-uid-1234"

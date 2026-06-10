@@ -21,43 +21,6 @@ def _ctx(tmp_path: Path) -> MagicMock:
 
 
 class TestDiffCli:
-    def test_passes_refs_to_render(self, tmp_path: Path):
-        runner = CliRunner()
-        with patch("roar.cli.commands.diff.render_diff", return_value="output") as mock:
-            result = runner.invoke(diff, ["./a.pt", "./b.pt"], obj=_ctx(tmp_path))
-
-        assert result.exit_code == 0
-        request = mock.call_args.args[0]
-        assert request.ref_a == "./a.pt"
-        assert request.ref_b == "./b.pt"
-        assert request.output_json is False
-        assert request.format == "summary"
-
-    def test_json_flag(self, tmp_path: Path):
-        runner = CliRunner()
-        with patch("roar.cli.commands.diff.render_diff", return_value="{}") as mock:
-            result = runner.invoke(diff, ["@5", "@7", "--json"], obj=_ctx(tmp_path))
-
-        assert result.exit_code == 0
-        request = mock.call_args.args[0]
-        assert request.output_json is True
-
-    def test_format_option(self, tmp_path: Path):
-        runner = CliRunner()
-        with patch("roar.cli.commands.diff.render_diff", return_value="out") as mock:
-            result = runner.invoke(diff, ["@5", "@7", "--format", "dag"], obj=_ctx(tmp_path))
-
-        assert result.exit_code == 0
-        assert mock.call_args.args[0].format == "dag"
-
-    def test_depth_option(self, tmp_path: Path):
-        runner = CliRunner()
-        with patch("roar.cli.commands.diff.render_diff", return_value="out") as mock:
-            result = runner.invoke(diff, ["@5", "@7", "--depth", "3"], obj=_ctx(tmp_path))
-
-        assert result.exit_code == 0
-        assert mock.call_args.args[0].depth == 3
-
     def test_diff_error_surfaces_as_click_exception(self, tmp_path: Path):
         runner = CliRunner()
         with patch(

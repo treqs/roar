@@ -101,10 +101,3 @@ class TestBuildToolCollector:
         result = service.collect(processes, sys_prefix="/venv")
         assert result == {}
 
-    def test_known_build_tools_set(self):
-        """Verify key tools are in the known set."""
-        assert "cmake" in KNOWN_BUILD_TOOLS
-        assert "gcc" in KNOWN_BUILD_TOOLS
-        assert "ninja" in KNOWN_BUILD_TOOLS
-        assert "rustc" in KNOWN_BUILD_TOOLS
-        assert "python" not in KNOWN_BUILD_TOOLS

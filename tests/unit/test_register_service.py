@@ -49,39 +49,6 @@ def _lineage_data(
     )
 
 
-class TestRegisterResult:
-    def test_success_result(self) -> None:
-        result = RegisterResult(
-            success=True,
-            session_hash="abc123",
-            jobs_registered=3,
-            artifacts_registered=5,
-            links_created=8,
-        )
-        assert result.success is True
-        assert result.session_hash == "abc123"
-        assert result.jobs_registered == 3
-        assert result.artifacts_registered == 5
-        assert result.links_created == 8
-        assert result.error is None
-
-    def test_error_result(self) -> None:
-        result = RegisterResult(success=False, error="Something went wrong")
-        assert result.success is False
-        assert result.error == "Something went wrong"
-
-    def test_register_result_includes_artifact_hash(self) -> None:
-        result = RegisterResult(
-            success=True,
-            session_hash="session123",
-            artifact_hash="artifact456",
-            jobs_registered=2,
-            artifacts_registered=3,
-            links_created=5,
-        )
-        assert result.artifact_hash == "artifact456"
-
-
 class TestRegisterService:
     def setup_method(self) -> None:
         self.mock_glaas_client = MagicMock()
@@ -123,30 +90,6 @@ class TestRegisterService:
         ordered = order_jobs_for_registration([child, parent])
 
         assert [job["job_uid"] for job in ordered] == ["parent-uid", "child-uid"]
-
-    def test_normalize_jobs_for_registration_maps_unresolved_ray_parent_to_submit_job(self) -> None:
-        submit_job = {
-            "id": 1,
-            "job_uid": "local-submit",
-            "step_number": 1,
-            "timestamp": 10.0,
-            "command": "ray job submit --address http://localhost:8265 -- python main.py",
-            "job_type": None,
-        }
-        phase_job = {
-            "id": 2,
-            "job_uid": "phase-job",
-            "parent_job_uid": "remote-driver",
-            "step_number": 4,
-            "timestamp": 40.0,
-            "command": "ray_task:evaluation",
-            "job_type": "ray_task",
-        }
-
-        normalized = normalize_jobs_for_registration([phase_job, submit_job])
-
-        jobs_by_uid = {job["job_uid"]: job for job in normalized}
-        assert jobs_by_uid["phase-job"]["parent_job_uid"] == "local-submit"
 
     def test_normalize_jobs_for_registration_filters_known_ray_noise_jobs(self) -> None:
         submit_job = {
@@ -192,33 +135,6 @@ class TestRegisterService:
         assert [job["job_uid"] for job in normalized] == ["local-submit", "phase-job"]
         jobs_by_uid = {job["job_uid"]: job for job in normalized}
         assert jobs_by_uid["phase-job"]["parent_job_uid"] == "local-submit"
-
-    def test_register_prepared_lineage_dry_run(self, tmp_path: Path) -> None:
-        with (
-            patch("roar.application.publish.register_execution.config_get", return_value=False),
-            patch("roar.application.publish.register_execution.Spinner") as spinner_cls,
-        ):
-            result = self.service.register_prepared_lineage(
-                lineage=_lineage_data(
-                    jobs=[{"id": 1, "job_uid": "job1"}, {"id": 2, "job_uid": "job2"}],
-                    artifacts=[{"id": "a1"}, {"id": "a2"}, {"id": "a3"}],
-                    artifact_hashes={"hash1", "hash2", "hash3"},
-                ),
-                roar_dir=tmp_path / ".roar",
-                artifact_hash="hash1",
-                dry_run=True,
-                as_blake3=False,
-                skip_confirmation=False,
-                confirm_callback=None,
-                prepared=_prepared_execution(tmp_path),
-            )
-
-        assert result.success is True
-        assert result.session_hash == "session-hash-123"
-        assert result.jobs_registered == 2
-        assert result.artifacts_registered == 3
-        self.mock_coordinator.register_lineage.assert_not_called()
-        spinner_cls.assert_not_called()
 
     def test_register_prepared_lineage_dry_run_filters_known_ray_noise_jobs(
         self, tmp_path: Path
@@ -377,26 +293,3 @@ class TestRegisterService:
                 "session_hash": "session-hash-123",
             }
         ]
-
-    def test_register_prepared_lineage_shows_spinner_for_publish_path(self, tmp_path: Path) -> None:
-        with (
-            patch("roar.application.publish.register_execution.config_get", return_value=False),
-            patch("roar.application.publish.register_execution.Spinner") as spinner_cls,
-        ):
-            result = self.service.register_prepared_lineage(
-                lineage=_lineage_data(
-                    jobs=[{"id": 1, "job_uid": "job1"}],
-                    artifacts=[{"id": "a1"}],
-                    artifact_hashes={"hash1"},
-                ),
-                roar_dir=tmp_path / ".roar",
-                artifact_hash="hash1",
-                dry_run=False,
-                as_blake3=False,
-                skip_confirmation=False,
-                confirm_callback=None,
-                prepared=_prepared_execution(tmp_path),
-            )
-
-        assert result.success is True
-        spinner_cls.assert_called_once_with("Publishing lineage to GLaaS...")

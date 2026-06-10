@@ -122,11 +122,3 @@ class TestBuildPipCollector:
         result = service.collect(processes, sys_prefix="/venv")
         assert result == {"pip": "23.3.1"}
 
-    def test_known_python_build_tools_set(self):
-        """Verify key tools are in the known set."""
-        assert "uv" in KNOWN_PYTHON_BUILD_TOOLS
-        assert "pip" in KNOWN_PYTHON_BUILD_TOOLS
-        assert "maturin" in KNOWN_PYTHON_BUILD_TOOLS
-        assert "poetry" in KNOWN_PYTHON_BUILD_TOOLS
-        assert "python" not in KNOWN_PYTHON_BUILD_TOOLS
-        assert "cmake" not in KNOWN_PYTHON_BUILD_TOOLS

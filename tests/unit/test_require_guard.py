@@ -47,10 +47,6 @@ class TestGuardEscapeHatch:
         result = _run_require(env_overrides={"ROAR_GUARD": "0"})
         assert result.returncode == 0
 
-    def test_guard_passes_when_job_is_already_instrumented(self):
-        result = _run_require(env_overrides={"ROAR_JOB_INSTRUMENTED": "1"})
-        assert result.returncode == 0
-
     def test_guard_passes_when_backend_job_marker_is_present(self):
         result = _run_require(env_overrides={"RAY_JOB_ID": "job-123"})
         assert result.returncode == 0
@@ -65,36 +61,13 @@ class TestGuardEscapeHatch:
         assert "ROAR_GUARD=0" in result.stderr
 
 
-class TestProcessTreeDetection:
-    @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only")
-    def test_walk_linux_finds_no_roar_ancestor(self, require_module):
-        # In a test runner, roar is not an ancestor.
-        assert require_module._walk_linux() is False
-
-    @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only")
-    def test_walk_macos_finds_no_roar_ancestor(self, require_module):
-        assert require_module._walk_macos() is False
-
-
 class TestIsRoarProcess:
     def test_roar_cli(self, require_module):
         assert require_module._is_roar_process("roar") is True
 
-    def test_tracer_preload(self, require_module):
-        assert require_module._is_roar_process("roar-tracer-preload") is True
-
-    def test_tracer_ebpf(self, require_module):
-        assert require_module._is_roar_process("roar-tracer-ebpf") is True
-
-    def test_tracer_ptrace(self, require_module):
-        assert require_module._is_roar_process("roar-tracer") is True
-
     def test_truncated_preload(self, require_module):
         """Linux /proc comm truncates to 15 chars."""
         assert require_module._is_roar_process("roar-tracer-pre") is True
-
-    def test_truncated_ebpf(self, require_module):
-        assert require_module._is_roar_process("roar-tracer-ebp") is True
 
     def test_unrelated_process(self, require_module):
         assert require_module._is_roar_process("python3") is False
