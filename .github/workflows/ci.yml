@@ -278,6 +278,7 @@ jobs:
           --ignore=tests/backends/osmo
           --ignore-glob=tests/backends/test_osmo*.py
           --ignore=tests/execution/runtime/test_sitecustomize_perf.py
+          --durations=30
 
   test-tracer-privileged:
     runs-on: ubuntu-latest
