@@ -206,9 +206,7 @@ def remote_set_labels(request: RemoteLabelSetRequest) -> str:
 
     session_hash = request.target.strip().lower()
     if not _is_session_hash(session_hash):
-        raise ValueError(
-            f"Expected a 64-character hex session hash, got: {request.target!r}"
-        )
+        raise ValueError(f"Expected a 64-character hex session hash, got: {request.target!r}")
 
     payload = {
         "session_hash": session_hash,
@@ -231,9 +229,7 @@ def remote_set_labels(request: RemoteLabelSetRequest) -> str:
         allow_public_without_binding=publish_auth.scope_request is None,
     )
     if not client.publish_auth.access_token and not client.publish_auth.ssh_auth_available:
-        raise ValueError(
-            "Remote label set requires authentication. Run `roar login` first."
-        )
+        raise ValueError("Remote label set requires authentication. Run `roar login` first.")
 
     result, error = client.reconcile_labels(payload)
     if error:
