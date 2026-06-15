@@ -157,6 +157,26 @@ def test_summary_no_longer_embeds_show_suggestion() -> None:
     assert "# details" not in out
 
 
+def test_job_line_includes_step_alias() -> None:
+    """The summary job line surfaces the `@N` step alias next to the UID,
+    so users can copy it into `roar show` / `roar register`."""
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.summary(_make_result(job_uid="abc12345", step_number=2), [])
+    out = _strip(buf.getvalue())
+    assert "abc12345" in out
+    assert "(alias @2)" in out
+
+
+def test_job_line_omits_alias_without_step_number() -> None:
+    buf = io.StringIO()
+    report = RunReportPresenter(stream=buf, caps=_tty_caps())
+    report.summary(_make_result(job_uid="abc12345", step_number=None), [])
+    out = _strip(buf.getvalue())
+    assert "abc12345" in out
+    assert "alias @" not in out
+
+
 def test_next_steps_hint_prefers_step_form() -> None:
     """When the step number is known, the register suggestion uses the
     `@N` form — shorter and more discoverable than the bare UID."""
@@ -164,7 +184,7 @@ def test_next_steps_hint_prefers_step_form() -> None:
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
     report.next_steps_hint(_make_result(job_uid="abc12345", step_number=3))
     out = _strip(buf.getvalue())
-    assert "hint: next: roar show --job abc12345" in out
+    assert "hint: next: roar show @3" in out
     assert "roar dag" in out
     assert "roar register @3" in out
 
@@ -182,28 +202,16 @@ def test_next_steps_hint_falls_back_to_uid_form_when_no_step_number() -> None:
     assert "roar register @" not in out
 
 
-def test_next_steps_hint_explains_what_register_does() -> None:
-    """The hint line is followed by a one-line explainer that tells the
-    user (and any agent reading the output) what `roar register` does.
-    Uses the same register_arg as the action line so the two stay in
-    sync."""
+def test_next_steps_hint_has_no_uploads_explainer() -> None:
+    """The old 'uploads lineage to glaas.ai … reproduce it later' explainer
+    was removed; the persistence nudge now lives on `roar dag`, gated on
+    sync state. The next-steps line stays a terse breadcrumb."""
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
     report.next_steps_hint(_make_result(job_uid="abc12345", step_number=3))
     out = _strip(buf.getvalue())
-    assert "'roar register @3' uploads lineage to glaas.ai" in out
-    assert "reproduce it later" in out
-
-
-def test_next_steps_hint_explainer_uses_uid_form_when_no_step_number() -> None:
-    """When the action line falls back to the UID form, the explainer
-    refers to the same UID — not a missing `@N`."""
-    buf = io.StringIO()
-    report = RunReportPresenter(stream=buf, caps=_tty_caps())
-    report.next_steps_hint(_make_result(job_uid="abc12345", step_number=None))
-    out = _strip(buf.getvalue())
-    assert "'roar register abc12345' uploads lineage to glaas.ai" in out
-    assert "'roar register @" not in out
+    assert "uploads lineage" not in out
+    assert "reproduce it later" not in out
 
 
 def test_next_steps_hint_appears_in_pipe_mode_for_agents_and_ci() -> None:
@@ -218,7 +226,7 @@ def test_next_steps_hint_appears_in_pipe_mode_for_agents_and_ci() -> None:
     report = RunReportPresenter(stream=buf, caps=_pipe_caps())
     report.next_steps_hint(_make_result(job_uid="abc12345"))
     out = _strip(buf.getvalue())
-    assert "hint: next: roar show --job abc12345" in out
+    assert "hint: next: roar show abc12345" in out
 
 
 def test_next_steps_hint_silent_in_quiet_mode() -> None:
@@ -245,7 +253,7 @@ def test_tmp_filtered_hint_fires_when_tmp_io_was_filtered() -> None:
     report.tmp_filtered_hint(_make_result(filter_counts={"tmp_files": 3}))
     out = _strip(buf.getvalue())
     assert "hint:" in out
-    assert "3 /tmp files filtered" in out
+    assert "3 files under /tmp ignored" in out
     assert "filters.ignore_tmp_files" in out
 
 
@@ -253,7 +261,7 @@ def test_tmp_filtered_hint_singular() -> None:
     buf = io.StringIO()
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
     report.tmp_filtered_hint(_make_result(filter_counts={"tmp_files": 1}))
-    assert "1 /tmp file filtered" in _strip(buf.getvalue())
+    assert "1 file under /tmp ignored" in _strip(buf.getvalue())
 
 
 def test_tmp_filtered_hint_silent_when_nothing_filtered() -> None:
@@ -385,7 +393,7 @@ def test_show_report_legacy() -> None:
     report = RunReportPresenter(_CapturePresenter(), stream=buf, caps=_tty_caps())
     report.show_report(_make_result(post_duration=0.2), [])
     out = _strip(buf.getvalue())
-    assert "roar show --job f3fba717" in out
+    assert "roar show f3fba717" in out
     assert "trace done" in out
     assert "done" in out
 
@@ -399,7 +407,8 @@ def test_no_repo_hint_fires_when_no_git_context() -> None:
     report.no_repo_hint(_make_result(git_branch=None, git_short_commit=None))
     out = _strip(buf.getvalue())
     assert "no git commit captured" in out
-    assert "roar register" in out
+    assert "clean git repo" in out
+    assert "reproducible" in out
 
 
 def test_no_repo_hint_silent_when_commit_present() -> None:
