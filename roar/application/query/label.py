@@ -24,6 +24,7 @@ from .requests import (
     LabelShowRequest,
     LabelSyncRequest,
     LabelUnsetRequest,
+    RemoteLabelSetRequest,
 )
 from .results import (
     LabelCurrentSummary,
@@ -185,6 +186,69 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
         entries=_build_sync_entries(result),
         empty_message="No label changes.",
     )
+
+
+def remote_set_labels(request: RemoteLabelSetRequest) -> str:
+    """Immediately write labels to a remote GLaaS entity by hash."""
+    if request.entity_type == "job":
+        raise ValueError(
+            "Remote job labeling is not yet supported. "
+            "A reverse lookup endpoint (job UID → session hash) is needed first."
+        )
+    if request.entity_type == "artifact":
+        raise ValueError(
+            "Remote artifact labeling is not yet supported. "
+            "Requires a glaas-api change to resolve write scope without session context."
+        )
+
+    metadata = parse_label_pairs(request.pairs)
+    LabelService._reject_reserved_keys(metadata)
+
+    session_hash = request.target.strip().lower()
+    if not _is_session_hash(session_hash):
+        raise ValueError(f"Expected a 64-character hex session hash, got: {request.target!r}")
+
+    payload = {
+        "session_hash": session_hash,
+        "mode": "sync_user_labels",
+        "dry_run": False,
+        "prune": False,
+        "labels": [
+            {
+                "entity_type": "dag",
+                "session_hash": session_hash,
+                "metadata": metadata,
+            }
+        ],
+    }
+
+    publish_auth = _load_label_sync_publish_auth(request.cwd)
+    client = GlaasClient(
+        start_dir=str(request.cwd),
+        publish_auth=publish_auth,
+        allow_public_without_binding=publish_auth.scope_request is None,
+    )
+    if not client.publish_auth.access_token and not client.publish_auth.ssh_auth_available:
+        raise ValueError("Remote label set requires authentication. Run `roar login` first.")
+
+    result, error = client.reconcile_labels(payload)
+    if error:
+        if _is_missing_reconcile_route_error(error):
+            raise ValueError(
+                "Remote label set requires GLaaS support for /api/v1/labels/reconcile."
+            ) from None
+        raise ValueError(f"Remote label set failed: {error}")
+
+    heading = _render_sync_heading(result, dry_run=False)
+    return LabelCurrentSummary(
+        heading=heading,
+        entries=_build_sync_entries(result),
+        empty_message="No label changes.",
+    ).render()
+
+
+def _is_session_hash(value: str) -> bool:
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
 def show_labels(request: LabelShowRequest) -> str:

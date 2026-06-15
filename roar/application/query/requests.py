@@ -110,6 +110,14 @@ class LabelSyncRequest:
     output_json: bool = False
 
 
+@dataclass(frozen=True)
+class RemoteLabelSetRequest:
+    cwd: Path
+    entity_type: str
+    target: str
+    pairs: tuple[str, ...]
+
+
 DiffFormat = Literal["summary", "category", "dag"]
 
 
