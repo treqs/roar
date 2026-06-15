@@ -228,17 +228,27 @@ def _cache_is_inside_project_tree(
     try:
         start = Path(start_dir).resolve()
         project_root = _find_project_tree_root(start)
+        if project_root is None:
+            return False
         paths.cache_dir.resolve().relative_to(project_root)
         return True
     except (OSError, ValueError):
         return False
 
 
-def _find_project_tree_root(start: Path) -> Path:
+def _find_project_tree_root(start: Path) -> Path | None:
+    """Return the nearest ancestor containing a ``.git`` marker, or ``None``.
+
+    Returning ``None`` when no marker is found (instead of falling back to
+    ``start``) is deliberate: without a project boundary we must not treat the
+    cwd as a "project tree". The default cache dir lives under ``$HOME``, so a
+    ``start`` fallback makes any home-directory invocation (cwd is an ancestor
+    of ``~/.cache/roar``) look cache-in-project and silently suppress telemetry.
+    """
     for parent in [start, *list(start.parents)]:
         if (parent / ".git").exists():
             return parent
-    return start
+    return None
 
 
 def _load_config_file(path: Path) -> dict[str, Any]:
