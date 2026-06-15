@@ -231,6 +231,16 @@ jobs:
           pip install maturin
           pip install -e .[dev]
 
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
       - name: Build native hash extension
         run: ./scripts/build_hash_native.sh
 
