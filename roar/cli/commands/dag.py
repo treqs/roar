@@ -130,3 +130,17 @@ def dag(
             _caps, hint = make_hint_printer()
             hint("To rebuild an artifact: roar reproduce <artifact-hash>")
             hint("To clear and start fresh: roar reset")
+
+            # Persist nudge — only while the session has unregistered jobs,
+            # so it stops once everything is on GLaaS.
+            from ...application.query.dag import session_has_unsynced
+
+            if session_has_unsynced(ctx.roar_dir, session_ref):
+                hint("To save lineage to GLaaS: roar register <job-or-artifact>")
+
+            # Login nudge — only when there's no live session, framed as a gain.
+            from ...auth_store import is_auth_state_expired, load_auth_state
+
+            auth = load_auth_state()
+            if auth is None or is_auth_state_expired(auth):
+                hint("To attribute runs to your account: roar login")

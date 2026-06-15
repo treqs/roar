@@ -245,18 +245,18 @@ class TestPresenterNormal:
             ["python"],
         )
         text = out.getvalue()
-        assert "flt" in text
+        assert "ignored i/o" in text
         assert "18 system" in text
-        assert "1244 pkg" in text
-        assert "4 tmp" in text
+        assert "1244 packages" in text
+        assert "4 /tmp" in text
 
     def test_normal_skips_filter_line_when_no_drops(self) -> None:
         out = io.StringIO()
         p = RunReportPresenter(stream=out, caps=_no_pipe_caps(), verbosity="normal")
         p.summary(_make_result(), ["python"])
-        # No `flt` row should appear when nothing was filtered (or the
-        # counts dict is empty).
-        assert "flt" not in out.getvalue()
+        # No `ignored i/o` row should appear when nothing was filtered (or
+        # the counts dict is empty).
+        assert "ignored i/o" not in out.getvalue()
 
     def test_normal_does_not_list_files(self) -> None:
         out = io.StringIO()
@@ -300,7 +300,7 @@ class TestPresenterVerbose:
             ["python"],
         )
         text = out.getvalue()
-        assert "2 pkg" in text  # count line still shows up
+        assert "2 packages" in text  # count line still shows up
         assert "/pkg/a" not in text
         assert "/pkg/b" not in text
 
@@ -330,7 +330,7 @@ class TestPresenterDebug:
         p = RunReportPresenter(stream=out, caps=_no_pipe_caps(), verbosity="debug")
         p.summary(_make_result(filter_counts={"package_reads": 2}), ["python"])
         # Counts present, no per-category list — debug just skips listing.
-        assert "2 pkg" in out.getvalue()
+        assert "2 packages" in out.getvalue()
 
 
 class TestPresenterPipeMode:
