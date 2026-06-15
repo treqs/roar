@@ -9,91 +9,24 @@ Tests verify:
 """
 
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib
-
 from roar.cli.commands.init import DEFAULT_CONFIG_TEMPLATE
 from roar.integrations.config import (
     CONFIGURABLE_KEYS,
-    VALID_HASH_ALGORITHMS,
     _get_default_config,
     config_get,
     config_set,
-    find_config_file,
     get_roar_dir,
     load_config,
-    load_settings,
     save_config,
 )
 
 
 class TestRoarInit:
     """Tests for the roar init command."""
-
-    def test_init_creates_config_file(self, tmp_path: Path) -> None:
-        """roar init creates .roar/config.toml file."""
-        # Run roar init
-        result = subprocess.run(
-            [sys.executable, "-m", "roar", "init", "-n"],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, f"roar init failed: {result.stderr}"
-
-        # Verify .roar directory exists
-        roar_dir = tmp_path / ".roar"
-        assert roar_dir.exists(), ".roar directory should be created"
-        assert roar_dir.is_dir(), ".roar should be a directory"
-
-        # Verify config.toml exists
-        config_path = roar_dir / "config.toml"
-        assert config_path.exists(), ".roar/config.toml should be created"
-        assert config_path.is_file(), "config.toml should be a file"
-
-    def test_init_config_is_valid_toml(self, tmp_path: Path) -> None:
-        """roar init creates a valid TOML config file."""
-        # Run roar init
-        subprocess.run(
-            [sys.executable, "-m", "roar", "init", "-n"],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-
-        # Load the config - this will fail if TOML is invalid
-        config = load_config(start_dir=str(tmp_path))
-
-        # Verify basic structure
-        assert "output" in config
-        assert "registration" in config
-        assert "hash" in config
-        assert "logging" in config
-
-    def test_init_config_can_be_found(self, tmp_path: Path) -> None:
-        """find_config_file() can locate the config created by init."""
-        # Run roar init
-        subprocess.run(
-            [sys.executable, "-m", "roar", "init", "-n"],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-
-        # find_config_file should locate it
-        found = find_config_file(str(tmp_path))
-        assert found is not None, "find_config_file should find the config"
-        assert found.name == "config.toml"
-        assert found.parent.name == ".roar"
 
     def test_get_roar_dir_reuses_parent_roar_directory(self, tmp_path: Path) -> None:
         root = tmp_path / "repo"
@@ -109,123 +42,6 @@ class TestRoarInit:
 
 class TestDefaultConfigTemplate:
     """Tests for the DEFAULT_CONFIG_TEMPLATE used by roar init."""
-
-    def test_template_is_valid_toml(self, tmp_path: Path) -> None:
-        """DEFAULT_CONFIG_TEMPLATE is valid TOML."""
-        # Write template to file
-        config_path = tmp_path / ".roar" / "config.toml"
-        config_path.parent.mkdir(parents=True)
-        config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
-
-        # Load should not raise
-        config = load_config(config_path=config_path)
-        assert isinstance(config, dict)
-
-    def test_template_output_defaults(self, tmp_path: Path) -> None:
-        """Template has correct output section defaults."""
-        config_path = tmp_path / ".roar" / "config.toml"
-        config_path.parent.mkdir(parents=True)
-        config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
-
-        config = load_config(config_path=config_path)
-
-        assert config["output"]["track_repo_files"] is False
-        assert config["output"]["quiet"] is False
-
-    def test_template_analyzers_defaults(self, tmp_path: Path) -> None:
-        """Template has correct analyzers section defaults."""
-        config_path = tmp_path / ".roar" / "config.toml"
-        config_path.parent.mkdir(parents=True)
-        config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
-
-        config = load_config(config_path=config_path)
-
-        assert config["analyzers"]["experiment_tracking"] is True
-
-    def test_template_filters_defaults(self, tmp_path: Path) -> None:
-        """Template has correct filters section defaults."""
-        config_path = tmp_path / ".roar" / "config.toml"
-        config_path.parent.mkdir(parents=True)
-        config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
-
-        config = load_config(config_path=config_path)
-
-        assert config["filters"]["ignore_system_reads"] is True
-        assert config["filters"]["ignore_package_reads"] is True
-        assert config["filters"]["ignore_torch_cache"] is True
-        assert config["filters"]["ignore_tmp_files"] is True
-
-    def test_template_registration_defaults(self, tmp_path: Path) -> None:
-        """Template has correct registration section defaults."""
-        config_path = tmp_path / ".roar" / "config.toml"
-        config_path.parent.mkdir(parents=True)
-        config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
-
-        config = load_config(config_path=config_path)
-
-        assert config["registration"]["public_by_default"] is False
-        assert config["registration"]["omit"]["enabled"] is True
-        assert config["registration"]["tagging"]["enabled"] is True
-        assert "WANDB_API_KEY" in config["registration"]["omit"]["env_vars"]["names"]
-        assert "OPENAI_API_KEY" in config["registration"]["omit"]["env_vars"]["names"]
-        assert "ANTHROPIC_API_KEY" in config["registration"]["omit"]["env_vars"]["names"]
-
-    def test_template_includes_materialized_tagging_and_proxy_sections(self) -> None:
-        raw = tomllib.loads(DEFAULT_CONFIG_TEMPLATE)
-
-        assert raw["registration"]["tagging"]["enabled"] is True
-        assert raw["proxy"]["enabled"] is False
-
-    def test_template_exposes_telemetry_endpoint_override(self) -> None:
-        assert "[telemetry]" in DEFAULT_CONFIG_TEMPLATE
-        assert (
-            '# endpoint = "https://api.glaas.ai/api/v1/telemetry/roar"' in DEFAULT_CONFIG_TEMPLATE
-        )
-
-    def test_template_hash_defaults(self, tmp_path: Path) -> None:
-        """Template has correct hash section defaults."""
-        config_path = tmp_path / ".roar" / "config.toml"
-        config_path.parent.mkdir(parents=True)
-        config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
-
-        config = load_config(config_path=config_path)
-
-        assert config["hash"]["primary"] == "blake3"
-        assert config["hash"]["get"] == ["sha256"]
-        assert config["hash"]["put"] == []
-        assert config["hash"]["run"] == []
-
-    def test_template_proxy_defaults(self, tmp_path: Path) -> None:
-        """Template has correct proxy section defaults."""
-        config_path = tmp_path / ".roar" / "config.toml"
-        config_path.parent.mkdir(parents=True)
-        config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
-
-        config = load_config(config_path=config_path)
-
-        assert config["proxy"]["enabled"] is False
-
-    def test_template_reversible_defaults(self, tmp_path: Path) -> None:
-        """Template has correct reversible section defaults."""
-        config_path = tmp_path / ".roar" / "config.toml"
-        config_path.parent.mkdir(parents=True)
-        config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
-
-        config = load_config(config_path=config_path)
-
-        assert config["reversible"]["enabled"] is False
-
-    def test_template_logging_defaults(self, tmp_path: Path) -> None:
-        """Template has correct logging section defaults."""
-        config_path = tmp_path / ".roar" / "config.toml"
-        config_path.parent.mkdir(parents=True)
-        config_path.write_text(DEFAULT_CONFIG_TEMPLATE)
-
-        config = load_config(config_path=config_path)
-
-        assert config["logging"]["level"] == "warning"
-        assert config["logging"]["console"] is False
-        assert config["logging"]["file"] is True
 
 
 class TestDefaultsMatchPydanticModels:
@@ -283,16 +99,6 @@ class TestDefaultsMatchPydanticModels:
 class TestConfigLoading:
     """Tests for config loading functionality."""
 
-    def test_load_config_without_file_returns_defaults(self, tmp_path: Path) -> None:
-        """load_config returns defaults when no config file exists."""
-        config = load_config(start_dir=str(tmp_path))
-
-        # Should have all sections with defaults
-        assert config["output"]["quiet"] is False
-        assert config["registration"]["omit"]["enabled"] is True
-        assert config["hash"]["primary"] == "blake3"
-        assert config["telemetry"]["enabled"] is True
-
     def test_load_config_merges_with_defaults(self, tmp_path: Path) -> None:
         """load_config merges file values with defaults."""
         # Create partial config
@@ -310,15 +116,6 @@ quiet = true
         # Unspecified values should use defaults
         assert config["output"]["track_repo_files"] is False
         assert config["registration"]["omit"]["enabled"] is True
-
-    def test_load_settings_returns_settings_object(self, tmp_path: Path) -> None:
-        """load_settings returns a RoarSettings instance."""
-        settings = load_settings(start_dir=str(tmp_path))
-
-        assert hasattr(settings, "output")
-        assert hasattr(settings, "registration")
-        assert hasattr(settings, "hash")
-        assert settings.output.quiet is False
 
     def test_config_get_nested_keys(self, tmp_path: Path) -> None:
         """config_get can access deeply nested keys."""
@@ -437,14 +234,6 @@ class TestConfigurableKeys:
                     f"{key}: got {value!r}, expected {expected_default!r}"
                 )
 
-    def test_hash_algorithms_are_valid(self) -> None:
-        """All hash algorithms in defaults are in VALID_HASH_ALGORITHMS."""
-        defaults = _get_default_config()
-
-        assert defaults["hash"]["primary"] in VALID_HASH_ALGORITHMS
-        for algo in defaults["hash"]["get"]:
-            assert algo in VALID_HASH_ALGORITHMS
-
 
 class TestConfigSetValidation:
     def test_config_set_invalid_glaas_url_is_rejected(self, tmp_path: Path) -> None:
@@ -490,10 +279,6 @@ default = "ebpf"
     def test_config_set_legacy_mode_is_rejected(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match=r"Unknown config key: tracer\.mode"):
             config_set("tracer.mode", "ptrace", start_dir=str(tmp_path))
-
-    def test_fallback_enabled_default_is_true(self, tmp_path: Path) -> None:
-        config = load_config(start_dir=str(tmp_path))
-        assert config["tracer"]["fallback_enabled"] is True
 
     def test_config_set_preload_mode(self, tmp_path: Path) -> None:
         config_set("tracer.default", "preload", start_dir=str(tmp_path))

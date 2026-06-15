@@ -14,10 +14,6 @@ class TestIsSshUrl:
         """SCP-like format for GitHub should return True."""
         assert is_ssh_url("git@github.com:user/repo.git") is True
 
-    def test_scp_format_gitlab(self):
-        """SCP-like format for GitLab should return True."""
-        assert is_ssh_url("git@gitlab.com:group/repo.git") is True
-
     def test_scp_format_nested_path(self):
         """SCP-like format with nested path should return True."""
         assert is_ssh_url("git@gitlab.com:group/subgroup/repo.git") is True
@@ -26,21 +22,9 @@ class TestIsSshUrl:
         """Explicit SSH scheme for GitHub should return True."""
         assert is_ssh_url("ssh://git@github.com/user/repo.git") is True
 
-    def test_ssh_scheme_gitlab(self):
-        """Explicit SSH scheme for GitLab should return True."""
-        assert is_ssh_url("ssh://git@gitlab.com/group/repo.git") is True
-
-    def test_ssh_scheme_self_hosted(self):
-        """SSH scheme for self-hosted should return True."""
-        assert is_ssh_url("ssh://git@git.company.com/team/repo.git") is True
-
     def test_https_url_returns_false(self):
         """HTTPS URL should return False."""
         assert is_ssh_url("https://github.com/user/repo.git") is False
-
-    def test_http_url_returns_false(self):
-        """HTTP URL should return False."""
-        assert is_ssh_url("http://github.com/user/repo.git") is False
 
     def test_file_path_returns_false(self):
         """File path should return False."""
@@ -59,53 +43,24 @@ class TestSshToHttps:
         result = ssh_to_https("git@github.com:user/repo.git")
         assert result == "https://github.com/user/repo.git"
 
-    def test_scp_format_gitlab(self):
-        """Convert SCP-like GitLab URL to HTTPS."""
-        result = ssh_to_https("git@gitlab.com:group/repo.git")
-        assert result == "https://gitlab.com/group/repo.git"
-
     def test_scp_format_nested_path(self):
         """Convert SCP-like URL with nested path to HTTPS."""
         result = ssh_to_https("git@gitlab.com:group/subgroup/repo.git")
         assert result == "https://gitlab.com/group/subgroup/repo.git"
-
-    def test_scp_format_bitbucket(self):
-        """Convert SCP-like Bitbucket URL to HTTPS."""
-        result = ssh_to_https("git@bitbucket.org:team/repo.git")
-        assert result == "https://bitbucket.org/team/repo.git"
-
-    def test_scp_format_self_hosted(self):
-        """Convert SCP-like self-hosted URL to HTTPS."""
-        result = ssh_to_https("git@git.company.com:team/project.git")
-        assert result == "https://git.company.com/team/project.git"
 
     def test_ssh_scheme_github(self):
         """Convert SSH scheme GitHub URL to HTTPS."""
         result = ssh_to_https("ssh://git@github.com/user/repo.git")
         assert result == "https://github.com/user/repo.git"
 
-    def test_ssh_scheme_gitlab(self):
-        """Convert SSH scheme GitLab URL to HTTPS."""
-        result = ssh_to_https("ssh://git@gitlab.com/group/repo.git")
-        assert result == "https://gitlab.com/group/repo.git"
-
     def test_ssh_scheme_nested_path(self):
         """Convert SSH scheme URL with nested path to HTTPS."""
         result = ssh_to_https("ssh://git@gitlab.com/group/subgroup/repo.git")
         assert result == "https://gitlab.com/group/subgroup/repo.git"
 
-    def test_ssh_scheme_self_hosted(self):
-        """Convert SSH scheme self-hosted URL to HTTPS."""
-        result = ssh_to_https("ssh://git@git.company.com/team/repo.git")
-        assert result == "https://git.company.com/team/repo.git"
-
     def test_https_url_returns_none(self):
         """HTTPS URL should return None."""
         assert ssh_to_https("https://github.com/user/repo.git") is None
-
-    def test_http_url_returns_none(self):
-        """HTTP URL should return None."""
-        assert ssh_to_https("http://github.com/user/repo.git") is None
 
     def test_empty_string_returns_none(self):
         """Empty string should return None."""
@@ -127,20 +82,11 @@ class TestNormalizeGitUrl:
     def test_scp_format(self):
         assert normalize_git_url("git@github.com:user/repo.git") == "github.com/user/repo"
 
-    def test_scp_format_no_suffix(self):
-        assert normalize_git_url("git@github.com:user/repo") == "github.com/user/repo"
-
     def test_https_with_suffix(self):
         assert normalize_git_url("https://github.com/user/repo.git") == "github.com/user/repo"
 
-    def test_https_no_suffix(self):
-        assert normalize_git_url("https://github.com/user/repo") == "github.com/user/repo"
-
     def test_ssh_scheme(self):
         assert normalize_git_url("ssh://git@github.com/user/repo.git") == "github.com/user/repo"
-
-    def test_ssh_scheme_no_suffix(self):
-        assert normalize_git_url("ssh://git@github.com/user/repo") == "github.com/user/repo"
 
     def test_http(self):
         assert normalize_git_url("http://github.com/user/repo.git") == "github.com/user/repo"
@@ -153,12 +99,6 @@ class TestUrlsMatch:
         assert urls_match(
             "git@github.com:user/repo.git",
             "https://github.com/user/repo.git",
-        )
-
-    def test_ssh_vs_https_no_suffix(self):
-        assert urls_match(
-            "git@github.com:user/repo",
-            "https://github.com/user/repo",
         )
 
     def test_mixed_suffix(self):

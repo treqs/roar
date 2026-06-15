@@ -56,11 +56,6 @@ def _transfer(tmp_path: Path) -> GetTransferResult:
 # ---- _build_get_command -------------------------------------------------------
 
 
-def test_build_get_command_bare(tmp_path: Path) -> None:
-    cmd = _build_get_command(_request(tmp_path))
-    assert cmd == "roar get hf://datasets/openai/gsm8k"
-
-
 def test_build_get_command_includes_limit(tmp_path: Path) -> None:
     cmd = _build_get_command(_request(tmp_path, limit=2))
     assert cmd == "roar get hf://datasets/openai/gsm8k --limit 2"

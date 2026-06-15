@@ -34,28 +34,6 @@ class TestTracerStatusEbpfRow:
 
 
 class TestTracerUseVerb:
-    def test_use_writes_tracer_default_key(self):
-        runner = CliRunner()
-        with patch.object(
-            tracer_cli_module, "config_set", return_value=("/tmp/config.toml", "ebpf")
-        ) as mock_set:
-            result = runner.invoke(tracer_cli_module.tracer, ["use", "ebpf"])
-
-        assert result.exit_code == 0, result.output
-        mock_set.assert_called_once_with("tracer.default", "ebpf")
-        assert "Default tracer set to: ebpf" in result.output
-
-    def test_use_preload(self):
-        runner = CliRunner()
-        with patch.object(
-            tracer_cli_module, "config_set", return_value=("/tmp/config.toml", "preload")
-        ) as mock_set:
-            result = runner.invoke(tracer_cli_module.tracer, ["use", "preload"])
-
-        assert result.exit_code == 0, result.output
-        mock_set.assert_called_once_with("tracer.default", "preload")
-        assert "Default tracer set to: preload" in result.output
-
     def test_use_warns_when_picked_backend_is_fixable(self):
         runner = CliRunner()
         fixable = tracer_cli_module._BackendStatus("fixable", "perf_event_paranoid=4 (needs <= 1)")

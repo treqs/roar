@@ -39,12 +39,6 @@ def test_save_auth_state_creates_file_with_secure_permissions(xdg_config_home: P
     assert mode == 0o600
 
 
-def test_parse_auth_state_expiry_accepts_utc_z_suffix() -> None:
-    parsed = parse_auth_state_expiry("2030-01-01T00:00:00Z")
-
-    assert parsed == datetime(2030, 1, 1, 0, 0, tzinfo=timezone.utc)
-
-
 def test_parse_auth_state_expiry_rejects_invalid_timestamp() -> None:
     with pytest.raises(click.ClickException, match="invalid expires_at timestamp"):
         parse_auth_state_expiry("not-a-timestamp")

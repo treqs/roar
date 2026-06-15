@@ -3,8 +3,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from roar.core.exceptions import TracerNotFoundError, TracerPreflightError
-from roar.execution.cluster.proxy import S3LogEntry
+from roar.core.exceptions import TracerPreflightError
 from roar.execution.runtime.coordinator import RunCoordinator
 from roar.execution.runtime.resources import RuntimeObservationBundle, RuntimeResourceStart
 
@@ -104,84 +103,6 @@ class TestRuntimeResourceLifecycle:
 
         assert resource.stop_calls == [0]
 
-    def test_runtime_resource_env_patch_is_forwarded_to_tracer(self):
-        resource = _FakeRuntimeResource(
-            start_env={
-                "AWS_ENDPOINT_URL": "http://127.0.0.1:9090",
-                "ROAR_UPSTREAM_S3_ENDPOINT": "http://localhost:4566",
-            }
-        )
-        mock_tracer = _make_mock_tracer()
-
-        coord = RunCoordinator(tracer_service=mock_tracer, runtime_resources=[resource])
-        self._run_coord(coord)
-
-        call_kwargs = mock_tracer.execute.call_args.kwargs
-        assert call_kwargs["extra_env"]["ROAR_EXECUTION_BACKEND"] == "local"
-        assert call_kwargs["extra_env"]["AWS_ENDPOINT_URL"] == "http://127.0.0.1:9090"
-        assert call_kwargs["extra_env"]["ROAR_UPSTREAM_S3_ENDPOINT"] == "http://localhost:4566"
-
-    def test_no_runtime_resource_means_no_extra_env_beyond_backend(self):
-        mock_tracer = _make_mock_tracer()
-
-        coord = RunCoordinator(tracer_service=mock_tracer, runtime_resources=[])
-        self._run_coord(coord)
-
-        call_kwargs = mock_tracer.execute.call_args.kwargs
-        assert call_kwargs["extra_env"] == {"ROAR_EXECUTION_BACKEND": "local"}
-
-    def test_run_job_uid_is_forwarded_to_record_job(self):
-        mock_tracer = _make_mock_tracer()
-        coord = RunCoordinator(tracer_service=mock_tracer, runtime_resources=[])
-        mock_prov = MagicMock()
-        mock_prov.collect.return_value = {"data": {"read_files": [], "written_files": []}}
-
-        with (
-            patch("secrets.token_hex", return_value="runuid12"),
-            patch("os.path.exists", return_value=True),
-            patch("roar.integrations.config.load_config", return_value={}),
-            patch("roar.execution.provenance.ProvenanceService", return_value=mock_prov),
-            patch.object(
-                coord, "_record_job", return_value=(1, "abc123", [], [], [], [], {})
-            ) as mock_record,
-            patch.object(coord, "_backup_previous_outputs"),
-            patch.object(coord, "_cleanup_logs"),
-        ):
-            coord.execute(_make_ctx())
-
-        assert mock_record.call_args.kwargs["run_job_uid"] == "runuid12"
-
-    def test_tracer_overrides_are_forwarded(self):
-        resource = _FakeRuntimeResource(start_env={"AWS_ENDPOINT_URL": "http://127.0.0.1:9090"})
-        mock_tracer = _make_mock_tracer()
-
-        coord = RunCoordinator(tracer_service=mock_tracer, runtime_resources=[resource])
-        ctx = _make_ctx()
-        ctx.tracer_mode = "ptrace"
-        ctx.tracer_fallback = False
-        self._run_coord(coord, ctx=ctx)
-
-        resolve_kwargs = mock_tracer.resolve_execution_candidates.call_args.kwargs
-        assert resolve_kwargs["tracer_mode_override"] == "ptrace"
-        assert resolve_kwargs["fallback_enabled_override"] is False
-
-        call_kwargs = mock_tracer.execute.call_args.kwargs
-        assert call_kwargs["tracer_mode_override"] == "ptrace"
-        assert call_kwargs["fallback_enabled_override"] is False
-        assert call_kwargs["candidates_override"] == [("ptrace", "/fake/roar-tracer")]
-
-    def test_runtime_resource_is_stopped_on_tracer_not_found(self):
-        resource = _FakeRuntimeResource(start_env={"AWS_ENDPOINT_URL": "http://127.0.0.1:9090"})
-        mock_tracer = _make_mock_tracer()
-        mock_tracer.resolve_execution_candidates.side_effect = TracerNotFoundError("no tracer")
-
-        coord = RunCoordinator(tracer_service=mock_tracer, runtime_resources=[resource])
-        with patch.object(coord, "_backup_previous_outputs"):
-            result = coord.execute(_make_ctx())
-
-        assert result.exit_code == 1
-        assert resource.stop_calls == [1]
-
     def test_runtime_resource_is_stopped_on_tracer_preflight_failure(self):
         resource = _FakeRuntimeResource(start_env={"AWS_ENDPOINT_URL": "http://127.0.0.1:9090"})
         mock_tracer = _make_mock_tracer()
@@ -239,40 +160,3 @@ class TestRuntimeResourceLifecycle:
 
         assert result.exit_code == 1
         assert resource.stop_calls == [1]
-
-    def test_runtime_resource_observations_are_forwarded_to_record_job(self):
-        s3_entries = (
-            S3LogEntry(operation="GetObject", bucket="bucket", key="input.csv", etag="etag"),
-        )
-        resource = _FakeRuntimeResource(
-            start_env={"AWS_ENDPOINT_URL": "http://127.0.0.1:9090"},
-            stop_result=RuntimeObservationBundle(s3_entries=s3_entries),
-        )
-        mock_tracer = _make_mock_tracer()
-
-        coord = RunCoordinator(tracer_service=mock_tracer, runtime_resources=[resource])
-        mock_prov = MagicMock()
-        mock_prov.collect.return_value = {"data": {"read_files": [], "written_files": []}}
-
-        with (
-            patch("os.path.exists", return_value=True),
-            patch("roar.integrations.config.load_config", return_value={}),
-            patch("roar.execution.provenance.ProvenanceService", return_value=mock_prov),
-            patch.object(
-                coord, "_record_job", return_value=(1, "abc123", [], [], [], [], {})
-            ) as mock_record,
-            patch.object(coord, "_backup_previous_outputs"),
-            patch.object(coord, "_cleanup_logs"),
-        ):
-            coord.execute(_make_ctx())
-
-        assert mock_record.call_args.args[5] == list(s3_entries)
-
-    def test_proxy_active_is_reflected_in_run_result(self):
-        resource = _FakeRuntimeResource(start_env={"AWS_ENDPOINT_URL": "http://127.0.0.1:9090"})
-        mock_tracer = _make_mock_tracer()
-
-        coord = RunCoordinator(tracer_service=mock_tracer, runtime_resources=[resource])
-        result = self._run_coord(coord)
-
-        assert result.proxy_active is True

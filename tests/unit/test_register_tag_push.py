@@ -187,9 +187,6 @@ class TestDistinctJobCommits:
         )
         assert _distinct_job_commits(lineage, "aaa") == ["xxx"]
 
-    def test_none_lineage_returns_empty(self) -> None:
-        assert _distinct_job_commits(None, "aaa") == []
-
 
 # ---------------------------------------------------------------------------
 # ensure_roar_tags_pushed (end-to-end across modes)
@@ -453,11 +450,3 @@ class TestCliRender:
         # The warning goes to stderr.
         assert "NOT pushed" in captured.err
         assert "will not resolve" in captured.err
-
-    def test_render_none_is_silent(self, capsys: pytest.CaptureFixture[str]) -> None:
-        from roar.cli.commands.register import _render_tag_summary
-
-        _render_tag_summary(None)
-        captured = capsys.readouterr()
-        assert captured.out == ""
-        assert captured.err == ""

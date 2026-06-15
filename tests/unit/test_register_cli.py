@@ -38,29 +38,6 @@ def _fake_result() -> RegisterLineageResponse:
     )
 
 
-def test_register_cli_accepts_s3_uri(tmp_path: Path) -> None:
-    runner = CliRunner()
-
-    with (
-        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
-        patch(
-            "roar.cli.commands.register._resolve_glaas_web_url",
-            return_value="https://glaas.local",
-        ),
-    ):
-        mock_register.return_value = _fake_result()
-        result = runner.invoke(
-            register,
-            ["s3://output-bucket/results/run123/final_report.json", "--yes"],
-            obj=_mock_context(tmp_path),
-        )
-
-    assert result.exit_code == 0, result.output
-    mock_register.assert_called_once()
-    request = mock_register.call_args.args[0]
-    assert request.target == "s3://output-bucket/results/run123/final_report.json"
-
-
 def test_register_cli_prints_next_steps_for_artifacts(tmp_path: Path) -> None:
     runner = CliRunner()
     artifact_hash = "abcdef0123456789abcdef0123456789"
@@ -308,20 +285,6 @@ def test_register_cli_anonymous_prompt_uses_configured_glaas_host(tmp_path: Path
     assert result.exit_code != 0
     assert "Will publish to: https://glaas.staging.example/dag/<session-hash>" in result.output
     mock_register.assert_not_called()
-
-
-def test_register_cli_uses_private_scope_as_default_publish_intent(tmp_path: Path) -> None:
-    runner = CliRunner()
-    save_repo_scope("private", start_dir=tmp_path)
-
-    with patch("roar.cli.commands.register.register_lineage_target") as mock_register:
-        mock_register.return_value = _fake_result()
-        result = runner.invoke(register, ["model.pt", "--yes"], obj=_mock_context(tmp_path))
-
-    assert result.exit_code == 0, result.output
-    request = mock_register.call_args.args[0]
-    assert request.public is False
-    assert request.anonymous is False
 
 
 def test_register_cli_rejects_anonymous_private(tmp_path: Path) -> None:

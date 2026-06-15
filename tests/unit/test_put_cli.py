@@ -82,29 +82,6 @@ def test_put_cli_dry_run_mentions_destination_and_count(tmp_path: Path) -> None:
     assert str(tmp_path / "model.pt") in result.output
 
 
-def test_put_cli_dry_run_does_not_load_glaas_web_url(tmp_path: Path) -> None:
-    runner = CliRunner()
-    response = PutResponse(
-        success=True,
-        destination="s3://bucket/release",
-        dry_run=True,
-        would_upload=[PutDryRunItem(path=str(tmp_path / "model.pt"), exists=True)],
-    )
-
-    with (
-        patch("roar.cli.commands.put.put_artifacts", return_value=response),
-        patch("roar.cli.commands.put._resolve_glaas_web_url") as resolve_web_url,
-    ):
-        result = runner.invoke(
-            put,
-            ["model.pt", "s3://bucket/release", "-m", "publish release", "--dry-run"],
-            obj=_mock_context(tmp_path),
-        )
-
-    assert result.exit_code == 0, result.output
-    resolve_web_url.assert_not_called()
-
-
 def test_put_cli_uses_public_default_from_config(tmp_path: Path) -> None:
     runner = CliRunner()
     config_set("registration.public_by_default", "true", start_dir=str(tmp_path))

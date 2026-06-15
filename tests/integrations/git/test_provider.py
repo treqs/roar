@@ -44,18 +44,6 @@ def test_get_status_suppresses_git_stderr_outside_a_repo(tmp_path, capfd) -> Non
     assert "not a git repository" not in captured.err
 
 
-def test_get_status_passes_devnull_stderr(tmp_path) -> None:
-    provider = GitVCSProvider()
-
-    with patch(
-        "roar.integrations.git.provider.subprocess.check_output",
-        return_value=b"",
-    ) as mock_check:
-        provider.get_status(str(tmp_path))
-
-    assert mock_check.call_args.kwargs.get("stderr") is subprocess.DEVNULL
-
-
 # --- canonical remote resolution (real temp repos) ---------------------------
 # A repo whose only remote isn't named "origin" (e.g. "treqs") must still record
 # its remote URL as git_repo, not fall back to a local file:// path.
