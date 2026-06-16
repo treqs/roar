@@ -150,7 +150,7 @@ def _warn_unsourced_inputs(ctx: RoarContext, target: str) -> None:
     another machine, so the published record isn't reproducible. Reuses the same
     query as ``roar inputs --unsourced`` so the two always agree."""
     try:
-        from ...application.query.inputs import build_inputs_summary
+        from ...application.query.inputs import build_inputs_summary, is_ephemeral_tmp_path
         from ...application.query.requests import InputsQueryRequest
 
         summary = build_inputs_summary(
@@ -177,6 +177,14 @@ def _warn_unsourced_inputs(ctx: RoarContext, target: str) -> None:
     )
     click.echo(f"   {shown}", err=True)
     click.echo("   Use `roar inputs --unsourced` to see the full list.", err=True)
+
+    tmp_count = sum(1 for a in summary.artifacts if is_ephemeral_tmp_path(a.path))
+    if tmp_count:
+        click.echo(
+            f"⚠  {tmp_count} of these live in /tmp and definitely won't exist on "
+            "reproduce — move them into your project or ingest with `roar get`.",
+            err=True,
+        )
 
 
 @click.command("register")

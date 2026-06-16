@@ -91,6 +91,52 @@ def test_filter_files_keeps_regular_tmp_writes_when_tmp_filter_disabled(monkeypa
     assert user_tmp_output in filtered.written_files
 
 
+def test_preexisting_tmp_read_is_kept_even_with_tmp_filter_on(monkeypatch) -> None:
+    """A /tmp file the job only *reads* pre-existed the run — a real (ephemeral)
+    input — and must survive the default ignore_tmp_files filter."""
+    monkeypatch.setattr(file_filter, "_get_editable_install_dirs", lambda: frozenset())
+
+    preexisting_input = "/tmp/dataset.parquet"
+    tracer_data = TracerData(
+        opened_files=[preexisting_input],
+        read_files=[preexisting_input],
+        written_files=[],
+    )
+    python_data = PythonInjectData(sys_prefix="", sys_base_prefix="", roar_inject_dir="")
+
+    filtered = FileFilterService().filter_files(
+        tracer_data,
+        python_data,
+        _filter_config(ignore_tmp_files=True),
+    )
+
+    assert preexisting_input in filtered.read_files
+    assert preexisting_input in filtered.opened_files
+
+
+def test_tmp_intermediate_read_and_written_is_dropped(monkeypatch) -> None:
+    """A /tmp file the job both writes and reads back is an endogenous
+    intermediate (created under roar's watch) — drop it from reads as before."""
+    monkeypatch.setattr(file_filter, "_get_editable_install_dirs", lambda: frozenset())
+
+    intermediate = "/tmp/scratch.bin"
+    tracer_data = TracerData(
+        opened_files=[intermediate],
+        read_files=[intermediate],
+        written_files=[intermediate],
+    )
+    python_data = PythonInjectData(sys_prefix="", sys_base_prefix="", roar_inject_dir="")
+
+    filtered = FileFilterService().filter_files(
+        tracer_data,
+        python_data,
+        _filter_config(ignore_tmp_files=True),
+    )
+
+    assert intermediate not in filtered.read_files
+    assert intermediate not in filtered.written_files
+
+
 def test_filter_files_excludes_roar_db_reads(monkeypatch) -> None:
     monkeypatch.setattr(file_filter, "_get_editable_install_dirs", lambda: frozenset())
 

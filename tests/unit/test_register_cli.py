@@ -412,6 +412,37 @@ def test_warns_when_lineage_has_unsourced_inputs(tmp_path: Path) -> None:
     assert "roar inputs --unsourced" in out
 
 
+def test_escalates_when_an_unsourced_input_lives_in_tmp(tmp_path: Path) -> None:
+    from roar.application.query.results import InputArtifactSummary, InputsSummary
+
+    summary = InputsSummary(
+        target_ref="out",
+        is_root=False,
+        artifacts=[
+            InputArtifactSummary("a", "/w/gen.py", 10, unsourced=True),
+            InputArtifactSummary("b", "/tmp/dataset.parquet", 10, unsourced=True),
+        ],
+    )
+    out = _capture_warn(summary, tmp_path)
+    # Generic unsourced warning still fires...
+    assert "may not be reproducible" in out
+    # ...plus a distinct, single /tmp escalation line.
+    assert "1 of these live in /tmp" in out
+    assert "won't exist on" in out
+
+
+def test_no_tmp_escalation_when_no_unsourced_input_in_tmp(tmp_path: Path) -> None:
+    from roar.application.query.results import InputArtifactSummary, InputsSummary
+
+    summary = InputsSummary(
+        target_ref="out",
+        is_root=False,
+        artifacts=[InputArtifactSummary("a", "/w/gen.py", 10, unsourced=True)],
+    )
+    out = _capture_warn(summary, tmp_path)
+    assert "/tmp" not in out
+
+
 def test_no_warning_when_all_inputs_sourced(tmp_path: Path) -> None:
     from roar.application.query.results import InputsSummary
 
