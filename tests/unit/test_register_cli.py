@@ -371,3 +371,55 @@ def test_register_cli_renders_already_registered(tmp_path: Path) -> None:
     assert "Registered lineage for:" not in result.output
     assert "Labels: 2" in result.output
     assert "https://glaas.example/dag/0123456789abcdef0123456789abcdef" in result.output
+
+
+# -- unsourced-inputs reproducibility warning --
+
+
+def _capture_warn(summary_or_exc, tmp_path: Path) -> str:
+    import io
+    from contextlib import redirect_stderr
+
+    from roar.cli.commands.register import _warn_unsourced_inputs
+
+    ctx = _mock_context(tmp_path)
+    buf = io.StringIO()
+    target = "roar.application.query.inputs.build_inputs_summary"
+    if isinstance(summary_or_exc, Exception):
+        patcher = patch(target, side_effect=summary_or_exc)
+    else:
+        patcher = patch(target, return_value=summary_or_exc)
+    with patcher, redirect_stderr(buf):
+        _warn_unsourced_inputs(ctx, "out")
+    return buf.getvalue()
+
+
+def test_warns_when_lineage_has_unsourced_inputs(tmp_path: Path) -> None:
+    from roar.application.query.results import InputArtifactSummary, InputsSummary
+
+    summary = InputsSummary(
+        target_ref="out",
+        is_root=False,
+        artifacts=[
+            InputArtifactSummary("a", "/w/gen.py", 10, unsourced=True),
+            InputArtifactSummary("b", "/w/proc.py", 10, unsourced=True),
+        ],
+    )
+    out = _capture_warn(summary, tmp_path)
+    assert "may not be reproducible" in out
+    assert "2 file(s)" in out
+    assert "gen.py" in out and "proc.py" in out
+    assert "roar inputs --unsourced" in out
+
+
+def test_no_warning_when_all_inputs_sourced(tmp_path: Path) -> None:
+    from roar.application.query.results import InputsSummary
+
+    out = _capture_warn(InputsSummary(target_ref="out", is_root=False, artifacts=[]), tmp_path)
+    assert out == ""
+
+
+def test_audit_failure_is_silent(tmp_path: Path) -> None:
+    # A target the inputs query can't resolve (e.g. session hash) must not break register.
+    out = _capture_warn(RuntimeError("unresolvable"), tmp_path)
+    assert out == ""

@@ -144,6 +144,41 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     return click.confirm("Continue with registration? (secrets will be filtered)", default=False)
 
 
+def _warn_unsourced_inputs(ctx: RoarContext, target: str) -> None:
+    """Loudly (but briefly) warn — never block — if the lineage being registered
+    consumes inputs that nothing tracked produced. Those files won't exist on
+    another machine, so the published record isn't reproducible. Reuses the same
+    query as ``roar inputs --unsourced`` so the two always agree."""
+    try:
+        from ...application.query.inputs import build_inputs_summary
+        from ...application.query.requests import InputsQueryRequest
+
+        summary = build_inputs_summary(
+            InputsQueryRequest(
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                ref=target,
+                unsourced=True,
+            )
+        )
+    except Exception:
+        # Never let the audit break registration (e.g. session-hash targets the
+        # inputs query can't resolve). The warning is best-effort.
+        return
+
+    names = [a.path or a.artifact_id for a in summary.artifacts]
+    if not names:
+        return
+    shown = " · ".join(names[:3]) + (" · …" if len(names) > 3 else "")
+    click.echo(
+        f"⚠  This lineage may not be reproducible. {len(names)} file(s) were not "
+        "created under roar run's watch:",
+        err=True,
+    )
+    click.echo(f"   {shown}", err=True)
+    click.echo("   Use `roar inputs --unsourced` to see the full list.", err=True)
+
+
 @click.command("register")
 @click.argument("target", type=click.STRING)
 @click.option(
@@ -256,6 +291,8 @@ def register(
     ):
         click.echo("Registration aborted.")
         raise SystemExit(1)
+
+    _warn_unsourced_inputs(ctx, target)
 
     response = register_lineage_target(
         RegisterLineageRequest(

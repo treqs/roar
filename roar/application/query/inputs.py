@@ -29,13 +29,22 @@ def render_inputs(request: InputsQueryRequest) -> str:
         return summary.message
 
     lines: list[str] = []
+    any_unsourced = any(a.unsourced for a in summary.artifacts)
     for art in summary.artifacts:
         digest = _short_digest(art.hashes)
         path = art.path or "(no path)"
-        if digest:
-            lines.append(f"{path}  {digest}")
-        else:
-            lines.append(path)
+        marker = "⚠ " if art.unsourced else ("  " if any_unsourced else "")
+        suffix = f"  {digest}" if digest else ""
+        lines.append(f"{marker}{path}{suffix}")
+    if any_unsourced:
+        lines.append("")
+        lines.append(
+            "⚠ unsourced: nothing tracked produced this file, so it won't exist on another machine."
+        )
+        lines.append(
+            "  Make it reproducible — commit code to a git repo, or ingest data with "
+            "`roar get <url>` / `roar run wget <url>`."
+        )
     return "\n".join(lines)
 
 
@@ -75,6 +84,11 @@ def build_inputs_summary(request: InputsQueryRequest) -> InputsSummary:
             )
         else:
             artifacts = _walk_upstream_roots(db_ctx, target_artifact_ids)
+
+        if request.unsourced:
+            artifacts = [a for a in artifacts if a.unsourced]
+        elif request.sourced:
+            artifacts = [a for a in artifacts if not a.unsourced]
 
         return InputsSummary(
             target_ref=target_label,
@@ -201,7 +215,21 @@ def _is_root_artifact(db_ctx, artifact_id: str) -> bool:
     return len(inputs) == 0
 
 
-def _make_artifact_summary(artifact: dict[str, Any]) -> InputArtifactSummary:
+def _is_unsourced(db_ctx, artifact_id: str) -> bool:
+    """True iff no tracked job produced this artifact.
+
+    Distinct from ``_is_root_artifact``: a producer-with-no-inputs (e.g. a
+    ``roar get`` source node, a ``roar run wget`` download, or a deterministic
+    generator) is a root but IS sourced — it re-runs on reproduce. Only an
+    artifact with no producer at all is unsourced (pre-existing / not ingested).
+    """
+    produced_by = db_ctx.artifacts.get_jobs(artifact_id).get("produced_by", [])
+    return not produced_by
+
+
+def _make_artifact_summary(
+    artifact: dict[str, Any], *, unsourced: bool = False
+) -> InputArtifactSummary:
     """Build an InputArtifactSummary from a raw artifact dict."""
     return InputArtifactSummary(
         artifact_id=str(artifact["id"]),
@@ -214,6 +242,7 @@ def _make_artifact_summary(artifact: dict[str, Any]) -> InputArtifactSummary:
             )
             for h in artifact.get("hashes", [])
         ],
+        unsourced=unsourced,
     )
 
 
@@ -235,18 +264,19 @@ def _walk_upstream_roots(db_ctx, start_artifact_ids: list[str]) -> list[InputArt
         produced_by = jobs.get("produced_by", [])
 
         if not produced_by:
-            # No producer at all — this is a root
+            # No producer at all — unsourced root (pre-existing / not ingested).
             artifact = db_ctx.artifacts.get(artifact_id)
             if artifact:
-                roots[artifact_id] = _make_artifact_summary(artifact)
+                roots[artifact_id] = _make_artifact_summary(artifact, unsourced=True)
         else:
             producer = produced_by[0]
             inputs = db_ctx.jobs.get_inputs(producer["id"])
             if not inputs:
-                # Producer has no inputs (e.g., roar get) — treat this artifact as a root
+                # Producer has no inputs (e.g., roar get / wget / a generator) —
+                # a root, but SOURCED: it re-runs on reproduce.
                 artifact = db_ctx.artifacts.get(artifact_id)
                 if artifact:
-                    roots[artifact_id] = _make_artifact_summary(artifact)
+                    roots[artifact_id] = _make_artifact_summary(artifact, unsourced=False)
             else:
                 for inp in inputs:
                     _trace(inp["artifact_id"])
@@ -274,7 +304,9 @@ def _get_direct_inputs(db_ctx, start_artifact_ids: list[str]) -> list[InputArtif
                 if aid not in seen:
                     artifact = db_ctx.artifacts.get(aid)
                     if artifact:
-                        seen[aid] = _make_artifact_summary(artifact)
+                        seen[aid] = _make_artifact_summary(
+                            artifact, unsourced=_is_unsourced(db_ctx, aid)
+                        )
 
     return list(seen.values())
 
@@ -296,13 +328,15 @@ def _walk_upstream_all(
         visited.add(artifact_id)
         path_stack.add(artifact_id)
 
+        # Fetch producers once; reuse for both the unsourced flag and traversal.
+        jobs = db_ctx.artifacts.get_jobs(artifact_id)
+        produced_by = jobs.get("produced_by", [])
+
         if artifact_id not in exclude:
             artifact = db_ctx.artifacts.get(artifact_id)
             if artifact:
-                collected[artifact_id] = _make_artifact_summary(artifact)
+                collected[artifact_id] = _make_artifact_summary(artifact, unsourced=not produced_by)
 
-        jobs = db_ctx.artifacts.get_jobs(artifact_id)
-        produced_by = jobs.get("produced_by", [])
         if produced_by:
             producer = produced_by[0]
             inputs = db_ctx.jobs.get_inputs(producer["id"])
