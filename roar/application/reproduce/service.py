@@ -86,6 +86,10 @@ def reproduce_artifact(
     output.print(f"Build steps: {len(pipeline.build_steps)}")
     output.print(f"Run steps: {len(pipeline.run_steps)}")
 
+    # Fail fast (before the clone) if the lineage depends on inputs nothing
+    # tracked produced and that aren't recoverable here.
+    _audit_unsourced_inputs(request, output)
+
     if request.list_requirements:
         for block in preview.requirement_blocks:
             _print_requirement_block(
@@ -141,6 +145,88 @@ def reproduce_artifact(
         ),
         output,
     )
+    # A reproduction that didn't run every step is a failure — surface it as a
+    # non-zero exit instead of silently returning 0 after printing tracebacks.
+    if steps_run < steps_total:
+        raise ValueError(
+            f"reproduction failed: {steps_run}/{steps_total} steps completed "
+            "(see the step output above)"
+        )
+
+
+def _file_matches_recorded_hash(path: str, hashes: list) -> bool:
+    """True iff the file at ``path`` blake3-hashes to its recorded digest.
+
+    Conservative: if there's no recorded blake3 to compare against, or hashing
+    fails, treat it as a non-match (we can't confirm the input is intact).
+    """
+    from ...db.hashing.backend import compute_hash
+
+    for h in hashes:
+        if h.algorithm == "blake3":
+            try:
+                return compute_hash(path, "blake3") == h.digest
+            except Exception:
+                return False
+    return False
+
+
+def _audit_unsourced_inputs(request: ReproduceRequest, output: IPresenter) -> None:
+    """Pre-flight the lineage for inputs nothing tracked produced.
+
+    Such inputs (a pre-existing data file, a script run outside a git repo)
+    won't exist after a fresh clone, so the reproduction would crash mid-run.
+    Per the agreed policy:
+      - present locally with the recorded hash  -> warn, then proceed
+      - missing or changed                      -> fail fast (before the clone)
+    Best-effort: if the target can't be resolved against the local DB (e.g. a
+    remote-only lineage), skip silently — Part A still catches a failed run.
+    """
+    import os
+
+    try:
+        from ..query.inputs import build_inputs_summary
+        from ..query.requests import InputsQueryRequest
+
+        summary = build_inputs_summary(
+            InputsQueryRequest(
+                roar_dir=request.roar_dir,
+                cwd=request.cwd,
+                ref=request.hash_prefix,
+                unsourced=True,
+            )
+        )
+    except Exception:
+        return
+
+    if not summary.artifacts:
+        return
+
+    present: list[str] = []
+    broken: list[str] = []
+    for art in summary.artifacts:
+        path = art.path
+        if path and os.path.exists(path) and _file_matches_recorded_hash(path, art.hashes):
+            present.append(path)
+        else:
+            broken.append(path or art.artifact_id)
+
+    if broken:
+        listed = "\n  ".join(broken)
+        raise ValueError(
+            "Cannot reproduce — these inputs weren't produced by any tracked run and "
+            f"are missing or changed here:\n  {listed}\n"
+            "Ingest them with `roar get` / `roar run wget`, or commit code to a git repo."
+        )
+
+    output.print("")
+    output.print(
+        "⚠  May not reproduce elsewhere: these inputs exist here but nothing tracked "
+        "produced them —"
+    )
+    output.print("   they won't be present on another machine:")
+    for path in present:
+        output.print(f"     {path}")
 
 
 def _load_server_url(cwd: Path) -> str | None:
