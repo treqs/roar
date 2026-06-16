@@ -2,6 +2,14 @@
 
 **Run Observation & Artifact Registration**
 
+## Quickstart
+
+```bash
+uv tool install roar-cli      # installs the `roar` command (Python 3.10+)
+roar init                     # set up roar in your project
+roar run <command>            # track a run — then `roar dag` to see it
+```
+
 `roar` tracks data artifacts and execution steps in ML pipelines, enabling reproducibility and lineage queries. `roar` tracking happens automagically by observing your commands as they run, capturing essential context without requiring you to define a pipeline explicitly.
 
 By identifying files based on their actual content rather than their names, it ensures you can always trace a result back to the exact inputs and code that produced it. This gives you reliable reproducibility and a clear history of your artifacts, all derived naturally from your workflow.
@@ -11,12 +19,16 @@ While `roar` captures your work locally, connecting it to a GLaaS (Global Lineag
 ## Installation
 
 ```bash
-pip install roar-cli
-# or with uv
+# Recommended: install the `roar` command in an isolated tool environment
+uv tool install roar-cli
+# or: pipx install roar-cli
+
+# Into an existing environment (e.g. to use roar alongside Ray in the same venv)
 uv pip install roar-cli
+# or: pip install roar-cli
 ```
 
-Requires Python 3.10+.
+Requires Python 3.10+. (A single stable-ABI wheel covers every Python 3.10+.)
 
 > For the full prereqs, platform support matrix, tracer-backend setup,
 > macOS SIP notes, and sdist build steps, see the canonical
@@ -34,44 +46,17 @@ Requires Python 3.10+.
 
 PyPI wheels are published for Linux (`x86_64`, `aarch64`) and macOS (`x86_64`, `arm64`).
 
-If a matching wheel isn't available, `pip install` falls through to the
-source distribution. The sdist ships the Rust tracer source but no
-pre-built binaries, so it requires a C toolchain (`gcc` / `clang`), Rust
-(`rustup`), and a few minutes to compile the tracers on first install.
+On platforms without a published wheel (e.g. musl/Alpine, Windows, or glibc
+older than the manylinux baseline), `pip install` falls through to the
+source distribution, which ships the Rust tracer source but no pre-built
+binaries — so it needs a C toolchain (`gcc` / `clang`), Rust (`rustup`),
+and a few minutes to compile the tracers on first install.
 
 ### Development Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/treqs/roar.git
-cd roar
-
-# One-shot dev install: Python package + Rust tracer binaries
-bash scripts/install-dev.sh
-```
-
-`scripts/install-dev.sh` runs `pip install -e ".[dev]"` (preferring `uv`
-when available) and then builds the Rust tracer binaries
-(`roar-tracer`, `roar-tracer-preload`, `roar-tracer-ebpf`, `roard`,
-`roar-proxy`) and stages them into `roar/bin/`. A bare
-`pip install -e .` does _not_ build the tracer binaries because they
-live in separate cargo crates outside the maturin manifest, so
-`roar run` would fail with "No tracer binary found" until the script
-runs. See [Building from source](#building-from-source) below for
-details and the manual flow.
-
-## Quick Start
-
-```bash
-# Initialize roar in your project
-cd my-ml-project
-roar init
-
-# Run commands with provenance tracking
-roar run python preprocess.py --input data.csv --output features.parquet
-roar run python train.py --data features.parquet --output model.pt
-roar run python evaluate.py --model model.pt --output metrics.json
-```
+Installing from source (editable Python package + Rust tracer binaries) is
+covered under [Development → Building from source](#building-from-source).
+The fast path is `bash scripts/install-dev.sh`.
 
 ## Product Telemetry
 
@@ -113,8 +98,8 @@ roar config set telemetry.enabled false
 Environment opt-outs always win over saved config:
 
 ```bash
-DO_NOT_TRACK=1 roar run python train.py
-ROAR_NO_TELEMETRY=1 roar run python train.py
+DO_NOT_TRACK=1 roar run python3 train.py
+ROAR_NO_TELEMETRY=1 roar run python3 train.py
 ```
 
 Telemetry is also suppressed automatically in CI, pytest, and Roar-managed
@@ -209,7 +194,7 @@ Run a command with provenance tracking. Roar captures:
 - Command arguments
 
 ```bash
-roar run python train.py --epochs 10 --lr 0.001
+roar run python3 train.py --epochs 10 --lr 0.001
 roar run ./scripts/preprocess.sh
 roar run torchrun --nproc_per_node=4 train.py
 
@@ -562,9 +547,9 @@ Named groups of artifacts, used for downloaded datasets or upload bundles.
 
 ```bash
 # Record your pipeline
-roar run python preprocess.py
-roar run python train.py --epochs 10
-roar run python evaluate.py
+roar run python3 preprocess.py
+roar run python3 train.py --epochs 10
+roar run python3 evaluate.py
 
 # Later, reproduce an artifact
 roar reproduce <model-hash> --run
@@ -590,40 +575,21 @@ Add `.roar/` to your `.gitignore` (roar offers to do this during `roar init`).
 
 ## GLaaS Server
 
-Roar can register sessions, jobs, steps, and artifacts with a GLaaS (Global Lineage-as-a-Service) server using the `roar register` command.
-
-### Server Setup
-
-```bash
-# Install with server dependencies
-uv pip install -e ".[server]"
-# or without uv
-pip install -e ".[server]"
-
-# Run the server
-glaas-server
-
-# Or with custom host/port
-GLAAS_HOST=0.0.0.0 GLAAS_PORT=8080 glaas-server
-```
-
-The server provides:
-
-- REST API for artifact and job registration
-- Web UI at `/` with artifact and job browsers
-- Search and filtering by command, GPU, file type, etc.
-
-### Client Configuration
+GLaaS (Global Lineage-as-a-Service) is the shared registry roar publishes to
+with `roar register` and `roar put`. It's hosted at
+[glaas.ai](https://glaas.ai) (default API endpoint `https://api.glaas.ai`),
+so there's nothing to run yourself — sign in and publish.
 
 ```bash
-# Set the GLaaS server URL
-roar config set glaas.url http://localhost:8000
+# Sign in (browser/device flow) for attributed, private, or project publishing
+roar login
 
-# Show your SSH key (copy to GLaaS web UI)
-roar auth register
+# Or register an SSH key for programmatic auth
+roar auth register      # show your public key to paste at glaas.ai
+roar auth test          # verify the connection
 
-# Test authentication
-roar auth test
+# Point roar at a different GLaaS deployment if needed
+roar config set glaas.url https://api.glaas.ai
 ```
 
 > [!TIP]
@@ -702,13 +668,13 @@ Verify the install with `roar tracer`; every backend listed should be
 ruff check .
 
 # Format check
-ruff format --check
+ruff format --check .
 
 # Type checking
 mypy roar
 
 # Run all checks at once
-ruff check . && ruff format --check && mypy roar
+ruff check . && ruff format --check . && mypy roar
 ```
 
 ### Running Tests
