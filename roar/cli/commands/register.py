@@ -144,36 +144,47 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     return click.confirm("Continue with registration? (secrets will be filtered)", default=False)
 
 
-def _render_register_checklist(
-    ctx: RoarContext, target: str, response: RegisterLineageResponse
-) -> None:
-    """Render the shared reproducibility checklist as a register receipt.
-
-    Consolidates the scattered "not reproducible" / "unsourced inputs" warnings
-    into one checklist, evaluated the same way `roar reproduce` shows it. Warn,
-    never block; best-effort (any failure here must not break registration)."""
+def _warn_unsourced_inputs(ctx: RoarContext, target: str) -> None:
+    """Loudly (but briefly) warn — never block — if the lineage being registered
+    consumes inputs that nothing tracked produced. Those files won't exist on
+    another machine, so the published record isn't reproducible. Reuses the same
+    query as ``roar inputs --unsourced`` so the two always agree."""
     try:
-        from ...application.reproducibility.report import (
-            build_report,
-            render_report,
-            unsourced_input_paths,
-        )
+        from ...application.query.inputs import build_inputs_summary, is_ephemeral_tmp_path
+        from ...application.query.requests import InputsQueryRequest
 
-        report = build_report(
-            committed=response.reproducible,
-            pushed=bool(response.tag_summary and response.tag_summary.remote),
-            # Anything reaching `register` went through `roar run`, which always
-            # captures the runtime — so treat it as recorded (best-effort).
-            runtime_ok=True,
-            unsourced_paths=unsourced_input_paths(ctx.roar_dir, ctx.cwd, target),
-            on_glaas=True,
+        summary = build_inputs_summary(
+            InputsQueryRequest(
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                ref=target,
+                unsourced=True,
+            )
         )
     except Exception:
+        # Never let the audit break registration (e.g. session-hash targets the
+        # inputs query can't resolve). The warning is best-effort.
         return
 
-    click.echo("")
-    for line in render_report(report, title="Reproducibility").splitlines():
-        click.echo(line)
+    names = [a.path or a.artifact_id for a in summary.artifacts]
+    if not names:
+        return
+    shown = " · ".join(names[:3]) + (" · …" if len(names) > 3 else "")
+    click.echo(
+        f"⚠  This lineage may not be reproducible. {len(names)} file(s) were not "
+        "created under roar run's watch:",
+        err=True,
+    )
+    click.echo(f"   {shown}", err=True)
+    click.echo("   Use `roar inputs --unsourced` to see the full list.", err=True)
+
+    tmp_count = sum(1 for a in summary.artifacts if is_ephemeral_tmp_path(a.path))
+    if tmp_count:
+        click.echo(
+            f"⚠  {tmp_count} of these live in /tmp and definitely won't exist on "
+            "reproduce — move them into your project or ingest with `roar get`.",
+            err=True,
+        )
 
 
 @click.command("register")
@@ -289,6 +300,8 @@ def register(
         click.echo("Registration aborted.")
         raise SystemExit(1)
 
+    _warn_unsourced_inputs(ctx, target)
+
     response = register_lineage_target(
         RegisterLineageRequest(
             target=target,
@@ -359,7 +372,16 @@ def register(
             for error in response.error.split("; "):
                 click.echo(f"  - {error}", err=True)
 
-        _render_register_checklist(ctx, target, response)
+        if not response.reproducible:
+            from .._format import hints_should_print, make_hint_printer
+
+            if hints_should_print():
+                _caps, hint = make_hint_printer()
+                hint(
+                    "registered without a git commit — this lineage records what ran, "
+                    "but can't be reproduced from source."
+                )
+                hint("Run inside a git repo (code committed) to register reproducible lineage.")
 
         click.echo("")
         click.echo("GLaaS:")
