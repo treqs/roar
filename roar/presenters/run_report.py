@@ -250,21 +250,7 @@ class RunReportPresenter:
         c = self._caps.can_color
         self._print(
             style(
-                "hint: no git commit captured — this run isn't tied to a code version.",
-                "warn_amber",
-                enabled=c,
-            )
-        )
-        self._print(
-            style(
-                "hint: run in a clean git repo to attach a commit to",
-                "warn_amber",
-                enabled=c,
-            )
-        )
-        self._print(
-            style(
-                "hint:   your lineage and make it reproducible.",
+                "hint: no git commit — can't reproduce code not managed by a package manager.",
                 "warn_amber",
                 enabled=c,
             )
