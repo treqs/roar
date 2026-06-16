@@ -487,7 +487,29 @@ class CommandNotFoundError(RoarExecutionError):
 
     def __init__(self, command_name: str, *, cause: Exception | None = None) -> None:
         self.command_name = command_name
-        super().__init__(f"command not found: {command_name}", cause=cause)
+        message = f"command not found: {command_name}"
+        alternative = _suggest_alternative_command(command_name)
+        if alternative:
+            message += f" — did you mean '{alternative}'?"
+        super().__init__(message, cause=cause)
+
+
+def _suggest_alternative_command(name: str) -> str | None:
+    """Suggest a near-miss command that IS on PATH, or None.
+
+    The common case: a `python`-only example copied onto a box that only has
+    `python3` (or vice versa — Windows/conda ship `python`, many Linux/macOS
+    only `python3`). Also covers `pip`/`pip3`, `python2`-style, etc. Only
+    suggests an alternative that actually exists, so we never cry wolf.
+    """
+    import shutil
+
+    if not name or "/" in name or "\\" in name:
+        return None
+    alternative = name[:-1] if name.endswith("3") else f"{name}3"
+    if alternative and alternative != name and shutil.which(alternative):
+        return alternative
+    return None
 
 
 class ProcessExecutionError(RoarExecutionError):
