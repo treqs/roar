@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -51,7 +50,7 @@ def reproduce_artifact(
             output,
         )
 
-    pipeline, pipeline_source = _resolve_pipeline(
+    pipeline = _resolve_pipeline(
         hash_prefix=request.hash_prefix,
         server_url=server_url,
         roar_dir=request.roar_dir,
@@ -76,6 +75,9 @@ def reproduce_artifact(
         output.print(f"  {preview.run_hint}")
         return
 
+    if not pipeline.git_repo:
+        raise ValueError("Cannot reproduce: no git repository URL available")
+
     output.print(
         f"Found {_target_label(pipeline.target_kind).lower()}: {_pipeline_target_hash(pipeline)}"
     )
@@ -85,15 +87,8 @@ def reproduce_artifact(
     output.print(f"Run steps: {len(pipeline.run_steps)}")
 
     # Fail fast (before the clone) if the lineage depends on inputs nothing
-    # tracked produced and that are missing or changed here.
+    # tracked produced and that aren't recoverable here.
     _audit_unsourced_inputs(request, output)
-
-    # Show the recorded lineage's reproducibility checklist before running, so the
-    # user knows what they're getting (and why a result might diverge).
-    output.print("")
-    output.print(
-        _render_reproducibility_checklist(request, pipeline, on_glaas=(pipeline_source == "remote"))
-    )
 
     if request.list_requirements:
         for block in preview.requirement_blocks:
@@ -136,12 +131,11 @@ def reproduce_artifact(
         )
         return
 
-    with _reproduction_session(environment.repo_dir, output):
-        steps_run, steps_total = PipelineExecutor(presenter=output).execute(
-            pipeline,
-            environment,
-            request.auto_confirm,
-        )
+    steps_run, steps_total = PipelineExecutor(presenter=output).execute(
+        pipeline,
+        environment,
+        request.auto_confirm,
+    )
     _render_reproduction_result(
         ReproduceRunSummary(
             repo_dir=environment.repo_dir,
@@ -177,74 +171,6 @@ def _file_matches_recorded_hash(path: str, hashes: list) -> bool:
     return False
 
 
-@contextmanager
-def _reproduction_session(repo_dir: Path, output: IPresenter):
-    """Run the replay in its own session so it never mutates the original lineage.
-
-    Reproduction re-runs each step with roar (recording a fresh lineage you can
-    compare to the original). In place, those inner runs would otherwise append
-    to the repo's *active* session and pollute it. So: if the active session is
-    empty, reuse it (no churn); if it has steps, warn and start a new session for
-    the replay, restoring the original active session afterward. Best-effort —
-    any failure here just falls back to the existing session.
-    """
-    roar_dir = repo_dir / ".roar"
-    if not (roar_dir / "roar.db").exists():
-        yield
-        return
-
-    from ...db.context import create_database_context
-
-    restore_id: int | None = None
-    try:
-        with create_database_context(roar_dir) as ctx:
-            active = ctx.sessions.get_active()
-            if active is not None and ctx.sessions.get_steps(active["id"]):
-                restore_id = int(active["id"])
-                output.print(
-                    "Active session already has steps — reproducing into a new session so it "
-                    "doesn't add to your current lineage."
-                )
-                ctx.sessions.create(make_active=True)
-            # empty / no active session -> reuse it (the replay fills it).
-    except Exception:
-        yield
-        return
-
-    try:
-        yield
-    finally:
-        if restore_id is not None:
-            try:
-                with create_database_context(roar_dir) as ctx:
-                    ctx.sessions.set_active(restore_id)
-            except Exception:
-                pass
-
-
-def _render_reproducibility_checklist(
-    request: ReproduceRequest, pipeline: PipelineInfo, *, on_glaas: bool
-) -> str:
-    """Build the recorded lineage's reproducibility checklist (see report module)."""
-    from ..reproducibility.report import (
-        build_report,
-        is_shareable_remote,
-        render_report,
-        runtime_captured,
-        unsourced_input_paths,
-    )
-
-    report = build_report(
-        committed=bool(pipeline.git_commit),
-        pushed=is_shareable_remote(pipeline.git_repo),
-        runtime_ok=runtime_captured(pipeline),
-        unsourced_paths=unsourced_input_paths(request.roar_dir, request.cwd, request.hash_prefix),
-        on_glaas=on_glaas,
-        single_commit=pipeline.single_commit,
-    )
-    return render_report(report, title="Reproducibility (as recorded)")
-
-
 def _audit_unsourced_inputs(request: ReproduceRequest, output: IPresenter) -> None:
     """Pre-flight the lineage for inputs nothing tracked produced.
 
@@ -276,10 +202,13 @@ def _audit_unsourced_inputs(request: ReproduceRequest, output: IPresenter) -> No
     if not summary.artifacts:
         return
 
+    present: list[str] = []
     broken: list[str] = []
     for art in summary.artifacts:
         path = art.path
-        if not (path and os.path.exists(path) and _file_matches_recorded_hash(path, art.hashes)):
+        if path and os.path.exists(path) and _file_matches_recorded_hash(path, art.hashes):
+            present.append(path)
+        else:
             broken.append(path or art.artifact_id)
 
     if broken:
@@ -289,8 +218,15 @@ def _audit_unsourced_inputs(request: ReproduceRequest, output: IPresenter) -> No
             f"are missing or changed here:\n  {listed}\n"
             "Ingest them with `roar get` / `roar run wget`, or commit code to a git repo."
         )
-    # Inputs that are present-but-unsourced are surfaced by the reproducibility
-    # checklist (rendered next), so this audit only fails fast on broken ones.
+
+    output.print("")
+    output.print(
+        "⚠  May not reproduce elsewhere: these inputs exist here but nothing tracked "
+        "produced them —"
+    )
+    output.print("   they won't be present on another machine:")
+    for path in present:
+        output.print(f"     {path}")
 
 
 def _load_server_url(cwd: Path) -> str | None:
@@ -336,8 +272,8 @@ def _resolve_pipeline(
     roar_dir: Path,
     glaas_client: GlaasClient | None,
     target_kind: Literal["artifact", "lineage"],
-) -> tuple[PipelineInfo, str]:
-    """Resolve the target pipeline for reproduction; returns (pipeline, source)."""
+) -> PipelineInfo:
+    """Resolve the target pipeline for reproduction."""
     lookup = lookup_pipeline_result(
         hash_prefix=hash_prefix,
         roar_dir=roar_dir,
@@ -352,7 +288,7 @@ def _resolve_pipeline(
         raise ValueError(
             f"No pipeline found for {_target_label(target_kind).lower()} {hash_prefix}"
         )
-    return pipeline, lookup.source
+    return pipeline
 
 
 def build_preview_summary(
