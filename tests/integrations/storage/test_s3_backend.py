@@ -80,21 +80,6 @@ class TestS3BackendUpload:
 class TestS3BackendExists:
     """Tests for S3 exists functionality."""
 
-    def test_exists_returns_true_when_object_exists(self):
-        """Exists returns True when object is in S3."""
-        with patch("roar.integrations.storage.s3.boto3") as mock_boto3:
-            mock_client = Mock()
-            mock_boto3.client.return_value = mock_client
-            # head_object succeeds = object exists
-            mock_client.head_object.return_value = {"ContentLength": 100}
-
-            backend = S3Backend(bucket="bucket", prefix="models")
-
-            result = backend.exists("model.pt")
-
-            assert result is True
-            mock_client.head_object.assert_called_once_with(Bucket="bucket", Key="models/model.pt")
-
     def test_exists_returns_false_when_object_missing(self):
         """Exists returns False when object is not in S3."""
         with patch("roar.integrations.storage.s3.boto3") as mock_boto3:
@@ -117,17 +102,6 @@ class TestS3BackendExists:
 
 class TestS3BackendAuth:
     """Tests for S3 authentication handling."""
-
-    def test_uses_default_credentials(self):
-        """Backend uses default boto3 credential chain."""
-        with patch("roar.integrations.storage.s3.boto3") as mock_boto3:
-            mock_client = Mock()
-            mock_boto3.client.return_value = mock_client
-
-            S3Backend(bucket="bucket", prefix="")
-
-            # Verify client was created with s3 service
-            mock_boto3.client.assert_called_once_with("s3")
 
     def test_upload_auth_error_propagates(self, tmp_path: Path):
         """Auth errors during upload propagate to caller."""

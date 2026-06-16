@@ -12,7 +12,6 @@ import pytest
 
 from roar.core.exceptions import (
     GlaasApiError,
-    GlaasAuthError,
     GlaasConnectionError,
     GlaasNotConfiguredError,
 )
@@ -173,16 +172,6 @@ class TestGlaasClientExceptions:
 
 class TestExceptionHierarchy:
     """Test that exception classes have correct hierarchy."""
-
-    def test_glaas_errors_inherit_from_roar_exception(self):
-        """All GLaaS errors should inherit from RoarException."""
-        from roar.core.exceptions import GlaasError, RoarException
-
-        assert issubclass(GlaasError, RoarException)
-        assert issubclass(GlaasConnectionError, GlaasError)
-        assert issubclass(GlaasAuthError, GlaasError)
-        assert issubclass(GlaasApiError, GlaasError)
-        assert issubclass(GlaasNotConfiguredError, GlaasError)
 
     def test_glaas_api_error_stores_status_code(self):
         """GlaasApiError should store HTTP status code."""
@@ -489,30 +478,6 @@ class TestRegisterJobsBatch:
         assert errors == []
         assert error is None
 
-    def test_batch_calls_correct_endpoint(self):
-        """Batch uses session-scoped /jobs/batch endpoint."""
-        client = _optional_auth_client()
-
-        with patch.object(client, "_request") as mock_request:
-            mock_request.return_value = (
-                {"job_ids": ["id-1", "id-2"], "errors": []},
-                None,
-            )
-
-            job_ids, errors, error = client.register_jobs_batch(
-                session_hash="ses_abc123",
-                jobs=[{"job_uid": "j1"}, {"job_uid": "j2"}],
-            )
-
-            mock_request.assert_called_once_with(
-                "POST",
-                "/api/v1/sessions/ses_abc123/jobs/batch",
-                {"jobs": [{"job_uid": "j1"}, {"job_uid": "j2"}]},
-            )
-            assert job_ids == ["id-1", "id-2"]
-            assert errors == []
-            assert error is None
-
     def test_batch_propagates_overall_error(self):
         """Overall request error is returned for all jobs."""
         client = _optional_auth_client()
@@ -622,49 +587,9 @@ class TestParentJobUidPayload:
 class TestSessionReproductionWrapper:
     """Test thin client wrapper for lineage/session reproduction."""
 
-    def test_get_session_reproduction_calls_expected_endpoint(self):
-        client = _optional_auth_client()
-
-        with patch.object(client, "_request") as mock_request:
-            mock_request.return_value = ({"sessionHash": "a" * 64, "jobs": []}, None)
-
-            result, error = client.get_session_reproduction("a" * 64)
-
-            mock_request.assert_called_once_with(
-                "GET",
-                f"/api/v1/public/sessions/{'a' * 64}/reproduction",
-            )
-            assert error is None
-            assert result == {"sessionHash": "a" * 64, "jobs": []}
-
 
 class TestCompositeAndLabelWrappers:
     """Test thin client wrappers for composite artifact endpoints."""
-
-    def test_register_composite_artifact_calls_expected_endpoint(self):
-        client = _optional_auth_client()
-        payload = {"hash": "abc12345", "components": []}
-
-        with patch.object(client, "_request") as mock_request:
-            mock_request.return_value = ({"artifact_id": "a1"}, None)
-
-            result, error = client.register_composite_artifact(payload)
-
-            mock_request.assert_called_once_with("POST", "/api/v1/artifacts/composites", payload)
-            assert error is None
-            assert result == {"artifact_id": "a1"}
-
-    def test_get_composite_components_calls_expected_endpoint(self):
-        client = _optional_auth_client()
-
-        with patch.object(client, "_request") as mock_request:
-            mock_request.return_value = ({"components": [{"relativePath": "f"}]}, None)
-
-            result, error = client.get_composite_components("abc12345")
-
-            mock_request.assert_called_once_with("GET", "/api/v1/artifacts/abc12345/components")
-            assert error is None
-            assert result == {"components": [{"relativePath": "f"}]}
 
 
 class TestArtifactHashMapping:

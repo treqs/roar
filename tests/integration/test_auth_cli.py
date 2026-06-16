@@ -109,7 +109,7 @@ def test_auth_register_prints_public_key(temp_git_repo: Path, ssh_keypair: Path)
     assert result.returncode == 0, result.stderr
     assert "Your SSH public key:" in result.stdout
     assert pubkey_content in result.stdout
-    assert f"Path: {pubkey_path}" in result.stdout
+    assert str(pubkey_path) in result.stdout
 
 
 def test_auth_key_copy_recommends_login_and_avoids_signup_verb(
@@ -126,7 +126,7 @@ def test_auth_key_copy_recommends_login_and_avoids_signup_verb(
     assert result.returncode == 0, result.stderr
     assert "sign up" not in result.stdout.lower()
     assert "sign in at" in result.stdout
-    assert "roar login" in result.stdout
+    assert "roar auth login" in result.stdout
 
 
 def test_auth_key_url_follows_dev_api(temp_git_repo: Path, ssh_keypair: Path) -> None:
@@ -162,8 +162,8 @@ def test_auth_status_prefers_env_glaas_url(
     )
 
     assert result.returncode == 0, result.stderr
-    assert f"Server URL: {fake_glaas_url}" in result.stdout
-    assert f"SSH key: {ssh_keypair}.pub" in result.stdout
+    assert fake_glaas_url in result.stdout
+    assert f"{ssh_keypair}.pub" in result.stdout
     assert "Fingerprint: SHA256:" in result.stdout
     assert "https://api.glaas.ai" not in result.stdout
 
@@ -184,10 +184,9 @@ def test_auth_test_succeeds_against_local_server(
     )
 
     assert result.returncode == 0, result.stderr
-    assert f"Testing connection to {fake_glaas_url}..." in result.stdout
-    assert "Server is reachable." in result.stdout
-    assert "Testing authentication..." in result.stdout
-    assert "Authentication successful!" in result.stdout
+    assert fake_glaas_url in result.stdout
+    assert "reachable" in result.stdout
+    assert "Signature accepted by server" in result.stdout
     assert fake_glaas_auth_server.last_authorization is not None
     assert "Signature keyid=" in fake_glaas_auth_server.last_authorization
 
@@ -210,10 +209,8 @@ def test_auth_test_surfaces_unauthorized_response(
 
     combined_output = f"{result.stdout}\n{result.stderr}"
     assert result.returncode != 0
-    assert "Authentication failed: Unknown key" in combined_output
-    # Error must direct the user to the actual key-registration URL and
-    # mention the browser-based alternative. The old copy pointed at
-    # https://glaas.ai (homepage) which doesn't accept key paste.
+    assert "Key not registered with GLaaS" in combined_output
+    # Must direct the user to the key-registration URL and mention browser auth.
     assert "https://glaas.ai/login" in combined_output
-    assert "roar login" in combined_output
+    assert "roar auth login" in combined_output
     assert fake_glaas_auth_server.last_authorization is not None

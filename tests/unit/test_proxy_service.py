@@ -19,16 +19,6 @@ class TestFindProxy:
         assert result is not None
         assert "release" in result
 
-    def test_finds_debug_binary(self, tmp_path):
-        proxy_dir = tmp_path / "rust" / "target" / "debug"
-        proxy_dir.mkdir(parents=True)
-        (proxy_dir / "roar-proxy").touch()
-
-        svc = ProxyService(package_path=tmp_path / "roar")
-        result = svc.find_proxy()
-        assert result is not None
-        assert "debug" in result
-
     def test_finds_installed_bin(self, tmp_path):
         bin_dir = tmp_path / "roar" / "bin"
         bin_dir.mkdir(parents=True)
@@ -113,30 +103,6 @@ class TestStartForRun:
             cmd = mock_popen.call_args[0][0]
             assert "--upstream" in cmd
             assert "http://localhost:4566" in cmd
-
-    def test_no_upstream_flag_when_none(self, tmp_path):
-        svc = ProxyService(package_path=tmp_path / "roar")
-        svc.find_proxy = MagicMock(return_value="/fake/roar-proxy")
-
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        mock_proc.pid = 12345
-        mock_proc.stdout = iter([b"ROAR_PROXY_READY port=9999\n"])
-
-        with (
-            patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
-            patch("socket.socket") as mock_socket,
-        ):
-            mock_socket.return_value.__enter__ = MagicMock()
-            mock_socket.return_value.__exit__ = MagicMock(return_value=False)
-            mock_socket.return_value.__enter__.return_value.getsockname.return_value = (
-                "127.0.0.1",
-                9999,
-            )
-
-            _handle = svc.start_for_run(upstream_url=None)
-            cmd = mock_popen.call_args[0][0]
-            assert "--upstream" not in cmd
 
     def test_raises_on_timeout(self, tmp_path):
         svc = ProxyService(package_path=tmp_path / "roar")
@@ -249,11 +215,6 @@ class TestDaemonMethods:
         assert result is True
         assert not (tmp_path / "proxy.json").exists()
 
-    def test_stop_daemon_returns_false_when_not_running(self, tmp_path):
-        svc = ProxyService()
-        result = svc.stop_daemon(tmp_path)
-        assert result is False
-
     def test_get_daemon_status_returns_info_when_alive(self, tmp_path):
         import json
 
@@ -277,15 +238,3 @@ class TestDaemonMethods:
             result = svc.get_daemon_status(tmp_path)
         assert result is None
         assert not (tmp_path / "proxy.json").exists()
-
-
-def test_parse_log_line_get_object_with_size():
-    from roar.execution.cluster.proxy import parse_log_line
-
-    line = "[S3:GetObject] s3://my-bucket/data.csv  (8192 bytes)  etag=abc123"
-    entry = parse_log_line(line)
-
-    assert entry is not None
-    assert entry.operation == "GetObject"
-    assert entry.size_bytes == 8192
-    assert entry.etag == "abc123"

@@ -32,23 +32,3 @@ def test_tracking_open_skips_recording_when_suppressed(tmp_path) -> None:
         assert handle.read() == "hello"
 
     assert abs_path not in sitecustomize.opened_files
-
-
-def test_tracking_import_delegates_to_runtime_import_controller(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, str]] = []
-
-    class _FakeController:
-        def handle_import(self, module_name: str, module) -> None:
-            calls.append((module_name, module.__name__))
-
-    monkeypatch.setenv("ROAR_WRAP", "1")
-    monkeypatch.setattr(
-        sitecustomize._runtime_tracker, "_runtime_import_controller", _FakeController()
-    )
-
-    module = sitecustomize.tracking_import("json")
-
-    assert module.__name__ == "json"
-    assert calls == [("json", "json")]

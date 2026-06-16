@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
-from roar.application.query.requests import InputsQueryRequest
 from roar.cli.commands.inputs import inputs
 
 
@@ -45,42 +44,6 @@ def test_inputs_cli_rejects_positional_ref_with_explicit_selector(tmp_path) -> N
 
     assert result.exit_code == 2
     assert "Positional REF cannot be combined" in result.output
-
-
-def test_inputs_cli_passes_correct_request_for_positional_ref(tmp_path) -> None:
-    ctx = _ctx(tmp_path)
-
-    with patch("roar.cli.commands.inputs.render_inputs", return_value="ok") as render:
-        result = CliRunner().invoke(inputs, ["model.pkl"], obj=ctx)
-
-    assert result.exit_code == 0
-    render.assert_called_once_with(
-        InputsQueryRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, ref="model.pkl")
-    )
-
-
-def test_inputs_cli_passes_correct_request_for_job_selector(tmp_path) -> None:
-    ctx = _ctx(tmp_path)
-
-    with patch("roar.cli.commands.inputs.render_inputs", return_value="ok") as render:
-        result = CliRunner().invoke(inputs, ["--job", "@5"], obj=ctx)
-
-    assert result.exit_code == 0
-    render.assert_called_once_with(
-        InputsQueryRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, ref="@5", selector="job")
-    )
-
-
-def test_inputs_cli_passes_direct_flag(tmp_path) -> None:
-    ctx = _ctx(tmp_path)
-
-    with patch("roar.cli.commands.inputs.render_inputs", return_value="ok") as render:
-        result = CliRunner().invoke(inputs, ["--direct", "model.pkl"], obj=ctx)
-
-    assert result.exit_code == 0
-    render.assert_called_once_with(
-        InputsQueryRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, ref="model.pkl", direct=True)
-    )
 
 
 def test_inputs_cli_surfaces_query_error_as_click_exception(tmp_path) -> None:

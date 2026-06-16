@@ -200,68 +200,50 @@ def _run_roar_cmd(
     return result
 
 
+@pytest.fixture(scope="session")
+def _git_repo_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """
+    Session-scoped canonical initialized repo used as a copy-source by temp_git_repo.
+
+    Built once per xdist worker (or once for the whole session in non-parallel runs).
+    Each call to temp_git_repo gets a fresh shutil.copytree() of this template, which
+    takes ~50ms instead of the ~35s that running git-init + roar-init subprocesses costs.
+    """
+    template = tmp_path_factory.mktemp("_repo_template")
+
+    subprocess.run(["git", "init"], cwd=template, capture_output=True, check=True)
+
+    # Write user config directly to avoid two extra subprocess round-trips
+    git_config = template / ".git" / "config"
+    git_config.write_text(
+        git_config.read_text() + "\n[user]\n\temail = test@example.com\n\tname = Test User\n"
+    )
+
+    (template / ".gitignore").write_text(".roar/\n")
+    subprocess.run(["git", "add", ".gitignore"], cwd=template, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Initial commit"], cwd=template, capture_output=True, check=True
+    )
+
+    _run_roar_cmd("init", "-y", cwd=template)
+
+    config_path = template / ".roar" / "config.toml"
+    config_path.write_text(
+        config_path.read_text().replace("ignore_tmp_files = true", "ignore_tmp_files = false")
+    )
+
+    return template
+
+
 @pytest.fixture
-def temp_git_repo(tmp_path: Path) -> Path:
+def temp_git_repo(tmp_path: Path, _git_repo_template: Path) -> Path:
     """
     Create a temporary git repository with roar initialized.
 
-    Sets up:
-    - Empty git repository with initial commit
-    - .roar directory via `roar init`
-    - .gitignore with .roar/ entry
-
-    Returns:
-        Path to the temporary repository root
+    Copies a session-scoped pre-built template rather than running git-init and
+    roar-init subprocesses for every test, reducing per-test setup from ~35s to ~50ms.
     """
-    # Initialize git repo
-    subprocess.run(
-        ["git", "init"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True,
-    )
-
-    # Configure git user for commits
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Test User"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True,
-    )
-
-    # Create .gitignore
-    gitignore = tmp_path / ".gitignore"
-    gitignore.write_text(".roar/\n")
-
-    # Initial commit
-    subprocess.run(
-        ["git", "add", ".gitignore"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "commit", "-m", "Initial commit"],
-        cwd=tmp_path,
-        capture_output=True,
-        check=True,
-    )
-
-    # Initialize roar (use -y to auto-accept gitignore)
-    _run_roar_cmd("init", "-y", cwd=tmp_path)
-
-    # Disable ignore_tmp_files since tests run in /tmp directories
-    config_path = tmp_path / ".roar" / "config.toml"
-    config_content = config_path.read_text()
-    config_content = config_content.replace("ignore_tmp_files = true", "ignore_tmp_files = false")
-    config_path.write_text(config_content)
-
+    shutil.copytree(_git_repo_template, tmp_path, dirs_exist_ok=True)
     return tmp_path
 
 

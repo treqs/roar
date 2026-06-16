@@ -29,7 +29,7 @@ fn compute_hashes<'py>(
     algorithms: Vec<String>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let output = hash_file(&path, &algorithms).map_err(to_py_error)?;
-    let dict = PyDict::new_bound(py);
+    let dict = PyDict::new(py);
     for (algorithm, digest) in output {
         dict.set_item(algorithm, digest)?;
     }
@@ -45,10 +45,10 @@ fn compute_hashes_batch<'py>(
     workers: Option<usize>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let output = hash_files(&paths, &algorithms, workers).map_err(to_py_error)?;
-    let dict = PyDict::new_bound(py);
+    let dict = PyDict::new(py);
 
     for (path, hashes) in output {
-        let digest_map = PyDict::new_bound(py);
+        let digest_map = PyDict::new(py);
         for (algorithm, digest) in hashes {
             digest_map.set_item(algorithm, digest)?;
         }

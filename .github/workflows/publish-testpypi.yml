@@ -84,106 +84,33 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64
-          - python-version: "3.10"
-            py-tag: "cp310"
-            runner: ubuntu-latest
+          # One abi3 wheel per platform. The `cp310-abi3` wheel covers every
+          # CPython >= 3.10 — including versions newer than the build
+          # interpreter — so new Python releases no longer need a matrix entry
+          # (and never silently lose a wheel). See the `abi3-py310` feature in
+          # rust/crates/artifact-hash-py/Cargo.toml.
+          - runner: ubuntu-latest
             artifact-name: roar-rust-binaries-linux-x86_64
             platform: linux
             platform-tag: linux-x86_64
-          - python-version: "3.11"
-            py-tag: "cp311"
-            runner: ubuntu-latest
-            artifact-name: roar-rust-binaries-linux-x86_64
-            platform: linux
-            platform-tag: linux-x86_64
-          - python-version: "3.12"
-            py-tag: "cp312"
-            runner: ubuntu-latest
-            artifact-name: roar-rust-binaries-linux-x86_64
-            platform: linux
-            platform-tag: linux-x86_64
-          - python-version: "3.13"
-            py-tag: "cp313"
-            runner: ubuntu-latest
-            artifact-name: roar-rust-binaries-linux-x86_64
-            platform: linux
-            platform-tag: linux-x86_64
-          # Linux aarch64
-          - python-version: "3.10"
-            py-tag: "cp310"
-            runner: ubuntu-24.04-arm
+          - runner: ubuntu-24.04-arm
             artifact-name: roar-rust-binaries-linux-aarch64
             platform: linux
             platform-tag: linux-aarch64
-          - python-version: "3.11"
-            py-tag: "cp311"
-            runner: ubuntu-24.04-arm
-            artifact-name: roar-rust-binaries-linux-aarch64
-            platform: linux
-            platform-tag: linux-aarch64
-          - python-version: "3.12"
-            py-tag: "cp312"
-            runner: ubuntu-24.04-arm
-            artifact-name: roar-rust-binaries-linux-aarch64
-            platform: linux
-            platform-tag: linux-aarch64
-          - python-version: "3.13"
-            py-tag: "cp313"
-            runner: ubuntu-24.04-arm
-            artifact-name: roar-rust-binaries-linux-aarch64
-            platform: linux
-            platform-tag: linux-aarch64
-          # macOS ARM64
-          - python-version: "3.10"
-            py-tag: "cp310"
-            runner: macos-latest
+          - runner: macos-latest
             artifact-name: roar-rust-binaries-macos-arm64
             platform: macos
             platform-tag: macos-arm64
-          - python-version: "3.11"
-            py-tag: "cp311"
-            runner: macos-latest
-            artifact-name: roar-rust-binaries-macos-arm64
-            platform: macos
-            platform-tag: macos-arm64
-          - python-version: "3.12"
-            py-tag: "cp312"
-            runner: macos-latest
-            artifact-name: roar-rust-binaries-macos-arm64
-            platform: macos
-            platform-tag: macos-arm64
-          - python-version: "3.13"
-            py-tag: "cp313"
-            runner: macos-latest
-            artifact-name: roar-rust-binaries-macos-arm64
-            platform: macos
-            platform-tag: macos-arm64
-          # macOS x86_64
-          - python-version: "3.10"
-            py-tag: "cp310"
-            runner: macos-15-intel
+            # apple silicon starts at macOS 11; this is the effective floor.
+            macos-deployment-target: "11.0"
+          - runner: macos-15-intel
             artifact-name: roar-rust-binaries-macos-x86_64
             platform: macos
             platform-tag: macos-x86_64
-          - python-version: "3.11"
-            py-tag: "cp311"
-            runner: macos-15-intel
-            artifact-name: roar-rust-binaries-macos-x86_64
-            platform: macos
-            platform-tag: macos-x86_64
-          - python-version: "3.12"
-            py-tag: "cp312"
-            runner: macos-15-intel
-            artifact-name: roar-rust-binaries-macos-x86_64
-            platform: macos
-            platform-tag: macos-x86_64
-          - python-version: "3.13"
-            py-tag: "cp313"
-            runner: macos-15-intel
-            artifact-name: roar-rust-binaries-macos-x86_64
-            platform: macos
-            platform-tag: macos-x86_64
+            # Pin the Intel floor explicitly. Without this the single abi3 build
+            # host (3.12) would set the floor from its own interpreter, which
+            # could silently raise it above the 10.12 the per-version wheels had.
+            macos-deployment-target: "10.12"
 
     runs-on: ${{ matrix.runner }}
     needs: [build-rust-binaries-linux, build-rust-binaries-macos]
@@ -191,10 +118,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      # abi3 builds one wheel per platform regardless of this interpreter; any
+      # supported CPython works as the build host. Pin 3.12 for reproducibility.
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
       - name: Set up Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -218,6 +147,10 @@ jobs:
           platform: ${{ matrix.platform }}
 
       - name: Build wheel via maturin
+        # MACOSX_DEPLOYMENT_TARGET is empty (ignored) on Linux jobs and pins the
+        # macOS floor on macOS jobs so the single abi3 build host doesn't drift it.
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos-deployment-target }}
         run: maturin build --release --manifest-path rust/crates/artifact-hash-py/Cargo.toml --interpreter python --out dist
 
       - name: Verify wheel contains native extension and binaries
@@ -240,7 +173,7 @@ jobs:
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.py-tag }}-${{ matrix.platform-tag }}
+          name: wheel-${{ matrix.platform-tag }}
           path: dist/*.whl
 
   build-sdist:
@@ -310,8 +243,10 @@ jobs:
           import os
 
           wheels = sorted(glob.glob("dist/*.whl"))
-          expected_count = 16
-          expected_py_tags = {"cp310", "cp311", "cp312", "cp313"}
+          # One abi3 wheel per platform (4 platforms). abi3 means a single
+          # wheel per platform covers all CPython >= 3.10, so the count no
+          # longer scales with the number of supported Python versions.
+          expected_count = 4
 
           print("Found wheels:")
           for wheel in wheels:
@@ -320,12 +255,10 @@ jobs:
           if len(wheels) != expected_count:
               raise SystemExit(f"Expected {expected_count} wheels, found {len(wheels)}")
 
-          found_py_tags = {os.path.basename(w).split("-")[2] for w in wheels}
-          if found_py_tags != expected_py_tags:
-              raise SystemExit(
-                  f"Expected Python tags {sorted(expected_py_tags)}, "
-                  f"found {sorted(found_py_tags)}"
-              )
+          # Every wheel must be abi3 (filename: ...-cp310-abi3-<platform>.whl).
+          non_abi3 = [os.path.basename(w) for w in wheels if "-abi3-" not in os.path.basename(w)]
+          if non_abi3:
+              raise SystemExit(f"Expected only abi3 wheels, found non-abi3: {non_abi3}")
 
           # Verify we have wheels for all 4 platform tags
           wheel_basenames = [os.path.basename(w) for w in wheels]

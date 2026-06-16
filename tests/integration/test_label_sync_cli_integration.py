@@ -240,25 +240,3 @@ def test_label_sync_current_lineage_sends_all_user_managed_labels(
     sent = request["labels"]
     assert {label["entity_type"] for label in sent} == {"dag", "job", "artifact"}
     assert all("roar" not in label["metadata"] for label in sent)
-
-
-def test_label_push_command_is_removed(
-    temp_git_repo: Path,
-    roar_cli,
-    git_commit,
-    python_exe: str,
-    fake_glaas_publish_server: FakeGlaasServer,
-) -> None:
-    env = _configure_label_sync_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
-    _create_tracked_output(
-        temp_git_repo,
-        roar_cli=roar_cli,
-        git_commit=git_commit,
-        python_exe=python_exe,
-        env_overrides=env,
-    )
-
-    result = roar_cli("label", "push", "artifact", "processed.csv", check=False, env_overrides=env)
-
-    assert result.returncode != 0
-    assert "No such command 'push'" in result.stderr

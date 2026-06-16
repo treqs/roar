@@ -1,56 +1,15 @@
 """Tests for proxy configuration model and config get/set."""
 
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from roar.integrations.config import (
-    CONFIGURABLE_KEYS,
-    ProxyConfig,
     RoarConfig,
     config_get,
     save_config,
 )
 
 
-class TestProxyConfigModel:
-    def test_default_enabled_is_false(self):
-        config = ProxyConfig()
-        assert config.enabled is False
-
-    def test_roar_config_includes_proxy(self):
-        config = RoarConfig()
-        assert hasattr(config, "proxy")
-        assert isinstance(config.proxy, ProxyConfig)
-
-    def test_to_dict_includes_proxy(self):
-        config = RoarConfig()
-        d = config.to_dict()
-        assert "proxy" in d
-        assert d["proxy"]["enabled"] is False
-
-
-class TestProxyConfigurableKeys:
-    def test_proxy_enabled_in_configurable_keys(self):
-        assert "proxy.enabled" in CONFIGURABLE_KEYS
-
-    def test_proxy_enabled_metadata(self):
-        key_info = CONFIGURABLE_KEYS["proxy.enabled"]
-        assert key_info["type"] is bool
-        assert key_info["default"] is False
-        assert "description" in key_info
-
-
 class TestProxyConfigGetSet:
-    def test_config_get_returns_false_by_default(self, tmp_path):
-        # Create a minimal .roar directory with no config file
-        roar_dir = tmp_path / ".roar"
-        roar_dir.mkdir()
-
-        with patch("roar.integrations.config.access.load_settings") as mock_load:
-            mock_load.return_value = SimpleNamespace(proxy=SimpleNamespace(enabled=False))
-            result = config_get("proxy.enabled")
-        assert result is False
-
     def test_config_set_can_enable(self, tmp_path):
         from roar.integrations.config import config_set
 
@@ -113,7 +72,6 @@ class TestConfigGetDoesNotDiscoverBackends:
     """
 
     def test_non_backend_key_skips_to_dict(self) -> None:
-        from roar.integrations.config import config_get
 
         settings = _SettingsStub(
             backend_config_source={},
@@ -131,7 +89,6 @@ class TestConfigGetDoesNotDiscoverBackends:
         (e.g. ``[hints] enabled = false``), the raw-config walk must
         return it — also without touching ``to_dict()``.
         """
-        from roar.integrations.config import config_get
 
         settings = _SettingsStub(
             backend_config_source={"hints": {"enabled": False}},
@@ -150,7 +107,6 @@ class TestConfigGetDoesNotDiscoverBackends:
         when the user hasn't overridden them. Don't accidentally break
         the slow path for keys that need it.
         """
-        from roar.integrations.config import config_get
 
         settings = _SettingsStub(
             backend_config_source={},

@@ -205,6 +205,51 @@ def test_suppression_when_default_cache_would_dirty_project_tree(tmp_path: Path)
     assert effective.suppression_reason == "project_local_cache"
 
 
+def test_no_project_local_cache_suppression_from_home_without_git(tmp_path: Path) -> None:
+    # Regression: a fresh user runs `roar` from their home directory (no git
+    # repo), where the default cache (~/.cache/roar) is naturally *under* the
+    # cwd. This must NOT be treated as a project-local cache. Previously
+    # _find_project_tree_root fell back to the cwd when no .git was found, so
+    # every home-directory invocation was silently suppressed
+    # (project_local_cache) and never emitted telemetry — the cause of the
+    # production zero-events gap for the install-page cohort.
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".xdg"),
+    }
+
+    effective = config.resolve_config(
+        start_dir=home,  # cwd == HOME, no .git anywhere above it
+        environ=env,
+        paths=paths.resolve_paths(env),
+    )
+
+    assert effective.suppression_reason is None
+    assert effective.stats_enabled
+
+
+def test_no_project_local_cache_suppression_in_non_git_dir(tmp_path: Path) -> None:
+    # A plain working directory that is not a git repo, with a normal external
+    # home cache, must not be suppressed either.
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    env = {
+        "HOME": str(tmp_path / "home"),
+        "XDG_CONFIG_HOME": str(tmp_path / "home" / ".xdg"),
+    }
+
+    effective = config.resolve_config(
+        start_dir=workdir,
+        environ=env,
+        paths=paths.resolve_paths(env),
+    )
+
+    assert effective.suppression_reason is None
+    assert effective.stats_enabled
+
+
 def test_recording_stats_tracks_identity_version_counters_sequence_and_status(
     tmp_path: Path,
 ) -> None:

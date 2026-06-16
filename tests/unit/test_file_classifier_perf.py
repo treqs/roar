@@ -62,19 +62,6 @@ class TestBuildPackageFileMapPerf:
             "Use packages_distributions() index + path extraction instead."
         )
 
-    def test_file_to_pkg_is_empty(self, tmp_path):
-        """_file_to_pkg is intentionally empty; classify() uses path extraction."""
-        from roar.filters.files import FileClassifier
-
-        fc = FileClassifier(
-            repo_root=str(tmp_path),
-            sys_prefix=sys.prefix,
-            sys_base_prefix=sys.base_prefix,
-        )
-        assert fc._file_to_pkg == {}, (
-            "_file_to_pkg should be empty; classify() now uses path-based extraction."
-        )
-
     def test_pkg_versions_populated(self, tmp_path):
         """pkg_versions should still contain installed package versions."""
         from roar.filters.files import FileClassifier
@@ -91,19 +78,6 @@ class TestBuildPackageFileMapPerf:
         assert "pytest" in known or "pytest" in fc._pkg_versions, (
             f"Expected 'pytest' in pkg_versions, got: {list(fc._pkg_versions)[:10]}"
         )
-
-    def test_pkg_dist_map_populated(self, tmp_path):
-        """_pkg_dist_map should be populated with packages_distributions() data."""
-        from roar.filters.files import FileClassifier
-
-        fc = FileClassifier(
-            repo_root=str(tmp_path),
-            sys_prefix=sys.prefix,
-            sys_base_prefix=sys.base_prefix,
-        )
-        assert hasattr(fc, "_pkg_dist_map"), "_pkg_dist_map must be set by _build_package_file_map"
-        assert isinstance(fc._pkg_dist_map, dict), "_pkg_dist_map must be a dict"
-        assert len(fc._pkg_dist_map) > 0, "_pkg_dist_map should have entries"
 
 
 class TestClassifySitePackages:

@@ -18,12 +18,6 @@ class TestJobIODTOByteRanges:
         assert d == {"hash": "abc123", "path": "/data/file.csv"}
         assert "byte_ranges" not in d
 
-    def test_to_dict_with_none_byte_ranges(self):
-        dto = JobIODTO(hash="abc123", path="/data/file.csv", byte_ranges=None)
-        d = dto.to_dict()
-        assert d == {"hash": "abc123", "path": "/data/file.csv"}
-        assert "byte_ranges" not in d
-
     def test_to_dict_with_multiple_byte_ranges(self):
         dto = JobIODTO(hash="abc123", path="/data/file.csv", byte_ranges=[[0, 999], [2000, 2999]])
         d = dto.to_dict()

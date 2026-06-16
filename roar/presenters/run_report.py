@@ -28,14 +28,20 @@ Verbosity = Literal["quiet", "normal", "verbose", "debug"]
 # debug-mode listings. Order matters: this is the display order.
 _FILTER_LABELS: tuple[tuple[str, str], ...] = (
     ("system_reads", "system"),
-    ("package_reads", "pkg"),
-    ("torch_cache", "torch-cache"),
-    ("tmp_files", "tmp"),
-    ("write_noise", "write-noise"),
-    ("git_metadata", "git-meta"),
-    ("credential_files", "creds"),
+    ("package_reads", "packages"),
+    ("torch_cache", "torch cache"),
+    ("tmp_files", "/tmp"),
+    ("write_noise", "system-writes"),
+    ("git_metadata", "git"),
+    ("credential_files", "secrets"),
+    # Kept for verbose/debug dropped-file listings; hidden from the compact
+    # summary line (roar's own bookkeeping isn't user-meaningful there).
     ("roar_internal", "roar-internal"),
 )
+
+# Width of the detail-line label column. Sized to the widest label
+# ("ignored i/o") so the value column stays aligned across all rows.
+_DETAIL_LABEL_WIDTH = len("ignored i/o")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -214,19 +220,10 @@ class RunReportPresenter:
             register_arg = f"@{result.step_number}"
         else:
             register_arg = result.job_uid
-        line = (
-            f"hint: next: roar show --job {result.job_uid}"
-            f"  ·  roar dag"
-            f"  ·  roar register {register_arg}"
-        )
+        # Use the `@N` alias for `show` too (shorter, matches the job line),
+        # falling back to the bare UID when the step number isn't known.
+        line = f"hint: next: roar show {register_arg}  ·  roar dag  ·  roar register {register_arg}"
         self._print(style(line, "warn_amber", enabled=c))
-        # One-line explainer so users (and agents) reading the hint know
-        # what `roar register` actually does without having to look it up.
-        explainer = (
-            f"'roar register {register_arg}' uploads lineage to glaas.ai "
-            f"so you can reproduce it later."
-        )
-        self._print(style(explainer, "warn_amber", enabled=c))
 
     def no_repo_hint(self, result: RunResult) -> None:
         """Amber hint when the run was captured without a git commit.
@@ -260,8 +257,14 @@ class RunReportPresenter:
         )
         self._print(
             style(
-                "hint: run inside a git repository (code committed) to anchor lineage "
-                "and enable `roar register` for reproducible sharing.",
+                "hint: run in a clean git repo to attach a commit to",
+                "warn_amber",
+                enabled=c,
+            )
+        )
+        self._print(
+            style(
+                "hint:   your lineage and make it reproducible.",
                 "warn_amber",
                 enabled=c,
             )
@@ -293,9 +296,14 @@ class RunReportPresenter:
         plural = "s" if n != 1 else ""
         self._print(
             style(
-                f"hint: {n} /tmp file{plural} filtered out of this run's lineage "
-                f"(filters.ignore_tmp_files). Run outside /tmp, or "
-                f"`roar config set filters.ignore_tmp_files false`, to track them.",
+                f"hint: {n} file{plural} under /tmp ignored (filters.ignore_tmp_files).",
+                "warn_amber",
+                enabled=c,
+            )
+        )
+        self._print(
+            style(
+                "hint:   to track them: roar config set filters.ignore_tmp_files false",
                 "warn_amber",
                 enabled=c,
             )
@@ -382,7 +390,7 @@ class RunReportPresenter:
         """Emit a ``·  label  content`` detail line."""
         c = self._caps.can_color
         prefix = style("·", "dim", enabled=c)
-        lbl = style(f"{label:<3}", "dim", enabled=c)
+        lbl = style(f"{label:<{_DETAIL_LABEL_WIDTH}}", "dim", enabled=c)
         self._print(f"{prefix}  {lbl}  {content}")
 
     def _detail_blank(self) -> None:
@@ -413,8 +421,11 @@ class RunReportPresenter:
         if io_parts:
             self._detail("i/o", f" {self._dim_sep()}".join(io_parts))
 
-        # job line — bold hash, no hue.
+        # job line — bold hash, no hue, with the step alias when known.
         job_hash = style(result.job_uid, "bold", enabled=c)
+        if result.step_number is not None:
+            alias = style(f"(alias @{result.step_number})", "dim", enabled=c)
+            job_hash = f"{job_hash} {alias}"
         self._detail("job", job_hash)
 
         # git line.
@@ -472,12 +483,14 @@ class RunReportPresenter:
             return
         parts = []
         for key, label in _FILTER_LABELS:
+            if key == "roar_internal":
+                continue  # roar's own bookkeeping; not user-meaningful here
             n = int(counts.get(key, 0) or 0)
             if n:
                 parts.append(f"{n} {label}")
         if not parts:
             return
-        self._detail("flt", f" {self._dim_sep()}".join(parts))
+        self._detail("ignored i/o", f" {self._dim_sep()}".join(parts))
 
     def _render_io_lists(self, result: RunResult) -> None:
         c = self._caps.can_color
@@ -506,6 +519,6 @@ class RunReportPresenter:
             if not paths:
                 continue
             self._detail_blank()
-            self._detail("flt", style(f"{len(paths)} {label} (filtered)", "dim", enabled=c))
+            self._detail("ignored i/o", style(f"{len(paths)} {label} (filtered)", "dim", enabled=c))
             for p in paths:
                 self._print(f"    {p}")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from ...core.models.dag import DagVisualization
 from ...db.context import create_database_context
@@ -89,6 +90,21 @@ def build_dag_visualization(request: DagQueryRequest) -> DagVisualization:
         superseded_artifact_count=dag_data["superseded_artifact_count"],
         labels=dag_data.get("labels", {}),
     )
+
+
+def session_has_unsynced(roar_dir: Path, session_ref: str | None = None) -> bool:
+    """True if the resolved session has any job not yet pushed to GLaaS.
+
+    A job's ``synced_at`` is ``NULL`` until it is registered, so this gates
+    the ``roar dag`` "save lineage" nudge: once everything is registered the
+    hint stops showing. Returns ``False`` when there's no session to inspect.
+    """
+    with create_database_context(roar_dir) as db_ctx:
+        session = _resolve_session(db_ctx, session_ref)
+        if not session:
+            return False
+        jobs = db_ctx.jobs.get_by_session(int(session["id"]), limit=10000)
+        return any(job.get("synced_at") is None for job in jobs)
 
 
 def render_dag(request: DagQueryRequest) -> str:

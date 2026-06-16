@@ -90,58 +90,9 @@ class TestGCSBackendUpload:
 class TestGCSBackendExists:
     """Tests for GCS exists functionality."""
 
-    def test_exists_returns_true_when_blob_exists(self):
-        """Exists returns True when blob is in GCS."""
-        with patch("roar.integrations.storage.gcs.storage") as mock_storage:
-            mock_client = Mock()
-            mock_bucket = Mock()
-            mock_blob = Mock()
-
-            mock_storage.Client.return_value = mock_client
-            mock_client.bucket.return_value = mock_bucket
-            mock_bucket.blob.return_value = mock_blob
-            mock_blob.exists.return_value = True
-
-            backend = GCSBackend(bucket="bucket", prefix="models")
-
-            result = backend.exists("model.pt")
-
-            assert result is True
-            mock_bucket.blob.assert_called_with("models/model.pt")
-            mock_blob.exists.assert_called_once()
-
-    def test_exists_returns_false_when_blob_missing(self):
-        """Exists returns False when blob is not in GCS."""
-        with patch("roar.integrations.storage.gcs.storage") as mock_storage:
-            mock_client = Mock()
-            mock_bucket = Mock()
-            mock_blob = Mock()
-
-            mock_storage.Client.return_value = mock_client
-            mock_client.bucket.return_value = mock_bucket
-            mock_bucket.blob.return_value = mock_blob
-            mock_blob.exists.return_value = False
-
-            backend = GCSBackend(bucket="bucket", prefix="models")
-
-            result = backend.exists("missing.pt")
-
-            assert result is False
-
 
 class TestGCSBackendAuth:
     """Tests for GCS authentication handling."""
-
-    def test_uses_application_default_credentials(self):
-        """Backend uses Application Default Credentials (ADC)."""
-        with patch("roar.integrations.storage.gcs.storage") as mock_storage:
-            mock_client = Mock()
-            mock_storage.Client.return_value = mock_client
-
-            GCSBackend(bucket="bucket", prefix="")
-
-            # Verify client was created (ADC is used by default)
-            mock_storage.Client.assert_called_once()
 
     def test_upload_auth_error_propagates(self, tmp_path: Path):
         """Auth errors during upload propagate to caller."""

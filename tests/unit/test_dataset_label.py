@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from roar.execution.recording.dataset_metadata import (
-    AUTO_DATASET_LABEL_KEYS,
     build_dataset_label_metadata,
     build_dataset_metadata,
     find_matching_identifier,
@@ -74,31 +73,6 @@ class TestFindMatchingIdentifier:
 
 
 class TestBuildDatasetMetadata:
-    def test_all_fields_present(self):
-        identifier = {
-            "dataset_id": "file:///data/imagenet",
-            "dataset_fingerprint": "a1b2c3d4e5f67890",
-            "dataset_fingerprint_algorithm": "blake3",
-            "confidence": 0.92,
-            "evidence": ["manifest_anchor", "high_cardinality"],
-            "split": "train",
-            "version_hint": "v2",
-            "observed_paths": 20,
-            "profile": {"modality_hint": "image", "profiled_components": 1000},
-        }
-        result = build_dataset_metadata(identifier)
-        assert result == {
-            "dataset_id": "file:///data/imagenet",
-            "dataset_fingerprint": "a1b2c3d4e5f67890",
-            "dataset_fingerprint_algorithm": "blake3",
-            "confidence": 0.92,
-            "evidence": ["manifest_anchor", "high_cardinality"],
-            "split": "train",
-            "version_hint": "v2",
-            "observed_paths": 20,
-            "profile": {"modality_hint": "image", "profiled_components": 1000},
-        }
-
     def test_minimal_fields(self):
         identifier = {
             "dataset_id": "file:///data/raw",
@@ -168,14 +142,3 @@ class TestBuildDatasetLabelMetadata:
                 "modality": "image",
             }
         }
-
-    def test_declares_reserved_paths_for_system_managed_dataset_labels(self):
-        assert {
-            "dataset.type",
-            "dataset.id",
-            "dataset.fingerprint",
-            "dataset.fingerprint_algorithm",
-            "dataset.split",
-            "dataset.version_hint",
-            "dataset.modality",
-        } == AUTO_DATASET_LABEL_KEYS

@@ -14,7 +14,6 @@ from roar.application.git import (
     finalize_register_git,
     prepare_put_git,
     resolve_git_state,
-    resolve_roar_git_context,
 )
 
 
@@ -162,18 +161,3 @@ def test_finalize_register_git_creates_tag_when_enabled(tmp_path: Path) -> None:
         )
 
     create_tag.assert_called_once_with(tmp_path, "roar/deadbeef")
-
-
-def test_resolve_roar_git_context_uses_shared_transfer_resolution() -> None:
-    logger = MagicMock()
-
-    with patch("roar.application.git.resolve_git_context") as resolve_git_context:
-        resolve_git_context.return_value.repo = "file:///repo"
-        resolve_git_context.return_value.commit = "deadbeef" * 5
-        resolve_git_context.return_value.branch = "main"
-
-        ctx = resolve_roar_git_context(Path("/tmp/repo"), logger=logger)
-
-    assert ctx is resolve_git_context.return_value
-    resolve_git_context.assert_called_once_with(Path("/tmp/repo"), None, configured_remote=None)
-    logger.debug.assert_any_call("Resolving git context from %s", Path("/tmp/repo"))

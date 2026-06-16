@@ -147,11 +147,3 @@ def test_tracer_enable_non_ebpf_gives_friendly_message(temp_git_repo: Path) -> N
     assert result.returncode != 0
     assert "works out of the box" in result.stderr
     assert "roar tracer check preload" in result.stderr
-
-
-def test_tracer_check_no_backend_flag_anymore(temp_git_repo: Path) -> None:
-    """The `--backend` option is gone; positional is the only form."""
-    result = _run_roar_tracer("check", "--backend", "ptrace", cwd=temp_git_repo)
-    assert result.returncode != 0
-    assert "No such option" in result.stderr
-    assert "--backend" in result.stderr

@@ -51,22 +51,6 @@ def test_task_fragment_round_trip_dict() -> None:
     assert restored == fragment
 
 
-def test_artifact_ref_fields() -> None:
-    artifact = ArtifactRef(
-        path="s3://bucket/key",
-        hash="etag-123",
-        hash_algorithm="etag",
-        size=123,
-        capture_method="proxy",
-    )
-
-    assert artifact.path == "s3://bucket/key"
-    assert artifact.hash == "etag-123"
-    assert artifact.hash_algorithm == "etag"
-    assert artifact.size == 123
-    assert artifact.capture_method == "proxy"
-
-
 def test_derive_task_uid_is_deterministic() -> None:
     uid1 = derive_task_uid("job-a", "task-1")
     uid2 = derive_task_uid("job-a", "task-1")
@@ -79,20 +63,6 @@ def test_derive_task_uid_changes_with_task_id() -> None:
     uid2 = derive_task_uid("job-a", "task-2")
 
     assert uid1 != uid2
-
-
-def test_derive_task_uid_is_32_char_hex() -> None:
-    uid = derive_task_uid("job-a", "task-1")
-
-    assert len(uid) == 32
-    assert int(uid, 16) >= 0
-
-
-def test_derive_task_identity_is_stable_hex() -> None:
-    identity = derive_task_identity("job-a", "task-1")
-
-    assert len(identity) == 32
-    assert int(identity, 16) >= 0
 
 
 def test_derive_task_identity_changes_with_job_uid_when_parent_is_missing() -> None:

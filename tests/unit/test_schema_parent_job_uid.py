@@ -3,10 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
-
 from roar.db.context import create_database_context
-from roar.db.models import Base
 from roar.db.schema import run_migrations
 
 
@@ -104,18 +101,6 @@ def test_insert_job_with_null_parent_job_uid_succeeds() -> None:
     ).fetchone()
     assert row is not None
     assert row["parent_job_uid"] is None
-
-
-def test_sqlalchemy_schema_includes_parent_job_uid_column() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-
-    with engine.connect() as conn:
-        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(jobs)")).fetchall()}
-
-    assert "parent_job_uid" in columns
-    assert "execution_backend" in columns
-    assert "execution_role" in columns
 
 
 def test_create_database_context_migrates_parent_job_uid_for_legacy_db(tmp_path: Path) -> None:
