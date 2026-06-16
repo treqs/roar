@@ -406,9 +406,12 @@ def test_no_repo_hint_fires_when_no_git_context() -> None:
     report = RunReportPresenter(stream=buf, caps=_tty_caps())
     report.no_repo_hint(_make_result(git_branch=None, git_short_commit=None))
     out = _strip(buf.getvalue())
-    assert "no git commit captured" in out
-    assert "clean git repo" in out
-    assert "reproducible" in out
+    assert "no git commit" in out
+    assert "package manager" in out
+    assert "reproduce" in out
+    # The whole git warning must be a single line.
+    assert out.count("hint:") == 1
+    assert out.strip().count("\n") == 0
 
 
 def test_no_repo_hint_silent_when_commit_present() -> None:
