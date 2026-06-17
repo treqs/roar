@@ -228,27 +228,15 @@ def _build_local_session_pipeline(
     build_steps = [s for s in step_dicts if s.get("job_type") == "build"]
     run_steps = [s for s in step_dicts if s.get("job_type") != "build"]
 
-    # Reproduce at the session's LAST commit, not its first: when the user
-    # commits between runs (which roar's clean-tree rule encourages), the target
-    # was produced at the end state — and only there do all the code and the
-    # final .gitignore exist. Checking out the start commit reruns later steps
-    # against stale code and can dirty the tree on outputs the start commit
-    # didn't yet ignore.
-    commit_start = session.get("git_commit_start")
-    commit_end = session.get("git_commit_end")
-    git_commit = commit_end or commit_start
-    single_commit = not (commit_start and commit_end and commit_start != commit_end)
-
     return PipelineInfo(
         artifact_hash=artifact_hash,
         git_repo=session.get("git_repo"),
-        git_commit=git_commit,
+        git_commit=session.get("git_commit_start") or session.get("git_commit_end"),
         target_kind=target_kind,
         session_hash=session_hash,
         build_steps=build_steps,
         run_steps=run_steps,
         total_steps=len(build_steps) + len(run_steps),
-        single_commit=single_commit,
     )
 
 
