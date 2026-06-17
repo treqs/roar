@@ -57,6 +57,25 @@ def test_unsourced_detail_lists_paths_and_flags_tmp():
     assert "1 in /tmp" in out
 
 
+def test_na_marker_renders_dash_and_is_excluded_from_count():
+    # dry-run marks publish status n/a — neither pass nor fail.
+    report = build_report(
+        committed=True,
+        pushed=True,
+        runtime_ok=True,
+        unsourced_paths=[],
+        on_glaas=False,
+        na={"on_glaas": "dry run — nothing published yet"},
+    )
+    out = render_report(report)
+    assert "[-] lineage saved on glaas.ai" in out
+    assert "dry run — nothing published yet" in out
+    # n/a excluded from the denominator: 5 applicable checks, all green
+    assert "Reproducibility — 5/5" in out
+    # an n/a item is not a failure, so no warning
+    assert "may not reproduce" not in out
+
+
 def test_check_keys_are_stable_and_complete():
     keys = [c.key for c in _full_report().checks]
     assert keys == ["committed", "single_commit", "pushed", "inputs_sourced", "runtime", "on_glaas"]

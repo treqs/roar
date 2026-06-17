@@ -446,3 +446,60 @@ def test_audit_noop_when_no_unsourced_inputs(tmp_path: Path) -> None:
     ):
         _audit_unsourced_inputs(_request(tmp_path), presenter)
     presenter.print.assert_not_called()
+
+
+# -- reproduction runs in its own session (no lineage pollution) --
+
+
+def _session_ctx(*, active, steps):
+    ctx = MagicMock()
+    ctx.__enter__.return_value = ctx
+    ctx.__exit__.return_value = False
+    ctx.sessions.get_active.return_value = active
+    ctx.sessions.get_steps.return_value = steps
+    return ctx
+
+
+def test_reproduction_session_reuses_empty_active(tmp_path: Path) -> None:
+    from roar.application.reproduce.service import _reproduction_session
+
+    (tmp_path / ".roar").mkdir()
+    (tmp_path / ".roar" / "roar.db").write_text("")
+    ctx = _session_ctx(active={"id": 1}, steps=[])  # empty session
+
+    with (
+        patch("roar.db.context.create_database_context", return_value=ctx),
+        _reproduction_session(tmp_path, MagicMock()),
+    ):
+        pass
+
+    ctx.sessions.create.assert_not_called()  # reuse, don't churn a new one
+    ctx.sessions.set_active.assert_not_called()
+
+
+def test_reproduction_session_isolates_nonempty_active(tmp_path: Path) -> None:
+    from roar.application.reproduce.service import _reproduction_session
+
+    (tmp_path / ".roar").mkdir()
+    (tmp_path / ".roar" / "roar.db").write_text("")
+    ctx = _session_ctx(active={"id": 7}, steps=[{"id": 1}])  # has a step
+    presenter = MagicMock()
+
+    with (
+        patch("roar.db.context.create_database_context", return_value=ctx),
+        _reproduction_session(tmp_path, presenter),
+    ):
+        pass
+
+    ctx.sessions.create.assert_called_once_with(make_active=True)  # new session
+    ctx.sessions.set_active.assert_called_once_with(7)  # restored afterward
+    out = "\n".join(c.args[0] for c in presenter.print.call_args_list)
+    assert "new session" in out
+
+
+def test_reproduction_session_noop_without_db(tmp_path: Path) -> None:
+    from roar.application.reproduce.service import _reproduction_session
+
+    # No .roar DB -> nothing to isolate, must not crash.
+    with _reproduction_session(tmp_path, MagicMock()):
+        pass

@@ -54,6 +54,7 @@ class ReproCheck:
     ok: bool
     detail: str = ""  # the exception / how-to-fix, shown when not ok
     note: str = ""  # supporting info, shown when ok
+    na: bool = False  # not-applicable in this context (e.g. publish status on a dry run)
 
 
 @dataclass
@@ -61,12 +62,16 @@ class ReproducibilityReport:
     checks: list[ReproCheck] = field(default_factory=list)
 
     @property
+    def applicable(self) -> list[ReproCheck]:
+        return [c for c in self.checks if not c.na]
+
+    @property
     def passed(self) -> list[ReproCheck]:
-        return [c for c in self.checks if c.ok]
+        return [c for c in self.applicable if c.ok]
 
     @property
     def failed(self) -> list[ReproCheck]:
-        return [c for c in self.checks if not c.ok]
+        return [c for c in self.applicable if not c.ok]
 
     @property
     def all_ok(self) -> bool:
@@ -82,6 +87,7 @@ def build_report(
     on_glaas: bool,
     single_commit: bool = True,
     notes: dict[str, str] | None = None,
+    na: dict[str, str] | None = None,
 ) -> ReproducibilityReport:
     """Assemble the canonical checklist from already-computed facts.
 
@@ -134,6 +140,9 @@ def build_report(
     for check in report.checks:
         if notes and check.key in notes:
             check.note = notes[check.key]
+        if na and check.key in na:
+            check.na = True
+            check.note = na[check.key]
     return report
 
 
@@ -178,13 +187,17 @@ def render_punchlist(items: list[ReproCheck], *, title: str) -> str:
     """Render a checkbox punchlist: every item on its own line, detail indented.
 
     ``[✅] label`` with the ``note`` below when passed; ``[❌] label`` with the
-    ``→ detail`` exception below when failed. Shared by the reproducibility
-    checklist and register's operational summary so they read identically."""
-    n_ok = sum(1 for it in items if it.ok)
-    lines = [f"{title} — {n_ok}/{len(items)}"]
+    ``→ detail`` exception below when failed; ``[-] label`` for a not-applicable
+    item (e.g. publish status on a dry run). Not-applicable items are excluded
+    from the X/Y count. Shared by the reproducibility checklist and register's
+    operational summary so they read identically."""
+    applicable = [it for it in items if not it.na]
+    n_ok = sum(1 for it in applicable if it.ok)
+    lines = [f"{title} — {n_ok}/{len(applicable)}"]
     for it in items:
-        lines.append(f"  [{_PASS if it.ok else _FAIL}] {it.label}")
-        if it.ok and it.note:
+        mark = "-" if it.na else (_PASS if it.ok else _FAIL)
+        lines.append(f"  [{mark}] {it.label}")
+        if (it.na and it.note) or (it.ok and it.note):
             lines.append(f"       {it.note}")
         elif not it.ok and it.detail:
             lines.append(f"       → {it.detail}")

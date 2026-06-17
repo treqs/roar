@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -135,11 +136,12 @@ def reproduce_artifact(
         )
         return
 
-    steps_run, steps_total = PipelineExecutor(presenter=output).execute(
-        pipeline,
-        environment,
-        request.auto_confirm,
-    )
+    with _reproduction_session(environment.repo_dir, output):
+        steps_run, steps_total = PipelineExecutor(presenter=output).execute(
+            pipeline,
+            environment,
+            request.auto_confirm,
+        )
     _render_reproduction_result(
         ReproduceRunSummary(
             repo_dir=environment.repo_dir,
@@ -173,6 +175,51 @@ def _file_matches_recorded_hash(path: str, hashes: list) -> bool:
             except Exception:
                 return False
     return False
+
+
+@contextmanager
+def _reproduction_session(repo_dir: Path, output: IPresenter):
+    """Run the replay in its own session so it never mutates the original lineage.
+
+    Reproduction re-runs each step with roar (recording a fresh lineage you can
+    compare to the original). In place, those inner runs would otherwise append
+    to the repo's *active* session and pollute it. So: if the active session is
+    empty, reuse it (no churn); if it has steps, warn and start a new session for
+    the replay, restoring the original active session afterward. Best-effort —
+    any failure here just falls back to the existing session.
+    """
+    roar_dir = repo_dir / ".roar"
+    if not (roar_dir / "roar.db").exists():
+        yield
+        return
+
+    from ...db.context import create_database_context
+
+    restore_id: int | None = None
+    try:
+        with create_database_context(roar_dir) as ctx:
+            active = ctx.sessions.get_active()
+            if active is not None and ctx.sessions.get_steps(active["id"]):
+                restore_id = int(active["id"])
+                output.print(
+                    "Active session already has steps — reproducing into a new session so it "
+                    "doesn't add to your current lineage."
+                )
+                ctx.sessions.create(make_active=True)
+            # empty / no active session -> reuse it (the replay fills it).
+    except Exception:
+        yield
+        return
+
+    try:
+        yield
+    finally:
+        if restore_id is not None:
+            try:
+                with create_database_context(roar_dir) as ctx:
+                    ctx.sessions.set_active(restore_id)
+            except Exception:
+                pass
 
 
 def _render_reproducibility_checklist(
