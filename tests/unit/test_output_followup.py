@@ -147,3 +147,76 @@ def test_warning_silent_when_only_tracked_modifications(
     buf = io.StringIO()
     emit_dirty_outputs_warning(repo_root=tmp_path, stream=buf, caps=_plain_caps(), quiet=False)
     assert buf.getvalue() == ""
+
+
+# -- emit_unsourced_inputs_nudge --------------------------------------------
+
+
+def _summary(*paths):
+    from roar.application.query.results import InputArtifactSummary, InputsSummary
+
+    return InputsSummary(
+        target_ref="@1",
+        is_root=False,
+        artifacts=[InputArtifactSummary(p, p, 0, unsourced=True) for p in paths],
+    )
+
+
+def test_nudge_warns_when_run_read_unsourced_inputs(
+    monkeypatch: pytest.MonkeyPatch, hints_enabled: None, tmp_path: Path
+) -> None:
+    from roar.application.run import output_followup
+
+    # The function imports build_inputs_summary locally, so patch it at source.
+    monkeypatch.setattr(
+        "roar.application.query.inputs.build_inputs_summary",
+        lambda req: _summary("/data/events.csv"),
+    )
+    buf = io.StringIO()
+    output_followup.emit_unsourced_inputs_nudge(
+        roar_dir=tmp_path / ".roar",
+        cwd=tmp_path,
+        job_ref="@1",
+        stream=buf,
+        caps=_plain_caps(),
+        quiet=False,
+    )
+    out = buf.getvalue()
+    assert "1 input nothing tracked produced" in out
+    assert "roar inputs --unsourced @1" in out
+
+
+def test_nudge_silent_when_all_sourced(
+    monkeypatch: pytest.MonkeyPatch, hints_enabled: None, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "roar.application.query.inputs.build_inputs_summary",
+        lambda req: _summary(),  # no unsourced inputs
+    )
+    from roar.application.run import output_followup
+
+    buf = io.StringIO()
+    output_followup.emit_unsourced_inputs_nudge(
+        roar_dir=tmp_path / ".roar",
+        cwd=tmp_path,
+        job_ref="@1",
+        stream=buf,
+        caps=_plain_caps(),
+        quiet=False,
+    )
+    assert buf.getvalue() == ""
+
+
+def test_nudge_silent_in_quiet_mode(tmp_path: Path) -> None:
+    from roar.application.run import output_followup
+
+    buf = io.StringIO()
+    output_followup.emit_unsourced_inputs_nudge(
+        roar_dir=tmp_path / ".roar",
+        cwd=tmp_path,
+        job_ref="@1",
+        stream=buf,
+        caps=_plain_caps(),
+        quiet=True,
+    )
+    assert buf.getvalue() == ""
