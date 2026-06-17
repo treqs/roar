@@ -50,7 +50,7 @@ def reproduce_artifact(
             output,
         )
 
-    pipeline = _resolve_pipeline(
+    pipeline, pipeline_source = _resolve_pipeline(
         hash_prefix=request.hash_prefix,
         server_url=server_url,
         roar_dir=request.roar_dir,
@@ -84,8 +84,15 @@ def reproduce_artifact(
     output.print(f"Run steps: {len(pipeline.run_steps)}")
 
     # Fail fast (before the clone) if the lineage depends on inputs nothing
-    # tracked produced and that aren't recoverable here.
+    # tracked produced and that are missing or changed here.
     _audit_unsourced_inputs(request, output)
+
+    # Show the recorded lineage's reproducibility checklist before running, so the
+    # user knows what they're getting (and why a result might diverge).
+    output.print("")
+    output.print(
+        _render_reproducibility_checklist(request, pipeline, on_glaas=(pipeline_source == "remote"))
+    )
 
     if request.list_requirements:
         for block in preview.requirement_blocks:
@@ -168,6 +175,27 @@ def _file_matches_recorded_hash(path: str, hashes: list) -> bool:
     return False
 
 
+def _render_reproducibility_checklist(
+    request: ReproduceRequest, pipeline: PipelineInfo, *, on_glaas: bool
+) -> str:
+    """Build the recorded lineage's reproducibility checklist (see report module)."""
+    from ..reproducibility.report import (
+        build_report,
+        render_report,
+        runtime_captured,
+        unsourced_input_paths,
+    )
+
+    report = build_report(
+        committed=bool(pipeline.git_commit),
+        pushed=bool(pipeline.git_repo),
+        runtime_ok=runtime_captured(pipeline),
+        unsourced_paths=unsourced_input_paths(request.roar_dir, request.cwd, request.hash_prefix),
+        on_glaas=on_glaas,
+    )
+    return render_report(report, title="Reproducibility (as recorded)")
+
+
 def _audit_unsourced_inputs(request: ReproduceRequest, output: IPresenter) -> None:
     """Pre-flight the lineage for inputs nothing tracked produced.
 
@@ -199,13 +227,10 @@ def _audit_unsourced_inputs(request: ReproduceRequest, output: IPresenter) -> No
     if not summary.artifacts:
         return
 
-    present: list[str] = []
     broken: list[str] = []
     for art in summary.artifacts:
         path = art.path
-        if path and os.path.exists(path) and _file_matches_recorded_hash(path, art.hashes):
-            present.append(path)
-        else:
+        if not (path and os.path.exists(path) and _file_matches_recorded_hash(path, art.hashes)):
             broken.append(path or art.artifact_id)
 
     if broken:
@@ -215,15 +240,8 @@ def _audit_unsourced_inputs(request: ReproduceRequest, output: IPresenter) -> No
             f"are missing or changed here:\n  {listed}\n"
             "Ingest them with `roar get` / `roar run wget`, or commit code to a git repo."
         )
-
-    output.print("")
-    output.print(
-        "⚠  May not reproduce elsewhere: these inputs exist here but nothing tracked "
-        "produced them —"
-    )
-    output.print("   they won't be present on another machine:")
-    for path in present:
-        output.print(f"     {path}")
+    # Inputs that are present-but-unsourced are surfaced by the reproducibility
+    # checklist (rendered next), so this audit only fails fast on broken ones.
 
 
 def _load_server_url(cwd: Path) -> str | None:
@@ -269,8 +287,8 @@ def _resolve_pipeline(
     roar_dir: Path,
     glaas_client: GlaasClient | None,
     target_kind: Literal["artifact", "lineage"],
-) -> PipelineInfo:
-    """Resolve the target pipeline for reproduction."""
+) -> tuple[PipelineInfo, str]:
+    """Resolve the target pipeline for reproduction; returns (pipeline, source)."""
     lookup = lookup_pipeline_result(
         hash_prefix=hash_prefix,
         roar_dir=roar_dir,
@@ -285,7 +303,7 @@ def _resolve_pipeline(
         raise ValueError(
             f"No pipeline found for {_target_label(target_kind).lower()} {hash_prefix}"
         )
-    return pipeline
+    return pipeline, lookup.source
 
 
 def build_preview_summary(
