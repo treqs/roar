@@ -148,9 +148,9 @@ class EnvironmentSetupService:
                 self._print(f"  - {warning}")
             self._print("")
 
-        # Create virtual environment
+        # Create virtual environment, pinned to the recorded interpreter.
         self.logger.debug("Creating virtual environment...")
-        venv_dir = self._create_venv(repo_dir)
+        venv_dir = self._create_venv(repo_dir, self._recorded_python_version(pipeline))
         self.logger.debug("Virtual environment created at: %s", venv_dir)
 
         # Initialize roar in the cloned repository
@@ -459,9 +459,14 @@ class EnvironmentSetupService:
 
         return repo_dir
 
-    def _create_venv(self, repo_dir: Path) -> Path:
+    def _create_venv(self, repo_dir: Path, target_version: str | None = None) -> Path:
         """
-        Create virtual environment in repository.
+        Create virtual environment in repository, pinned to the recorded Python.
+
+        We try the exact recorded interpreter (uv downloads a managed build if
+        needed), then the recorded major.minor, then fall back to the default
+        with a warning. We never block — a different interpreter still
+        reproduces, just less faithfully ("same setup" is best-effort).
 
         Returns:
             Path to venv directory
@@ -475,23 +480,88 @@ class EnvironmentSetupService:
         self._print("Creating virtual environment...")
 
         if self._use_uv:
-            subprocess.run(
-                ["uv", "venv", str(venv_dir)],
-                check=True,
-                cwd=repo_dir,
-            )
+            self._create_venv_uv(venv_dir, repo_dir, target_version)
         else:
+            # `python -m venv` can only use the running interpreter.
             subprocess.run(
                 [sys.executable, "-m", "venv", str(venv_dir)],
                 check=True,
                 cwd=repo_dir,
             )
+            self._warn_python_mismatch(target_version, self._get_python_version())
 
         gitignore = venv_dir / ".gitignore"
         if not gitignore.exists():
             gitignore.write_text("*\n")
 
         return venv_dir
+
+    def _create_venv_uv(self, venv_dir: Path, repo_dir: Path, target_version: str | None) -> None:
+        """Create the venv with uv, pinned to the recorded interpreter if we can."""
+        for version in self._python_candidates(target_version):
+            result = subprocess.run(
+                ["uv", "venv", str(venv_dir), "--python", version],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                # Provisioned the recorded interpreter (uv fetched it if missing).
+                return
+            # A failed --python attempt may leave a partial venv behind.
+            if venv_dir.exists():
+                shutil.rmtree(venv_dir, ignore_errors=True)
+
+        # Couldn't provision the recorded interpreter — use uv's default, then warn.
+        subprocess.run(["uv", "venv", str(venv_dir)], check=True, cwd=repo_dir)
+        self._warn_python_mismatch(target_version, self._venv_python_version(venv_dir))
+
+    def _recorded_python_version(self, pipeline: "PipelineInfo") -> str | None:
+        """The interpreter version recorded for this lineage (e.g. '3.14.4'), or None."""
+        try:
+            runtime = self._metadata_parser.first_runtime(pipeline.build_steps, pipeline.run_steps)
+            version = (runtime.get("python") or {}).get("version")
+            return version if isinstance(version, str) and version.strip() else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _python_candidates(target_version: str | None) -> list[str]:
+        """Versions to try with `uv venv --python`: exact, then major.minor."""
+        if not target_version:
+            return []
+        candidates = [target_version]
+        minor = ".".join(target_version.split(".")[:2])
+        if minor and minor != target_version:
+            candidates.append(minor)
+        return candidates
+
+    def _warn_python_mismatch(self, recorded: str | None, actual: str | None) -> None:
+        """Warn when the venv's interpreter differs from the recorded one at the
+        major.minor level. Patch differences (3.14.4 vs 3.14.6) aren't
+        reproducibility-relevant, so they don't warn."""
+        if not recorded:
+            return
+        rec_minor = ".".join(recorded.split(".")[:2])
+        act_minor = ".".join((actual or "").split(".")[:2])
+        if act_minor and act_minor == rec_minor:
+            return
+        using = actual or "a different interpreter"
+        self._print(
+            f"⚠  Recorded Python was {recorded}; reproducing with {using} — results may differ."
+        )
+
+    @staticmethod
+    def _venv_python_version(venv_dir: Path) -> str | None:
+        """Read the created venv's Python version from pyvenv.cfg, or None."""
+        try:
+            for line in (venv_dir / "pyvenv.cfg").read_text().splitlines():
+                key, _, value = line.partition("=")
+                if key.strip() in ("version", "version_info") and value.strip():
+                    return value.strip()
+        except OSError:
+            pass
+        return None
 
     def _install_roar(self, venv_dir: Path, repo_dir: Path) -> None:
         """Install roar-cli into the virtual environment."""
