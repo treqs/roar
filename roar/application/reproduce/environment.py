@@ -166,12 +166,19 @@ def _git_fetch(repo_root: str) -> None:
 
 
 def _add_worktree(repo_root: str, target_dir: Path, commit: str | None, *, presenter) -> Path:
-    """Create a clean detached worktree of ``repo_root`` at ``commit``."""
+    """Create a clean detached worktree of ``repo_root`` at ``commit``.
+
+    Cleans up after a previous reproduce first: ``prune`` clears worktrees whose
+    directory the user deleted by hand (which otherwise fail the next add with
+    "missing but already registered"), and an existing dir is removed so we add
+    onto clean ground."""
     target_dir.mkdir(parents=True, exist_ok=True)
     worktree_dir = target_dir / f"{Path(repo_root).name}-reproduce"
+    # Drop stale registrations (dir deleted out from under git) and any leftover.
+    _run_git(["worktree", "prune"], cwd=repo_root)
     if worktree_dir.exists():
-        # Stale worktree from a previous run — drop it before recreating.
         _run_git(["worktree", "remove", "--force", str(worktree_dir)], cwd=repo_root)
+        _run_git(["worktree", "prune"], cwd=repo_root)
     ref = commit or "HEAD"
     presenter.print(f"Creating clean worktree at {ref[:12]}...")
     result = _run_git(["worktree", "add", "--detach", str(worktree_dir), ref], cwd=repo_root)

@@ -181,6 +181,7 @@ def _render_reproducibility_checklist(
     """Build the recorded lineage's reproducibility checklist (see report module)."""
     from ..reproducibility.report import (
         build_report,
+        is_shareable_remote,
         render_report,
         runtime_captured,
         unsourced_input_paths,
@@ -188,7 +189,7 @@ def _render_reproducibility_checklist(
 
     report = build_report(
         committed=bool(pipeline.git_commit),
-        pushed=bool(pipeline.git_repo),
+        pushed=is_shareable_remote(pipeline.git_repo),
         runtime_ok=runtime_captured(pipeline),
         unsourced_paths=unsourced_input_paths(request.roar_dir, request.cwd, request.hash_prefix),
         on_glaas=on_glaas,

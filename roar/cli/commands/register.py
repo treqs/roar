@@ -144,14 +144,41 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     return click.confirm("Continue with registration? (secrets will be filtered)", default=False)
 
 
-def _render_register_checklist(
-    ctx: RoarContext, target: str, response: RegisterLineageResponse
-) -> None:
-    """Render the shared reproducibility checklist as a register receipt.
+def _register_notes(response: RegisterLineageResponse, *, on_glaas: bool) -> dict[str, str]:
+    """Operational receipt details folded onto the reproducibility punchlist.
 
-    Consolidates the scattered "not reproducible" / "unsourced inputs" warnings
-    into one checklist, evaluated the same way `roar reproduce` shows it. Warn,
-    never block; best-effort (any failure here must not break registration)."""
+    Each becomes the indented note under its check, so the one checklist also
+    shows what register *did* (tagged which commit, pushed where, what landed on
+    GLaaS) — the punchlist-with-details-below style."""
+    notes: dict[str, str] = {}
+    ts = response.tag_summary
+    if ts and ts.session_tag:
+        extra = len(ts.job_tags)
+        notes["committed"] = f"tagged {ts.session_tag}" + (
+            f" (+{extra} job commit{'s' if extra != 1 else ''})" if extra else ""
+        )
+    if ts and ts.remote:
+        notes["pushed"] = f"pushed to {ts.remote}"
+    if on_glaas:
+        recorded = (
+            f"{_format_jobs_line(response)} jobs · {response.artifacts_registered} artifacts · "
+            f"{response.links_created} links"
+        )
+        if response.labels_synced:
+            recorded += f" · {response.labels_synced} labels"
+        notes["on_glaas"] = recorded
+    return notes
+
+
+def _render_register_checklist(
+    ctx: RoarContext, target: str, response: RegisterLineageResponse, *, on_glaas: bool
+) -> None:
+    """Render the shared reproducibility punchlist as register's receipt.
+
+    The single checklist consolidates the old scattered warnings AND the
+    operational summary (tag/push/counts, folded in as notes), evaluated the
+    same way `roar reproduce` shows it. Warn, never block; best-effort (any
+    failure here must not break registration)."""
     try:
         from ...application.reproducibility.report import (
             build_report,
@@ -166,7 +193,8 @@ def _render_register_checklist(
             # captures the runtime — so treat it as recorded (best-effort).
             runtime_ok=True,
             unsourced_paths=unsourced_input_paths(ctx.roar_dir, ctx.cwd, target),
-            on_glaas=True,
+            on_glaas=on_glaas,
+            notes=_register_notes(response, on_glaas=on_glaas),
         )
     except Exception:
         return
@@ -322,6 +350,8 @@ def register(
         click.echo(f"  Links: {response.links_created}")
         if response.secrets_detected:
             click.echo(f"  Secrets to redact: {len(response.secrets_detected)} types")
+        # Preview reproducibility BEFORE publishing (not yet on GLaaS).
+        _render_register_checklist(ctx, target, response, on_glaas=False)
         click.echo("")
         click.echo("GLaaS:")
         click.echo(f"  Session:  {session_url}")
@@ -342,13 +372,8 @@ def register(
     else:
         for warning in response.warnings:
             click.echo(f"Warning: {warning}", err=True)
-        _render_tag_summary(response.tag_summary)
         click.echo(f"Registered lineage for: {target}")
         click.echo(f"  Session: {session_preview}")
-        click.echo(f"  Jobs: {_format_jobs_line(response)}")
-        click.echo(f"  Artifacts: {response.artifacts_registered}")
-        click.echo(f"  Links: {response.links_created}")
-        click.echo(f"  Labels: {response.labels_synced}")
         if response.secrets_redacted:
             click.echo(f"  Secrets redacted: {len(response.secrets_detected)} types")
 
@@ -359,7 +384,9 @@ def register(
             for error in response.error.split("; "):
                 click.echo(f"  - {error}", err=True)
 
-        _render_register_checklist(ctx, target, response)
+        # One punchlist: reproducibility checks + what register did (tag/push/
+        # counts folded in as notes), replacing the old separate stat + tag block.
+        _render_register_checklist(ctx, target, response, on_glaas=True)
 
         click.echo("")
         click.echo("GLaaS:")

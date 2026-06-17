@@ -4,11 +4,36 @@ One definition of "what makes a lineage reproducible," evaluated from whatever
 facts each command has, and rendered the same way at both ends — so register's
 "here's what you published" and reproduce's "here's what was recorded" always
 agree. Warn, never block: an unchecked box is a heads-up, not a gate.
+
+Rendering is a punchlist: every item shows its own ``[✅]``/``[❌]`` with the
+detail (info when passed, the exception/fix when failed) indented below — the
+same style register uses for the operational steps it performed.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
+_PASS = "✅"
+_FAIL = "❌"
+
+
+def is_shareable_remote(url: str | None) -> bool:
+    """True iff ``url`` is a remote others could actually fetch from.
+
+    A local clone with no origin records its own ``file://`` path (or a bare
+    filesystem path) as ``git_repo``; that resolves only on this machine, so it
+    must NOT count as "reachable on a remote." This is the single definition both
+    register and reproduce use, so the two never disagree (the bug where a
+    ``file://`` path read as a remote at reproduce but not at register)."""
+    if not url:
+        return False
+    u = url.strip()
+    if u.startswith(("http://", "https://", "git://", "ssh://")):
+        return True
+    # scp-style git remotes: git@host:org/repo.git. Anything else (file://, bare
+    # filesystem paths, ~) is local and not shareable.
+    return "@" in u and ":" in u.split("@", 1)[1]
 
 
 def _is_ephemeral_tmp(path: str) -> bool:
@@ -22,12 +47,13 @@ def _is_ephemeral_tmp(path: str) -> bool:
 
 @dataclass
 class ReproCheck:
-    """A single checklist item. ``detail`` is shown only when not ``ok``."""
+    """A punchlist item. ``note`` shows when passed; ``detail`` when failed."""
 
     key: str
     label: str
     ok: bool
-    detail: str = ""
+    detail: str = ""  # the exception / how-to-fix, shown when not ok
+    note: str = ""  # supporting info, shown when ok
 
 
 @dataclass
@@ -54,9 +80,15 @@ def build_report(
     runtime_ok: bool,
     unsourced_paths: list[str],
     on_glaas: bool,
+    notes: dict[str, str] | None = None,
 ) -> ReproducibilityReport:
-    """Assemble the canonical checklist from already-computed facts."""
-    return ReproducibilityReport(
+    """Assemble the canonical checklist from already-computed facts.
+
+    ``notes`` attaches supporting info (shown when the check passed) by check
+    key — e.g. register passes ``{"committed": "tagged roar/ab12", "on_glaas":
+    "2 jobs · 7 artifacts"}`` so the punchlist doubles as its operation receipt.
+    """
+    report = ReproducibilityReport(
         checks=[
             ReproCheck(
                 "committed",
@@ -68,7 +100,8 @@ def build_report(
                 "pushed",
                 "commit reachable on a remote",
                 pushed,
-                "no git remote recorded — others can't fetch the exact code",
+                "no shareable git remote — others can't fetch the exact code "
+                "(add one: `git remote add origin <url>`)",
             ),
             ReproCheck(
                 "inputs_sourced",
@@ -90,6 +123,10 @@ def build_report(
             ),
         ]
     )
+    for check in report.checks:
+        if notes and check.key in notes:
+            check.note = notes[check.key]
+    return report
 
 
 def runtime_captured(pipeline) -> bool:
@@ -129,32 +166,26 @@ def _unsourced_detail(paths: list[str]) -> str:
     return detail
 
 
-def render_report(
-    report: ReproducibilityReport,
-    *,
-    title: str = "Reproducibility",
-    links: list[tuple[str, str]] | None = None,
-) -> str:
-    """Render the checklist: collapse the green boxes, expand only the failed ones.
+def render_punchlist(items: list[ReproCheck], *, title: str) -> str:
+    """Render a checkbox punchlist: every item on its own line, detail indented.
 
-    All green -> a single confirming line. Any failing -> the failed boxes with
-    their detail, the passed ones folded into one line, and a single warning.
-    """
-    lines: list[str] = []
-    total = len(report.checks)
-
-    if report.all_ok:
-        lines.append(f"{title}: ✓ all {total} checks passed")
-    else:
-        lines.append(f"{title}: {len(report.passed)}/{total} checks passed")
-        for check in report.failed:
-            lines.append(f"  [ ] {check.label}")
-            if check.detail:
-                lines.append(f"      → {check.detail}")
-        if report.passed:
-            lines.append(f"  [x] {', '.join(c.label for c in report.passed)}")
-        lines.append("⚠  This lineage may not reproduce as recorded — see the unchecked items.")
-
-    for label, url in links or []:
-        lines.append(f"  {label}: {url}")
+    ``[✅] label`` with the ``note`` below when passed; ``[❌] label`` with the
+    ``→ detail`` exception below when failed. Shared by the reproducibility
+    checklist and register's operational summary so they read identically."""
+    n_ok = sum(1 for it in items if it.ok)
+    lines = [f"{title} — {n_ok}/{len(items)}"]
+    for it in items:
+        lines.append(f"  [{_PASS if it.ok else _FAIL}] {it.label}")
+        if it.ok and it.note:
+            lines.append(f"       {it.note}")
+        elif not it.ok and it.detail:
+            lines.append(f"       → {it.detail}")
     return "\n".join(lines)
+
+
+def render_report(report: ReproducibilityReport, *, title: str = "Reproducibility") -> str:
+    """Render the reproducibility punchlist, with one warning if anything failed."""
+    out = render_punchlist(report.checks, title=title)
+    if not report.all_ok:
+        out += "\n⚠  This lineage may not reproduce as recorded — see the unchecked items."
+    return out
