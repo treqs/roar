@@ -1,6 +1,6 @@
 """Tests for the reproduction code-source resolver."""
 
-from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,19 +23,15 @@ def _make_pipeline(**kwargs):
     return PipelineInfo(**defaults)
 
 
-def _ok(*_a, **_k):
-    return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-
 def _patch(**overrides):
     """Patch the resolver's git helpers; sensible defaults, override per test."""
     defaults = {
         "_git_toplevel": lambda cwd: None,
         "_git_origin": lambda root: None,
         "_commit_exists": lambda root, commit: False,
-        "_uncommitted_modifications": lambda root: 0,
+        "_is_dirty": lambda root: False,
         "_git_fetch": lambda root: None,
-        "_run_git": _ok,
+        "_add_worktree": lambda root, target, commit, *, presenter: Path(target) / "wt",
     }
     defaults.update(overrides)
     return [patch.object(env, name, fn) for name, fn in defaults.items()]
@@ -52,36 +48,25 @@ def _run(cwd, pipeline=None, **overrides):
             p.stop()
 
 
-def test_matching_repo_reuses_in_place(tmp_path):
+def test_matching_repo_clean_tree_uses_worktree(tmp_path):
     plan = _run(
         tmp_path,
         _git_toplevel=lambda cwd: str(tmp_path),
         _commit_exists=lambda root, commit: True,  # recorded commit is here
-        _uncommitted_modifications=lambda root: 0,
+        _is_dirty=lambda root: False,
     )
-    assert plan.kind == "reuse"
-    assert plan.repo_dir == tmp_path
+    assert plan.kind == "worktree"
+    assert plan.repo_dir == tmp_path / "reproduce" / "wt"
 
 
-def test_matching_repo_uncommitted_modifications_error(tmp_path):
+def test_matching_repo_dirty_tree_errors(tmp_path):
     with pytest.raises(ValueError, match="uncommitted changes"):
         _run(
             tmp_path,
             _git_toplevel=lambda cwd: str(tmp_path),
             _commit_exists=lambda root, commit: True,
-            _uncommitted_modifications=lambda root: 2,
+            _is_dirty=lambda root: True,
         )
-
-
-def test_matching_repo_deleted_output_is_reused_not_blocked(tmp_path):
-    # Deleting an output to recreate it isn't "uncommitted work" -> reuse, no error.
-    plan = _run(
-        tmp_path,
-        _git_toplevel=lambda cwd: str(tmp_path),
-        _commit_exists=lambda root, commit: True,
-        _uncommitted_modifications=lambda root: 0,  # deletions don't count
-    )
-    assert plan.kind == "reuse"
 
 
 def test_inside_nonmatching_repo_errors(tmp_path):
@@ -90,11 +75,12 @@ def test_inside_nonmatching_repo_errors(tmp_path):
             tmp_path,
             _git_toplevel=lambda cwd: str(tmp_path),
             _git_origin=lambda root: "git@github.com:other/project.git",
-            _commit_exists=lambda root, commit: False,
+            _commit_exists=lambda root, commit: False,  # commit not here, origin differs
         )
 
 
-def test_matching_by_origin_fetches_then_reuses(tmp_path):
+def test_matching_by_origin_fetches_then_worktrees(tmp_path):
+    # origin matches but the commit isn't local yet; a fetch makes it appear.
     state = {"fetched": False}
 
     def fetch(root):
@@ -111,7 +97,7 @@ def test_matching_by_origin_fetches_then_reuses(tmp_path):
         _git_fetch=fetch,
     )
     assert state["fetched"] is True
-    assert plan.kind == "reuse"
+    assert plan.kind == "worktree"
 
 
 def test_not_in_repo_with_remote_clones(tmp_path):
