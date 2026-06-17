@@ -35,6 +35,10 @@ class PipelineInfo:
     build_steps: list[dict] = field(default_factory=list)
     run_steps: list[dict] = field(default_factory=list)
     total_steps: int = 0
+    # False when the session's steps span more than one git commit (the user
+    # committed between runs). Reproduce checks out the last commit, so results
+    # may differ from the original. Defaults True (single/unknown commit).
+    single_commit: bool = True
 
 
 @dataclass
