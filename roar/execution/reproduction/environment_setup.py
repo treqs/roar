@@ -100,19 +100,9 @@ class EnvironmentSetupService:
         Raises:
             RuntimeError: If setup fails
         """
-        from ...core.interfaces.reproduction import EnvironmentInfo
-
         self.logger.debug("EnvironmentSetupService.setup: starting environment setup")
         self.logger.debug("Target directory: %s", target_dir)
         self.logger.debug("Git repo: %s, commit: %s", pipeline.git_repo, pipeline.git_commit)
-
-        # Validate environment first
-        env_warnings = self._validate_environment(pipeline)
-        if env_warnings:
-            self._print("\nEnvironment warnings:")
-            for warning in env_warnings:
-                self._print(f"  - {warning}")
-            self._print("")
 
         # Clone repository
         self.logger.debug("Cloning repository...")
@@ -122,6 +112,41 @@ class EnvironmentSetupService:
             target_dir,
         )
         self.logger.debug("Repository cloned to: %s", repo_dir)
+
+        return self.setup_in_place(
+            pipeline,
+            repo_dir,
+            auto_confirm,
+            dpkg_any_version=dpkg_any_version,
+            pip_any_version=pip_any_version,
+            package_sync=package_sync,
+        )
+
+    def setup_in_place(
+        self,
+        pipeline: "PipelineInfo",
+        repo_dir: Path,
+        auto_confirm: bool = False,
+        dpkg_any_version: bool = False,
+        pip_any_version: bool = False,
+        package_sync: bool = False,
+    ) -> "EnvironmentInfo":
+        """Build the environment in an already-materialized ``repo_dir``.
+
+        Used when the code is sourced without a fresh clone — a git worktree of
+        a matching local repo, or a scratch directory for a repo-less rerun.
+        Everything after the clone (venv, roar init, package install) is shared
+        with :meth:`setup`.
+        """
+        from ...core.interfaces.reproduction import EnvironmentInfo
+
+        # Validate environment first
+        env_warnings = self._validate_environment(pipeline)
+        if env_warnings:
+            self._print("\nEnvironment warnings:")
+            for warning in env_warnings:
+                self._print(f"  - {warning}")
+            self._print("")
 
         # Create virtual environment
         self.logger.debug("Creating virtual environment...")

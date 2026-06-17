@@ -75,9 +75,6 @@ def reproduce_artifact(
         output.print(f"  {preview.run_hint}")
         return
 
-    if not pipeline.git_repo:
-        raise ValueError("Cannot reproduce: no git repository URL available")
-
     output.print(
         f"Found {_target_label(pipeline.target_kind).lower()}: {_pipeline_target_hash(pipeline)}"
     )
