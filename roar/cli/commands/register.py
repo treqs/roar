@@ -176,7 +176,7 @@ def _warn_unsourced_inputs(ctx: RoarContext, target: str) -> None:
         err=True,
     )
     click.echo(f"   {shown}", err=True)
-    click.echo("   Use `roar inputs --unsourced` to see the full list.", err=True)
+    click.echo(f"   Use `roar inputs --unsourced {target}` to see the full list.", err=True)
 
 
 @click.command("register")
