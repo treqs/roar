@@ -357,22 +357,31 @@ class TestEnsureRoarTagsPushed:
         assert f"roar/{head[:8]}" in remote_refs
         assert f"roar/{earlier[:8]}" in remote_refs
 
-    def test_auto_fail_closed_when_no_remote(self, repo: Path) -> None:
+    def test_auto_degrades_to_local_only_when_no_remote(self, repo: Path) -> None:
+        """No remote in auto mode no longer blocks the register (warn-don't-block).
+
+        The "does this work locally" loop shouldn't be gated on having a remote,
+        and the dry-run never blocks — so the real run mustn't contradict it. The
+        tags are created locally; the summary records push_skipped_reason so the
+        CLI can note "not pushed (no remote)" and the checklist shows the commit
+        isn't reachable on a remote."""
         head = _git(repo, "rev-parse", "HEAD").strip()
-        with pytest.raises(TagPushError) as exc:
-            ensure_roar_tags_pushed(
-                repo_root=repo,
-                session_commit=head,
-                session_tag_name=f"roar/{head[:8]}",
-                lineage=None,
-                dry_run=False,
-                tagging_enabled=True,
-                configured_remote=None,
-                push_mode="auto",
-                logger=_logger(),
-            )
-        msg = str(exc.value)
-        assert "No git remote" in msg
+        summary = ensure_roar_tags_pushed(
+            repo_root=repo,
+            session_commit=head,
+            session_tag_name=f"roar/{head[:8]}",
+            lineage=None,
+            dry_run=False,
+            tagging_enabled=True,
+            configured_remote=None,
+            push_mode="auto",
+            logger=_logger(),
+        )
+        assert summary.push_skipped_reason == "no_remote"
+        assert summary.remote is None
+        assert summary.session_tag == f"roar/{head[:8]}"
+        # The local tag was actually created.
+        assert _git(repo, "tag", "--list", f"roar/{head[:8]}").strip() == f"roar/{head[:8]}"
 
     def test_unreachable_commit_in_lineage_fails_closed(
         self, repo: Path, bare_remote: Path
