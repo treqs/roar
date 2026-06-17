@@ -93,9 +93,10 @@ def test_register_cli_summary_reports_new_jobs_and_labels(tmp_path: Path) -> Non
         result = runner.invoke(register, ["metrics.json", "--yes"], obj=_mock_context(tmp_path))
 
     assert result.exit_code == 0, result.output
-    assert "Jobs: 4" in result.output
+    # Counts now ride as the note under the "lineage saved on glaas.ai" punchlist item.
+    assert "4 jobs" in result.output
     assert "already registered" not in result.output
-    assert "Labels: 3" in result.output
+    assert "3 labels" in result.output
 
 
 def test_register_cli_summary_calls_out_already_registered_jobs(tmp_path: Path) -> None:
@@ -121,8 +122,7 @@ def test_register_cli_summary_calls_out_already_registered_jobs(tmp_path: Path) 
         result = runner.invoke(register, ["metrics.json", "--yes"], obj=_mock_context(tmp_path))
 
     assert result.exit_code == 0, result.output
-    assert "Jobs: 0 (4 already registered)" in result.output
-    assert "Labels: 0" in result.output
+    assert "0 (4 already registered) jobs" in result.output
 
 
 def test_register_cli_prefers_returned_session_url(tmp_path: Path) -> None:
@@ -391,7 +391,7 @@ def _capture_checklist(response, tmp_path: Path, unsourced=None) -> str:
         ),
         redirect_stdout(buf),
     ):
-        _render_register_checklist(ctx, "out", response)
+        _render_register_checklist(ctx, "out", response, on_glaas=True)
     return buf.getvalue()
 
 
@@ -407,9 +407,12 @@ def _repro_response(*, reproducible=True, remote="origin"):
     )
 
 
-def test_checklist_all_green_collapses(tmp_path: Path) -> None:
+def test_checklist_all_green_shows_full_punchlist(tmp_path: Path) -> None:
     out = _capture_checklist(_repro_response(), tmp_path, unsourced=[])
-    assert "Reproducibility: ✓ all 5 checks passed" in out
+    assert "Reproducibility — 5/5" in out
+    assert out.count("[✅]") == 5
+    # operational details fold in as notes
+    assert "pushed to origin" in out
 
 
 def test_checklist_flags_no_commit_and_unsourced(tmp_path: Path) -> None:
@@ -418,14 +421,13 @@ def test_checklist_flags_no_commit_and_unsourced(tmp_path: Path) -> None:
         tmp_path,
         unsourced=["/w/gen.py"],
     )
-    assert "checks passed" in out
-    assert "[ ] code committed to git" in out
-    assert "[ ] commit reachable on a remote" in out
-    assert "[ ] all inputs sourced" in out
+    assert "[❌] code committed to git" in out
+    assert "[❌] commit reachable on a remote" in out
+    assert "[❌] all inputs sourced" in out
     assert "/w/gen.py" in out
     assert "may not reproduce as recorded" in out
     # lineage is on glaas (just registered) — that box stays green
-    assert "lineage saved on glaas.ai" in out
+    assert "[✅] lineage saved on glaas.ai" in out
 
 
 def test_checklist_is_best_effort_silent_on_error(tmp_path: Path) -> None:
@@ -436,4 +438,6 @@ def test_checklist_is_best_effort_silent_on_error(tmp_path: Path) -> None:
         "roar.application.reproducibility.report.unsourced_input_paths",
         side_effect=RuntimeError("boom"),
     ):
-        _render_register_checklist(_mock_context(tmp_path), "out", _repro_response())  # no raise
+        _render_register_checklist(
+            _mock_context(tmp_path), "out", _repro_response(), on_glaas=True
+        )  # no raise
