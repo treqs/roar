@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..core.interfaces.logger import ILogger
 from ..core.interfaces.registration import GitContext
 from ..integrations.git import GitVCSProvider, resolve_git_context
+from ..utils.git_url import is_shareable_remote
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,17 @@ def resolve_roar_git_context(
     """
     logger.debug("Resolving git context from %s", path)
     ctx = resolve_git_context(path, git_commit, configured_remote=configured_remote)
+    # A repo with no real remote records its own ``file://`` path as the URL.
+    # That resolves only on this machine, so publishing it both leaks the
+    # user's local filesystem layout to GLaaS and is useless to anyone else.
+    # This resolver is publish-only (register/put/package prep), so drop the
+    # non-shareable URL here — the publish record then honestly shows "no
+    # remote", matching the reproducibility checklist. (Local recording uses
+    # ``resolve_git_context`` directly and keeps the ``file://`` URI, which
+    # in-place reproduce relies on.)
+    if ctx.repo and not is_shareable_remote(ctx.repo):
+        logger.debug("Dropping non-shareable git repo URL from publish context: %s", ctx.repo)
+        ctx = replace(ctx, repo=None)
     logger.debug(
         "Git context resolved: repo=%s, commit=%s, branch=%s",
         ctx.repo,
