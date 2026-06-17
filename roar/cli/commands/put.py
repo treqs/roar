@@ -18,6 +18,7 @@ from ..decorators import require_init
 from ..publish_intent import (
     confirm_anonymous_public_publish,
     resolve_publish_intent,
+    warn_defaulted_anonymous,
     warn_public_default,
 )
 
@@ -164,6 +165,8 @@ def put(
     )
     if publish_intent.used_public_default:
         warn_public_default()
+    if publish_intent.defaulted_anonymous:
+        warn_defaulted_anonymous()
 
     if (
         publish_intent.anonymous

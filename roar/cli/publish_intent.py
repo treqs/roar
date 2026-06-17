@@ -10,6 +10,20 @@ class PublishIntent:
     public: bool
     anonymous: bool
     used_public_default: bool = False
+    # Not logged in and no scope set: fell back to anonymous because private
+    # publishing needs an account. Drives the "you're publishing anonymously" warning.
+    defaulted_anonymous: bool = False
+
+
+def _is_logged_in() -> bool:
+    """True iff there's a usable GLaaS/TReqs session on this machine."""
+    try:
+        from ..auth_store import load_auth_state
+
+        auth = load_auth_state()
+    except Exception:
+        return False
+    return auth is not None and bool(auth.access_token)
 
 
 def resolve_publish_intent(
@@ -18,7 +32,19 @@ def resolve_publish_intent(
     *,
     start_dir: str | None = None,
 ) -> PublishIntent:
-    """Resolve visibility and attribution for publish-style commands."""
+    """Resolve visibility and attribution for publish-style commands.
+
+    Explicit choices win (``--anonymous`` / ``--public`` / ``--private``, then an
+    explicitly-set repo scope). When scope is *unset* the default is resolved
+    LIVE rather than frozen at ``roar init`` time:
+
+    - ``registration.public_by_default`` set  -> public (explicit global pref);
+    - else logged in -> **private** (don't expose by accident);
+    - else (not logged in) -> **anonymous + warn** (private needs an account).
+
+    Deterministic, so it's headless-safe — no interactive prompt is required to
+    reach a default.
+    """
     if anonymous:
         return PublishIntent(public=True, anonymous=True)
 
@@ -36,14 +62,14 @@ def resolve_publish_intent(
         if scope.mode in {"private", "project"}:
             return PublishIntent(public=False, anonymous=False)
 
+    # Scope unset: resolve the default from current state, not a value baked at init.
     from ..integrations.config import config_get
 
-    resolved_public = bool(config_get("registration.public_by_default", start_dir=start_dir))
-    return PublishIntent(
-        public=resolved_public,
-        anonymous=False,
-        used_public_default=resolved_public,
-    )
+    if bool(config_get("registration.public_by_default", start_dir=start_dir)):
+        return PublishIntent(public=True, anonymous=False, used_public_default=True)
+    if _is_logged_in():
+        return PublishIntent(public=False, anonymous=False)
+    return PublishIntent(public=True, anonymous=True, defaulted_anonymous=True)
 
 
 def warn_public_default() -> None:
@@ -51,6 +77,20 @@ def warn_public_default() -> None:
     click.echo(
         "Warning: defaulting to public visibility because "
         "registration.public_by_default=true in roar config. Pass --private to override.",
+        err=True,
+    )
+
+
+def warn_defaulted_anonymous() -> None:
+    """Tell the user a not-logged-in publish is going out anonymously and publicly."""
+    click.echo(
+        "Warning: not signed in — publishing anonymously and publicly (anyone with the "
+        "hash can read it).",
+        err=True,
+    )
+    click.echo(
+        "  `roar login` to keep runs private by default, or set a scope with "
+        "`roar scope use <owner>/<project>`.",
         err=True,
     )
 
