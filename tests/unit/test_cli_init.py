@@ -39,9 +39,9 @@ def test_init_creates_gitignore_when_missing(tmp_path: Path) -> None:
     assert gitignore.exists()
     assert ".roar/" in gitignore.read_text().splitlines()
     config_text = (repo / ".roar" / "config.toml").read_text(encoding="utf-8")
-    assert "[scope]" in config_text
-    assert 'mode = "anonymous"' in config_text
-    assert "scope:      anonymous (public; no account)" in result.output
+    # Scope is intentionally UNSET at init now — it resolves at publish time.
+    assert 'mode = "anonymous"' not in config_text
+    assert "scope:      unset (private when signed in, else anonymous)" in result.output
     assert "created .gitignore with .roar/ entry" in result.output
 
 
