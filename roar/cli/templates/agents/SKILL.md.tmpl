@@ -59,6 +59,26 @@ roar run bash scripts/preprocess.sh
 roar build pip install -r requirements.txt   # build step, not main pipeline
 ```
 
+## Sourced vs unsourced inputs
+
+Not every input a run reads will exist on another machine. roar splits inputs into two kinds, and the distinction is what determines whether a lineage actually reproduces:
+
+- **Sourced** — the input has a tracked origin: either a previous job in the lineage produced it, or it's covered by the recorded git commit. Anyone who reproduces the lineage gets it.
+- **Unsourced** — nothing tracked produced it *and* it isn't in git. A loose file that pre-existed the run — a manual download, a `/tmp` file, an uncommitted script. It won't exist when the lineage is reproduced elsewhere. This is the single most common reason a complete-looking lineage doesn't reproduce.
+
+roar warns at run time when a job reads an unsourced input, and you can list them:
+
+```bash
+roar inputs --unsourced <ref>    # unsourced inputs for a job or artifact
+```
+
+To make an unsourced input sourced:
+
+- **Code, configs, scripts** — commit them to git. (A program you launch directly, e.g. `roar run ./script.sh`, is itself an input; an uncommitted one is unsourced.)
+- **External data** — ingest it through roar so the retrieval is recorded: `roar get <url>` or `roar run wget <url>`. The resulting Get job becomes the input's tracked producer.
+
+`roar register` and `roar reproduce` print a reproducibility checklist whose "all inputs sourced" line reflects exactly this. When the user wants reproducibility, treat unsourced inputs as something to resolve, not ignore.
+
 ## Detection: is a script running under roar?
 
 If a Python script needs to *require* it's being run under `roar run`, add at the top:
@@ -82,7 +102,7 @@ Workloads should NOT need to know which backend is active.
 
 - **Clean git state is required.** `roar run` refuses to execute if the git working tree has uncommitted changes — including untracked files. There's no `--dirty` bypass; commit (or stash, or gitignore) first. Lineage ties to a commit, so this is by design.
 - **Add `.roar/` to `.gitignore` before your first run.** Otherwise it becomes an untracked change that trips the clean-tree check above on the next run. `roar init` prompts to add it; say yes. If you run `roar init -n` (skip) you'll need to add it yourself.
-- **Default config filters `/tmp`.** `ignore_tmp_files = true` in the generated `config.toml` silently drops any I/O under `/tmp`. If a run shows `in:0 out:0` or a missing `Inputs/Outputs` section and you're working under `/tmp`, that's why — move the workdir or edit `.roar/config.toml` to flip the filter. Other default filters hide system reads (`/sys`, `/etc`) and installed-package reads.
+- **Default config filters `/tmp` intermediates.** `ignore_tmp_files = true` in the generated `config.toml` drops files the run *wrote* under `/tmp` (endogenous intermediates). A file the run only *read* from `/tmp` pre-existed it and is kept — but flagged unsourced (see above), since `/tmp` is ephemeral and won't survive. If a run shows missing outputs and you're working under `/tmp`, that's why — move the workdir out of `/tmp` (don't park intermediates there) or edit `.roar/config.toml` to flip the filter. Other default filters hide system reads (`/sys`, `/etc`, `/usr`) and installed-package reads.
 - **Ray workers**: `ROAR_WRAP=1` is set on the driver but NOT on Ray workers. `ROAR_SESSION_ID` and `ROAR_JOB_ID` are propagated. Use those if a worker needs to detect provenance context.
 - **Osmo workers**: no env var propagation today.
 - **Don't make user code import roar** for tracking purposes — capture is transparent. The only exception is `from roar import require` for the abort-if-not-tracked guard.
