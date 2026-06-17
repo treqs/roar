@@ -99,3 +99,8 @@ class PutResponse:
     git_tag: str | None = None
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
+    # Reproducibility-checklist inputs, mirroring RegisterLineageResponse so
+    # `roar put` can render the same receipt as `roar register`.
+    reproducible: bool = True  # the published run has a git commit
+    single_commit: bool = True  # the session's steps share one commit
+    commit_on_remote: bool = False  # the commit is reachable on a shareable remote

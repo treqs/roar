@@ -353,6 +353,9 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
     db_ctx = MagicMock()
     put_result = PutResult(success=True, job_id=3, uploaded_files=[], dry_run=False)
     prepared = MagicMock()
+    # Deterministic reproducibility facts: no commit (preflight warned), no remote.
+    prepared.session_id = 7
+    prepared.git_context.repo = None
     prepared_git = MagicMock(
         git_commit=None, expected_tag=None, warnings=("Git operation failed: git unavailable",)
     )
@@ -407,6 +410,9 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
         job_id=3,
         dry_run=False,
         warnings=["Git operation failed: git unavailable"],
+        # No commit (preflight warned) and no remote -> reproducibility facts off.
+        reproducible=False,
+        commit_on_remote=False,
     )
 
 
@@ -494,6 +500,9 @@ def test_put_artifacts_dry_run_skips_backend_runtime_and_service(tmp_path: Path)
         dry_run=True,
         would_upload=[PutDryRunItem(path=str(model.resolve()), exists=True)],
         warnings=[],
+        # Dry run resolves no git commit, so the reproducible flag is off (the
+        # field is unused on the dry-run path, which renders no checklist).
+        reproducible=False,
     )
     create_db_ctx.assert_not_called()
     resolve_backend.assert_not_called()

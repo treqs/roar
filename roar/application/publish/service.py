@@ -822,6 +822,9 @@ def put_artifacts(request: PutRequest) -> PutResponse:
         )
 
     repo_root = request.repo_root or request.cwd
+    # Reproducibility-checklist facts, filled in on the real (non-dry-run) path.
+    put_single_commit = True
+    put_commit_on_remote = False
     if request.dry_run:
         git_state = None
         git_commit = None
@@ -877,6 +880,17 @@ def put_artifacts(request: PutRequest) -> PutResponse:
                 logger=logger,
             )
 
+            # Reproducibility facts for the receipt: same commit-span source as
+            # register/reproduce, and whether the commit is reachable on a real
+            # remote (git_context.repo is None here when no shareable remote —
+            # resolve_roar_git_context drops local file:// URIs).
+            from ...utils.git_url import is_shareable_remote
+
+            put_single_commit = _session_single_commit(
+                roar_dir=request.roar_dir, session_id=prepared.session_id
+            )
+            put_commit_on_remote = is_shareable_remote(prepared.git_context.repo)
+
             result = service.put_prepared(
                 prepared=prepared,
                 sources=request.sources,
@@ -921,6 +935,9 @@ def put_artifacts(request: PutRequest) -> PutResponse:
         git_tag=created_git_tag,
         warnings=warnings,
         error=result.error,
+        reproducible=bool(git_commit),
+        single_commit=put_single_commit,
+        commit_on_remote=put_commit_on_remote,
     )
 
 
