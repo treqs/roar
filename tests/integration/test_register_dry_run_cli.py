@@ -155,9 +155,9 @@ def test_register_publishes_local_lineage_with_fake_glaas(
 
     assert result.returncode == 0
     assert "Registered lineage for: report.txt" in result.stdout
-    assert "Jobs: 1" in result.stdout
-    assert "Artifacts:" in result.stdout
-    assert "Links:" in result.stdout
+    assert "1 jobs" in result.stdout
+    assert "artifacts" in result.stdout
+    assert "links" in result.stdout
     assert "Next:" in result.stdout
     assert "roar reproduce " in result.stdout
     assert "GLaaS:" in result.stdout
@@ -252,7 +252,7 @@ def test_register_can_republish_same_local_session_after_additional_run_with_fak
     second_register = roar_cli("register", "summary.txt", "--yes", env_overrides=env)
 
     assert second_register.returncode == 0
-    assert "Jobs: 2" in second_register.stdout
+    assert "2 jobs" in second_register.stdout
     assert len(fake_glaas_publish_server.registration_session_creations) == 2
     assert len(fake_glaas_publish_server.registration_session_finalizations) == 2
     assert len(fake_glaas_publish_server.registration_session_job_batches) == 2
