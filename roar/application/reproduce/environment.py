@@ -1,19 +1,20 @@
 """Environment-preparation helpers for reproduction workflows.
 
-Reproduction needs the recorded *code* somewhere on disk before it can build a
-venv and re-run. ``resolve_code_source`` picks the best available source, in
-priority order:
+Reproduction needs the recorded *code* on disk before it can run. ``resolve_code_source``
+picks the best available source, in priority order:
 
 1. **matching local repo** — the recorded commit is reachable in the repo you're
-   standing in (with or without a remote): materialize it in a clean ``git
-   worktree`` at that commit. Offline, and never mutates your working tree.
+   standing in (with or without a remote): reproduce **in place**, checking out
+   the recorded commit and re-running the steps in your working tree (outputs are
+   recreated where they belong). Refused only if you have uncommitted *changes*
+   that would be clobbered.
 2. **recorded remote** — not in a repo, but a remote URL was recorded: clone it.
 3. **rerun-only** — no repo/commit was recorded at all (e.g. a package-only run
    like ``roar run wget …``): re-run the recorded command in a scratch dir.
 
 Hard errors (never silently guess): you're in a git repo that doesn't match the
-lineage; your working tree is dirty; or the code is a commit with no remote and
-you're not in its repo.
+lineage; you have uncommitted modifications; or the code is a commit with no
+remote and you're not in its repo.
 """
 
 from __future__ import annotations
@@ -31,8 +32,8 @@ from ...utils.git_url import urls_match
 class CodeSourcePlan:
     """How reproduction will obtain the recorded code."""
 
-    kind: str  # "clone" | "worktree" | "rerun"
-    repo_dir: Path | None = None  # pre-materialized dir for worktree/rerun
+    kind: str  # "reuse" | "clone" | "rerun"
+    repo_dir: Path | None = None  # the in-place repo, or pre-made scratch dir
 
 
 def prepare_reproduction_environment(
@@ -49,6 +50,14 @@ def prepare_reproduction_environment(
     plan = resolve_code_source(cwd, pipeline, presenter=presenter)
     service = EnvironmentSetupService(presenter=presenter)
 
+    if plan.kind == "reuse":
+        # In place: the user's repo already holds the code (now at the recorded
+        # commit) and its environment. Don't clone or rebuild — run the recorded
+        # steps where they belong, reusing the existing venv if present.
+        assert plan.repo_dir is not None
+        venv = plan.repo_dir / ".venv" if (plan.repo_dir / ".venv").is_dir() else None
+        return EnvironmentInfo(repo_dir=plan.repo_dir, venv_dir=venv, python_version=None)
+
     if plan.kind == "clone":
         target_dir = cwd / "reproduce"
         presenter.print(f"\nSetting up environment in {target_dir}...")
@@ -61,7 +70,7 @@ def prepare_reproduction_environment(
             package_sync=package_sync,
         )
 
-    # worktree / rerun: the code dir is already materialized by the resolver.
+    # rerun: a repo-less run; the scratch dir is already made by the resolver.
     assert plan.repo_dir is not None
     presenter.print(f"\nSetting up environment in {plan.repo_dir}...")
     return service.setup_in_place(
@@ -96,12 +105,17 @@ def resolve_code_source(cwd: Path, pipeline: PipelineInfo, *, presenter) -> Code
                 "Reproduce from an empty directory, or cd into the lineage's own repository."
             )
 
-        # Matching repo — reproduce from a clean worktree at the recorded commit.
-        if _is_dirty(repo_root):
+        # Matching repo — reproduce IN PLACE. Refuse only if there are uncommitted
+        # *modifications* we could clobber; deleted/untracked files are fine
+        # (reproduction recreates the recorded outputs).
+        modified = _uncommitted_modifications(repo_root)
+        if modified:
             raise ValueError(
-                "Your working tree has uncommitted changes. Reproduction needs a known, "
-                "clean state — commit or stash them, then retry."
+                f"Your working tree has uncommitted changes to {modified} tracked file(s). "
+                "Reproduction runs in place and could overwrite them — commit or stash first, "
+                "then retry."
             )
+
         if commit and not commit_here:
             presenter.print("Fetching the recorded commit from origin...")
             _git_fetch(repo_root)
@@ -110,8 +124,21 @@ def resolve_code_source(cwd: Path, pipeline: PipelineInfo, *, presenter) -> Code
                 raise ValueError(
                     f"Recorded commit {commit[:12]} was not found locally or on origin."
                 )
-        worktree_dir = _add_worktree(repo_root, cwd / "reproduce", commit, presenter=presenter)
-        return CodeSourcePlan(kind="worktree", repo_dir=worktree_dir)
+        if commit:
+            checkout = _run_git(["checkout", commit], cwd=repo_root)
+            if checkout.returncode != 0:
+                presenter.print(
+                    f"Warning: could not check out {commit[:12]} "
+                    f"({checkout.stderr.strip()}); using current HEAD"
+                )
+
+        presenter.print(
+            f"Current repository matches the recorded lineage — reproducing in place in "
+            f"{repo_root}.\n"
+            "⚠  This re-runs the recorded steps in your working tree; recorded outputs "
+            "may be overwritten."
+        )
+        return CodeSourcePlan(kind="reuse", repo_dir=Path(repo_root))
 
     # Not in a git repo.
     if recorded_repo:
@@ -156,32 +183,26 @@ def _commit_exists(repo_root: str, commit: str) -> bool:
     return _run_git(["cat-file", "-e", f"{commit}^{{commit}}"], cwd=repo_root).returncode == 0
 
 
-def _is_dirty(repo_root: str) -> bool:
+def _uncommitted_modifications(repo_root: str) -> int:
+    """Count uncommitted changes that reproduction could clobber.
+
+    Counts modifications/additions/renames to tracked files. Deleted files and
+    untracked files are NOT counted — reproduction recreates the recorded
+    outputs, so deleting one and reproducing to restore it is a supported flow.
+    """
     result = _run_git(["status", "--porcelain"], cwd=repo_root)
-    return bool(result.stdout.strip())
+    count = 0
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        code = line[:2]
+        if code == "??":  # untracked — may be a to-be-recreated output
+            continue
+        if code.strip() == "D":  # deleted — reproduction recreates outputs
+            continue
+        count += 1
+    return count
 
 
 def _git_fetch(repo_root: str) -> None:
     _run_git(["fetch", "--all", "--quiet"], cwd=repo_root)
-
-
-def _add_worktree(repo_root: str, target_dir: Path, commit: str | None, *, presenter) -> Path:
-    """Create a clean detached worktree of ``repo_root`` at ``commit``.
-
-    Cleans up after a previous reproduce first: ``prune`` clears worktrees whose
-    directory the user deleted by hand (which otherwise fail the next add with
-    "missing but already registered"), and an existing dir is removed so we add
-    onto clean ground."""
-    target_dir.mkdir(parents=True, exist_ok=True)
-    worktree_dir = target_dir / f"{Path(repo_root).name}-reproduce"
-    # Drop stale registrations (dir deleted out from under git) and any leftover.
-    _run_git(["worktree", "prune"], cwd=repo_root)
-    if worktree_dir.exists():
-        _run_git(["worktree", "remove", "--force", str(worktree_dir)], cwd=repo_root)
-        _run_git(["worktree", "prune"], cwd=repo_root)
-    ref = commit or "HEAD"
-    presenter.print(f"Creating clean worktree at {ref[:12]}...")
-    result = _run_git(["worktree", "add", "--detach", str(worktree_dir), ref], cwd=repo_root)
-    if result.returncode != 0:
-        raise ValueError(f"Failed to create reproduction worktree: {result.stderr.strip()}")
-    return worktree_dir
