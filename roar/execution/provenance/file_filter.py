@@ -247,6 +247,15 @@ class FileFilterService:
             if collect_dropped_paths:
                 dropped[category].append(path)
 
+        # A /tmp file the job *wrote* is an endogenous intermediate (created
+        # under roar's watch) and is dropped as noise. A /tmp file the job only
+        # *read* is a pre-existing input — ephemeral and almost certainly
+        # unsourced, but a real dependency — so it is kept rather than silently
+        # discarded, and surfaces through the unsourced-inputs warning. (An
+        # in-place mmap edit reads *and* writes the file, so it lands in
+        # written_set and is correctly treated as an intermediate.)
+        written_set: set[str] = set(tracer_data.written_files)
+
         def categorize_read(path: str) -> str | None:
             """Return the filter category that drops this path, or None to keep."""
             if roar_inject_dir and path.startswith(roar_inject_dir):
@@ -269,7 +278,10 @@ class FileFilterService:
                 path, sys_prefix, sys_base_prefix, editable_dirs=editable_dirs
             ):
                 return "package_reads"
-            if ignore_tmp_files and self._is_tmp_path(path):
+            # Drop /tmp reads only when the job also wrote the file (an
+            # endogenous intermediate). A read-only /tmp file pre-existed the
+            # run and is kept as a (pre-existing) input.
+            if ignore_tmp_files and self._is_tmp_path(path) and path in written_set:
                 return "tmp_files"
             if self._matches_ignore_paths(path, ignore_abs, ignore_rel):
                 return "ignore_paths"

@@ -136,3 +136,5 @@ class InputsQueryRequest:
     direct: bool = False
     show_all: bool = False
     output_json: bool = False
+    unsourced: bool = False  # show only unsourced inputs (no producer)
+    sourced: bool = False  # show only sourced inputs (produced/ingested by roar)

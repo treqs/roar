@@ -343,6 +343,10 @@ class InputArtifactSummary:
     path: str
     size: int
     hashes: list[ShowHashSummary] = field(default_factory=list)
+    # True when nothing tracked produced this artifact (no producing job and not
+    # ingested via `roar get` / `roar run wget`). Such inputs won't exist on
+    # another machine, so the lineage that consumes them isn't reproducible.
+    unsourced: bool = False
 
 
 @dataclass(frozen=True)
