@@ -409,7 +409,9 @@ def test_warns_when_lineage_has_unsourced_inputs(tmp_path: Path) -> None:
     assert "may not be reproducible" in out
     assert "2 file(s)" in out
     assert "gen.py" in out and "proc.py" in out
-    assert "roar inputs --unsourced" in out
+    # The suggested command must be runnable verbatim — `roar inputs --unsourced`
+    # alone errors ("a target reference is required"), so it must carry the target.
+    assert "roar inputs --unsourced out" in out
 
 
 def test_no_warning_when_all_inputs_sourced(tmp_path: Path) -> None:
