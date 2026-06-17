@@ -14,26 +14,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# Re-exported so existing imports (`from ...reproducibility.report import
+# is_shareable_remote`) keep working; the single definition lives in utils.
+from ...utils.git_url import is_shareable_remote as is_shareable_remote
+
 _PASS = "✅"
 _FAIL = "❌"
-
-
-def is_shareable_remote(url: str | None) -> bool:
-    """True iff ``url`` is a remote others could actually fetch from.
-
-    A local clone with no origin records its own ``file://`` path (or a bare
-    filesystem path) as ``git_repo``; that resolves only on this machine, so it
-    must NOT count as "reachable on a remote." This is the single definition both
-    register and reproduce use, so the two never disagree (the bug where a
-    ``file://`` path read as a remote at reproduce but not at register)."""
-    if not url:
-        return False
-    u = url.strip()
-    if u.startswith(("http://", "https://", "git://", "ssh://")):
-        return True
-    # scp-style git remotes: git@host:org/repo.git. Anything else (file://, bare
-    # filesystem paths, ~) is local and not shareable.
-    return "@" in u and ":" in u.split("@", 1)[1]
 
 
 def _is_ephemeral_tmp(path: str) -> bool:
