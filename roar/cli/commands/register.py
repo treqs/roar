@@ -228,8 +228,10 @@ def _render_register_checklist(
             runtime_ok=True,
             unsourced_paths=unsourced_input_paths(ctx.roar_dir, ctx.cwd, target),
             on_glaas=on_glaas,
-            # Extra job-commit tags mean the session spanned multiple commits.
-            single_commit=not (response.tag_summary and response.tag_summary.job_tags),
+            # Computed from the session's commit span (matches `roar reproduce`);
+            # the old job-tags proxy mis-read single-commit whenever tagging was
+            # skipped (e.g. no remote), contradicting reproduce's verdict.
+            single_commit=response.single_commit,
             notes=_register_notes(response, on_glaas=on_glaas),
             na={"on_glaas": "dry run — nothing published yet"} if dry_run else None,
         )

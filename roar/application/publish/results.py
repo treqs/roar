@@ -49,6 +49,11 @@ class RegisterLineageResponse:
     # the CLI surfaces a notice so the user knows it can't be reproduced from
     # source. Defaults True so existing/normal registrations are unaffected.
     reproducible: bool = True
+    # False when the session's steps span more than one git commit (the user
+    # committed between runs). Computed from the session's commit span — the
+    # SAME source `roar reproduce` uses — so the two checklists never disagree.
+    # Defaults True so single-commit/normal registrations are unaffected.
+    single_commit: bool = True
 
 
 @dataclass(frozen=True)
