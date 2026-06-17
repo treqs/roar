@@ -320,3 +320,25 @@ class TestTracerSelection:
             )
 
         assert mock_subprocess.Popen.call_count == 1
+
+
+class TestTracerNotFoundHint:
+    """The not-found hint must not tell packaged-wheel users to `cd rust &&
+    cargo build` against a directory that doesn't exist in their project."""
+
+    def test_generic_hint_leads_with_reinstall_not_cargo(self, tmp_path):
+        hint = _make_service(tmp_path)._build_tracer_not_found_hint("auto")
+        # Reinstall is the headline remedy for the common (PyPI) case...
+        assert "uv tool install --reinstall roar-cli" in hint
+        assert "github.com/treqs/roar/issues" in hint
+        # ...and the cargo path is present but framed as the source-checkout case.
+        assert "source checkout or sdist" in hint
+        assert "cargo build --release -p roar-tracer" in hint
+        # The misleading bare "cd rust && cargo build" headline is gone.
+        assert "cd rust && cargo build" not in hint
+
+    def test_mode_specific_hint_names_only_its_crate(self, tmp_path):
+        hint = _make_service(tmp_path)._build_tracer_not_found_hint("ptrace")
+        assert "cargo build --release -p roar-tracer\n" in hint + "\n"
+        assert "roar-tracer-ebpf" not in hint
+        assert "uv tool install --reinstall roar-cli" in hint
