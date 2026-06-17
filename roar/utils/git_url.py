@@ -79,6 +79,25 @@ def is_ssh_url(url: str) -> bool:
     return bool(re.match(r"^(?:ssh://)?git@([^:/]+)[:/]", url))
 
 
+def is_shareable_remote(url: str | None) -> bool:
+    """True iff ``url`` is a remote others could actually fetch from.
+
+    A local clone with no origin records its own ``file://`` path (or a bare
+    filesystem path) as ``git_repo``; that resolves only on this machine, so it
+    must NOT count as a shareable remote. Used both to gate the "commit reachable
+    on a remote" reproducibility check and to avoid publishing useless (and
+    path-leaking) ``file://`` repos to GLaaS.
+    """
+    if not url:
+        return False
+    u = url.strip()
+    if u.startswith(("http://", "https://", "git://", "ssh://")):
+        return True
+    # scp-style git remotes: git@host:org/repo.git. Anything else (file://, bare
+    # filesystem paths, ~) is local and not shareable.
+    return "@" in u and ":" in u.split("@", 1)[1]
+
+
 def ssh_to_https(ssh_url: str) -> str | None:
     """
     Convert SSH URL to HTTPS equivalent.
