@@ -198,14 +198,20 @@ def _register_notes(response: RegisterLineageResponse, *, on_glaas: bool) -> dic
 
 
 def _render_register_checklist(
-    ctx: RoarContext, target: str, response: RegisterLineageResponse, *, on_glaas: bool
+    ctx: RoarContext,
+    target: str,
+    response: RegisterLineageResponse,
+    *,
+    on_glaas: bool,
+    dry_run: bool = False,
 ) -> None:
     """Render the shared reproducibility punchlist as register's receipt.
 
     The single checklist consolidates the old scattered warnings AND the
     operational summary (tag/push/counts, folded in as notes), evaluated the
-    same way `roar reproduce` shows it. Warn, never block; best-effort (any
-    failure here must not break registration)."""
+    same way `roar reproduce` shows it. On a dry run nothing is published, so the
+    publish check is shown as n/a (not a failure). Warn, never block; best-effort
+    (any failure here must not break registration)."""
     try:
         from ...application.reproducibility.report import (
             build_report,
@@ -224,6 +230,7 @@ def _render_register_checklist(
             # Extra job-commit tags mean the session spanned multiple commits.
             single_commit=not (response.tag_summary and response.tag_summary.job_tags),
             notes=_register_notes(response, on_glaas=on_glaas),
+            na={"on_glaas": "dry run — nothing published yet"} if dry_run else None,
         )
     except Exception:
         return
@@ -380,7 +387,7 @@ def register(
         if response.secrets_detected:
             click.echo(f"  Secrets to redact: {len(response.secrets_detected)} types")
         # Preview reproducibility BEFORE publishing (not yet on GLaaS).
-        _render_register_checklist(ctx, target, response, on_glaas=False)
+        _render_register_checklist(ctx, target, response, on_glaas=False, dry_run=True)
         click.echo("")
         click.echo("GLaaS:")
         click.echo(f"  Session:  {session_url}")
