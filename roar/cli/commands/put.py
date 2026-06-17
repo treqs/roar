@@ -65,9 +65,7 @@ def _render_put_checklist(
         elif response.job_id is not None:
             target_ref = f"@{response.job_id}"
 
-        unsourced = (
-            unsourced_input_paths(ctx.roar_dir, ctx.cwd, target_ref) if target_ref else []
-        )
+        unsourced = unsourced_input_paths(ctx.roar_dir, ctx.cwd, target_ref) if target_ref else []
         recorded = f"{len(response.uploaded_files)} files · published to {response.destination}"
         report = build_report(
             committed=response.reproducible,

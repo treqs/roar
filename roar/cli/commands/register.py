@@ -414,7 +414,9 @@ def register(
         if response.secrets_detected:
             click.echo(f"  Secrets to redact: {len(response.secrets_detected)} types")
         # Preview reproducibility BEFORE publishing (not yet on GLaaS).
-        _render_register_checklist(ctx, target, response, on_glaas=False, dry_run=True, visibility=visibility)
+        _render_register_checklist(
+            ctx, target, response, on_glaas=False, dry_run=True, visibility=visibility
+        )
         click.echo("")
         click.echo("GLaaS:")
         click.echo(f"  Session:  {session_url}")
