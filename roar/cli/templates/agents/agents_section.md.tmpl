@@ -5,7 +5,8 @@ This project uses [roar](https://github.com/treqs/roar) to capture lineage for M
 - **Run scripts with provenance:** prefer `roar run <cmd>` over bare `<cmd>` (e.g. `roar run python train.py`).
 - **Don't modify code to use roar.** Capture is transparent. The exception: `from roar import require` at the top of a script aborts if it isn't being run under `roar run`.
 - **Clean git state is required.** `roar run` refuses to execute with uncommitted changes (including untracked files). No `--dirty` bypass. Make sure `.roar/` is in `.gitignore`.
-- **Avoid `/tmp` for workdirs.** Default config has `ignore_tmp_files = true`, which silently drops I/O under `/tmp` — a run there will show `in:0 out:0`.
+- **Avoid `/tmp` for workdirs.** Default config has `ignore_tmp_files = true`, which drops intermediates written under `/tmp`; a `/tmp` file the run only reads is kept but flagged unsourced (see below).
+- **Mind unsourced inputs.** An input with no tracked producer that isn't committed to git — a manual download, a `/tmp` file, an uncommitted script — won't exist when the run is reproduced elsewhere, and is the most common reason a lineage doesn't reproduce. List them with `roar inputs --unsourced <ref>`; fix by committing code or ingesting data with `roar get <url>` (or `roar run wget <url>`).
 - **Inspect lineage:** `roar show <ref>`, `roar log`, `roar dag`. Add `--all` to `roar show` to disable truncation.
 - **Don't commit `.roar/`** — it's local lineage state.
 - **`roar --help` is the source of truth** for current command behavior.
