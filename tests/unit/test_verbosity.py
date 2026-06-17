@@ -144,7 +144,8 @@ class TestFileFilterCounts:
         reads = [
             "/sys/foo",
             "/etc/passwd",
-            "/tmp/scratch.dat",
+            "/tmp/scratch.dat",  # read-only /tmp -> pre-existing input, KEPT
+            "/tmp/output.txt",  # also written below -> intermediate, dropped
             "/tmp/torchinductor_user/cached.so",
             "/some/repo/.git/HEAD",
             "/home/.roar/runtime.json",
@@ -154,7 +155,10 @@ class TestFileFilterCounts:
         result: FilteredFiles = FileFilterService().filter_files(tracer, py, {})
 
         assert result.counts.system_reads == 2  # /sys, /etc
-        assert result.counts.tmp_files == 2  # 1 read + 1 write tmp
+        # /tmp/output.txt is dropped from both reads (intermediate) and writes;
+        # /tmp/scratch.dat is read-only and survives as a pre-existing input.
+        assert result.counts.tmp_files == 2  # output.txt read + output.txt write
+        assert "/tmp/scratch.dat" in result.read_files
         assert result.counts.torch_cache == 1
         assert result.counts.git_metadata == 1
         assert result.counts.roar_internal == 1

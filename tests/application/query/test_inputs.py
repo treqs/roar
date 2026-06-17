@@ -358,6 +358,49 @@ def test_render_marks_unsourced_and_shows_legend(tmp_path: Path) -> None:
     assert "/w/data.csv" in out and "⚠ /w/data.csv" not in out
 
 
+def _tmp_input_db(db_ctx) -> None:
+    """out.pkl <- job 1, whose only input is an unsourced /tmp file."""
+    db_ctx.artifacts.get_by_path.return_value = _artifact("art-out", "/w/out.pkl", "a" * 64)
+    db_ctx.artifacts.get_jobs.side_effect = lambda aid: {
+        "produced_by": [{"id": 1, "command": "python proc.py"}] if aid == "art-out" else [],
+        "consumed_by": [],
+    }
+    db_ctx.jobs.get_inputs.side_effect = lambda jid: (
+        [{"artifact_id": "art-tmp"}] if jid == 1 else []
+    )
+    db_ctx.artifacts.get.side_effect = lambda aid: (
+        _artifact("art-tmp", "/tmp/dataset.parquet", "b" * 64) if aid == "art-tmp" else None
+    )
+
+
+def test_render_escalates_unsourced_tmp_input_with_distinct_line(tmp_path: Path) -> None:
+    with patch.object(inputs_module, "create_query_database_context") as mock_db:
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        _tmp_input_db(db_ctx)
+        out = inputs_module.render_inputs(_request(tmp_path, "out.pkl"))
+    assert "⚠ unsourced:" in out  # generic legend present
+    assert "1 in /tmp" in out  # distinct escalation line
+    assert "won't survive" in out
+
+
+def test_render_no_tmp_line_when_no_unsourced_tmp_input(tmp_path: Path) -> None:
+    with patch.object(inputs_module, "create_query_database_context") as mock_db:
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        _audit_db(db_ctx)  # unsourced gen.py is /w/, not /tmp
+        out = inputs_module.render_inputs(_request(tmp_path, "out.pkl"))
+    assert "in /tmp" not in out
+
+
+def test_is_ephemeral_tmp_path() -> None:
+    assert inputs_module.is_ephemeral_tmp_path("/tmp/x.parquet")
+    assert inputs_module.is_ephemeral_tmp_path("/private/var/folders/ab/cd/x")
+    assert not inputs_module.is_ephemeral_tmp_path("/w/data.csv")
+    assert not inputs_module.is_ephemeral_tmp_path("")
+    assert not inputs_module.is_ephemeral_tmp_path(None)
+
+
 def test_json_output_includes_unsourced_field(tmp_path: Path) -> None:
     import json
 

@@ -30,6 +30,9 @@ def render_inputs(request: InputsQueryRequest) -> str:
 
     lines: list[str] = []
     any_unsourced = any(a.unsourced for a in summary.artifacts)
+    tmp_unsourced = sum(
+        1 for a in summary.artifacts if a.unsourced and is_ephemeral_tmp_path(a.path)
+    )
     for art in summary.artifacts:
         digest = _short_digest(art.hashes)
         path = art.path or "(no path)"
@@ -45,7 +48,24 @@ def render_inputs(request: InputsQueryRequest) -> str:
             "  Make it reproducible — commit code to a git repo, or ingest data with "
             "`roar get <url>` / `roar run wget <url>`."
         )
+        if tmp_unsourced:
+            lines.append(
+                f"⚠ {tmp_unsourced} in /tmp — these definitely won't survive; "
+                "move into your project or ingest with `roar get`."
+            )
     return "\n".join(lines)
+
+
+def is_ephemeral_tmp_path(path: str | None) -> bool:
+    """True for an input under an ephemeral tmp dir (Linux /tmp, macOS var/folders).
+
+    Such a file is guaranteed not to exist when the lineage is reproduced on
+    another machine — a sharper, more certain failure than generic
+    unsourcedness, so it warrants its own escalated warning.
+    """
+    if not path:
+        return False
+    return path.startswith("/tmp/") or "/private/var/folders/" in path
 
 
 def _short_digest(hashes: list[ShowHashSummary]) -> str:
