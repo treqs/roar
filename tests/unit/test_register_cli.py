@@ -57,7 +57,7 @@ def test_register_cli_prints_next_steps_for_artifacts(tmp_path: Path) -> None:
             return_value="https://glaas.example",
         ),
     ):
-        result = runner.invoke(register, ["model.pt"], obj=_mock_context(tmp_path))
+        result = runner.invoke(register, ["model.pt", "--yes"], obj=_mock_context(tmp_path))
 
     assert result.exit_code == 0, result.output
     assert "Registered lineage for: model.pt" in result.output
@@ -143,7 +143,7 @@ def test_register_cli_prefers_returned_session_url(tmp_path: Path) -> None:
             return_value="https://fallback.glaas.example",
         ),
     ):
-        result = runner.invoke(register, ["model.pt"], obj=_mock_context(tmp_path))
+        result = runner.invoke(register, ["model.pt", "--yes"], obj=_mock_context(tmp_path))
 
     assert result.exit_code == 0, result.output
     assert "https://glaas.example/sessions/published-session" in result.output
