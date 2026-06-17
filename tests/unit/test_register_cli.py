@@ -93,9 +93,10 @@ def test_register_cli_summary_reports_new_jobs_and_labels(tmp_path: Path) -> Non
         result = runner.invoke(register, ["metrics.json", "--yes"], obj=_mock_context(tmp_path))
 
     assert result.exit_code == 0, result.output
-    assert "Jobs: 4" in result.output
+    # Counts now ride as the note under the "lineage saved on glaas.ai" punchlist item.
+    assert "4 jobs" in result.output
     assert "already registered" not in result.output
-    assert "Labels: 3" in result.output
+    assert "3 labels" in result.output
 
 
 def test_register_cli_summary_calls_out_already_registered_jobs(tmp_path: Path) -> None:
@@ -121,8 +122,7 @@ def test_register_cli_summary_calls_out_already_registered_jobs(tmp_path: Path) 
         result = runner.invoke(register, ["metrics.json", "--yes"], obj=_mock_context(tmp_path))
 
     assert result.exit_code == 0, result.output
-    assert "Jobs: 0 (4 already registered)" in result.output
-    assert "Labels: 0" in result.output
+    assert "0 (4 already registered) jobs" in result.output
 
 
 def test_register_cli_prefers_returned_session_url(tmp_path: Path) -> None:
@@ -373,84 +373,71 @@ def test_register_cli_renders_already_registered(tmp_path: Path) -> None:
     assert "https://glaas.example/dag/0123456789abcdef0123456789abcdef" in result.output
 
 
-# -- unsourced-inputs reproducibility warning --
+# -- reproducibility checklist (register receipt) --
 
 
-def _capture_warn(summary_or_exc, tmp_path: Path) -> str:
+def _capture_checklist(response, tmp_path: Path, unsourced=None) -> str:
     import io
-    from contextlib import redirect_stderr
+    from contextlib import redirect_stdout
 
-    from roar.cli.commands.register import _warn_unsourced_inputs
+    from roar.cli.commands.register import _render_register_checklist
 
     ctx = _mock_context(tmp_path)
     buf = io.StringIO()
-    target = "roar.application.query.inputs.build_inputs_summary"
-    if isinstance(summary_or_exc, Exception):
-        patcher = patch(target, side_effect=summary_or_exc)
-    else:
-        patcher = patch(target, return_value=summary_or_exc)
-    with patcher, redirect_stderr(buf):
-        _warn_unsourced_inputs(ctx, "out")
+    with (
+        patch(
+            "roar.application.reproducibility.report.unsourced_input_paths",
+            return_value=unsourced or [],
+        ),
+        redirect_stdout(buf),
+    ):
+        _render_register_checklist(ctx, "out", response, on_glaas=True)
     return buf.getvalue()
 
 
-def test_warns_when_lineage_has_unsourced_inputs(tmp_path: Path) -> None:
-    from roar.application.query.results import InputArtifactSummary, InputsSummary
+def _repro_response(*, reproducible=True, remote="origin"):
+    from roar.application.publish.results import RegisterLineageResponse, RegisterTagSummary
 
-    summary = InputsSummary(
-        target_ref="out",
-        is_root=False,
-        artifacts=[
-            InputArtifactSummary("a", "/w/gen.py", 10, unsourced=True),
-            InputArtifactSummary("b", "/w/proc.py", 10, unsourced=True),
-        ],
+    return RegisterLineageResponse(
+        success=True,
+        session_hash="a" * 64,
+        artifact_hash="b" * 64,
+        reproducible=reproducible,
+        tag_summary=RegisterTagSummary(remote=remote) if remote else None,
     )
-    out = _capture_warn(summary, tmp_path)
-    assert "may not be reproducible" in out
-    assert "2 file(s)" in out
-    assert "gen.py" in out and "proc.py" in out
-    assert "roar inputs --unsourced" in out
 
 
-def test_escalates_when_an_unsourced_input_lives_in_tmp(tmp_path: Path) -> None:
-    from roar.application.query.results import InputArtifactSummary, InputsSummary
+def test_checklist_all_green_shows_full_punchlist(tmp_path: Path) -> None:
+    out = _capture_checklist(_repro_response(), tmp_path, unsourced=[])
+    assert "Reproducibility — 5/5" in out
+    assert out.count("[✅]") == 5
+    # operational details fold in as notes
+    assert "pushed to origin" in out
 
-    summary = InputsSummary(
-        target_ref="out",
-        is_root=False,
-        artifacts=[
-            InputArtifactSummary("a", "/w/gen.py", 10, unsourced=True),
-            InputArtifactSummary("b", "/tmp/dataset.parquet", 10, unsourced=True),
-        ],
+
+def test_checklist_flags_no_commit_and_unsourced(tmp_path: Path) -> None:
+    out = _capture_checklist(
+        _repro_response(reproducible=False, remote=None),
+        tmp_path,
+        unsourced=["/w/gen.py"],
     )
-    out = _capture_warn(summary, tmp_path)
-    # Generic unsourced warning still fires...
-    assert "may not be reproducible" in out
-    # ...plus a distinct, single /tmp escalation line.
-    assert "1 of these live in /tmp" in out
-    assert "won't exist on" in out
+    assert "[❌] code committed to git" in out
+    assert "[❌] commit reachable on a remote" in out
+    assert "[❌] all inputs sourced" in out
+    assert "/w/gen.py" in out
+    assert "may not reproduce as recorded" in out
+    # lineage is on glaas (just registered) — that box stays green
+    assert "[✅] lineage saved on glaas.ai" in out
 
 
-def test_no_tmp_escalation_when_no_unsourced_input_in_tmp(tmp_path: Path) -> None:
-    from roar.application.query.results import InputArtifactSummary, InputsSummary
+def test_checklist_is_best_effort_silent_on_error(tmp_path: Path) -> None:
+    # An evaluation failure must never break registration.
+    from roar.cli.commands.register import _render_register_checklist
 
-    summary = InputsSummary(
-        target_ref="out",
-        is_root=False,
-        artifacts=[InputArtifactSummary("a", "/w/gen.py", 10, unsourced=True)],
-    )
-    out = _capture_warn(summary, tmp_path)
-    assert "/tmp" not in out
-
-
-def test_no_warning_when_all_inputs_sourced(tmp_path: Path) -> None:
-    from roar.application.query.results import InputsSummary
-
-    out = _capture_warn(InputsSummary(target_ref="out", is_root=False, artifacts=[]), tmp_path)
-    assert out == ""
-
-
-def test_audit_failure_is_silent(tmp_path: Path) -> None:
-    # A target the inputs query can't resolve (e.g. session hash) must not break register.
-    out = _capture_warn(RuntimeError("unresolvable"), tmp_path)
-    assert out == ""
+    with patch(
+        "roar.application.reproducibility.report.unsourced_input_paths",
+        side_effect=RuntimeError("boom"),
+    ):
+        _render_register_checklist(
+            _mock_context(tmp_path), "out", _repro_response(), on_glaas=True
+        )  # no raise
