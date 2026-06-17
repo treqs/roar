@@ -95,6 +95,33 @@ def _maybe_show_signup_nudge() -> None:
             pass
 
 
+def _current_login_name() -> str | None:
+    """Username/email of the active GLaaS session, or None if not logged in."""
+    try:
+        from ...auth_store import load_auth_state
+
+        auth = load_auth_state()
+    except Exception:
+        return None
+    if auth is None or not auth.access_token:
+        return None
+    return auth.user.username or auth.user.email or "your account"
+
+
+def _maybe_show_attribution_nudge(login_name: str) -> None:
+    """Authenticated, but the lineage published anonymously — nudge to attribute.
+
+    The inverse of the signup nudge: the user already has an account, so being
+    published unattributed is probably not what they want. Say how to fix it."""
+    from .._format import hints_should_print, make_hint_printer
+
+    if not hints_should_print():
+        return
+    _caps, hint = make_hint_printer()
+    hint(f"Signed in as {login_name}, but this lineage was published anonymously (unattributed).")
+    hint("Attribute future runs with `roar scope use <owner>/<project>` (or `register --public`).")
+
+
 def _render_tag_summary(summary: RegisterTagSummary | None) -> None:
     """Render the P1-23 tag-push block above the main register output.
 
@@ -194,6 +221,8 @@ def _render_register_checklist(
             runtime_ok=True,
             unsourced_paths=unsourced_input_paths(ctx.roar_dir, ctx.cwd, target),
             on_glaas=on_glaas,
+            # Extra job-commit tags mean the session spanned multiple commits.
+            single_commit=not (response.tag_summary and response.tag_summary.job_tags),
             notes=_register_notes(response, on_glaas=on_glaas),
         )
     except Exception:
@@ -403,7 +432,13 @@ def register(
 
         record_action_trigger("register", start_dir=ctx.cwd)
 
-        # Anonymous register succeeds with no account; give first-timers the
-        # one reason to sign up they otherwise never hear at this moment.
+        # Anonymous register. If the user has NO account, nudge them to sign up
+        # (names what an account unlocks). If they're already signed in, the
+        # useful nudge is the opposite — they published unattributed, so show
+        # how to attribute.
         if publish_intent.anonymous:
-            _maybe_show_signup_nudge()
+            login_name = _current_login_name()
+            if login_name:
+                _maybe_show_attribution_nudge(login_name)
+            else:
+                _maybe_show_signup_nudge()

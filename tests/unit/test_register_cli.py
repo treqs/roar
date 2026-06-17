@@ -409,8 +409,8 @@ def _repro_response(*, reproducible=True, remote="origin"):
 
 def test_checklist_all_green_shows_full_punchlist(tmp_path: Path) -> None:
     out = _capture_checklist(_repro_response(), tmp_path, unsourced=[])
-    assert "Reproducibility — 5/5" in out
-    assert out.count("[✅]") == 5
+    assert "Reproducibility — 6/6" in out
+    assert out.count("[✅]") == 6
     # operational details fold in as notes
     assert "pushed to origin" in out
 
@@ -441,3 +441,39 @@ def test_checklist_is_best_effort_silent_on_error(tmp_path: Path) -> None:
         _render_register_checklist(
             _mock_context(tmp_path), "out", _repro_response(), on_glaas=True
         )  # no raise
+
+
+# -- authenticated-but-anonymous nudge --
+
+
+def test_current_login_name_reads_auth_state(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from roar.cli.commands.register import _current_login_name
+
+    auth = SimpleNamespace(
+        access_token="tok", user=SimpleNamespace(username="cmgeyer", email="c@e.ai", sub="x")
+    )
+    with patch("roar.auth_store.load_auth_state", return_value=auth):
+        assert _current_login_name() == "cmgeyer"
+    # not logged in -> None
+    with patch("roar.auth_store.load_auth_state", return_value=None):
+        assert _current_login_name() is None
+
+
+def test_attribution_nudge_names_the_user(tmp_path: Path) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    from roar.cli.commands.register import _maybe_show_attribution_nudge
+
+    buf = io.StringIO()
+    with (
+        patch("roar.cli._format.hints_should_print", return_value=True),
+        redirect_stderr(buf),
+    ):
+        _maybe_show_attribution_nudge("cmgeyer")
+    out = buf.getvalue()
+    assert "cmgeyer" in out
+    assert "anonymously" in out
+    assert "roar scope use" in out

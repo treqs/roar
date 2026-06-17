@@ -193,6 +193,7 @@ def _render_reproducibility_checklist(
         runtime_ok=runtime_captured(pipeline),
         unsourced_paths=unsourced_input_paths(request.roar_dir, request.cwd, request.hash_prefix),
         on_glaas=on_glaas,
+        single_commit=pipeline.single_commit,
     )
     return render_report(report, title="Reproducibility (as recorded)")
 
