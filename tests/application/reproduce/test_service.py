@@ -374,7 +374,9 @@ def _unsourced_summary(path: str, digest: str = "a" * 64):
     )
 
 
-def test_audit_warns_when_unsourced_input_present_and_matching(tmp_path: Path) -> None:
+def test_audit_is_silent_when_unsourced_input_present_and_matching(tmp_path: Path) -> None:
+    # Present-but-unsourced inputs no longer warn here — they're surfaced by the
+    # reproducibility checklist instead. The audit only fails fast on broken ones.
     from roar.application.reproduce.service import _audit_unsourced_inputs
 
     presenter = MagicMock()
@@ -389,8 +391,7 @@ def test_audit_warns_when_unsourced_input_present_and_matching(tmp_path: Path) -
         _audit_unsourced_inputs(_request(tmp_path), presenter)  # no raise
 
     out = "\n".join(c.args[0] for c in presenter.print.call_args_list)
-    assert "May not reproduce elsewhere" in out
-    assert "/w/gen.py" in out
+    assert out == ""
 
 
 def test_audit_fails_fast_when_unsourced_input_missing(tmp_path: Path) -> None:
