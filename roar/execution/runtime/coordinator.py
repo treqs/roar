@@ -266,6 +266,7 @@ class RunCoordinator:
             inject_log,
             config,
             collect_dropped_paths=(ctx.verbosity == "debug"),
+            command=list(ctx.command),
         )
         t_prov_end = time.perf_counter()
         n_read = len(prov.get("data", {}).get("read_files", []))
