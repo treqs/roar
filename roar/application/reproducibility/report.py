@@ -80,6 +80,7 @@ def build_report(
     runtime_ok: bool,
     unsourced_paths: list[str],
     on_glaas: bool,
+    single_commit: bool = True,
     notes: dict[str, str] | None = None,
 ) -> ReproducibilityReport:
     """Assemble the canonical checklist from already-computed facts.
@@ -95,6 +96,13 @@ def build_report(
                 "code committed to git",
                 committed,
                 "run outside a git repo — the code isn't versioned, so it can't be restored",
+            ),
+            ReproCheck(
+                "single_commit",
+                "single git commit across all steps",
+                single_commit,
+                "steps span more than one commit — reproduce checks out the last, "
+                "so results may differ from the original",
             ),
             ReproCheck(
                 "pushed",

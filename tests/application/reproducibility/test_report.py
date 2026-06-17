@@ -21,11 +21,12 @@ def _full_report(**overrides):
 
 def test_all_green_shows_every_check():
     out = render_report(_full_report())
-    assert "Reproducibility — 5/5" in out
+    assert "Reproducibility — 6/6" in out
     # every check is listed (no collapsing)
-    assert out.count("[✅]") == 5
+    assert out.count("[✅]") == 6
     assert "[❌]" not in out
     assert "code committed to git" in out
+    assert "single git commit across all steps" in out
     assert "lineage saved on glaas.ai" in out
     # all green -> no warning
     assert "may not reproduce" not in out
@@ -33,11 +34,18 @@ def test_all_green_shows_every_check():
 
 def test_failed_checks_expand_with_exception():
     out = render_report(_full_report(committed=False, on_glaas=False))
-    assert "Reproducibility — 3/5" in out
+    assert "Reproducibility — 4/6" in out
     assert out.count("[❌]") == 2
-    assert out.count("[✅]") == 3
+    assert out.count("[✅]") == 4
     assert "[❌] code committed to git" in out
     assert "→ run outside a git repo" in out  # the exception detail
+    assert "may not reproduce as recorded" in out
+
+
+def test_multi_commit_fails_single_commit_check():
+    out = render_report(_full_report(single_commit=False))
+    assert "[❌] single git commit across all steps" in out
+    assert "→ steps span more than one commit" in out
     assert "may not reproduce as recorded" in out
 
 
@@ -51,7 +59,7 @@ def test_unsourced_detail_lists_paths_and_flags_tmp():
 
 def test_check_keys_are_stable_and_complete():
     keys = [c.key for c in _full_report().checks]
-    assert keys == ["committed", "pushed", "inputs_sourced", "runtime", "on_glaas"]
+    assert keys == ["committed", "single_commit", "pushed", "inputs_sourced", "runtime", "on_glaas"]
 
 
 def test_is_shareable_remote():

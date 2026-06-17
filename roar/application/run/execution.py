@@ -73,6 +73,14 @@ def validate_git_clean(
         # from an extracted working_dir without a .git.
         return cwd
 
+    # `roar reproduce` re-runs the recorded steps, which legitimately recreate
+    # the run's outputs and so dirty the tree; enforcing the clean-tree rule on
+    # the reproduction's own intermediates would deadlock it (step 1's output
+    # blocks step 2). The reproduce executor sets ROAR_REPRODUCE for exactly
+    # this window, so skip the dirty-tree gate here.
+    if os.environ.get("ROAR_REPRODUCE") == "1":
+        return repo_root
+
     try:
         # Preserve leading whitespace in porcelain output: the two-column
         # status code starts with a space for worktree-only modifications
