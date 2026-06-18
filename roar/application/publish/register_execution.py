@@ -469,8 +469,18 @@ class RegisterService:
 
         composite_registered = sum(1 for item in composite_registrations if item.get("registered"))
         composite_failed = sum(1 for item in composite_registrations if not item.get("registered"))
-        total_artifacts_registered = batch_result.artifacts_registered + composite_registered
         total_artifacts_failed = batch_result.artifacts_failed + composite_failed
+        # Report DISTINCT artifacts, matching `register --dry-run`'s
+        # len(lineage.artifacts). The coordinator's running tally double-counts
+        # (artifacts are tallied in both the staging and the link phase, and the
+        # server's success count is per content-hash) — when everything
+        # registered, the distinct figure is simply the lineage's artifact count.
+        # The success gate below keys off *_failed, not this display number, so
+        # this is safe. On partial failure, fall back to the coordinator's tally.
+        if total_artifacts_failed == 0:
+            total_artifacts_registered = len(lineage.artifacts)
+        else:
+            total_artifacts_registered = batch_result.artifacts_registered + composite_registered
 
         success = (
             batch_result.jobs_failed == 0 and total_artifacts_failed == 0 and not finalize_failed
