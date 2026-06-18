@@ -56,6 +56,7 @@ def _render_put_checklist(
             build_report,
             render_report,
             unsourced_input_paths,
+            untracked_artifact_dirs,
         )
 
         # The published artifact (or the put job) is the lineage root we audit.
@@ -72,6 +73,7 @@ def _render_put_checklist(
             pushed=response.commit_on_remote,
             runtime_ok=True,
             unsourced_paths=unsourced,
+            untracked_paths=untracked_artifact_dirs(ctx.roar_dir, ctx.cwd),
             on_glaas=True,
             single_commit=response.single_commit,
             notes={"on_glaas": f"{visibility} · {recorded}" if visibility else recorded},
