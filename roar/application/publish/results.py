@@ -49,6 +49,11 @@ class RegisterLineageResponse:
     # the CLI surfaces a notice so the user knows it can't be reproduced from
     # source. Defaults True so existing/normal registrations are unaffected.
     reproducible: bool = True
+    # False when the session's steps span more than one git commit (the user
+    # committed between runs). Computed from the session's commit span — the
+    # SAME source `roar reproduce` uses — so the two checklists never disagree.
+    # Defaults True so single-commit/normal registrations are unaffected.
+    single_commit: bool = True
 
 
 @dataclass(frozen=True)
@@ -94,3 +99,8 @@ class PutResponse:
     git_tag: str | None = None
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
+    # Reproducibility-checklist inputs, mirroring RegisterLineageResponse so
+    # `roar put` can render the same receipt as `roar register`.
+    reproducible: bool = True  # the published run has a git commit
+    single_commit: bool = True  # the session's steps share one commit
+    commit_on_remote: bool = False  # the commit is reachable on a shareable remote

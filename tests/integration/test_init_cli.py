@@ -44,14 +44,14 @@ def test_init_with_yes_adds_roar_to_gitignore(tmp_path: Path) -> None:
     assert (tmp_path / ".roar" / "roar.db").is_file()
     assert (tmp_path / ".roar" / "config.toml").is_file()
     config_text = (tmp_path / ".roar" / "config.toml").read_text(encoding="utf-8")
-    assert "[scope]" in config_text
-    assert 'mode = "anonymous"' in config_text
+    # Scope is unset at init now (resolves at publish time), so no baked mode.
+    assert 'mode = "anonymous"' not in config_text
     active_session = _active_session_row(tmp_path)
     assert active_session is not None
     assert active_session["is_active"] == 1
     assert active_session["current_step"] == 1
     assert "added .roar/ entry" in result.stdout
-    assert "scope:      anonymous (public; no account)" in result.stdout
+    assert "scope:      unset (private when signed in, else anonymous)" in result.stdout
     assert gitignore_path.read_text().endswith(".roar/\n")
 
 
