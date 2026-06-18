@@ -125,6 +125,7 @@ def _lookup_local_artifact(hash_prefix: str, roar_dir: Path) -> PipelineInfo | N
             artifact_hash=artifact_hash,
             target_kind="artifact",
             session_hash=None,
+            target_artifact_id=artifact["id"],
         )
 
 
@@ -161,6 +162,46 @@ def _lookup_local_lineage(hash_prefix: str, roar_dir: Path) -> PipelineInfo | No
     return None
 
 
+def _restrict_steps_to_artifact_subdag(steps: list[dict], target_artifact_id: object) -> list[dict]:
+    """Return only the steps needed to produce ``target_artifact_id``.
+
+    Walks backward from the step that produced the target artifact through its
+    transitive input-producing steps, preserving session order. Steps that
+    don't contribute to the target — an unrelated job in the same session, or a
+    redundant re-run that produced the same content — are dropped. Without this,
+    reproducing an artifact from a session that ran the same script several
+    times would list every run, so the plan would re-execute the work N times.
+
+    Falls back to all steps if the target's producer can't be located among the
+    session's steps (so we never silently produce an empty plan).
+    """
+    step_by_id = {s["id"]: s for s in steps}
+    output_to_step: dict[object, object] = {}
+    for s in steps:
+        for out in s.get("_outputs", []):
+            aid = out.get("artifact_id")
+            if aid is not None:
+                output_to_step.setdefault(aid, s["id"])
+
+    start = output_to_step.get(target_artifact_id)
+    if start is None:
+        return steps
+
+    needed: set[object] = set()
+    stack: list[object] = [start]
+    while stack:
+        sid = stack.pop()
+        if sid in needed:
+            continue
+        needed.add(sid)
+        for inp in step_by_id[sid].get("_inputs", []):
+            producer = output_to_step.get(inp.get("artifact_id"))
+            if producer is not None:
+                stack.append(producer)
+
+    return [s for s in steps if s["id"] in needed]
+
+
 def _build_local_session_pipeline(
     *,
     ctx,
@@ -169,29 +210,45 @@ def _build_local_session_pipeline(
     artifact_hash: str,
     target_kind: ReproduceTargetKind,
     session_hash: str | None,
+    target_artifact_id: object | None = None,
 ) -> PipelineInfo:
     steps = ctx.sessions.get_steps(session_id)
-    build_steps: list[dict] = []
-    run_steps: list[dict] = []
-
+    step_dicts: list[dict] = []
     for step in steps:
         step_dict = dict(step)
         step_dict["_inputs"] = ctx.jobs.get_inputs(step["id"])
         step_dict["_outputs"] = ctx.jobs.get_outputs(step["id"])
-        if step.get("job_type") == "build":
-            build_steps.append(step_dict)
-        else:
-            run_steps.append(step_dict)
+        step_dicts.append(step_dict)
+
+    # Reproducing an artifact replays only the sub-DAG that produces it, not the
+    # whole session; reproducing a lineage replays everything.
+    if target_kind == "artifact" and target_artifact_id is not None:
+        step_dicts = _restrict_steps_to_artifact_subdag(step_dicts, target_artifact_id)
+
+    build_steps = [s for s in step_dicts if s.get("job_type") == "build"]
+    run_steps = [s for s in step_dicts if s.get("job_type") != "build"]
+
+    # Reproduce at the session's LAST commit, not its first: when the user
+    # commits between runs (which roar's clean-tree rule encourages), the target
+    # was produced at the end state — and only there do all the code and the
+    # final .gitignore exist. Checking out the start commit reruns later steps
+    # against stale code and can dirty the tree on outputs the start commit
+    # didn't yet ignore.
+    commit_start = session.get("git_commit_start")
+    commit_end = session.get("git_commit_end")
+    git_commit = commit_end or commit_start
+    single_commit = not (commit_start and commit_end and commit_start != commit_end)
 
     return PipelineInfo(
         artifact_hash=artifact_hash,
         git_repo=session.get("git_repo"),
-        git_commit=session.get("git_commit_start") or session.get("git_commit_end"),
+        git_commit=git_commit,
         target_kind=target_kind,
         session_hash=session_hash,
         build_steps=build_steps,
         run_steps=run_steps,
         total_steps=len(build_steps) + len(run_steps),
+        single_commit=single_commit,
     )
 
 

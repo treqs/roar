@@ -72,6 +72,53 @@ def emit_dirty_outputs_warning(
     )
 
 
+def emit_unsourced_inputs_nudge(
+    *,
+    roar_dir: Path | str | None,
+    cwd: str | Path,
+    job_ref: str,
+    stream: IO[str],
+    caps: TerminalCaps,
+    quiet: bool,
+) -> None:
+    """One-line nudge if the just-completed run read inputs nothing tracked produced.
+
+    Light by design — the full picture lives in ``roar inputs --unsourced`` and
+    the reproducibility checklist at register/reproduce. This just raises
+    awareness at the moment the unsourced dependency is created. Silent on the
+    happy path, in quiet mode, or when ``hints.enabled = false``. Best-effort:
+    any query failure is swallowed (it must never affect the run's outcome)."""
+    if quiet or not roar_dir or not _hints_enabled():
+        return
+
+    try:
+        from ...application.query.inputs import build_inputs_summary
+        from ...application.query.requests import InputsQueryRequest
+
+        summary = build_inputs_summary(
+            InputsQueryRequest(
+                roar_dir=Path(roar_dir),
+                cwd=Path(cwd),
+                ref=job_ref,
+                selector="job",
+                unsourced=True,
+            )
+        )
+    except Exception:
+        return
+
+    count = len(summary.artifacts)
+    if not count:
+        return
+
+    noun = "input" if count == 1 else "inputs"
+    warning = (
+        f"warning: {count} {noun} nothing tracked produced — won't exist when reproduced "
+        f"elsewhere. See `roar inputs --unsourced {job_ref}`."
+    )
+    _emit(stream, style(warning, "warn_yellow", enabled=caps.can_color))
+
+
 def _hints_enabled() -> bool:
     try:
         from ...integrations.config import config_get

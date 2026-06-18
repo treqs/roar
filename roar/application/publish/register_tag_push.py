@@ -33,6 +33,7 @@ from ...core.interfaces.logger import ILogger
 from ..git import build_roar_git_tag_name, create_roar_git_tag
 from .git_remote import (
     GitRemoteError,
+    list_remote_names,
     push_roar_tags,
     resolve_canonical_remote,
     warn_if_ssh_passphrase_prompt_likely,
@@ -143,6 +144,21 @@ def ensure_roar_tags_pushed(
             session_tag=session_tag_name,
             job_tags=job_tags,
             push_skipped_reason="never_config",
+        )
+
+    # No remote at all (and none configured): degrade to a local-only register
+    # instead of blocking. The common "does this work" loop shouldn't be gated on
+    # having a remote — and the dry-run never blocks, so the real run shouldn't
+    # contradict it. Tags exist locally; the reproducibility checklist surfaces
+    # that the commit isn't reachable on a remote. (An *invalid* configured
+    # remote or ambiguous multi-remote setup still errors below — those mean the
+    # user wants a push but roar can't safely pick where.)
+    if not configured_remote and not list_remote_names(repo_root):
+        logger.debug("No git remote configured — registering local-only (tags not pushed).")
+        return RegisterTagSummary(
+            session_tag=session_tag_name,
+            job_tags=job_tags,
+            push_skipped_reason="no_remote",
         )
 
     try:

@@ -21,6 +21,8 @@ def _request(
     direct: bool = False,
     show_all: bool = False,
     output_json: bool = False,
+    unsourced: bool = False,
+    sourced: bool = False,
 ) -> InputsQueryRequest:
     roar_dir = tmp_path / ".roar"
     roar_dir.mkdir(exist_ok=True)
@@ -32,6 +34,8 @@ def _request(
         direct=direct,
         show_all=show_all,
         output_json=output_json,
+        unsourced=unsourced,
+        sourced=sourced,
     )
 
 
@@ -139,6 +143,8 @@ def test_build_inputs_direct_returns_immediate_inputs_only(tmp_path: Path) -> No
             {"produced_by": [{"id": 5}], "consumed_by": []},
             # _get_direct_inputs lookup
             {"produced_by": [{"id": 5}], "consumed_by": []},
+            # _is_unsourced(art-feat): has a producer -> sourced
+            {"produced_by": [{"id": 3}], "consumed_by": []},
         ]
         db_ctx.jobs.get_inputs.side_effect = [
             # is_root check: job 5 has inputs, not a root
@@ -277,3 +283,150 @@ def test_render_inputs_json_output(tmp_path: Path) -> None:
 
     assert '"is_root": true' in output
     assert '"target": "data.parquet"' in output
+
+
+# -- unsourced vs sourced detection (reproducibility audit) --
+
+
+def _audit_db(db_ctx) -> None:
+    """Wire a keyed mock DB for a 1-job lineage:
+
+    out.pkl  <- job 1  (inputs: gen.py [unsourced root], data.csv [sourced via job 0])
+    gen.py   : no producer            -> unsourced
+    data.csv : produced by job 0 (roar get, no inputs) -> sourced root
+    """
+    producers = {
+        "art-out": [{"id": 1, "command": "python proc.py"}],
+        "art-gen": [],  # no producer -> unsourced
+        "art-data": [{"id": 0, "command": "roar get s3://b/data.csv"}],
+    }
+    job_inputs = {
+        1: [{"artifact_id": "art-gen"}, {"artifact_id": "art-data"}],
+        0: [],  # roar get: producer with no inputs -> sourced
+    }
+    arts = {
+        "art-gen": _artifact("art-gen", "/w/gen.py", "b" * 64),
+        "art-data": _artifact("art-data", "/w/data.csv", "c" * 64),
+    }
+    db_ctx.artifacts.get_by_path.return_value = _artifact("art-out", "/w/out.pkl", "a" * 64)
+    db_ctx.artifacts.get_jobs.side_effect = lambda aid: {
+        "produced_by": producers.get(aid, []),
+        "consumed_by": [],
+    }
+    db_ctx.jobs.get_inputs.side_effect = lambda jid: job_inputs.get(jid, [])
+    db_ctx.artifacts.get.side_effect = lambda aid: arts.get(aid)
+
+
+def test_no_producer_root_is_unsourced_ingested_root_is_sourced(tmp_path: Path) -> None:
+    with patch.object(inputs_module, "create_query_database_context") as mock_db:
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        _audit_db(db_ctx)
+        summary = inputs_module.build_inputs_summary(_request(tmp_path, "out.pkl"))
+
+    by_path = {a.path: a.unsourced for a in summary.artifacts}
+    assert by_path == {"/w/gen.py": True, "/w/data.csv": False}
+
+
+def test_git_tracked_producerless_input_is_sourced(tmp_path: Path) -> None:
+    """A producer-less input that git tracks is SOURCED — `roar reproduce` checks
+    out the recorded commit and restores it. Only loose/uncommitted producer-less
+    inputs are unsourced."""
+    with (
+        patch.object(inputs_module, "create_query_database_context") as mock_db,
+        patch.object(inputs_module, "_git_tracked_paths", return_value=frozenset({"/w/gen.py"})),
+    ):
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        _audit_db(db_ctx)
+        summary = inputs_module.build_inputs_summary(_request(tmp_path, "out.pkl"))
+
+    by_path = {a.path: a.unsourced for a in summary.artifacts}
+    # gen.py has no producer but IS git-tracked -> sourced (was unsourced before).
+    assert by_path == {"/w/gen.py": False, "/w/data.csv": False}
+
+
+def test_unsourced_filter_keeps_only_unsourced(tmp_path: Path) -> None:
+    with patch.object(inputs_module, "create_query_database_context") as mock_db:
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        _audit_db(db_ctx)
+        summary = inputs_module.build_inputs_summary(_request(tmp_path, "out.pkl", unsourced=True))
+    assert [a.path for a in summary.artifacts] == ["/w/gen.py"]
+
+
+def test_sourced_filter_keeps_only_sourced(tmp_path: Path) -> None:
+    with patch.object(inputs_module, "create_query_database_context") as mock_db:
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        _audit_db(db_ctx)
+        summary = inputs_module.build_inputs_summary(_request(tmp_path, "out.pkl", sourced=True))
+    assert [a.path for a in summary.artifacts] == ["/w/data.csv"]
+
+
+def test_render_marks_unsourced_and_shows_legend(tmp_path: Path) -> None:
+    with patch.object(inputs_module, "create_query_database_context") as mock_db:
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        _audit_db(db_ctx)
+        out = inputs_module.render_inputs(_request(tmp_path, "out.pkl"))
+    assert "⚠ /w/gen.py" in out
+    assert "⚠ unsourced:" in out  # legend present
+    # sourced one is shown but not marked
+    assert "/w/data.csv" in out and "⚠ /w/data.csv" not in out
+
+
+def _tmp_input_db(db_ctx) -> None:
+    """out.pkl <- job 1, whose only input is an unsourced /tmp file."""
+    db_ctx.artifacts.get_by_path.return_value = _artifact("art-out", "/w/out.pkl", "a" * 64)
+    db_ctx.artifacts.get_jobs.side_effect = lambda aid: {
+        "produced_by": [{"id": 1, "command": "python proc.py"}] if aid == "art-out" else [],
+        "consumed_by": [],
+    }
+    db_ctx.jobs.get_inputs.side_effect = lambda jid: (
+        [{"artifact_id": "art-tmp"}] if jid == 1 else []
+    )
+    db_ctx.artifacts.get.side_effect = lambda aid: (
+        _artifact("art-tmp", "/tmp/dataset.parquet", "b" * 64) if aid == "art-tmp" else None
+    )
+
+
+def test_render_escalates_unsourced_tmp_input_with_distinct_line(tmp_path: Path) -> None:
+    with patch.object(inputs_module, "create_query_database_context") as mock_db:
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        _tmp_input_db(db_ctx)
+        out = inputs_module.render_inputs(_request(tmp_path, "out.pkl"))
+    assert "⚠ unsourced:" in out  # generic legend present
+    assert "1 in /tmp" in out  # distinct escalation line
+    assert "won't survive" in out
+
+
+def test_render_no_tmp_line_when_no_unsourced_tmp_input(tmp_path: Path) -> None:
+    with patch.object(inputs_module, "create_query_database_context") as mock_db:
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        _audit_db(db_ctx)  # unsourced gen.py is /w/, not /tmp
+        out = inputs_module.render_inputs(_request(tmp_path, "out.pkl"))
+    assert "in /tmp" not in out
+
+
+def test_is_ephemeral_tmp_path() -> None:
+    assert inputs_module.is_ephemeral_tmp_path("/tmp/x.parquet")
+    assert inputs_module.is_ephemeral_tmp_path("/private/var/folders/ab/cd/x")
+    assert not inputs_module.is_ephemeral_tmp_path("/w/data.csv")
+    assert not inputs_module.is_ephemeral_tmp_path("")
+    assert not inputs_module.is_ephemeral_tmp_path(None)
+
+
+def test_json_output_includes_unsourced_field(tmp_path: Path) -> None:
+    import json
+
+    with patch.object(inputs_module, "create_query_database_context") as mock_db:
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        _audit_db(db_ctx)
+        out = inputs_module.render_inputs(_request(tmp_path, "out.pkl", output_json=True))
+    data = json.loads(out)
+    flags = {i["path"]: i["unsourced"] for i in data["inputs"]}
+    assert flags == {"/w/gen.py": True, "/w/data.csv": False}

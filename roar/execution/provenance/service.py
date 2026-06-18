@@ -4,6 +4,8 @@ Provenance service orchestrator.
 Coordinates all provenance collection services to produce the final output.
 """
 
+import os
+import shutil
 from datetime import datetime, timezone
 from typing import Any
 
@@ -89,6 +91,7 @@ class ProvenanceService:
         config: dict[str, Any] | None = None,
         *,
         collect_dropped_paths: bool = False,
+        command: list[str] | None = None,
     ) -> dict[str, Any]:
         """
         Collect provenance from tracer output and optional Python-specific log.
@@ -127,6 +130,20 @@ class ProvenanceService:
             len(python_data.modules_files),
             len(python_data.used_packages),
         )
+
+        # 1b. Ensure the exec'd program itself counts as an input. A directly
+        # exec'd program — `roar run ./script.sh`, a compiled binary — may never
+        # trigger an open()/read() the tracer records (the kernel execs it), so
+        # it escapes input capture and nothing flags it when it's a loose,
+        # uncommitted file. Resolve the program from the *user's* command (what
+        # roar exec'd) — not the tracer's root process, which is the post-shebang
+        # interpreter (e.g. /bin/bash) — and add it to the RAW reads so it flows
+        # through the same system/package filters and sourced/unsourced
+        # classification as any other input.
+        program_path = self._resolve_exec_program(command)
+        if program_path and program_path not in set(tracer_data.read_files):
+            tracer_data.read_files.append(program_path)
+            self.logger.debug("Recorded exec'd program as input: %s", program_path)
 
         # 2. Filter files
         self.logger.debug("Filtering files")
@@ -268,6 +285,38 @@ class ProvenanceService:
         result = self._assembler.assemble(ctx, config)
         self.logger.debug("Provenance collection complete")
         return result
+
+    def _resolve_exec_program(self, command: list[str] | None) -> str | None:
+        """Resolve the run's exec'd program (the user's argv[0]) to an abspath.
+
+        No per-interpreter special-casing: a bare command (`python`, `bash`,
+        `torchrun`) is resolved via PATH and lands under ``/usr`` or the active
+        venv, so the existing system/package read filters drop it. Only a
+        program the user pointed at outside those trees survives — to be
+        classified sourced (committed) or unsourced (a loose script). Returns
+        None when argv[0] can't be resolved to an existing file.
+        """
+        if not command:
+            return None
+        prog = command[0]
+        if not isinstance(prog, str) or not prog:
+            return None
+
+        candidate: str | None
+        if os.path.isabs(prog):
+            candidate = prog
+        elif "/" in prog:
+            # Relative path (e.g. ./script.sh). roar never chdirs for a run, so
+            # the working dir at collection time is the invocation cwd the
+            # command resolved against.
+            candidate = os.path.abspath(prog)
+        else:
+            # Bare command resolved via PATH — typically an interpreter/tool.
+            candidate = shutil.which(prog)
+
+        if candidate and os.path.isfile(candidate):
+            return candidate
+        return None
 
     def _build_timing(self, start_time: float, end_time: float) -> dict[str, Any]:
         """Build timing info dict from timestamps."""

@@ -134,6 +134,9 @@ def build_registration_package(
         git_context=git_context,
         cwd=cwd,
     )
+    redacted_lineage, redacted_git_context = _drop_local_remotes(
+        redacted_lineage, redacted_git_context
+    )
 
     registration_jobs = order_jobs_for_registration(
         normalize_jobs_for_registration(redacted_lineage.jobs)
@@ -261,6 +264,27 @@ def _apply_redaction(
             "warnings": [_redaction_warning(pattern_id) for pattern_id in warning_ids],
         },
     )
+
+
+def _drop_local_remotes(
+    lineage: LineageData, git_context: GitContext
+) -> tuple[LineageData, GitContext]:
+    """Don't publish non-shareable (``file://`` / local-path) git repos to GLaaS.
+
+    A repo with no real remote records its own ``file://`` path as ``git_repo``;
+    publishing that leaks the local filesystem path and is useless to anyone else.
+    Replace such repos with "" so the GLaaS record honestly shows no remote — the
+    reproducibility checklist already flags this as "commit reachable on a remote".
+    """
+    from ...utils.git_url import is_shareable_remote
+
+    if git_context.repo and not is_shareable_remote(git_context.repo):
+        git_context = GitContext(repo="", commit=git_context.commit, branch=git_context.branch)
+    for job in lineage.jobs:
+        repo = job.get("git_repo")
+        if isinstance(repo, str) and repo and not is_shareable_remote(repo):
+            job["git_repo"] = ""
+    return lineage, git_context
 
 
 def _filter_git_context(

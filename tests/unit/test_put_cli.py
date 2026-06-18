@@ -43,7 +43,7 @@ def test_put_cli_prints_structured_success_summary(tmp_path: Path) -> None:
     with patch("roar.cli.commands.put.put_artifacts", return_value=response):
         result = runner.invoke(
             put,
-            ["model.pt", "s3://bucket/release", "-m", "publish release"],
+            ["model.pt", "s3://bucket/release", "-m", "publish release", "--yes"],
             obj=_mock_context(tmp_path),
         )
 
@@ -90,7 +90,7 @@ def test_put_cli_uses_public_default_from_config(tmp_path: Path) -> None:
     with patch("roar.cli.commands.put.put_artifacts", return_value=response) as mock_put:
         result = runner.invoke(
             put,
-            ["model.pt", "s3://bucket/release", "-m", "publish release"],
+            ["model.pt", "s3://bucket/release", "-m", "publish release", "--yes"],
             obj=_mock_context(tmp_path),
         )
 

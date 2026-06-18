@@ -60,12 +60,17 @@ def _git_check_output(repo_root: Path | str, *args: str, capture_stderr: bool) -
     )
 
 
-def _list_remote_names(repo_root: Path | str) -> list[str]:
+def list_remote_names(repo_root: Path | str) -> list[str]:
+    """Return the names of git remotes configured in this repo (empty if none)."""
     try:
         raw = _git_check_output(repo_root, "remote", capture_stderr=False)
     except subprocess.CalledProcessError:
         return []
     return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
+# Back-compat alias for internal callers.
+_list_remote_names = list_remote_names
 
 
 def resolve_canonical_remote(repo_root: Path | str, configured_remote: str | None) -> str:

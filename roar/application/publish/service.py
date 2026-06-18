@@ -370,13 +370,13 @@ def _resolve_register_preview_git_context(*, path: Path, logger: Any) -> Any:
     commit = _run_git(repo_root_path, "rev-parse", "HEAD")
     branch = _run_git(repo_root_path, "rev-parse", "--abbrev-ref", "HEAD")
     remote = _run_git(repo_root_path, "remote", "get-url", "origin")
-    repo = remote or repo_root_path.resolve().as_uri()
+    # Publish-only preview: never record a local ``file://`` URI here. A repo
+    # with no shareable remote publishes as "no remote" (matching the real
+    # register path, which drops it in `resolve_roar_git_context`) rather than
+    # leaking the local filesystem path to GLaaS.
+    repo = remote if remote else None
     if remote is None:
-        logger.debug(
-            "No git remote configured for %s; using local repository URI %s",
-            repo_root_path,
-            repo,
-        )
+        logger.debug("No git remote configured for %s; publishing with no remote", repo_root_path)
 
     return GitContext(repo=repo, commit=commit, branch=branch)
 
@@ -434,6 +434,31 @@ def _form_lineage_composites_for_lineage(*, roar_dir: Path, lineage: Any, logger
         return 0
     with create_database_context(roar_dir) as form_db:
         return form_lineage_composites(db_ctx=form_db, job_ids=job_ids, logger=logger)
+
+
+def _session_single_commit(*, roar_dir: Path, session_id: Any) -> bool:
+    """True iff the session's steps all ran at one git commit.
+
+    Computed from the session's commit span (``git_commit_start`` vs
+    ``git_commit_end``) — the SAME formula ``roar reproduce`` uses (see
+    ``reproduce/lookup.py``) — so register's receipt and reproduce's preview can
+    never disagree on the "single git commit" check. The old proxy (extra job
+    tags) read False-positive whenever tagging was skipped (e.g. no remote),
+    silently mis-scoring multi-commit lineages as single-commit. Best-effort:
+    defaults True (the existing assume-single behavior) on any miss.
+    """
+    if session_id is None:
+        return True
+    try:
+        with create_query_database_context(roar_dir) as db_ctx:
+            session = db_ctx.sessions.get(session_id)
+    except Exception:
+        return True
+    if not session:
+        return True
+    start = session.get("git_commit_start")
+    end = session.get("git_commit_end")
+    return not (start and end and start != end)
 
 
 def _load_remote_job_uid_mapping(*, roar_dir: Path, session_id: Any) -> dict[str, str]:
@@ -593,6 +618,12 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             except Exception as exc:  # attribution is best-effort
                 logger.debug("anchor attribution skipped: %s", exc)
 
+        # Did the lineage span more than one git commit? Compute it the same way
+        # `roar reproduce` does (commit span), so the two checklists agree.
+        single_commit = _session_single_commit(
+            roar_dir=request.roar_dir, session_id=collected_lineage.session_id
+        )
+
         # Collapse each job's dataset membership into consumes/produces view edges (a
         # bloom over the touched leaves) and prune the subsumed leaves from the bundle.
         # Pushed after the main registration. Best-effort.
@@ -637,7 +668,9 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             )
 
         if request.dry_run:
-            return preview_register_lineage(
+            from dataclasses import replace
+
+            preview = preview_register_lineage(
                 lineage=collected_lineage.lineage,
                 artifact_hash=collected_lineage.artifact_hash,
                 prepared=prepared,
@@ -645,6 +678,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
                 skip_confirmation=request.skip_confirmation,
                 confirm_callback=request.confirm_callback,
             )
+            return replace(preview, single_commit=single_commit)
 
         # P1-23: push roar tags BEFORE writing the GLaaS record so the
         # record never references a tag that doesn't yet exist on the
@@ -743,6 +777,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             tag_summary=tag_summary,
             warnings=warnings,
             reproducible=bool(prepared.git_context.commit),
+            single_commit=single_commit,
         )
     except PublishAuthError as exc:
         return RegisterLineageResponse(success=False, error=str(exc))
@@ -787,6 +822,9 @@ def put_artifacts(request: PutRequest) -> PutResponse:
         )
 
     repo_root = request.repo_root or request.cwd
+    # Reproducibility-checklist facts, filled in on the real (non-dry-run) path.
+    put_single_commit = True
+    put_commit_on_remote = False
     if request.dry_run:
         git_state = None
         git_commit = None
@@ -842,6 +880,17 @@ def put_artifacts(request: PutRequest) -> PutResponse:
                 logger=logger,
             )
 
+            # Reproducibility facts for the receipt: same commit-span source as
+            # register/reproduce, and whether the commit is reachable on a real
+            # remote (git_context.repo is None here when no shareable remote —
+            # resolve_roar_git_context drops local file:// URIs).
+            from ...utils.git_url import is_shareable_remote
+
+            put_single_commit = _session_single_commit(
+                roar_dir=request.roar_dir, session_id=prepared.session_id
+            )
+            put_commit_on_remote = is_shareable_remote(prepared.git_context.repo)
+
             result = service.put_prepared(
                 prepared=prepared,
                 sources=request.sources,
@@ -886,6 +935,9 @@ def put_artifacts(request: PutRequest) -> PutResponse:
         git_tag=created_git_tag,
         warnings=warnings,
         error=result.error,
+        reproducible=bool(git_commit),
+        single_commit=put_single_commit,
+        commit_on_remote=put_commit_on_remote,
     )
 
 

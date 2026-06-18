@@ -59,10 +59,10 @@ url = "https://api.glaas.ai"
 # Default roar register/put to public visibility unless overridden by --private
 public_by_default = false
 
-[scope]
-# Default repo publication scope. Anonymous means public and unattributed until
-# you run `roar login`, which upgrades this repo to private.
-mode = "anonymous"
+# Publication scope for this repo is UNSET by default, so it resolves at publish
+# time: `roar register`/`roar put` publish PRIVATE when you're signed in, and
+# anonymous (public, unattributed) when you're not. Set it explicitly to override:
+#   roar scope use private | public | <owner>/<project>
 
 [registration.omit]
 # Enable secret filtering for registration data
@@ -340,7 +340,7 @@ def _print_init_summary(*, roar_dir: Path, gitignore_status: str | None, in_git_
     click.echo(f"Initialized roar in {roar_dir.parent}")
     click.echo(f"  database:   {roar_dir / 'roar.db'}")
     click.echo(f"  config:     {roar_dir / 'config.toml'}")
-    click.echo("  scope:      anonymous (public; no account)")
+    click.echo("  scope:      unset (private when signed in, else anonymous)")
     if gitignore_status:
         click.echo(f"  gitignore:  {gitignore_status}")
     if not in_git_repo:
@@ -373,10 +373,9 @@ def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) 
     hint("  roar register output.csv     # publish to GLaaS for teammates")
     hint()
     hint("Privacy:")
-    hint("  `roar register` and `roar put` publish public anonymous lineage")
-    hint("  until you change scope.")
-    hint("  Run `roar login` to switch this repo to private,")
-    hint("  or `roar scope use <owner>/<project>` for project scope.")
+    hint("  Signed in -> `roar register`/`roar put` publish PRIVATE by default.")
+    hint("  Not signed in -> public + anonymous (run `roar login` to keep runs private).")
+    hint("  Set an explicit scope with `roar scope use private|public|<owner>/<project>`.")
     hint("  Anonymous public publishing prompts for confirmation;")
     hint("  bypass with `roar register -y` or `roar put -y`.")
     hint()

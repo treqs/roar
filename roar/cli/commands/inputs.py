@@ -23,6 +23,16 @@ from ..decorators import require_init
 @click.option(
     "--all", "show_all", is_flag=True, help="Show all upstream artifacts including intermediates."
 )
+@click.option(
+    "--unsourced",
+    is_flag=True,
+    help="Show only unsourced inputs (nothing tracked produced them — not reproducible).",
+)
+@click.option(
+    "--sourced",
+    is_flag=True,
+    help="Show only sourced inputs (produced by a tracked run or ingested via roar get).",
+)
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON.")
 @click.argument("ref", required=False)
 @click.pass_obj
@@ -34,6 +44,8 @@ def inputs(
     artifact_ref: str | None,
     direct: bool,
     show_all: bool,
+    unsourced: bool,
+    sourced: bool,
     output_json: bool,
     ref: str | None,
 ) -> None:
@@ -59,6 +71,8 @@ def inputs(
     """
     if direct and show_all:
         raise click.UsageError("--direct and --all are mutually exclusive.")
+    if unsourced and sourced:
+        raise click.UsageError("--unsourced and --sourced are mutually exclusive.")
 
     resolved_ref, selector = _build_ref_and_selector(
         ref=ref,
@@ -74,6 +88,8 @@ def inputs(
         selector=selector,
         direct=direct,
         show_all=show_all,
+        unsourced=unsourced,
+        sourced=sourced,
         output_json=output_json,
     )
     try:

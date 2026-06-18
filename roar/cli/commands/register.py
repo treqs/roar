@@ -18,6 +18,8 @@ from ..decorators import require_init
 from ..publish_intent import (
     confirm_anonymous_public_publish,
     resolve_publish_intent,
+    visibility_label,
+    warn_defaulted_anonymous,
     warn_public_default,
 )
 
@@ -95,6 +97,33 @@ def _maybe_show_signup_nudge() -> None:
             pass
 
 
+def _current_login_name() -> str | None:
+    """Username/email of the active GLaaS session, or None if not logged in."""
+    try:
+        from ...auth_store import load_auth_state
+
+        auth = load_auth_state()
+    except Exception:
+        return None
+    if auth is None or not auth.access_token:
+        return None
+    return auth.user.username or auth.user.email or "your account"
+
+
+def _maybe_show_attribution_nudge(login_name: str) -> None:
+    """Authenticated, but the lineage published anonymously — nudge to attribute.
+
+    The inverse of the signup nudge: the user already has an account, so being
+    published unattributed is probably not what they want. Say how to fix it."""
+    from .._format import hints_should_print, make_hint_printer
+
+    if not hints_should_print():
+        return
+    _caps, hint = make_hint_printer()
+    hint(f"Signed in as {login_name}, but this lineage was published anonymously (unattributed).")
+    hint("Attribute future runs with `roar scope use <owner>/<project>` (or `register --public`).")
+
+
 def _render_tag_summary(summary: RegisterTagSummary | None) -> None:
     """Render the P1-23 tag-push block above the main register output.
 
@@ -131,6 +160,16 @@ def _render_tag_summary(summary: RegisterTagSummary | None) -> None:
             "GLaaS links to these tags will not resolve for teammates.",
             err=True,
         )
+    elif summary.push_skipped_reason == "no_remote":
+        click.echo(
+            "Note: roar tags created locally but NOT pushed (no git remote).",
+            err=True,
+        )
+        click.echo(
+            "Add a remote (`git remote add origin <url>`) and re-register so "
+            "teammates can resolve the commit.",
+            err=True,
+        )
     click.echo("")
 
 
@@ -142,6 +181,87 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
         click.echo(f"  - {secret_type}")
     click.echo("")
     return click.confirm("Continue with registration? (secrets will be filtered)", default=False)
+
+
+def _register_notes(
+    response: RegisterLineageResponse, *, on_glaas: bool, visibility: str | None = None
+) -> dict[str, str]:
+    """Operational receipt details folded onto the reproducibility punchlist.
+
+    Each becomes the indented note under its check, so the one checklist also
+    shows what register *did* (tagged which commit, pushed where, what landed on
+    GLaaS) — the punchlist-with-details-below style."""
+    notes: dict[str, str] = {}
+    ts = response.tag_summary
+    if ts and ts.session_tag:
+        extra = len(ts.job_tags)
+        notes["committed"] = f"tagged {ts.session_tag}" + (
+            f" (+{extra} job commit{'s' if extra != 1 else ''})" if extra else ""
+        )
+    if ts and ts.remote:
+        notes["pushed"] = f"pushed to {ts.remote}"
+    if on_glaas:
+        recorded = (
+            f"{_format_jobs_line(response)} jobs · {response.artifacts_registered} artifacts · "
+            f"{response.links_created} links"
+        )
+        if response.labels_synced:
+            recorded += f" · {response.labels_synced} labels"
+        # Lead with visibility + account so the receipt confirms what was exposed.
+        notes["on_glaas"] = f"{visibility} · {recorded}" if visibility else recorded
+    return notes
+
+
+def _render_register_checklist(
+    ctx: RoarContext,
+    target: str,
+    response: RegisterLineageResponse,
+    *,
+    on_glaas: bool,
+    dry_run: bool = False,
+    visibility: str | None = None,
+) -> None:
+    """Render the shared reproducibility punchlist as register's receipt.
+
+    The single checklist consolidates the old scattered warnings AND the
+    operational summary (tag/push/counts, folded in as notes), evaluated the
+    same way `roar reproduce` shows it. On a dry run nothing is published, so the
+    publish check is shown as n/a (not a failure). Warn, never block; best-effort
+    (any failure here must not break registration)."""
+    try:
+        from ...application.reproducibility.report import (
+            build_report,
+            render_report,
+            unsourced_input_paths,
+        )
+
+        report = build_report(
+            committed=response.reproducible,
+            pushed=bool(response.tag_summary and response.tag_summary.remote),
+            # Anything reaching `register` went through `roar run`, which always
+            # captures the runtime — so treat it as recorded (best-effort).
+            runtime_ok=True,
+            unsourced_paths=unsourced_input_paths(ctx.roar_dir, ctx.cwd, target),
+            on_glaas=on_glaas,
+            # Computed from the session's commit span (matches `roar reproduce`);
+            # the old job-tags proxy mis-read single-commit whenever tagging was
+            # skipped (e.g. no remote), contradicting reproduce's verdict.
+            single_commit=response.single_commit,
+            notes=_register_notes(response, on_glaas=on_glaas, visibility=visibility),
+            na=(
+                {"on_glaas": f"dry run — would publish {visibility}"}
+                if dry_run and visibility
+                else {"on_glaas": "dry run — nothing published yet"}
+                if dry_run
+                else None
+            ),
+        )
+    except Exception:
+        return
+
+    click.echo("")
+    for line in render_report(report, title="Reproducibility").splitlines():
+        click.echo(line)
 
 
 @click.command("register")
@@ -245,6 +365,8 @@ def register(
     )
     if publish_intent.used_public_default:
         warn_public_default()
+    if publish_intent.defaulted_anonymous:
+        warn_defaulted_anonymous()
 
     if (
         publish_intent.anonymous
@@ -280,6 +402,7 @@ def register(
     web_url = _resolve_glaas_web_url(start_dir=str(ctx.cwd))
     session_preview = _preview_hash(response.session_hash) if response.session_hash else ""
     session_url = _display_session_url(response.session_url, web_url, response.session_hash)
+    visibility = visibility_label(publish_intent)
 
     # Format output
     if dry_run:
@@ -290,6 +413,10 @@ def register(
         click.echo(f"  Links: {response.links_created}")
         if response.secrets_detected:
             click.echo(f"  Secrets to redact: {len(response.secrets_detected)} types")
+        # Preview reproducibility BEFORE publishing (not yet on GLaaS).
+        _render_register_checklist(
+            ctx, target, response, on_glaas=False, dry_run=True, visibility=visibility
+        )
         click.echo("")
         click.echo("GLaaS:")
         click.echo(f"  Session:  {session_url}")
@@ -310,13 +437,8 @@ def register(
     else:
         for warning in response.warnings:
             click.echo(f"Warning: {warning}", err=True)
-        _render_tag_summary(response.tag_summary)
         click.echo(f"Registered lineage for: {target}")
         click.echo(f"  Session: {session_preview}")
-        click.echo(f"  Jobs: {_format_jobs_line(response)}")
-        click.echo(f"  Artifacts: {response.artifacts_registered}")
-        click.echo(f"  Links: {response.links_created}")
-        click.echo(f"  Labels: {response.labels_synced}")
         if response.secrets_redacted:
             click.echo(f"  Secrets redacted: {len(response.secrets_detected)} types")
 
@@ -327,16 +449,9 @@ def register(
             for error in response.error.split("; "):
                 click.echo(f"  - {error}", err=True)
 
-        if not response.reproducible:
-            from .._format import hints_should_print, make_hint_printer
-
-            if hints_should_print():
-                _caps, hint = make_hint_printer()
-                hint(
-                    "registered without a git commit — this lineage records what ran, "
-                    "but can't be reproduced from source."
-                )
-                hint("Run inside a git repo (code committed) to register reproducible lineage.")
+        # One punchlist: reproducibility checks + what register did (tag/push/
+        # counts folded in as notes), replacing the old separate stat + tag block.
+        _render_register_checklist(ctx, target, response, on_glaas=True, visibility=visibility)
 
         click.echo("")
         click.echo("GLaaS:")
@@ -353,7 +468,13 @@ def register(
 
         record_action_trigger("register", start_dir=ctx.cwd)
 
-        # Anonymous register succeeds with no account; give first-timers the
-        # one reason to sign up they otherwise never hear at this moment.
+        # Anonymous register. If the user has NO account, nudge them to sign up
+        # (names what an account unlocks). If they're already signed in, the
+        # useful nudge is the opposite — they published unattributed, so show
+        # how to attribute.
         if publish_intent.anonymous:
-            _maybe_show_signup_nudge()
+            login_name = _current_login_name()
+            if login_name:
+                _maybe_show_attribution_nudge(login_name)
+            else:
+                _maybe_show_signup_nudge()

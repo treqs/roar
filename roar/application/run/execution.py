@@ -73,6 +73,14 @@ def validate_git_clean(
         # from an extracted working_dir without a .git.
         return cwd
 
+    # `roar reproduce` re-runs the recorded steps, which legitimately recreate
+    # the run's outputs and so dirty the tree; enforcing the clean-tree rule on
+    # the reproduction's own intermediates would deadlock it (step 1's output
+    # blocks step 2). The reproduce executor sets ROAR_REPRODUCE for exactly
+    # this window, so skip the dirty-tree gate here.
+    if os.environ.get("ROAR_REPRODUCE") == "1":
+        return repo_root
+
     try:
         # Preserve leading whitespace in porcelain output: the two-column
         # status code starts with a space for worktree-only modifications
@@ -223,7 +231,7 @@ def execute_and_report(
     # Warn now if the run left the tree dirty so the *next* `roar run`
     # doesn't surprise the user with a refusal they could have fixed in
     # one .gitignore line right now.
-    from .output_followup import emit_dirty_outputs_warning
+    from .output_followup import emit_dirty_outputs_warning, emit_unsourced_inputs_nudge
 
     emit_dirty_outputs_warning(
         repo_root=repo_root,
@@ -231,6 +239,19 @@ def execute_and_report(
         caps=report._caps,
         quiet=(verbosity == "quiet"),
     )
+
+    # Nudge now if this run read inputs nothing tracked produced — the moment
+    # the unsourced dependency is created is the cheapest time to hear about it.
+    job_ref = f"@{result.step_number}" if result.step_number is not None else result.job_uid
+    if job_ref:
+        emit_unsourced_inputs_nudge(
+            roar_dir=roar_dir,
+            cwd=repo_root,
+            job_ref=job_ref,
+            stream=report._stream,
+            caps=report._caps,
+            quiet=(verbosity == "quiet"),
+        )
 
     if result.stale_upstream or result.stale_downstream:
         report.show_stale_warnings(
