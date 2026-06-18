@@ -14,11 +14,14 @@ from roar.application.reproducibility.report import (
 
 
 def _full_report(**overrides):
+    # A register/put-style report: every fact supplied, so all checks render
+    # (including the receipt-only `paths_tracked` and `on_glaas`).
     facts = {
         "committed": True,
         "pushed": True,
         "runtime_ok": True,
         "unsourced_paths": [],
+        "untracked_paths": [],
         "on_glaas": True,
     }
     facts.update(overrides)
@@ -79,6 +82,7 @@ def test_na_marker_renders_dash_and_is_excluded_from_count():
         pushed=True,
         runtime_ok=True,
         unsourced_paths=[],
+        untracked_paths=[],
         on_glaas=False,
         na={"on_glaas": "dry run — nothing published yet"},
     )
@@ -102,6 +106,18 @@ def test_check_keys_are_stable_and_complete():
         "runtime",
         "on_glaas",
     ]
+
+
+def test_reproduce_report_omits_receipt_only_checks():
+    """reproduce supplies neither on_glaas nor untracked_paths, so those
+    register/put receipt checks are omitted — its punchlist carries only the
+    checks that bear on whether the reproduction can run."""
+    report = build_report(committed=True, pushed=True, runtime_ok=True, unsourced_paths=[])
+    keys = [c.key for c in report.checks]
+    assert keys == ["committed", "single_commit", "pushed", "inputs_sourced", "runtime"]
+    out = render_report(report, title="Reproducibility (as recorded)")
+    assert "lineage saved on glaas.ai" not in out
+    assert "all artifact paths in tracked directories" not in out
 
 
 def test_dir_will_exist_on_checkout(tmp_path: Path) -> None:

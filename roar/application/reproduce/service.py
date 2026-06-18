@@ -51,7 +51,7 @@ def reproduce_artifact(
             output,
         )
 
-    pipeline, pipeline_source = _resolve_pipeline(
+    pipeline, _pipeline_source = _resolve_pipeline(
         hash_prefix=request.hash_prefix,
         server_url=server_url,
         roar_dir=request.roar_dir,
@@ -91,9 +91,7 @@ def reproduce_artifact(
     # Show the recorded lineage's reproducibility checklist before running, so the
     # user knows what they're getting (and why a result might diverge).
     output.print("")
-    output.print(
-        _render_reproducibility_checklist(request, pipeline, on_glaas=(pipeline_source == "remote"))
-    )
+    output.print(_render_reproducibility_checklist(request, pipeline))
 
     if request.list_requirements:
         for block in preview.requirement_blocks:
@@ -222,10 +220,15 @@ def _reproduction_session(repo_dir: Path, output: IPresenter):
                 pass
 
 
-def _render_reproducibility_checklist(
-    request: ReproduceRequest, pipeline: PipelineInfo, *, on_glaas: bool
-) -> str:
-    """Build the recorded lineage's reproducibility checklist (see report module)."""
+def _render_reproducibility_checklist(request: ReproduceRequest, pipeline: PipelineInfo) -> str:
+    """Build the recorded lineage's reproducibility checklist (see report module).
+
+    Operational punchlist for "can this reproduction run": code committed, single
+    commit, commit reachable on a remote (to clone), inputs sourced, runtime
+    captured. The register/put receipt checks (``lineage saved on glaas.ai`` and
+    ``all artifact paths in tracked directories``) are deliberately omitted —
+    you already hold the lineage and are re-creating its outputs, so neither
+    bears on whether the reproduction succeeds."""
     from ..reproducibility.report import (
         build_report,
         is_shareable_remote,
@@ -239,7 +242,6 @@ def _render_reproducibility_checklist(
         pushed=is_shareable_remote(pipeline.git_repo),
         runtime_ok=runtime_captured(pipeline),
         unsourced_paths=unsourced_input_paths(request.roar_dir, request.cwd, request.hash_prefix),
-        on_glaas=on_glaas,
         single_commit=pipeline.single_commit,
     )
     return render_report(report, title="Reproducibility (as recorded)")
