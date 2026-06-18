@@ -12,6 +12,8 @@ same style register uses for the operational steps it performed.
 
 from __future__ import annotations
 
+import os
+import subprocess
 from dataclasses import dataclass, field
 
 # Re-exported so existing imports (`from ...reproducibility.report import
@@ -72,6 +74,7 @@ def build_report(
     unsourced_paths: list[str],
     on_glaas: bool,
     single_commit: bool = True,
+    untracked_paths: list[str] | None = None,
     notes: dict[str, str] | None = None,
     na: dict[str, str] | None = None,
 ) -> ReproducibilityReport:
@@ -108,6 +111,12 @@ def build_report(
                 "all inputs sourced",
                 not unsourced_paths,
                 _unsourced_detail(unsourced_paths),
+            ),
+            ReproCheck(
+                "paths_tracked",
+                "all artifact paths in tracked directories",
+                not untracked_paths,
+                _untracked_detail(untracked_paths or []),
             ),
             ReproCheck(
                 "runtime",
@@ -167,6 +176,93 @@ def _unsourced_detail(paths: list[str]) -> str:
     if tmp:
         detail += f"; {tmp} in /tmp — those definitely won't survive"
     return detail
+
+
+def _untracked_detail(paths: list[str]) -> str:
+    if not paths:
+        return ""
+    return (
+        "can't guarantee these paths exist on reproduction — "
+        "see `roar status --untracked-dirs`; "
+        "add a .gitkeep (or other placeholder) to those directories"
+    )
+
+
+def _resolve_repo_root(cwd) -> str | None:
+    """Absolute git repo root for ``cwd``, or None if not in a git repo."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    root = out.stdout.strip()
+    return root or None
+
+
+def _dir_will_exist_on_checkout(abs_dir: str, repo_root: str | None) -> bool:
+    """True iff ``abs_dir`` is recreated by a clean checkout of ``repo_root``.
+
+    A directory is materialized by ``git checkout`` only when it holds at least
+    one tracked file. A path outside the repo (``~/.cache``, ``/tmp``, an
+    absolute path elsewhere) is never recreated, so it counts against the check.
+    The repo root itself always exists.
+    """
+    if repo_root is None:
+        return False
+    try:
+        rel = os.path.relpath(abs_dir, repo_root)
+    except ValueError:
+        return False  # different drive / unrelatable -> outside the repo
+    if rel == ".":
+        return True
+    if rel.startswith(".."):
+        return False  # outside the repo
+    res = subprocess.run(
+        ["git", "ls-files", "--", rel],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return bool(res.stdout.strip())
+
+
+def untracked_artifact_dirs(roar_dir, cwd) -> list[str]:
+    """Output-artifact paths whose directory won't exist on a clean checkout.
+
+    A directory survives ``git checkout`` only if it holds a tracked file; one
+    that doesn't — or a path outside the repo entirely — won't be there when the
+    lineage is reproduced elsewhere, so a step writing into it fails unless the
+    run recreates it. Advisory only (the run may ``mkdir`` it): a heads-up, not
+    a guarantee. Scoped to the active session's outputs, mirroring `roar status`.
+    Best-effort: returns [] on any error.
+    """
+    from ..query.requests import StatusQueryRequest
+    from ..query.status import build_status_summary
+
+    try:
+        summary = build_status_summary(StatusQueryRequest(roar_dir=roar_dir))
+    except Exception:
+        return []
+
+    repo_root = _resolve_repo_root(cwd)
+    flagged: list[str] = []
+    dir_ok: dict[str, bool] = {}
+    for artifact in summary.artifacts:
+        path = artifact.path
+        if not path:
+            continue
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent not in dir_ok:
+            dir_ok[parent] = _dir_will_exist_on_checkout(parent, repo_root)
+        if not dir_ok[parent]:
+            flagged.append(path)
+    return flagged
 
 
 def render_punchlist(items: list[ReproCheck], *, title: str) -> str:

@@ -116,6 +116,30 @@ def render_status(request: StatusQueryRequest) -> str:
     return "\n".join(lines)
 
 
+def render_untracked_dirs(request: StatusQueryRequest, cwd) -> str:
+    """Focused view: the session's output artifacts whose directory won't exist
+    on a clean checkout (untracked in-repo dirs, or paths outside the repo).
+
+    Backs the `all artifact paths in tracked directories` reproducibility check;
+    surfaced as `roar status --untracked-dirs` so the user can see exactly which
+    paths the check is flagging."""
+    from ..reproducibility.report import untracked_artifact_dirs
+
+    paths = untracked_artifact_dirs(request.roar_dir, cwd)
+    if not paths:
+        return "All artifact paths are in tracked directories."
+
+    lines = [f"Artifacts in untracked directories ({len(paths)}):"]
+    lines.extend(f"  {path}" for path in paths)
+    lines.append("")
+    lines.append(
+        "These directories won't exist on a clean checkout, so reproduction may "
+        "fail unless the run recreates them."
+    )
+    lines.append("Add a .gitkeep (or any tracked file) to each so a fresh checkout includes it.")
+    return "\n".join(lines)
+
+
 def build_status_summary(request: StatusQueryRequest) -> StatusSummary:
     """Build a typed summary of the active session status."""
     with create_query_database_context(request.roar_dir) as db_ctx:

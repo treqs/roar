@@ -376,7 +376,7 @@ def test_register_cli_renders_already_registered(tmp_path: Path) -> None:
 # -- reproducibility checklist (register receipt) --
 
 
-def _capture_checklist(response, tmp_path: Path, unsourced=None) -> str:
+def _capture_checklist(response, tmp_path: Path, unsourced=None, untracked=None) -> str:
     import io
     from contextlib import redirect_stdout
 
@@ -388,6 +388,10 @@ def _capture_checklist(response, tmp_path: Path, unsourced=None) -> str:
         patch(
             "roar.application.reproducibility.report.unsourced_input_paths",
             return_value=unsourced or [],
+        ),
+        patch(
+            "roar.application.reproducibility.report.untracked_artifact_dirs",
+            return_value=untracked or [],
         ),
         redirect_stdout(buf),
     ):
@@ -409,8 +413,8 @@ def _repro_response(*, reproducible=True, remote="origin"):
 
 def test_checklist_all_green_shows_full_punchlist(tmp_path: Path) -> None:
     out = _capture_checklist(_repro_response(), tmp_path, unsourced=[])
-    assert "Reproducibility — 6/6" in out
-    assert out.count("[✅]") == 6
+    assert "Reproducibility — 7/7" in out
+    assert out.count("[✅]") == 7
     # operational details fold in as notes
     assert "pushed to origin" in out
 
