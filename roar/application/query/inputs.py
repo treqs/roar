@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -96,14 +97,15 @@ def build_inputs_summary(request: InputsQueryRequest) -> InputsSummary:
                 message=f'"{target_label}" is a root artifact (no upstream inputs)',
             )
 
+        git_tracked = _git_tracked_paths(request.cwd)
         if request.direct:
-            artifacts = _get_direct_inputs(db_ctx, target_artifact_ids)
+            artifacts = _get_direct_inputs(db_ctx, target_artifact_ids, git_tracked)
         elif request.show_all:
             artifacts = _walk_upstream_all(
-                db_ctx, target_artifact_ids, exclude=set(target_artifact_ids)
+                db_ctx, target_artifact_ids, git_tracked, exclude=set(target_artifact_ids)
             )
         else:
-            artifacts = _walk_upstream_roots(db_ctx, target_artifact_ids)
+            artifacts = _walk_upstream_roots(db_ctx, target_artifact_ids, git_tracked)
 
         if request.unsourced:
             artifacts = [a for a in artifacts if a.unsourced]
@@ -235,16 +237,51 @@ def _is_root_artifact(db_ctx, artifact_id: str) -> bool:
     return len(inputs) == 0
 
 
-def _is_unsourced(db_ctx, artifact_id: str) -> bool:
-    """True iff no tracked job produced this artifact.
+def _git_tracked_paths(cwd: Path) -> frozenset[str]:
+    """Absolute paths of every file git tracks in ``cwd``'s repo (empty if none).
+
+    Used to recognise inputs that are *sourced by git*: a producer-less file that
+    git tracks is restored by ``roar reproduce`` (it checks out the commit), so
+    it is NOT unsourced even though nothing in the lineage produced it.
+    """
+    try:
+        root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        if not root:
+            return frozenset()
+        out = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=root, capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return frozenset()
+    return frozenset(os.path.join(root, p) for p in out.stdout.split("\0") if p)
+
+
+def _sourced_by_git(artifact: dict[str, Any] | None, git_tracked: frozenset[str]) -> bool:
+    """True iff a producer-less artifact is still recoverable because git tracks it."""
+    path = (artifact or {}).get("first_seen_path") or ""
+    return bool(path) and os.path.abspath(path) in git_tracked
+
+
+def _is_unsourced(db_ctx, artifact_id: str, git_tracked: frozenset[str]) -> bool:
+    """True iff this artifact won't exist on another machine.
 
     Distinct from ``_is_root_artifact``: a producer-with-no-inputs (e.g. a
     ``roar get`` source node, a ``roar run wget`` download, or a deterministic
-    generator) is a root but IS sourced — it re-runs on reproduce. Only an
-    artifact with no producer at all is unsourced (pre-existing / not ingested).
+    generator) is a root but IS sourced — it re-runs on reproduce. An artifact
+    with no producer is sourced only if git tracks it (``roar reproduce`` checks
+    out the commit and restores it); otherwise it's truly unsourced (a
+    pre-existing, un-ingested, uncommitted file).
     """
     produced_by = db_ctx.artifacts.get_jobs(artifact_id).get("produced_by", [])
-    return not produced_by
+    if produced_by:
+        return False
+    return not _sourced_by_git(db_ctx.artifacts.get(artifact_id), git_tracked)
 
 
 def _make_artifact_summary(
@@ -266,7 +303,9 @@ def _make_artifact_summary(
     )
 
 
-def _walk_upstream_roots(db_ctx, start_artifact_ids: list[str]) -> list[InputArtifactSummary]:
+def _walk_upstream_roots(
+    db_ctx, start_artifact_ids: list[str], git_tracked: frozenset[str]
+) -> list[InputArtifactSummary]:
     """Walk the DAG upstream and collect only root artifacts (no producer)."""
     roots: dict[str, InputArtifactSummary] = {}
     visited: set[str] = set()
@@ -284,10 +323,13 @@ def _walk_upstream_roots(db_ctx, start_artifact_ids: list[str]) -> list[InputArt
         produced_by = jobs.get("produced_by", [])
 
         if not produced_by:
-            # No producer at all — unsourced root (pre-existing / not ingested).
+            # No producer — unsourced unless git tracks it (reproduce restores
+            # a committed file from the recorded commit).
             artifact = db_ctx.artifacts.get(artifact_id)
             if artifact:
-                roots[artifact_id] = _make_artifact_summary(artifact, unsourced=True)
+                roots[artifact_id] = _make_artifact_summary(
+                    artifact, unsourced=not _sourced_by_git(artifact, git_tracked)
+                )
         else:
             producer = produced_by[0]
             inputs = db_ctx.jobs.get_inputs(producer["id"])
@@ -309,7 +351,9 @@ def _walk_upstream_roots(db_ctx, start_artifact_ids: list[str]) -> list[InputArt
     return list(roots.values())
 
 
-def _get_direct_inputs(db_ctx, start_artifact_ids: list[str]) -> list[InputArtifactSummary]:
+def _get_direct_inputs(
+    db_ctx, start_artifact_ids: list[str], git_tracked: frozenset[str]
+) -> list[InputArtifactSummary]:
     """Get only the immediate inputs (one level up)."""
     seen: dict[str, InputArtifactSummary] = {}
 
@@ -325,14 +369,18 @@ def _get_direct_inputs(db_ctx, start_artifact_ids: list[str]) -> list[InputArtif
                     artifact = db_ctx.artifacts.get(aid)
                     if artifact:
                         seen[aid] = _make_artifact_summary(
-                            artifact, unsourced=_is_unsourced(db_ctx, aid)
+                            artifact, unsourced=_is_unsourced(db_ctx, aid, git_tracked)
                         )
 
     return list(seen.values())
 
 
 def _walk_upstream_all(
-    db_ctx, start_artifact_ids: list[str], *, exclude: set[str] | None = None
+    db_ctx,
+    start_artifact_ids: list[str],
+    git_tracked: frozenset[str],
+    *,
+    exclude: set[str] | None = None,
 ) -> list[InputArtifactSummary]:
     """Walk the DAG upstream and collect all artifacts (intermediates + roots)."""
     exclude = exclude or set()
@@ -355,7 +403,8 @@ def _walk_upstream_all(
         if artifact_id not in exclude:
             artifact = db_ctx.artifacts.get(artifact_id)
             if artifact:
-                collected[artifact_id] = _make_artifact_summary(artifact, unsourced=not produced_by)
+                unsourced = not produced_by and not _sourced_by_git(artifact, git_tracked)
+                collected[artifact_id] = _make_artifact_summary(artifact, unsourced=unsourced)
 
         if produced_by:
             producer = produced_by[0]
