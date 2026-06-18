@@ -12,12 +12,15 @@ from __future__ import annotations
 import click
 
 from ...application.publish.requests import PutRequest
+from ...application.publish.results import PutResponse
 from ...application.publish.service import put_artifacts
 from ..context import RoarContext
 from ..decorators import require_init
 from ..publish_intent import (
     confirm_anonymous_public_publish,
     resolve_publish_intent,
+    visibility_label,
+    warn_defaulted_anonymous,
     warn_public_default,
 )
 
@@ -38,6 +41,47 @@ def _resolve_glaas_web_url(*, start_dir: str | None = None) -> str:
     from ...integrations.config.raw import get_raw_glaas_web_url
 
     return get_raw_glaas_web_url(start_dir=start_dir) or "https://glaas.ai"
+
+
+def _render_put_checklist(
+    ctx: RoarContext, response: PutResponse, *, visibility: str | None
+) -> None:
+    """Render the shared reproducibility punchlist as put's receipt.
+
+    Mirrors `roar register`'s checklist so a user publishing via `put` gets the
+    same honest receipt (visibility/account, single-commit, remote reachability,
+    sourced inputs). Best-effort: never break a successful put."""
+    try:
+        from ...application.reproducibility.report import (
+            build_report,
+            render_report,
+            unsourced_input_paths,
+        )
+
+        # The published artifact (or the put job) is the lineage root we audit.
+        target_ref: str | None = None
+        if response.uploaded_files and response.uploaded_files[0].hash:
+            target_ref = response.uploaded_files[0].hash
+        elif response.job_id is not None:
+            target_ref = f"@{response.job_id}"
+
+        unsourced = unsourced_input_paths(ctx.roar_dir, ctx.cwd, target_ref) if target_ref else []
+        recorded = f"{len(response.uploaded_files)} files · published to {response.destination}"
+        report = build_report(
+            committed=response.reproducible,
+            pushed=response.commit_on_remote,
+            runtime_ok=True,
+            unsourced_paths=unsourced,
+            on_glaas=True,
+            single_commit=response.single_commit,
+            notes={"on_glaas": f"{visibility} · {recorded}" if visibility else recorded},
+        )
+    except Exception:
+        return
+
+    click.echo("")
+    for line in render_report(report, title="Reproducibility").splitlines():
+        click.echo(line)
 
 
 @click.command("put")
@@ -164,6 +208,8 @@ def put(
     )
     if publish_intent.used_public_default:
         warn_public_default()
+    if publish_intent.defaulted_anonymous:
+        warn_defaulted_anonymous()
 
     if (
         publish_intent.anonymous
@@ -262,6 +308,9 @@ def put(
                     f"Warning: local composite metadata was not persisted for {root_path}{detail}",
                     err=True,
                 )
+
+    # Same reproducibility receipt as `roar register`.
+    _render_put_checklist(ctx, response, visibility=visibility_label(publish_intent))
 
     web_url = _resolve_glaas_web_url(start_dir=str(ctx.repo_root or ctx.cwd))
     session_hash = response.session_hash or ""

@@ -290,3 +290,37 @@ def test_export_registration_package_writes_package_without_glaas_client(
     assert response.artifact_count == 2
     assert response.link_count == 2
     collector.collect_session.assert_called_once_with(7, tmp_path / ".roar")
+
+
+def test_drop_local_remotes_strips_file_url_keeps_real_remote():
+    from roar.application.publish.registration_package import _drop_local_remotes
+
+    lineage = LineageData(
+        jobs=[
+            {"id": 1, "git_repo": "file:///home/ubuntu/proj"},
+            {"id": 2, "git_repo": "https://github.com/u/r.git"},
+            {"id": 3, "git_repo": ""},
+        ],
+        artifacts=[],
+        pipeline={},
+    )
+    gc = GitContext(repo="file:///home/ubuntu/proj", commit="deadbeef", branch="main")
+
+    out_lineage, out_gc = _drop_local_remotes(lineage, gc)
+
+    # file:// session repo -> "" (no path leaked, no useless remote published)
+    assert out_gc.repo == ""
+    assert out_gc.commit == "deadbeef"  # commit/branch preserved
+    assert out_gc.branch == "main"
+    # per-job: file:// stripped, real remote kept, empty stays empty
+    assert out_lineage.jobs[0]["git_repo"] == ""
+    assert out_lineage.jobs[1]["git_repo"] == "https://github.com/u/r.git"
+    assert out_lineage.jobs[2]["git_repo"] == ""
+
+
+def test_drop_local_remotes_keeps_shareable_session_repo():
+    from roar.application.publish.registration_package import _drop_local_remotes
+
+    gc = GitContext(repo="git@github.com:u/r.git", commit="c", branch="main")
+    _lineage_out, out_gc = _drop_local_remotes(LineageData(jobs=[], artifacts=[], pipeline={}), gc)
+    assert out_gc.repo == "git@github.com:u/r.git"

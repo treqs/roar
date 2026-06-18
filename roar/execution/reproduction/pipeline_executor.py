@@ -218,6 +218,11 @@ class PipelineExecutor:
         """
         env = os.environ.copy()
 
+        # Tell the inner `roar run` it's reproducing, so it doesn't enforce the
+        # clean-tree rule on outputs this very reproduction is recreating
+        # (otherwise step 1's output blocks step 2 — a self-deadlock).
+        env["ROAR_REPRODUCE"] = "1"
+
         if environment.venv_dir:
             # Add venv bin to PATH
             if sys.platform == "win32":

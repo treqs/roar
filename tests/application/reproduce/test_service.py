@@ -307,3 +307,199 @@ def test_reproduce_run_skip_after_environment_renders_warning_summary(tmp_path: 
     mock_executor.execute.assert_not_called()
     printed = "\n".join(call.args[0] for call in presenter.print.call_args_list)
     assert "Pipeline not executed (user chose to skip)" in printed
+
+
+# -- Part A: a partial run must fail (no more exit-0 after tracebacks) --
+
+
+def test_reproduce_run_raises_when_steps_incomplete(tmp_path: Path) -> None:
+    presenter = MagicMock()
+    with (
+        patch("roar.application.reproduce.service.bootstrap"),
+        patch(
+            "roar.application.reproduce.service.load_config",
+            return_value={"glaas": {"url": "http://localhost:3001"}},
+        ),
+        patch("roar.application.reproduce.service.GlaasClient") as mock_glaas_cls,
+        patch(
+            "roar.application.reproduce.service.lookup_pipeline_result",
+            return_value=PipelineLookupResult(pipeline=_pipeline(), error=None, source="remote"),
+        ),
+        patch(
+            "roar.application.reproduce.service.prepare_reproduction_environment",
+            return_value=EnvironmentInfo(
+                repo_dir=tmp_path / "r" / "repo",
+                venv_dir=tmp_path / "r" / "repo" / ".venv",
+                python_version="3.11.0",
+                packages=[],
+            ),
+        ),
+        patch("roar.application.reproduce.service.PipelineExecutor") as mock_executor_cls,
+    ):
+        mock_glaas = MagicMock()
+        mock_glaas.is_configured.return_value = True
+        mock_glaas_cls.return_value = mock_glaas
+        mock_executor = MagicMock()
+        mock_executor.execute.return_value = (1, 2)  # only 1 of 2 steps completed
+        mock_executor_cls.return_value = mock_executor
+
+        with pytest.raises(ValueError, match="reproduction failed: 1/2 steps completed"):
+            reproduce_artifact(
+                _request(tmp_path, run_pipeline=True, auto_confirm=True), presenter=presenter
+            )
+
+
+# -- Part B: pre-run unsourced-input audit (warn -> exists+hash -> fail) --
+
+
+def _unsourced_summary(path: str, digest: str = "a" * 64):
+    from roar.application.query.results import (
+        InputArtifactSummary,
+        InputsSummary,
+        ShowHashSummary,
+    )
+
+    return InputsSummary(
+        target_ref="t",
+        is_root=False,
+        artifacts=[
+            InputArtifactSummary(
+                "art1",
+                path,
+                10,
+                hashes=[ShowHashSummary(algorithm="blake3", digest=digest)],
+                unsourced=True,
+            )
+        ],
+    )
+
+
+def test_audit_is_silent_when_unsourced_input_present_and_matching(tmp_path: Path) -> None:
+    # Present-but-unsourced inputs no longer warn here — they're surfaced by the
+    # reproducibility checklist instead. The audit only fails fast on broken ones.
+    from roar.application.reproduce.service import _audit_unsourced_inputs
+
+    presenter = MagicMock()
+    with (
+        patch(
+            "roar.application.query.inputs.build_inputs_summary",
+            return_value=_unsourced_summary("/w/gen.py"),
+        ),
+        patch("os.path.exists", return_value=True),
+        patch("roar.db.hashing.backend.compute_hash", return_value="a" * 64),
+    ):
+        _audit_unsourced_inputs(_request(tmp_path), presenter)  # no raise
+
+    out = "\n".join(c.args[0] for c in presenter.print.call_args_list)
+    assert out == ""
+
+
+def test_audit_fails_fast_when_unsourced_input_missing(tmp_path: Path) -> None:
+    from roar.application.reproduce.service import _audit_unsourced_inputs
+
+    with (
+        patch(
+            "roar.application.query.inputs.build_inputs_summary",
+            return_value=_unsourced_summary("/w/gen.py"),
+        ),
+        patch("os.path.exists", return_value=False),
+        pytest.raises(ValueError, match="Cannot reproduce"),
+    ):
+        _audit_unsourced_inputs(_request(tmp_path), MagicMock())
+
+
+def test_audit_fails_fast_when_unsourced_input_changed(tmp_path: Path) -> None:
+    from roar.application.reproduce.service import _audit_unsourced_inputs
+
+    with (
+        patch(
+            "roar.application.query.inputs.build_inputs_summary",
+            return_value=_unsourced_summary("/w/gen.py", digest="a" * 64),
+        ),
+        patch("os.path.exists", return_value=True),
+        patch("roar.db.hashing.backend.compute_hash", return_value="b" * 64),
+        pytest.raises(ValueError, match="Cannot reproduce"),
+    ):
+        _audit_unsourced_inputs(_request(tmp_path), MagicMock())
+
+
+def test_audit_is_silent_when_target_not_locally_resolvable(tmp_path: Path) -> None:
+    from roar.application.reproduce.service import _audit_unsourced_inputs
+
+    presenter = MagicMock()
+    with patch(
+        "roar.application.query.inputs.build_inputs_summary",
+        side_effect=RuntimeError("remote-only"),
+    ):
+        _audit_unsourced_inputs(_request(tmp_path), presenter)  # no raise
+    presenter.print.assert_not_called()
+
+
+def test_audit_noop_when_no_unsourced_inputs(tmp_path: Path) -> None:
+    from roar.application.query.results import InputsSummary
+    from roar.application.reproduce.service import _audit_unsourced_inputs
+
+    presenter = MagicMock()
+    with patch(
+        "roar.application.query.inputs.build_inputs_summary",
+        return_value=InputsSummary(target_ref="t", is_root=False, artifacts=[]),
+    ):
+        _audit_unsourced_inputs(_request(tmp_path), presenter)
+    presenter.print.assert_not_called()
+
+
+# -- reproduction runs in its own session (no lineage pollution) --
+
+
+def _session_ctx(*, active, steps):
+    ctx = MagicMock()
+    ctx.__enter__.return_value = ctx
+    ctx.__exit__.return_value = False
+    ctx.sessions.get_active.return_value = active
+    ctx.sessions.get_steps.return_value = steps
+    return ctx
+
+
+def test_reproduction_session_reuses_empty_active(tmp_path: Path) -> None:
+    from roar.application.reproduce.service import _reproduction_session
+
+    (tmp_path / ".roar").mkdir()
+    (tmp_path / ".roar" / "roar.db").write_text("")
+    ctx = _session_ctx(active={"id": 1}, steps=[])  # empty session
+
+    with (
+        patch("roar.db.context.create_database_context", return_value=ctx),
+        _reproduction_session(tmp_path, MagicMock()),
+    ):
+        pass
+
+    ctx.sessions.create.assert_not_called()  # reuse, don't churn a new one
+    ctx.sessions.set_active.assert_not_called()
+
+
+def test_reproduction_session_isolates_nonempty_active(tmp_path: Path) -> None:
+    from roar.application.reproduce.service import _reproduction_session
+
+    (tmp_path / ".roar").mkdir()
+    (tmp_path / ".roar" / "roar.db").write_text("")
+    ctx = _session_ctx(active={"id": 7}, steps=[{"id": 1}])  # has a step
+    presenter = MagicMock()
+
+    with (
+        patch("roar.db.context.create_database_context", return_value=ctx),
+        _reproduction_session(tmp_path, presenter),
+    ):
+        pass
+
+    ctx.sessions.create.assert_called_once_with(make_active=True)  # new session
+    ctx.sessions.set_active.assert_called_once_with(7)  # restored afterward
+    out = "\n".join(c.args[0] for c in presenter.print.call_args_list)
+    assert "new session" in out
+
+
+def test_reproduction_session_noop_without_db(tmp_path: Path) -> None:
+    from roar.application.reproduce.service import _reproduction_session
+
+    # No .roar DB -> nothing to isolate, must not crash.
+    with _reproduction_session(tmp_path, MagicMock()):
+        pass

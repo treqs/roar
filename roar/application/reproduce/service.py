@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -50,7 +51,7 @@ def reproduce_artifact(
             output,
         )
 
-    pipeline = _resolve_pipeline(
+    pipeline, pipeline_source = _resolve_pipeline(
         hash_prefix=request.hash_prefix,
         server_url=server_url,
         roar_dir=request.roar_dir,
@@ -75,9 +76,6 @@ def reproduce_artifact(
         output.print(f"  {preview.run_hint}")
         return
 
-    if not pipeline.git_repo:
-        raise ValueError("Cannot reproduce: no git repository URL available")
-
     output.print(
         f"Found {_target_label(pipeline.target_kind).lower()}: {_pipeline_target_hash(pipeline)}"
     )
@@ -85,6 +83,17 @@ def reproduce_artifact(
     output.print(f"Git commit: {pipeline.git_commit or 'Not available'}")
     output.print(f"Build steps: {len(pipeline.build_steps)}")
     output.print(f"Run steps: {len(pipeline.run_steps)}")
+
+    # Fail fast (before the clone) if the lineage depends on inputs nothing
+    # tracked produced and that are missing or changed here.
+    _audit_unsourced_inputs(request, output)
+
+    # Show the recorded lineage's reproducibility checklist before running, so the
+    # user knows what they're getting (and why a result might diverge).
+    output.print("")
+    output.print(
+        _render_reproducibility_checklist(request, pipeline, on_glaas=(pipeline_source == "remote"))
+    )
 
     if request.list_requirements:
         for block in preview.requirement_blocks:
@@ -127,11 +136,12 @@ def reproduce_artifact(
         )
         return
 
-    steps_run, steps_total = PipelineExecutor(presenter=output).execute(
-        pipeline,
-        environment,
-        request.auto_confirm,
-    )
+    with _reproduction_session(environment.repo_dir, output):
+        steps_run, steps_total = PipelineExecutor(presenter=output).execute(
+            pipeline,
+            environment,
+            request.auto_confirm,
+        )
     _render_reproduction_result(
         ReproduceRunSummary(
             repo_dir=environment.repo_dir,
@@ -141,6 +151,146 @@ def reproduce_artifact(
         ),
         output,
     )
+    # A reproduction that didn't run every step is a failure — surface it as a
+    # non-zero exit instead of silently returning 0 after printing tracebacks.
+    if steps_run < steps_total:
+        raise ValueError(
+            f"reproduction failed: {steps_run}/{steps_total} steps completed "
+            "(see the step output above)"
+        )
+
+
+def _file_matches_recorded_hash(path: str, hashes: list) -> bool:
+    """True iff the file at ``path`` blake3-hashes to its recorded digest.
+
+    Conservative: if there's no recorded blake3 to compare against, or hashing
+    fails, treat it as a non-match (we can't confirm the input is intact).
+    """
+    from ...db.hashing.backend import compute_hash
+
+    for h in hashes:
+        if h.algorithm == "blake3":
+            try:
+                return compute_hash(path, "blake3") == h.digest
+            except Exception:
+                return False
+    return False
+
+
+@contextmanager
+def _reproduction_session(repo_dir: Path, output: IPresenter):
+    """Run the replay in its own session so it never mutates the original lineage.
+
+    Reproduction re-runs each step with roar (recording a fresh lineage you can
+    compare to the original). In place, those inner runs would otherwise append
+    to the repo's *active* session and pollute it. So: if the active session is
+    empty, reuse it (no churn); if it has steps, warn and start a new session for
+    the replay, restoring the original active session afterward. Best-effort —
+    any failure here just falls back to the existing session.
+    """
+    roar_dir = repo_dir / ".roar"
+    if not (roar_dir / "roar.db").exists():
+        yield
+        return
+
+    from ...db.context import create_database_context
+
+    restore_id: int | None = None
+    try:
+        with create_database_context(roar_dir) as ctx:
+            active = ctx.sessions.get_active()
+            if active is not None and ctx.sessions.get_steps(active["id"]):
+                restore_id = int(active["id"])
+                output.print(
+                    "Active session already has steps — reproducing into a new session so it "
+                    "doesn't add to your current lineage."
+                )
+                ctx.sessions.create(make_active=True)
+            # empty / no active session -> reuse it (the replay fills it).
+    except Exception:
+        yield
+        return
+
+    try:
+        yield
+    finally:
+        if restore_id is not None:
+            try:
+                with create_database_context(roar_dir) as ctx:
+                    ctx.sessions.set_active(restore_id)
+            except Exception:
+                pass
+
+
+def _render_reproducibility_checklist(
+    request: ReproduceRequest, pipeline: PipelineInfo, *, on_glaas: bool
+) -> str:
+    """Build the recorded lineage's reproducibility checklist (see report module)."""
+    from ..reproducibility.report import (
+        build_report,
+        is_shareable_remote,
+        render_report,
+        runtime_captured,
+        unsourced_input_paths,
+    )
+
+    report = build_report(
+        committed=bool(pipeline.git_commit),
+        pushed=is_shareable_remote(pipeline.git_repo),
+        runtime_ok=runtime_captured(pipeline),
+        unsourced_paths=unsourced_input_paths(request.roar_dir, request.cwd, request.hash_prefix),
+        on_glaas=on_glaas,
+        single_commit=pipeline.single_commit,
+    )
+    return render_report(report, title="Reproducibility (as recorded)")
+
+
+def _audit_unsourced_inputs(request: ReproduceRequest, output: IPresenter) -> None:
+    """Pre-flight the lineage for inputs nothing tracked produced.
+
+    Such inputs (a pre-existing data file, a script run outside a git repo)
+    won't exist after a fresh clone, so the reproduction would crash mid-run.
+    Per the agreed policy:
+      - present locally with the recorded hash  -> warn, then proceed
+      - missing or changed                      -> fail fast (before the clone)
+    Best-effort: if the target can't be resolved against the local DB (e.g. a
+    remote-only lineage), skip silently — Part A still catches a failed run.
+    """
+    import os
+
+    try:
+        from ..query.inputs import build_inputs_summary
+        from ..query.requests import InputsQueryRequest
+
+        summary = build_inputs_summary(
+            InputsQueryRequest(
+                roar_dir=request.roar_dir,
+                cwd=request.cwd,
+                ref=request.hash_prefix,
+                unsourced=True,
+            )
+        )
+    except Exception:
+        return
+
+    if not summary.artifacts:
+        return
+
+    broken: list[str] = []
+    for art in summary.artifacts:
+        path = art.path
+        if not (path and os.path.exists(path) and _file_matches_recorded_hash(path, art.hashes)):
+            broken.append(path or art.artifact_id)
+
+    if broken:
+        listed = "\n  ".join(broken)
+        raise ValueError(
+            "Cannot reproduce — these inputs weren't produced by any tracked run and "
+            f"are missing or changed here:\n  {listed}\n"
+            "Ingest them with `roar get` / `roar run wget`, or commit code to a git repo."
+        )
+    # Inputs that are present-but-unsourced are surfaced by the reproducibility
+    # checklist (rendered next), so this audit only fails fast on broken ones.
 
 
 def _load_server_url(cwd: Path) -> str | None:
@@ -186,8 +336,8 @@ def _resolve_pipeline(
     roar_dir: Path,
     glaas_client: GlaasClient | None,
     target_kind: Literal["artifact", "lineage"],
-) -> PipelineInfo:
-    """Resolve the target pipeline for reproduction."""
+) -> tuple[PipelineInfo, str]:
+    """Resolve the target pipeline for reproduction; returns (pipeline, source)."""
     lookup = lookup_pipeline_result(
         hash_prefix=hash_prefix,
         roar_dir=roar_dir,
@@ -202,7 +352,7 @@ def _resolve_pipeline(
         raise ValueError(
             f"No pipeline found for {_target_label(target_kind).lower()} {hash_prefix}"
         )
-    return pipeline
+    return pipeline, lookup.source
 
 
 def build_preview_summary(

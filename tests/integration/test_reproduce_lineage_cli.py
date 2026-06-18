@@ -58,9 +58,7 @@ def test_reproduce_lineage_run_reuses_matching_local_repo_and_recreates_outputs(
 
     assert reproduce_result.returncode == 0
     assert f"Found lineage: {lineage_hash}" in reproduce_result.stdout
-    assert "Current repository matches recorded remote, using existing environment" in (
-        reproduce_result.stdout
-    )
+    assert "reproducing in place" in reproduce_result.stdout
     assert "Reproduction Complete" in reproduce_result.stdout
     assert "Steps run: 1/1" in reproduce_result.stdout
     assert original_output.read_bytes() == original_bytes

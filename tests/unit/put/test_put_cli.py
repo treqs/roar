@@ -61,7 +61,7 @@ def test_put_uses_service_session_url_for_dag_link(tmp_path: Path) -> None:
     ):
         result = runner.invoke(
             put,
-            ["--no-tag", "-m", "publish", "model.pt", "memory://bucket/prefix"],
+            ["--no-tag", "-m", "publish", "model.pt", "memory://bucket/prefix", "--yes"],
             obj=ctx,
         )
 
@@ -96,7 +96,7 @@ def test_put_falls_back_to_web_url_plus_service_session_hash(tmp_path: Path) -> 
     ):
         result = runner.invoke(
             put,
-            ["--no-tag", "-m", "publish", "artifact.bin", "memory://bucket/prefix"],
+            ["--no-tag", "-m", "publish", "artifact.bin", "memory://bucket/prefix", "--yes"],
             obj=ctx,
         )
 
@@ -143,7 +143,7 @@ def test_put_prints_registered_composite_summary(tmp_path: Path) -> None:
     ):
         result = runner.invoke(
             put,
-            ["--no-tag", "-m", "publish", "artifact.bin", "memory://bucket/prefix"],
+            ["--no-tag", "-m", "publish", "artifact.bin", "memory://bucket/prefix", "--yes"],
             obj=ctx,
         )
 
@@ -194,7 +194,7 @@ def test_put_warns_when_local_composite_persistence_fails(tmp_path: Path) -> Non
     ):
         result = runner.invoke(
             put,
-            ["--no-tag", "-m", "publish", "artifact.bin", "memory://bucket/prefix"],
+            ["--no-tag", "-m", "publish", "artifact.bin", "memory://bucket/prefix", "--yes"],
             obj=ctx,
         )
 
