@@ -19,7 +19,6 @@ from ..context import RoarContext
 # Default config template with comments
 _CORE_CONFIG_TEMPLATE_PREFIX = """\
 # roar configuration file
-# See: https://docs.roar.dev/configuration
 
 [output]
 # Include list of repo files read in provenance output
