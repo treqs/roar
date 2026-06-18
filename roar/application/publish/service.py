@@ -784,27 +784,20 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
 
 
 def _format_anonymous_tag_push_warning(tag_push_error: str) -> str:
-    """Wrap a tag-push failure as a self-contained user-facing warning.
+    """One-line tag-push-failure warning for the anonymous register path.
 
-    Anonymous register continues past the push failure (GLaaS publish
-    succeeds), so the message has to (a) make clear the failure is git
-    remote auth, not GLaaS, (b) tell the user GLaaS registration still
-    happened, (c) explain why the missing push matters (the GLaaS
-    record references a tag that doesn't yet exist on the remote, so
-    anyone reading the record can't ``git checkout`` it), and
-    (d) point at the real fix (configure git remote auth + push the
-    tag). We deliberately do *not* suggest
-    ``git.push_tags_on_register=never`` here — that "fix" breaks
-    reproducibility for everyone viewing the GLaaS record, not just
-    silences a local warning.
+    Anonymous register continues past a push failure (GLaaS publish succeeds).
+    The "why a missing push matters" explanation now lives in the reproducibility
+    checklist's ``commit reachable on a remote`` item, so this stays terse: name
+    that the failure is git-remote auth (not GLaaS), that the record was still
+    registered, the fix, and the verbatim git error. (Deliberately not suggesting
+    ``git.push_tags_on_register=never`` — that "fix" breaks reproducibility for
+    everyone reading the record, it doesn't just silence the warning.)
     """
     return (
-        "roar tag push to git remote failed (git auth, not GLaaS) — "
-        "anonymous register continued without pushing the tag.\n"
-        "  The local tag exists, but viewers of the GLaaS record need it "
-        "on the remote to reproduce.\n"
-        "  Fix git remote auth, then push: `git push <remote> <tag>`.\n"
-        f"  Verbatim git error: {tag_push_error}"
+        "roar tag push to the git remote failed (git auth, not GLaaS) — registered "
+        "without it; the 'commit reachable on a remote' check flags this. "
+        f"Fix git remote auth and re-push (`git push <remote> <tag>`). git: {tag_push_error}"
     )
 
 
