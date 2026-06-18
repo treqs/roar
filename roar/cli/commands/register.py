@@ -233,6 +233,7 @@ def _render_register_checklist(
             build_report,
             render_report,
             unsourced_input_paths,
+            untracked_artifact_dirs,
         )
 
         report = build_report(
@@ -242,6 +243,7 @@ def _render_register_checklist(
             # captures the runtime — so treat it as recorded (best-effort).
             runtime_ok=True,
             unsourced_paths=unsourced_input_paths(ctx.roar_dir, ctx.cwd, target),
+            untracked_paths=untracked_artifact_dirs(ctx.roar_dir, ctx.cwd),
             on_glaas=on_glaas,
             # Computed from the session's commit span (matches `roar reproduce`);
             # the old job-tags proxy mis-read single-commit whenever tagging was
