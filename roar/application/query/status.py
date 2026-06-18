@@ -116,6 +116,33 @@ def render_status(request: StatusQueryRequest) -> str:
     return "\n".join(lines)
 
 
+def session_output_paths(roar_dir) -> list[str]:
+    """Filesystem paths of the active session's distinct output artifacts.
+
+    A lightweight counterpart to ``build_status_summary``: no publish-auth
+    resolution and no canonical dag-hash — just the paths. Callers like the
+    artifact-path reproducibility check need only the paths, and must not trigger
+    auth side effects (resolving SSH/creator identity would, e.g., inject a
+    signed request into an otherwise-anonymous publish).
+    """
+    with create_query_database_context(roar_dir) as db_ctx:
+        session = db_ctx.sessions.get_active()
+        if not session:
+            return []
+        distinct_outputs = getattr(db_ctx.jobs, "get_distinct_outputs_by_session", None)
+        if callable(distinct_outputs):
+            outputs = distinct_outputs(session["id"])
+        else:
+            seen: set[int | str] = set()
+            outputs = []
+            for job in db_ctx.jobs.get_by_session(session["id"], limit=10000):
+                for output in db_ctx.jobs.get_outputs(job["id"]):
+                    if output["artifact_id"] not in seen:
+                        seen.add(output["artifact_id"])
+                        outputs.append(output)
+        return [str(output["path"]) for output in outputs if output["path"]]
+
+
 def render_untracked_dirs(request: StatusQueryRequest, cwd) -> str:
     """Focused view: the session's output artifacts whose directory won't exist
     on a clean checkout (untracked in-repo dirs, or paths outside the repo).
@@ -126,6 +153,8 @@ def render_untracked_dirs(request: StatusQueryRequest, cwd) -> str:
     from ..reproducibility.report import untracked_artifact_dirs
 
     paths = untracked_artifact_dirs(request.roar_dir, cwd)
+    if paths is None:
+        return "Not in a git repository — artifact-path tracking doesn't apply."
     if not paths:
         return "All artifact paths are in tracked directories."
 

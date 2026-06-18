@@ -9,6 +9,7 @@ from roar.application.reproducibility.report import (
     build_report,
     is_shareable_remote,
     render_report,
+    untracked_artifact_dirs,
 )
 
 
@@ -124,6 +125,12 @@ def test_dir_will_exist_on_checkout(tmp_path: Path) -> None:
     assert _dir_will_exist_on_checkout(str(tmp_path / "elsewhere"), root) is False
     # Not in a git repo at all.
     assert _dir_will_exist_on_checkout(str(tmp_path), None) is False
+
+
+def test_untracked_artifact_dirs_none_outside_a_repo(tmp_path: Path) -> None:
+    """Not in a git repo -> the check doesn't apply (returns None), so callers
+    omit the box rather than flagging every artifact. tmp_path is not a repo."""
+    assert untracked_artifact_dirs(tmp_path / ".roar", tmp_path) is None
 
 
 def test_is_shareable_remote():

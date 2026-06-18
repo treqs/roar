@@ -232,7 +232,7 @@ def _dir_will_exist_on_checkout(abs_dir: str, repo_root: str | None) -> bool:
     return bool(res.stdout.strip())
 
 
-def untracked_artifact_dirs(roar_dir, cwd) -> list[str]:
+def untracked_artifact_dirs(roar_dir, cwd) -> list[str] | None:
     """Output-artifact paths whose directory won't exist on a clean checkout.
 
     A directory survives ``git checkout`` only if it holds a tracked file; one
@@ -240,21 +240,26 @@ def untracked_artifact_dirs(roar_dir, cwd) -> list[str]:
     lineage is reproduced elsewhere, so a step writing into it fails unless the
     run recreates it. Advisory only (the run may ``mkdir`` it): a heads-up, not
     a guarantee. Scoped to the active session's outputs, mirroring `roar status`.
-    Best-effort: returns [] on any error.
+
+    Returns ``None`` when the run isn't inside a git repo — there's nothing to
+    track into, so the check doesn't apply (the "code committed to git" check
+    already covers a repo-less run); callers omit the box rather than flagging
+    every artifact. Best-effort: returns ``[]`` on any error.
     """
-    from ..query.requests import StatusQueryRequest
-    from ..query.status import build_status_summary
+    repo_root = _resolve_repo_root(cwd)
+    if repo_root is None:
+        return None
+
+    from ..query.status import session_output_paths
 
     try:
-        summary = build_status_summary(StatusQueryRequest(roar_dir=roar_dir))
+        paths = session_output_paths(roar_dir)
     except Exception:
         return []
 
-    repo_root = _resolve_repo_root(cwd)
     flagged: list[str] = []
     dir_ok: dict[str, bool] = {}
-    for artifact in summary.artifacts:
-        path = artifact.path
+    for path in paths:
         if not path:
             continue
         parent = os.path.dirname(os.path.abspath(path))
