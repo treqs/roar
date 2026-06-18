@@ -72,7 +72,7 @@ def build_report(
     pushed: bool,
     runtime_ok: bool,
     unsourced_paths: list[str],
-    on_glaas: bool,
+    on_glaas: bool | None = None,
     single_commit: bool = True,
     untracked_paths: list[str] | None = None,
     notes: dict[str, str] | None = None,
@@ -83,55 +83,71 @@ def build_report(
     ``notes`` attaches supporting info (shown when the check passed) by check
     key — e.g. register passes ``{"committed": "tagged roar/ab12", "on_glaas":
     "2 jobs · 7 artifacts"}`` so the punchlist doubles as its operation receipt.
+
+    ``on_glaas`` and ``untracked_paths`` are register/put *receipt* concerns:
+    each check is included only when the caller supplies its fact. ``roar
+    reproduce`` supplies neither — once you hold the lineage and are re-creating
+    its outputs, "is it published?" and "are the output dirs tracked?" are
+    operationally irrelevant — so its punchlist carries only the checks that bear
+    on whether this reproduction can run.
     """
-    report = ReproducibilityReport(
-        checks=[
-            ReproCheck(
-                "committed",
-                "code committed to git",
-                committed,
-                "run outside a git repo — the code isn't versioned, so it can't be restored",
-            ),
-            ReproCheck(
-                "single_commit",
-                "single git commit across all steps",
-                single_commit,
-                "steps span more than one commit — reproduce checks out the last, "
-                "so results may differ from the original",
-            ),
-            ReproCheck(
-                "pushed",
-                "commit reachable on a remote",
-                pushed,
-                "no shareable git remote — others can't fetch the exact code "
-                "(add one: `git remote add origin <url>`)",
-            ),
-            ReproCheck(
-                "inputs_sourced",
-                "all inputs sourced",
-                not unsourced_paths,
-                _unsourced_detail(unsourced_paths),
-            ),
+    checks: list[ReproCheck] = [
+        ReproCheck(
+            "committed",
+            "code committed to git",
+            committed,
+            "run outside a git repo — the code isn't versioned, so it can't be restored",
+        ),
+        ReproCheck(
+            "single_commit",
+            "single git commit across all steps",
+            single_commit,
+            "steps span more than one commit — reproduce checks out the last, "
+            "so results may differ from the original",
+        ),
+        ReproCheck(
+            "pushed",
+            "commit reachable on a remote",
+            pushed,
+            "no shareable git remote — others can't fetch the exact code "
+            "(add one: `git remote add origin <url>`)",
+        ),
+        ReproCheck(
+            "inputs_sourced",
+            "all inputs sourced",
+            not unsourced_paths,
+            _unsourced_detail(unsourced_paths),
+        ),
+    ]
+    # Receipt-only checks: shown when the caller supplies the fact (register/put),
+    # omitted otherwise (reproduce).
+    if untracked_paths is not None:
+        checks.append(
             ReproCheck(
                 "paths_tracked",
                 "all artifact paths in tracked directories",
                 not untracked_paths,
-                _untracked_detail(untracked_paths or []),
-            ),
-            ReproCheck(
-                "runtime",
-                "runtime captured (interpreter + packages)",
-                runtime_ok,
-                "no interpreter/packages recorded for the run",
-            ),
+                _untracked_detail(untracked_paths),
+            )
+        )
+    checks.append(
+        ReproCheck(
+            "runtime",
+            "runtime captured (interpreter + packages)",
+            runtime_ok,
+            "no interpreter/packages recorded for the run",
+        )
+    )
+    if on_glaas is not None:
+        checks.append(
             ReproCheck(
                 "on_glaas",
                 "lineage saved on glaas.ai",
                 on_glaas,
                 "only on this machine — run `roar register` to publish it",
-            ),
-        ]
-    )
+            )
+        )
+    report = ReproducibilityReport(checks=checks)
     for check in report.checks:
         if notes and check.key in notes:
             check.note = notes[check.key]
