@@ -298,18 +298,18 @@ def test_register_lineage_target_anonymous_downgrades_tag_push_failure(tmp_path:
 
     # And the user gets a warning that:
     # - names this as a git push failure, not a GLaaS auth failure
-    # - mentions GLaaS registration still happened (via "continued")
-    # - explains why the missing push matters (reproducibility for
-    #   anyone reading the GLaaS record)
+    # - mentions GLaaS registration still happened (via "registered without it")
     # - points at the real fix (`git push` after configuring auth)
     # - includes the verbatim git error for context
+    # - defers the "why a missing push matters" explanation to the checklist's
+    #   'commit reachable on a remote' item (no longer re-explained here)
     # - does NOT suggest `git.push_tags_on_register=never`, which would
     #   break reproducibility for every future anonymous register
     assert len(response.warnings) == 1
     warning = response.warnings[0]
     assert "git remote" in warning
     assert "not GLaaS" in warning
-    assert "continued" in warning
+    assert "registered" in warning
     assert "git push" in warning
     assert "Permission denied (publickey)" in warning
     assert "git.push_tags_on_register" not in warning

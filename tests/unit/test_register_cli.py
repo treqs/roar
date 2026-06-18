@@ -315,12 +315,10 @@ def test_register_cli_renders_warnings_above_summary(tmp_path: Path) -> None:
         artifacts_registered=3,
         links_created=4,
         warnings=[
-            "roar tag push to git remote failed (git auth, not GLaaS) — "
-            "anonymous register continued without pushing the tag.\n"
-            "  The local tag exists, but viewers of the GLaaS record need it "
-            "on the remote to reproduce.\n"
-            "  Fix git remote auth, then push: `git push <remote> <tag>`.\n"
-            "  Verbatim git error: Permission denied (publickey)"
+            "roar tag push to the git remote failed (git auth, not GLaaS) — registered "
+            "without it; the 'commit reachable on a remote' check flags this. "
+            "Fix git remote auth and re-push (`git push <remote> <tag>`). "
+            "git: Permission denied (publickey)"
         ],
     )
 
@@ -338,9 +336,9 @@ def test_register_cli_renders_warnings_above_summary(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     # Warning prefix used (matches `roar put`'s convention).
-    assert "Warning: roar tag push to git remote failed" in result.output
+    assert "Warning: roar tag push to the git remote failed" in result.output
     # Warning appears before the "Registered lineage for:" success line.
-    warning_idx = result.output.index("Warning: roar tag push to git remote failed")
+    warning_idx = result.output.index("Warning: roar tag push to the git remote failed")
     summary_idx = result.output.index("Registered lineage for:")
     assert warning_idx < summary_idx
     # Actionable info is intact in the rendered warning.
