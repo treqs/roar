@@ -12,6 +12,8 @@ same style register uses for the operational steps it performed.
 
 from __future__ import annotations
 
+import os
+import subprocess
 from dataclasses import dataclass, field
 
 # Re-exported so existing imports (`from ...reproducibility.report import
@@ -70,8 +72,9 @@ def build_report(
     pushed: bool,
     runtime_ok: bool,
     unsourced_paths: list[str],
-    on_glaas: bool,
+    on_glaas: bool | None = None,
     single_commit: bool = True,
+    untracked_paths: list[str] | None = None,
     notes: dict[str, str] | None = None,
     na: dict[str, str] | None = None,
 ) -> ReproducibilityReport:
@@ -80,49 +83,71 @@ def build_report(
     ``notes`` attaches supporting info (shown when the check passed) by check
     key — e.g. register passes ``{"committed": "tagged roar/ab12", "on_glaas":
     "2 jobs · 7 artifacts"}`` so the punchlist doubles as its operation receipt.
+
+    ``on_glaas`` and ``untracked_paths`` are register/put *receipt* concerns:
+    each check is included only when the caller supplies its fact. ``roar
+    reproduce`` supplies neither — once you hold the lineage and are re-creating
+    its outputs, "is it published?" and "are the output dirs tracked?" are
+    operationally irrelevant — so its punchlist carries only the checks that bear
+    on whether this reproduction can run.
     """
-    report = ReproducibilityReport(
-        checks=[
+    checks: list[ReproCheck] = [
+        ReproCheck(
+            "committed",
+            "code committed to git",
+            committed,
+            "run outside a git repo — the code isn't versioned, so it can't be restored",
+        ),
+        ReproCheck(
+            "single_commit",
+            "single git commit across all steps",
+            single_commit,
+            "steps span more than one commit — reproduce checks out the last, "
+            "so results may differ from the original",
+        ),
+        ReproCheck(
+            "pushed",
+            "commit reachable on a remote",
+            pushed,
+            "no shareable git remote — others can't fetch the exact code "
+            "(add one: `git remote add origin <url>`)",
+        ),
+        ReproCheck(
+            "inputs_sourced",
+            "all inputs sourced",
+            not unsourced_paths,
+            _unsourced_detail(unsourced_paths),
+        ),
+    ]
+    # Receipt-only checks: shown when the caller supplies the fact (register/put),
+    # omitted otherwise (reproduce).
+    if untracked_paths is not None:
+        checks.append(
             ReproCheck(
-                "committed",
-                "code committed to git",
-                committed,
-                "run outside a git repo — the code isn't versioned, so it can't be restored",
-            ),
-            ReproCheck(
-                "single_commit",
-                "single git commit across all steps",
-                single_commit,
-                "steps span more than one commit — reproduce checks out the last, "
-                "so results may differ from the original",
-            ),
-            ReproCheck(
-                "pushed",
-                "commit reachable on a remote",
-                pushed,
-                "no shareable git remote — others can't fetch the exact code "
-                "(add one: `git remote add origin <url>`)",
-            ),
-            ReproCheck(
-                "inputs_sourced",
-                "all inputs sourced",
-                not unsourced_paths,
-                _unsourced_detail(unsourced_paths),
-            ),
-            ReproCheck(
-                "runtime",
-                "runtime captured (interpreter + packages)",
-                runtime_ok,
-                "no interpreter/packages recorded for the run",
-            ),
+                "paths_tracked",
+                "all artifact paths in tracked directories",
+                not untracked_paths,
+                _untracked_detail(untracked_paths),
+            )
+        )
+    checks.append(
+        ReproCheck(
+            "runtime",
+            "runtime captured (interpreter + packages)",
+            runtime_ok,
+            "no interpreter/packages recorded for the run",
+        )
+    )
+    if on_glaas is not None:
+        checks.append(
             ReproCheck(
                 "on_glaas",
                 "lineage saved on glaas.ai",
                 on_glaas,
                 "only on this machine — run `roar register` to publish it",
-            ),
-        ]
-    )
+            )
+        )
+    report = ReproducibilityReport(checks=checks)
     for check in report.checks:
         if notes and check.key in notes:
             check.note = notes[check.key]
@@ -167,6 +192,98 @@ def _unsourced_detail(paths: list[str]) -> str:
     if tmp:
         detail += f"; {tmp} in /tmp — those definitely won't survive"
     return detail
+
+
+def _untracked_detail(paths: list[str]) -> str:
+    if not paths:
+        return ""
+    return (
+        "can't guarantee these paths exist on reproduction — "
+        "see `roar status --untracked-dirs`; "
+        "add a .gitkeep (or other placeholder) to those directories"
+    )
+
+
+def _resolve_repo_root(cwd) -> str | None:
+    """Absolute git repo root for ``cwd``, or None if not in a git repo."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    root = out.stdout.strip()
+    return root or None
+
+
+def _dir_will_exist_on_checkout(abs_dir: str, repo_root: str | None) -> bool:
+    """True iff ``abs_dir`` is recreated by a clean checkout of ``repo_root``.
+
+    A directory is materialized by ``git checkout`` only when it holds at least
+    one tracked file. A path outside the repo (``~/.cache``, ``/tmp``, an
+    absolute path elsewhere) is never recreated, so it counts against the check.
+    The repo root itself always exists.
+    """
+    if repo_root is None:
+        return False
+    try:
+        rel = os.path.relpath(abs_dir, repo_root)
+    except ValueError:
+        return False  # different drive / unrelatable -> outside the repo
+    if rel == ".":
+        return True
+    if rel.startswith(".."):
+        return False  # outside the repo
+    res = subprocess.run(
+        ["git", "ls-files", "--", rel],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return bool(res.stdout.strip())
+
+
+def untracked_artifact_dirs(roar_dir, cwd) -> list[str] | None:
+    """Output-artifact paths whose directory won't exist on a clean checkout.
+
+    A directory survives ``git checkout`` only if it holds a tracked file; one
+    that doesn't — or a path outside the repo entirely — won't be there when the
+    lineage is reproduced elsewhere, so a step writing into it fails unless the
+    run recreates it. Advisory only (the run may ``mkdir`` it): a heads-up, not
+    a guarantee. Scoped to the active session's outputs, mirroring `roar status`.
+
+    Returns ``None`` when the run isn't inside a git repo — there's nothing to
+    track into, so the check doesn't apply (the "code committed to git" check
+    already covers a repo-less run); callers omit the box rather than flagging
+    every artifact. Best-effort: returns ``[]`` on any error.
+    """
+    repo_root = _resolve_repo_root(cwd)
+    if repo_root is None:
+        return None
+
+    from ..query.status import session_output_paths
+
+    try:
+        paths = session_output_paths(roar_dir)
+    except Exception:
+        return []
+
+    flagged: list[str] = []
+    dir_ok: dict[str, bool] = {}
+    for path in paths:
+        if not path:
+            continue
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent not in dir_ok:
+            dir_ok[parent] = _dir_will_exist_on_checkout(parent, repo_root)
+        if not dir_ok[parent]:
+            flagged.append(path)
+    return flagged
 
 
 def render_punchlist(items: list[ReproCheck], *, title: str) -> str:
