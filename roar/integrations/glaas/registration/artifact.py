@@ -246,6 +246,11 @@ class ArtifactRegistrationService(IArtifactRegistrar):
         # server body-parser limits (~100KB)
         total_success = 0
         total_errors = 0
+        # Distinct *artifacts* registered (one per batch entry), as opposed to the
+        # server's per-content-hash tally — an artifact with both a blake3 and a
+        # sha256 counts once. This is what we report, so the count matches
+        # `register --dry-run` (len(lineage.artifacts)) instead of doubling.
+        distinct_registered = 0
 
         batches = _batch_by_size(valid_artifacts)
         total_batches = len(batches)
@@ -273,16 +278,16 @@ class ArtifactRegistrationService(IArtifactRegistrar):
                 errors.append(f"Batch registration error: {batch_error}")
                 self._logger.warning("Batch artifact registration failed: %s", batch_error)
                 break  # Stop on first batch error
-            else:
-                self._logger.debug(
-                    "Batch artifact registration: %d success, %d errors (batch of %d)",
-                    success_count,
-                    error_count,
-                    len(batch),
-                )
+            distinct_registered += len(batch)
+            self._logger.debug(
+                "Batch artifact registration: %d success, %d errors (batch of %d)",
+                success_count,
+                error_count,
+                len(batch),
+            )
 
         return ArtifactRegistrationResult(
-            success_count=total_success,
+            success_count=distinct_registered,
             error_count=total_errors + len(errors),
             errors=errors,
         )
@@ -357,6 +362,9 @@ class ArtifactRegistrationService(IArtifactRegistrar):
 
         total_success = 0
         total_errors = 0
+        # Distinct artifacts (one per batch entry), not the server's per-hash
+        # tally — see register_batch. Reported so the count matches the dry-run.
+        distinct_registered = 0
 
         batches = _batch_by_size(valid_artifacts)
         total_batches = len(batches)
@@ -407,9 +415,10 @@ class ArtifactRegistrationService(IArtifactRegistrar):
                 errors.append(f"Staged batch registration error: {batch_error}")
                 self._logger.warning("Staged batch artifact registration failed: %s", batch_error)
                 break
+            distinct_registered += len(batch)
 
         return ArtifactRegistrationResult(
-            success_count=total_success,
+            success_count=distinct_registered,
             error_count=total_errors + len(errors),
             errors=errors,
         )

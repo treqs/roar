@@ -359,3 +359,41 @@ class TestArtifactBatchingBug:
             assert "HTTP 500" not in error, (
                 f"Batching failed - payload exceeded server limit: {error}"
             )
+
+
+class TestDistinctArtifactCount:
+    """register_batch reports DISTINCT artifacts, not the server's per-hash tally.
+
+    Regression for the count-wobble: `register --dry-run` counts distinct
+    artifacts (len(lineage.artifacts)); the real path must too, even though the
+    GLaaS server returns a success count per content-hash (an artifact with a
+    blake3 *and* a sha256 would otherwise count twice).
+    """
+
+    def test_success_count_is_distinct_artifacts_not_hashes(self):
+        from unittest.mock import MagicMock
+
+        client = MagicMock()
+        # Server reports success per content-hash (2 per artifact here).
+        client.register_artifacts_batch.side_effect = lambda batch: (
+            sum(len(a["hashes"]) for a in batch),
+            0,
+            None,
+        )
+        service = ArtifactRegistrationService(client=client)
+        artifacts = [
+            {
+                "hashes": [
+                    {"algorithm": "blake3", "digest": f"{i:064x}"},
+                    {"algorithm": "sha256", "digest": f"{i + 1000:064x}"},
+                ],
+                "size": 10,
+                "source_type": None,
+            }
+            for i in range(3)
+        ]
+
+        result = service.register_batch(artifacts, "a" * 64)
+
+        assert result.success_count == 3  # distinct artifacts, NOT 6 hashes
+        assert result.error_count == 0
