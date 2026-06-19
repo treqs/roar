@@ -51,6 +51,11 @@ def test_register_cli_prints_next_steps_for_artifacts(tmp_path: Path) -> None:
     )
 
     with (
+        # Pin login state so the default publish intent resolves to private and
+        # doesn't hit the anonymous-publish confirmation prompt — otherwise this
+        # success-output test depends on whether the runner is signed in (it fails
+        # in CI, which isn't). The interactive anonymous path is covered separately.
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
         patch("roar.cli.commands.register.register_lineage_target", return_value=response),
         patch(
             "roar.cli.commands.register._resolve_glaas_web_url",
@@ -137,6 +142,10 @@ def test_register_cli_prefers_returned_session_url(tmp_path: Path) -> None:
     )
 
     with (
+        # Pin login state (see test_register_cli_prints_next_steps_for_artifacts):
+        # the default intent must resolve private so this URL-precedence test
+        # doesn't depend on whether the runner is signed in.
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
         patch("roar.cli.commands.register.register_lineage_target", return_value=response),
         patch(
             "roar.cli.commands.register._resolve_glaas_web_url",
