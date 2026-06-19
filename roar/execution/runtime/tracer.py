@@ -277,27 +277,39 @@ class TracerService:
         return None
 
     def _build_tracer_not_found_hint(self, mode: str) -> str:
-        """Build the user-facing tracer-not-found hint for a mode."""
-        if mode == "ebpf":
-            return (
-                "roar-tracer-ebpf binary not found. Build it with:\n"
-                "  cd rust && cargo build --release -p roar-tracer-ebpf"
-            )
-        if mode == "preload":
-            return (
-                "roar-tracer-preload or preload library not found. Build it with:\n"
-                "  cd rust && cargo build --release -p roar-tracer-preload"
-            )
-        if mode == "ptrace":
-            return (
-                "roar-tracer binary not found. Build it with:\n"
-                "  cd rust && cargo build --release -p roar-tracer"
-            )
+        """Build the user-facing tracer-not-found hint for a mode.
+
+        Almost everyone who hits this installed roar from PyPI, where the wheel
+        is supposed to bundle the tracer binary — so the real fix is a
+        reinstall, not a Rust build. Lead with that. The ``cargo build`` path
+        only applies to people working from a source checkout or an sdist
+        install (no published wheel for their platform), so it's labelled as
+        such rather than presented as the headline instruction — the previous
+        message told every user to ``cd rust && cargo build`` against a
+        directory that doesn't exist in their project.
+        """
+        what = {
+            "ebpf": "roar-tracer-ebpf binary",
+            "preload": "roar-tracer-preload / preload library",
+            "ptrace": "roar-tracer binary",
+        }.get(mode, "tracer binary")
+        crates = {
+            "ebpf": ["roar-tracer-ebpf"],
+            "preload": ["roar-tracer-preload"],
+            "ptrace": ["roar-tracer"],
+        }.get(mode, ["roar-tracer-ebpf", "roar-tracer-preload", "roar-tracer"])
+        build_lines = "\n".join(f"      cargo build --release -p {crate}" for crate in crates)
         return (
-            "No tracer binary found. Build one with:\n"
-            "  cd rust && cargo build --release -p roar-tracer-ebpf\n"
-            "  cd rust && cargo build --release -p roar-tracer-preload\n"
-            "  cd rust && cargo build --release -p roar-tracer"
+            f"No {what} found — this roar install is missing its tracer backend.\n"
+            "  - Installed from PyPI (uv tool / pip)? The wheel ships the tracer, "
+            "so this is a broken install. Reinstall it:\n"
+            "      uv tool install --reinstall roar-cli   "
+            "(or: pip install --force-reinstall roar-cli)\n"
+            "    and please report it at https://github.com/treqs/roar/issues\n"
+            "  - Working from a roar source checkout or sdist? Build the tracer "
+            "from the rust/ tree:\n"
+            "      cd rust\n"
+            f"{build_lines}"
         )
 
     def _preflight_candidate(
