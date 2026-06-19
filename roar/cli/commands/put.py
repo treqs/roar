@@ -19,7 +19,6 @@ from ..decorators import require_init
 from ..publish_intent import (
     confirm_anonymous_public_publish,
     resolve_publish_intent,
-    visibility_label,
     warn_defaulted_anonymous,
     warn_public_default,
 )
@@ -43,14 +42,12 @@ def _resolve_glaas_web_url(*, start_dir: str | None = None) -> str:
     return get_raw_glaas_web_url(start_dir=start_dir) or "https://glaas.ai"
 
 
-def _render_put_checklist(
-    ctx: RoarContext, response: PutResponse, *, visibility: str | None
-) -> None:
+def _render_put_checklist(ctx: RoarContext, response: PutResponse) -> None:
     """Render the shared reproducibility punchlist as put's receipt.
 
     Mirrors `roar register`'s checklist so a user publishing via `put` gets the
-    same honest receipt (visibility/account, single-commit, remote reachability,
-    sourced inputs). Best-effort: never break a successful put."""
+    same honest receipt (single-commit, remote reachability, sourced inputs).
+    Best-effort: never break a successful put."""
     try:
         from ...application.reproducibility.report import (
             build_report,
@@ -76,7 +73,7 @@ def _render_put_checklist(
             untracked_paths=untracked_artifact_dirs(ctx.roar_dir, ctx.cwd),
             on_glaas=True,
             single_commit=response.single_commit,
-            notes={"on_glaas": f"{visibility} · {recorded}" if visibility else recorded},
+            notes={"on_glaas": recorded},
         )
     except Exception:
         return
@@ -312,7 +309,7 @@ def put(
                 )
 
     # Same reproducibility receipt as `roar register`.
-    _render_put_checklist(ctx, response, visibility=visibility_label(publish_intent))
+    _render_put_checklist(ctx, response)
 
     web_url = _resolve_glaas_web_url(start_dir=str(ctx.repo_root or ctx.cwd))
     session_hash = response.session_hash or ""
