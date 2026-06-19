@@ -51,13 +51,18 @@ def test_register_cli_prints_next_steps_for_artifacts(tmp_path: Path) -> None:
     )
 
     with (
+        # Pin login state so the default publish intent resolves to private and
+        # doesn't hit the anonymous-publish confirmation prompt — otherwise this
+        # success-output test depends on whether the runner is signed in (it fails
+        # in CI, which isn't). The interactive anonymous path is covered separately.
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
         patch("roar.cli.commands.register.register_lineage_target", return_value=response),
         patch(
             "roar.cli.commands.register._resolve_glaas_web_url",
             return_value="https://glaas.example",
         ),
     ):
-        result = runner.invoke(register, ["model.pt", "--yes"], obj=_mock_context(tmp_path))
+        result = runner.invoke(register, ["model.pt"], obj=_mock_context(tmp_path))
 
     assert result.exit_code == 0, result.output
     assert "Registered lineage for: model.pt" in result.output
@@ -137,13 +142,17 @@ def test_register_cli_prefers_returned_session_url(tmp_path: Path) -> None:
     )
 
     with (
+        # Pin login state (see test_register_cli_prints_next_steps_for_artifacts):
+        # the default intent must resolve private so this URL-precedence test
+        # doesn't depend on whether the runner is signed in.
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
         patch("roar.cli.commands.register.register_lineage_target", return_value=response),
         patch(
             "roar.cli.commands.register._resolve_glaas_web_url",
             return_value="https://fallback.glaas.example",
         ),
     ):
-        result = runner.invoke(register, ["model.pt", "--yes"], obj=_mock_context(tmp_path))
+        result = runner.invoke(register, ["model.pt"], obj=_mock_context(tmp_path))
 
     assert result.exit_code == 0, result.output
     assert "https://glaas.example/sessions/published-session" in result.output
@@ -315,12 +324,10 @@ def test_register_cli_renders_warnings_above_summary(tmp_path: Path) -> None:
         artifacts_registered=3,
         links_created=4,
         warnings=[
-            "roar tag push to git remote failed (git auth, not GLaaS) — "
-            "anonymous register continued without pushing the tag.\n"
-            "  The local tag exists, but viewers of the GLaaS record need it "
-            "on the remote to reproduce.\n"
-            "  Fix git remote auth, then push: `git push <remote> <tag>`.\n"
-            "  Verbatim git error: Permission denied (publickey)"
+            "roar tag push to the git remote failed (git auth, not GLaaS) — registered "
+            "without it; the 'commit reachable on a remote' check flags this. "
+            "Fix git remote auth and re-push (`git push <remote> <tag>`). "
+            "git: Permission denied (publickey)"
         ],
     )
 
@@ -338,9 +345,9 @@ def test_register_cli_renders_warnings_above_summary(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     # Warning prefix used (matches `roar put`'s convention).
-    assert "Warning: roar tag push to git remote failed" in result.output
+    assert "Warning: roar tag push to the git remote failed" in result.output
     # Warning appears before the "Registered lineage for:" success line.
-    warning_idx = result.output.index("Warning: roar tag push to git remote failed")
+    warning_idx = result.output.index("Warning: roar tag push to the git remote failed")
     summary_idx = result.output.index("Registered lineage for:")
     assert warning_idx < summary_idx
     # Actionable info is intact in the rendered warning.
@@ -376,7 +383,7 @@ def test_register_cli_renders_already_registered(tmp_path: Path) -> None:
 # -- reproducibility checklist (register receipt) --
 
 
-def _capture_checklist(response, tmp_path: Path, unsourced=None) -> str:
+def _capture_checklist(response, tmp_path: Path, unsourced=None, untracked=None) -> str:
     import io
     from contextlib import redirect_stdout
 
@@ -388,6 +395,10 @@ def _capture_checklist(response, tmp_path: Path, unsourced=None) -> str:
         patch(
             "roar.application.reproducibility.report.unsourced_input_paths",
             return_value=unsourced or [],
+        ),
+        patch(
+            "roar.application.reproducibility.report.untracked_artifact_dirs",
+            return_value=untracked or [],
         ),
         redirect_stdout(buf),
     ):
@@ -409,8 +420,8 @@ def _repro_response(*, reproducible=True, remote="origin"):
 
 def test_checklist_all_green_shows_full_punchlist(tmp_path: Path) -> None:
     out = _capture_checklist(_repro_response(), tmp_path, unsourced=[])
-    assert "Reproducibility — 6/6" in out
-    assert out.count("[✅]") == 6
+    assert "Reproducibility — 7/7" in out
+    assert out.count("[✅]") == 7
     # operational details fold in as notes
     assert "pushed to origin" in out
 

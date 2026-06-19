@@ -26,33 +26,6 @@ def _is_logged_in() -> bool:
     return auth is not None and bool(auth.access_token)
 
 
-def current_login_name() -> str | None:
-    """Username/email of the active GLaaS session, or None if not logged in."""
-    try:
-        from ..auth_store import load_auth_state
-
-        auth = load_auth_state()
-    except Exception:
-        return None
-    if auth is None or not auth.access_token:
-        return None
-    return auth.user.username or auth.user.email or "your account"
-
-
-def visibility_label(intent: PublishIntent) -> str:
-    """Short 'how was this published' string for register/put receipts.
-
-    Confirms the visibility AND the account it landed under — the thing you most
-    want to see right after a publish so you know you didn't expose something by
-    accident. Shared by `roar register` and `roar put` for a consistent receipt.
-    """
-    if intent.anonymous:
-        return "public · anonymous"
-    login = current_login_name() or "your account"
-    visibility = "public" if intent.public else "private"
-    return f"{visibility} · as {login}"
-
-
 def resolve_publish_intent(
     public: bool | None,
     anonymous: bool,

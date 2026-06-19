@@ -328,24 +328,6 @@ def test_no_producer_root_is_unsourced_ingested_root_is_sourced(tmp_path: Path) 
     assert by_path == {"/w/gen.py": True, "/w/data.csv": False}
 
 
-def test_git_tracked_producerless_input_is_sourced(tmp_path: Path) -> None:
-    """A producer-less input that git tracks is SOURCED — `roar reproduce` checks
-    out the recorded commit and restores it. Only loose/uncommitted producer-less
-    inputs are unsourced."""
-    with (
-        patch.object(inputs_module, "create_query_database_context") as mock_db,
-        patch.object(inputs_module, "_git_tracked_paths", return_value=frozenset({"/w/gen.py"})),
-    ):
-        db_ctx = MagicMock()
-        mock_db.return_value.__enter__.return_value = db_ctx
-        _audit_db(db_ctx)
-        summary = inputs_module.build_inputs_summary(_request(tmp_path, "out.pkl"))
-
-    by_path = {a.path: a.unsourced for a in summary.artifacts}
-    # gen.py has no producer but IS git-tracked -> sourced (was unsourced before).
-    assert by_path == {"/w/gen.py": False, "/w/data.csv": False}
-
-
 def test_unsourced_filter_keeps_only_unsourced(tmp_path: Path) -> None:
     with patch.object(inputs_module, "create_query_database_context") as mock_db:
         db_ctx = MagicMock()

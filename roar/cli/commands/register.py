@@ -18,7 +18,6 @@ from ..decorators import require_init
 from ..publish_intent import (
     confirm_anonymous_public_publish,
     resolve_publish_intent,
-    visibility_label,
     warn_defaulted_anonymous,
     warn_public_default,
 )
@@ -160,16 +159,6 @@ def _render_tag_summary(summary: RegisterTagSummary | None) -> None:
             "GLaaS links to these tags will not resolve for teammates.",
             err=True,
         )
-    elif summary.push_skipped_reason == "no_remote":
-        click.echo(
-            "Note: roar tags created locally but NOT pushed (no git remote).",
-            err=True,
-        )
-        click.echo(
-            "Add a remote (`git remote add origin <url>`) and re-register so "
-            "teammates can resolve the commit.",
-            err=True,
-        )
     click.echo("")
 
 
@@ -183,9 +172,7 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     return click.confirm("Continue with registration? (secrets will be filtered)", default=False)
 
 
-def _register_notes(
-    response: RegisterLineageResponse, *, on_glaas: bool, visibility: str | None = None
-) -> dict[str, str]:
+def _register_notes(response: RegisterLineageResponse, *, on_glaas: bool) -> dict[str, str]:
     """Operational receipt details folded onto the reproducibility punchlist.
 
     Each becomes the indented note under its check, so the one checklist also
@@ -207,8 +194,7 @@ def _register_notes(
         )
         if response.labels_synced:
             recorded += f" · {response.labels_synced} labels"
-        # Lead with visibility + account so the receipt confirms what was exposed.
-        notes["on_glaas"] = f"{visibility} · {recorded}" if visibility else recorded
+        notes["on_glaas"] = recorded
     return notes
 
 
@@ -219,7 +205,6 @@ def _render_register_checklist(
     *,
     on_glaas: bool,
     dry_run: bool = False,
-    visibility: str | None = None,
 ) -> None:
     """Render the shared reproducibility punchlist as register's receipt.
 
@@ -233,6 +218,7 @@ def _render_register_checklist(
             build_report,
             render_report,
             unsourced_input_paths,
+            untracked_artifact_dirs,
         )
 
         report = build_report(
@@ -242,19 +228,12 @@ def _render_register_checklist(
             # captures the runtime — so treat it as recorded (best-effort).
             runtime_ok=True,
             unsourced_paths=unsourced_input_paths(ctx.roar_dir, ctx.cwd, target),
+            untracked_paths=untracked_artifact_dirs(ctx.roar_dir, ctx.cwd),
             on_glaas=on_glaas,
-            # Computed from the session's commit span (matches `roar reproduce`);
-            # the old job-tags proxy mis-read single-commit whenever tagging was
-            # skipped (e.g. no remote), contradicting reproduce's verdict.
-            single_commit=response.single_commit,
-            notes=_register_notes(response, on_glaas=on_glaas, visibility=visibility),
-            na=(
-                {"on_glaas": f"dry run — would publish {visibility}"}
-                if dry_run and visibility
-                else {"on_glaas": "dry run — nothing published yet"}
-                if dry_run
-                else None
-            ),
+            # Extra job-commit tags mean the session spanned multiple commits.
+            single_commit=not (response.tag_summary and response.tag_summary.job_tags),
+            notes=_register_notes(response, on_glaas=on_glaas),
+            na={"on_glaas": "dry run — nothing published yet"} if dry_run else None,
         )
     except Exception:
         return
@@ -402,7 +381,6 @@ def register(
     web_url = _resolve_glaas_web_url(start_dir=str(ctx.cwd))
     session_preview = _preview_hash(response.session_hash) if response.session_hash else ""
     session_url = _display_session_url(response.session_url, web_url, response.session_hash)
-    visibility = visibility_label(publish_intent)
 
     # Format output
     if dry_run:
@@ -414,9 +392,7 @@ def register(
         if response.secrets_detected:
             click.echo(f"  Secrets to redact: {len(response.secrets_detected)} types")
         # Preview reproducibility BEFORE publishing (not yet on GLaaS).
-        _render_register_checklist(
-            ctx, target, response, on_glaas=False, dry_run=True, visibility=visibility
-        )
+        _render_register_checklist(ctx, target, response, on_glaas=False, dry_run=True)
         click.echo("")
         click.echo("GLaaS:")
         click.echo(f"  Session:  {session_url}")
@@ -451,7 +427,7 @@ def register(
 
         # One punchlist: reproducibility checks + what register did (tag/push/
         # counts folded in as notes), replacing the old separate stat + tag block.
-        _render_register_checklist(ctx, target, response, on_glaas=True, visibility=visibility)
+        _render_register_checklist(ctx, target, response, on_glaas=True)
 
         click.echo("")
         click.echo("GLaaS:")

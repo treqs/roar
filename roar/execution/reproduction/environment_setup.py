@@ -131,12 +131,11 @@ class EnvironmentSetupService:
         pip_any_version: bool = False,
         package_sync: bool = False,
     ) -> "EnvironmentInfo":
-        """Build the environment in an already-materialized ``repo_dir``.
+        """Build the environment in an already-materialized ``repo_dir`` (no clone).
 
-        Used when the code is sourced without a fresh clone — a git worktree of
-        a matching local repo, or a scratch directory for a repo-less rerun.
-        Everything after the clone (venv, roar init, package install) is shared
-        with :meth:`setup`.
+        Used when the code is sourced without a fresh clone — a scratch directory
+        for a repo-less rerun. Everything after the clone (validate, venv, roar
+        init, package install) is shared with :meth:`setup`.
         """
         from ...core.interfaces.reproduction import EnvironmentInfo
 
