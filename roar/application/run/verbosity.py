@@ -25,24 +25,18 @@ _VALID_VERBOSITY: tuple[Verbosity, ...] = ("quiet", "normal", "verbose", "debug"
 _QUIET_DEPRECATION_WARNED = False
 
 
-def _read_raw_output_section(repo_root: str | Path | None) -> dict[str, object]:
-    """Read just the [output] section of .roar/config.toml as raw TOML.
+def _read_raw_output_section(config_start_dir: str | Path | None) -> dict[str, object]:
+    """Read just the explicit [output] section from raw config layers.
 
     We need the raw form (not the validated `OutputConfig` defaults) to
     distinguish "user explicitly set X" from "field defaulted to X".
     """
-    if repo_root is None:
+    if config_start_dir is None:
         return {}
     try:
-        try:
-            import tomllib as _tomllib
-        except ImportError:
-            import tomli as _tomllib  # type: ignore[no-redef]
+        from ...integrations.config.raw import load_raw_config
 
-        config_toml = Path(repo_root) / ".roar" / "config.toml"
-        if not config_toml.exists():
-            return {}
-        data = _tomllib.loads(config_toml.read_text())
+        data = load_raw_config(start_dir=config_start_dir)
     except Exception:
         return {}
     output = data.get("output")
@@ -66,7 +60,8 @@ def resolve_verbosity(
     *,
     cli_quiet: bool,
     cli_verbose: int,
-    repo_root: str | Path | None,
+    repo_root: str | Path | None = None,
+    config_start_dir: str | Path | None = None,
     stream: IO[str] | None = None,
 ) -> Verbosity:
     """Compute the effective verbosity for one `roar run` invocation.
@@ -74,7 +69,8 @@ def resolve_verbosity(
     Args:
         cli_quiet: True if user passed `-q` / `--quiet`.
         cli_verbose: Count of `-v` flags (0, 1, 2+). 1 → verbose, 2+ → debug.
-        repo_root: Path to the repo root, used to read `.roar/config.toml`.
+        repo_root: Legacy fallback path used to read raw config.
+        config_start_dir: Directory used to resolve the active raw config.
         stream: Override for deprecation-message destination (defaults to stderr).
     """
     if cli_quiet and cli_verbose:
@@ -86,7 +82,9 @@ def resolve_verbosity(
     if cli_verbose == 1:
         return "verbose"
 
-    raw = _read_raw_output_section(repo_root)
+    raw = _read_raw_output_section(
+        config_start_dir if config_start_dir is not None else repo_root
+    )
     if "verbosity" in raw:
         v = raw["verbosity"]
         if v not in _VALID_VERBOSITY:

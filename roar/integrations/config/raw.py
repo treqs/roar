@@ -51,6 +51,19 @@ def _infer_search_stop(start: Path) -> Path:
     return start.resolve()
 
 
+def _config_search_start(
+    start_dir: str | os.PathLike[str] | None,
+    local_config_path: Path | None,
+) -> Path:
+    if start_dir is not None:
+        return Path(start_dir)
+    if local_config_path and local_config_path.name == "config.toml":
+        return local_config_path.parent.parent
+    if local_config_path:
+        return local_config_path.parent
+    return Path.cwd()
+
+
 def find_raw_config_file(
     start_dir: str | os.PathLike[str] | None = None,
     stop_dir: str | os.PathLike[str] | None = None,
@@ -180,23 +193,41 @@ def _load_raw_config(
     start_dir: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     path = find_raw_config_file(start_dir=start_dir)
+    config: dict[str, Any] = {}
+
+    roarconfig = _infer_search_stop(_config_search_start(start_dir, path)) / ".roarconfig"
+    if roarconfig.exists():
+        roarconfig_data = _load_raw_toml_file(roarconfig)
+        if isinstance(roarconfig_data, dict):
+            config = roarconfig_data
+
     if path is None:
-        return {}
+        return config
+
+    local_config = _load_raw_toml_file(path)
+    if path.name == "pyproject.toml":
+        tool_config = local_config.get("tool", {}) if isinstance(local_config, dict) else {}
+        if isinstance(tool_config, dict):
+            roar_config = tool_config.get("roar", {})
+            local_config = roar_config if isinstance(roar_config, dict) else {}
+        else:
+            local_config = {}
+
+    if isinstance(local_config, dict):
+        _deep_update(config, local_config)
+    return config
+
+
+def _load_raw_toml_file(path: Path) -> dict[str, Any]:
+    """Load a TOML file as a plain dict, returning empty on parse/read failure."""
 
     try:
         with open(path, "rb") as handle:
-            data = tomllib.load(handle)
+            loaded = tomllib.load(handle)
     except (tomllib.TOMLDecodeError, OSError):
         return {}
 
-    if path.name == "pyproject.toml":
-        tool_config = data.get("tool", {})
-        if isinstance(tool_config, dict):
-            roar_config = tool_config.get("roar", {})
-            return roar_config if isinstance(roar_config, dict) else {}
-        return {}
-
-    return data if isinstance(data, dict) else {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _deep_update(base: dict[str, Any], override: dict[str, Any]) -> None:

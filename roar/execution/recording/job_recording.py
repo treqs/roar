@@ -411,9 +411,10 @@ class ExecutionJobRecorder:
 
         # Include persistent env vars from [env] config section for reproduction.
         try:
+            from ...core.models.run import resolve_run_config_start_dir
             from ...integrations.config import load_config
 
-            config = load_config(start_dir=ctx.repo_root)
+            config = load_config(start_dir=str(resolve_run_config_start_dir(ctx)))
             env_vars = config.get("env", {})
             if isinstance(env_vars, dict) and env_vars:
                 metadata["env_vars"] = env_vars

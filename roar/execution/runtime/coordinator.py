@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV
 from roar.execution.recording import ExecutionJobRecorder
 
+from ...core.models.run import resolve_run_config_start_dir
 from .backup import PreviousOutputBackupService
 from .resources import RuntimeObservationBundle, RuntimeResourceController
 from .tracer import TracerService
@@ -103,6 +104,7 @@ class RunCoordinator:
         start_time = time.time()
         run_job_uid = secrets.token_hex(4)
         is_build = ctx.job_type == "build"
+        config_start_dir = resolve_run_config_start_dir(ctx)
 
         # Create signal handler
         signal_handler = ProcessSignalHandler(
@@ -149,6 +151,7 @@ class RunCoordinator:
                 ctx.command,
                 tracer_mode_override=ctx.tracer_mode,
                 fallback_enabled_override=ctx.tracer_fallback,
+                config_start_dir=config_start_dir,
             )
         except CommandNotFoundError as e:
             # The command doesn't exist — nothing ran. Clean up and let the
@@ -188,6 +191,7 @@ class RunCoordinator:
                 tracer_mode_override=ctx.tracer_mode,
                 fallback_enabled_override=ctx.tracer_fallback,
                 candidates_override=resolved_candidates,
+                config_start_dir=config_start_dir,
             )
             run_presenter.trace_ended(tracer_result.duration, tracer_result.exit_code)
             self.logger.debug(
@@ -232,7 +236,7 @@ class RunCoordinator:
         t_postrun_start = time.perf_counter()
 
         bootstrap(ctx.roar_dir)
-        config = load_config(start_dir=ctx.repo_root)
+        config = load_config(start_dir=str(config_start_dir))
 
         # Check if tracer log exists
         if not os.path.exists(tracer_result.tracer_log_path):
@@ -257,8 +261,7 @@ class RunCoordinator:
         inject_log = (
             tracer_result.inject_log_path if os.path.exists(tracer_result.inject_log_path) else None
         )
-        roar_dir = os.path.join(ctx.repo_root, ".roar")
-        provenance_service = ProvenanceService(cache_dir=roar_dir)
+        provenance_service = ProvenanceService(cache_dir=str(ctx.roar_dir))
         t_prov_start = time.perf_counter()
         prov = provenance_service.collect(
             ctx.repo_root,

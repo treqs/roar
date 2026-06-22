@@ -52,24 +52,30 @@ class TracerService:
             self._logger = get_logger()
         return self._logger
 
-    def _get_tracer_mode(self) -> str:
+    def _get_tracer_mode(self, start_dir: str | Path | None = None) -> str:
         """Get the configured tracer mode (auto, ebpf, preload, ptrace)."""
         try:
             from ...integrations.config import config_get
 
-            mode = config_get("tracer.default")
+            mode = config_get(
+                "tracer.default",
+                start_dir=str(start_dir) if start_dir is not None else None,
+            )
             if isinstance(mode, str) and is_valid_tracer_mode(mode):
                 return mode
         except Exception:
             pass
         return "auto"
 
-    def _get_fallback_enabled(self) -> bool:
+    def _get_fallback_enabled(self, start_dir: str | Path | None = None) -> bool:
         """Get whether tracer fallback is enabled."""
         try:
             from ...integrations.config import config_get
 
-            value = config_get("tracer.fallback_enabled")
+            value = config_get(
+                "tracer.fallback_enabled",
+                start_dir=str(start_dir) if start_dir is not None else None,
+            )
             if isinstance(value, bool):
                 return value
         except Exception:
@@ -100,7 +106,12 @@ class TracerService:
 
         return entries
 
-    def _lazy_install_runtime_entries(self, command: list[str], roar_dir: Path) -> list[str]:
+    def _lazy_install_runtime_entries(
+        self,
+        command: list[str],
+        roar_dir: Path,
+        config_start_dir: str | Path | None = None,
+    ) -> list[str]:
         """Probe the target Python and lazy-install a matching runtime tree on mismatch.
 
         Returns a list of site-packages paths to prepend to
@@ -150,12 +161,15 @@ class TracerService:
         if target_abi == bundled_abi:
             return []
         try:
+            resolved_start_dir = (
+                Path(config_start_dir) if config_start_dir is not None else roar_dir.parent
+            )
             tree = ensure_runtime(
                 target_python=target_python,
                 target_abi=target_abi,
                 bundled_abi=bundled_abi,
                 roar_version=roar_version,
-                start_dir=roar_dir,
+                start_dir=resolved_start_dir,
             )
         except Exception as exc:
             self.logger.debug("lazy-install failed: %s", exc)
@@ -325,13 +339,14 @@ class TracerService:
         command: list[str],
         tracer_mode_override: str | None = None,
         fallback_enabled_override: bool | None = None,
+        config_start_dir: str | Path | None = None,
     ) -> list[tuple[str, str]]:
         """Resolve concrete tracer candidates that passed strict preflight."""
-        mode = tracer_mode_override or self._get_tracer_mode()
+        mode = tracer_mode_override or self._get_tracer_mode(config_start_dir)
         fallback_enabled = (
             fallback_enabled_override
             if fallback_enabled_override is not None
-            else self._get_fallback_enabled()
+            else self._get_fallback_enabled(config_start_dir)
         )
         self.logger.debug(
             "Resolving execution candidates: mode=%s fallback_enabled=%s command=%s",
@@ -422,7 +437,7 @@ class TracerService:
         lines.extend(f"  - {suggestion}" for suggestion in suggestions)
         return "\n".join(lines)
 
-    def find_tracer(self) -> str | None:
+    def find_tracer(self, config_start_dir: str | Path | None = None) -> str | None:
         """
         Find the tracer binary based on configured mode.
 
@@ -435,8 +450,8 @@ class TracerService:
         Returns:
             Path to tracer binary, or None if not found
         """
-        mode = self._get_tracer_mode()
-        fallback_enabled = self._get_fallback_enabled()
+        mode = self._get_tracer_mode(config_start_dir)
+        fallback_enabled = self._get_fallback_enabled(config_start_dir)
         self.logger.debug("Tracer mode: %s (fallback_enabled=%s)", mode, fallback_enabled)
 
         candidates = self._get_tracer_candidates(mode, fallback_enabled)
@@ -456,6 +471,7 @@ class TracerService:
         tracer_mode_override: str | None = None,
         fallback_enabled_override: bool | None = None,
         candidates_override: list[tuple[str, str]] | None = None,
+        config_start_dir: str | Path | None = None,
     ) -> TracerResult:
         """
         Execute command with tracing.
@@ -473,16 +489,20 @@ class TracerService:
             RuntimeError: If tracer binary not found
         """
         self.logger.debug("TracerService.execute: command=%s", command)
-        mode = tracer_mode_override or self._get_tracer_mode()
+        resolved_config_start_dir = (
+            Path(config_start_dir) if config_start_dir is not None else roar_dir.parent
+        )
+        mode = tracer_mode_override or self._get_tracer_mode(resolved_config_start_dir)
         fallback_enabled = (
             fallback_enabled_override
             if fallback_enabled_override is not None
-            else self._get_fallback_enabled()
+            else self._get_fallback_enabled(resolved_config_start_dir)
         )
         candidates = candidates_override or self.resolve_execution_candidates(
             command,
             tracer_mode_override=mode,
             fallback_enabled_override=fallback_enabled,
+            config_start_dir=resolved_config_start_dir,
         )
 
         # Generate log file paths
@@ -501,7 +521,7 @@ class TracerService:
         try:
             from ...integrations.config import load_config
 
-            config = load_config()
+            config = load_config(start_dir=str(resolved_config_start_dir))
             config_env = config.get("env", {})
             if isinstance(config_env, dict):
                 env.update(config_env)
@@ -519,7 +539,11 @@ class TracerService:
         env["PYTHONPATH"] = (
             f"{inject_dir}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else inject_dir
         )
-        runtime_entries = self._lazy_install_runtime_entries(command, roar_dir)
+        runtime_entries = self._lazy_install_runtime_entries(
+            command,
+            roar_dir,
+            config_start_dir=resolved_config_start_dir,
+        )
         runtime_entries.extend(self._runtime_pythonpath_entries())
         env["ROAR_RUNTIME_PYTHONPATH"] = os.pathsep.join(runtime_entries)
         env["ROAR_LOG_FILE"] = inject_log_file

@@ -138,7 +138,11 @@ def _open_artifact_lookup(roar_dir: Path | str | None, stack: ExitStack) -> Any:
     return db_ctx.artifacts
 
 
-def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
+def get_quiet_setting(
+    quiet_flag: bool | None,
+    repo_root: str | Path,
+    config_start_dir: str | Path | None = None,
+) -> bool:
     """Get quiet setting from CLI flag or config (legacy helper).
 
     Prefer `resolve_verbosity()` from `verbosity.py` for new code; this
@@ -151,12 +155,16 @@ def get_quiet_setting(quiet_flag: bool | None, repo_root: str | Path) -> bool:
             cli_quiet=bool(quiet_flag),
             cli_verbose=0,
             repo_root=repo_root,
+            config_start_dir=config_start_dir,
         )
         == "quiet"
     )
 
 
-def get_hash_algorithms(cli_algorithms: list[str] | None = None) -> list[str]:
+def get_hash_algorithms(
+    cli_algorithms: list[str] | None = None,
+    config_start_dir: str | Path | None = None,
+) -> list[str]:
     """Get hash algorithms from CLI or config."""
     from ...integrations.config import get_hash_algorithms as config_get_hash_algorithms
 
@@ -164,6 +172,7 @@ def get_hash_algorithms(cli_algorithms: list[str] | None = None) -> list[str]:
         operation="run",
         cli_algorithms=cli_algorithms if cli_algorithms else None,
         hash_only=False,
+        start_dir=str(config_start_dir) if config_start_dir is not None else None,
     )
 
 
@@ -178,6 +187,7 @@ def execute_and_report(
     verbosity: str = "normal",
     hash_algorithms: list[str],
     repo_root: str,
+    config_start_dir: str | Path | None = None,
     tracer_mode: str | None = None,
     tracer_fallback: bool | None = None,
 ) -> ExecutionReport:
@@ -185,8 +195,12 @@ def execute_and_report(
     hash_algos = cast(list[Literal["blake3", "sha256", "sha512", "md5"]], hash_algorithms)
     job_type_literal = cast(Literal["run", "build"] | None, job_type)
     quiet = verbosity == "quiet"
+    resolved_config_start_dir = (
+        Path(config_start_dir) if config_start_dir is not None else None
+    )
     run_ctx = RunContext(
         roar_dir=roar_dir,
+        config_start_dir=resolved_config_start_dir,
         repo_root=repo_root,
         command=command,
         execution_backend=backend_name,

@@ -26,7 +26,7 @@ from roar.backends.osmo.workflow import (
     resolve_roar_install_requirement,
 )
 from roar.core.bootstrap import bootstrap
-from roar.core.models.run import RunContext, RunResult
+from roar.core.models.run import RunContext, RunResult, resolve_run_config_start_dir
 from roar.core.operation_metadata import build_operation_metadata_json
 from roar.db.context import create_database_context
 from roar.db.hashing import hash_files_blake3
@@ -110,7 +110,7 @@ def execute_osmo_workflow_submit(ctx: RunContext) -> RunResult:
     """Execute an OSMO workflow submit locally and record it as a Roar job."""
     bootstrap(ctx.roar_dir)
     started_at = time.time()
-    config = load_osmo_backend_config(start_dir=ctx.repo_root)
+    config = load_osmo_backend_config(start_dir=str(resolve_run_config_start_dir(ctx)))
     submit_context = _extract_submit_command_context(ctx.command, ctx.repo_root)
     submit_context = _merge_configured_osmo_context_hints(
         submit_context,
