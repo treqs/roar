@@ -82,9 +82,7 @@ def resolve_verbosity(
     if cli_verbose == 1:
         return "verbose"
 
-    raw = _read_raw_output_section(
-        config_start_dir if config_start_dir is not None else repo_root
-    )
+    raw = _read_raw_output_section(config_start_dir if config_start_dir is not None else repo_root)
     if "verbosity" in raw:
         v = raw["verbosity"]
         if v not in _VALID_VERBOSITY:

@@ -50,7 +50,7 @@ def test_run_from_subdir_uses_active_roar_config_and_root_roarconfig(tmp_path: P
     subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
     (repo / ".gitignore").write_text(".roar/\n", encoding="utf-8")
     (repo / ".roarconfig").write_text(
-        "[filters]\nignore_paths = [\"blocked-by-root.txt\"]\n",
+        '[filters]\nignore_paths = ["blocked-by-root.txt"]\n',
         encoding="utf-8",
     )
     _commit_all(repo, "initial project config")
@@ -67,8 +67,7 @@ def test_run_from_subdir_uses_active_roar_config_and_root_roarconfig(tmp_path: P
         "--no-tracer-fallback",
         sys.executable,
         "-c",
-        "open('out.txt', 'w').write('tracked'); "
-        "open('blocked-by-root.txt', 'w').write('ignored')",
+        "open('out.txt', 'w').write('tracked'); open('blocked-by-root.txt', 'w').write('ignored')",
         cwd=subdir,
         check=False,
     )

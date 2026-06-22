@@ -195,9 +195,7 @@ def execute_and_report(
     hash_algos = cast(list[Literal["blake3", "sha256", "sha512", "md5"]], hash_algorithms)
     job_type_literal = cast(Literal["run", "build"] | None, job_type)
     quiet = verbosity == "quiet"
-    resolved_config_start_dir = (
-        Path(config_start_dir) if config_start_dir is not None else None
-    )
+    resolved_config_start_dir = Path(config_start_dir) if config_start_dir is not None else None
     run_ctx = RunContext(
         roar_dir=roar_dir,
         config_start_dir=resolved_config_start_dir,
