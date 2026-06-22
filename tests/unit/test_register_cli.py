@@ -355,6 +355,51 @@ def test_register_cli_renders_warnings_above_summary(tmp_path: Path) -> None:
     assert "Permission denied (publickey)" in result.output
 
 
+def test_register_cli_no_target_defaults_to_active_session(tmp_path: Path) -> None:
+    """`roar register` with no target registers the whole active session.
+
+    It resolves the active session's canonical hash and passes it as the target
+    so the session_hash collection path runs (the full DAG, incl. downstream
+    steps), not an artifact's upstream-only ancestry.
+    """
+    runner = CliRunner()
+    session_hash = "c" * 64
+    with (
+        patch(
+            "roar.application.query.status.compute_active_session_hash",
+            return_value=session_hash,
+        ),
+        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
+    ):
+        mock_register.return_value = _fake_result()
+        result = runner.invoke(register, ["--yes", "--public"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    request = mock_register.call_args.args[0]
+    assert request.target == session_hash
+
+
+def test_register_cli_no_target_without_active_session_errors(tmp_path: Path) -> None:
+    """With no target and no active session, fail cleanly without calling GLaaS."""
+    from roar.application.query.status import StatusQueryError
+
+    runner = CliRunner()
+    with (
+        patch(
+            "roar.application.query.status.compute_active_session_hash",
+            side_effect=StatusQueryError(
+                "No active session. Run 'roar run' to create a session first."
+            ),
+        ),
+        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
+    ):
+        result = runner.invoke(register, ["--yes", "--public"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code != 0
+    assert "No active session" in result.output
+    mock_register.assert_not_called()
+
+
 def test_register_cli_renders_already_registered(tmp_path: Path) -> None:
     """A full re-register reports a no-op clearly, not a fresh publish."""
     runner = CliRunner()
