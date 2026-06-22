@@ -9,7 +9,10 @@ import pytest
 
 from tests.conftest import _run_roar_cmd
 
-pytestmark = [pytest.mark.integration]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(not sys.platform.startswith("linux"), reason="ptrace tracer requires Linux"),
+]
 
 
 def _commit_all(repo: Path, message: str) -> None:
