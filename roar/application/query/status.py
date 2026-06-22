@@ -225,14 +225,7 @@ def build_status_summary(request: StatusQueryRequest) -> StatusSummary:
                 )
             )
 
-        creator_identity = resolve_publish_creator_identity(
-            load_publish_auth_context(request.roar_dir.parent, allow_public_without_binding=True)
-        )
-        lineage = LineageCollector().collect_session(int(session["id"]), request.roar_dir)
-        dag_hash = compute_canonical_lineage_session_hash(
-            lineage=lineage,
-            creator_identity=creator_identity,
-        )
+        dag_hash = _canonical_session_hash(request.roar_dir, int(session["id"]))
 
     git_readiness = collect_git_readiness(request.roar_dir.parent)
     created_at = session.get("created_at") if isinstance(session, dict) else None
@@ -245,3 +238,33 @@ def build_status_summary(request: StatusQueryRequest) -> StatusSummary:
         created_at=created_at,
         latest_job=latest_job_summary,
     )
+
+
+def _canonical_session_hash(roar_dir: Path, session_id: int) -> str:
+    """Compute the canonical content hash for a session id.
+
+    This is the single source of truth for the session hash shown as ``Session:``
+    in ``roar status`` and used to address a session on GLaaS.
+    """
+    creator_identity = resolve_publish_creator_identity(
+        load_publish_auth_context(roar_dir.parent, allow_public_without_binding=True)
+    )
+    lineage = LineageCollector().collect_session(session_id, roar_dir)
+    return compute_canonical_lineage_session_hash(
+        lineage=lineage,
+        creator_identity=creator_identity,
+    )
+
+
+def compute_active_session_hash(roar_dir: Path) -> str:
+    """Return the active session's canonical content hash.
+
+    Raises :class:`StatusQueryError` when there is no active session. This is the
+    same hash shown as ``Session:`` in ``roar status``; ``roar session hash``
+    prints it for shell substitution (e.g. a session-scoped S3 key).
+    """
+    with create_query_database_context(roar_dir) as db_ctx:
+        session = db_ctx.sessions.get_active()
+        if not session:
+            raise StatusQueryError(_NO_ACTIVE_SESSION_MESSAGE)
+        return _canonical_session_hash(roar_dir, int(session["id"]))

@@ -244,7 +244,7 @@ def _render_register_checklist(
 
 
 @click.command("register")
-@click.argument("target", type=click.STRING)
+@click.argument("target", type=click.STRING, required=False)
 @click.option(
     "--dry-run",
     is_flag=True,
@@ -280,7 +280,7 @@ def _render_register_checklist(
 @require_init
 def register(
     ctx: RoarContext,
-    target: str,
+    target: str | None,
     dry_run: bool,
     yes: bool,
     as_blake3: bool,
@@ -294,6 +294,9 @@ def register(
     - a local job UID/hash
     - a DAG step reference like ``@4``
     - a local session hash/prefix previously shown by roar
+
+    With no target, registers the whole active session (all of its jobs and
+    artifacts) — the same session shown by ``roar status``.
 
     Artifact paths must refer to files tracked by roar.
 
@@ -316,6 +319,8 @@ def register(
     \b
     Examples:
 
+        roar register                       # Register the whole active session
+
         roar register model.pt              # Register model lineage
 
         roar register --dry-run model.pt    # Preview without registering
@@ -336,6 +341,18 @@ def register(
     """
     if anonymous and public is False:
         raise click.ClickException("--anonymous requires public visibility; remove --private.")
+
+    if target is None:
+        # No target -> register the whole active session. Resolving to the
+        # session's canonical hash routes through the session_hash collection
+        # path, which includes every job in the session (e.g. a downstream
+        # evaluate step), not just an artifact's upstream ancestry.
+        from ...application.query.status import StatusQueryError, compute_active_session_hash
+
+        try:
+            target = compute_active_session_hash(ctx.roar_dir)
+        except StatusQueryError as exc:
+            raise click.ClickException(str(exc)) from exc
 
     publish_intent = resolve_publish_intent(
         public,

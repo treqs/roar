@@ -46,6 +46,13 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "Sessions",
     ),
     CommandSpec(
+        "session",
+        "roar.cli.commands.session",
+        "session",
+        "Inspect the active session (e.g. its hash)",
+        "Sessions",
+    ),
+    CommandSpec(
         "dag",
         "roar.cli.commands.dag",
         "dag",
