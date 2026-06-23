@@ -76,6 +76,7 @@ class RunContext(RoarBaseModel):
     """Context for a run execution."""
 
     roar_dir: Path
+    config_start_dir: Path | None = None
     repo_root: Annotated[str, Field(min_length=1)]
     command: Annotated[list[str], Field(min_length=1)]
     execution_backend: Annotated[str, Field(min_length=1)]
@@ -100,13 +101,46 @@ class RunContext(RoarBaseModel):
         """Ensure roar_dir is a Path."""
         return Path(v) if not isinstance(v, Path) else v
 
+    @field_validator("config_start_dir", mode="before")
+    @classmethod
+    def ensure_optional_path(cls, v: Any) -> Path | None:
+        """Ensure config_start_dir is a Path when provided."""
+        if v is None:
+            return None
+        return Path(v) if not isinstance(v, Path) else v
+
     @model_validator(mode="after")
     def _sync_quiet_and_verbosity(self) -> RunContext:
         """If a caller passed only the legacy `quiet=True`, treat it as
         `verbosity="quiet"`. New callers should pass verbosity directly."""
         if self.quiet and self.verbosity == "normal":
             object.__setattr__(self, "verbosity", "quiet")
+        if self.config_start_dir is None:
+            object.__setattr__(self, "config_start_dir", self.roar_dir.parent)
         return self
+
+
+def resolve_run_config_start_dir(ctx: object) -> Path:
+    """Return the directory used to resolve run/build config for a context."""
+    value = getattr(ctx, "config_start_dir", None)
+    if isinstance(value, Path):
+        return value
+    if isinstance(value, str):
+        return Path(value)
+
+    roar_dir = getattr(ctx, "roar_dir", None)
+    if isinstance(roar_dir, Path):
+        return roar_dir.parent
+    if isinstance(roar_dir, str):
+        return Path(roar_dir).parent
+
+    repo_root = getattr(ctx, "repo_root", None)
+    if isinstance(repo_root, Path):
+        return repo_root
+    if isinstance(repo_root, str):
+        return Path(repo_root)
+
+    return Path.cwd()
 
 
 class RunResult(ImmutableModel):

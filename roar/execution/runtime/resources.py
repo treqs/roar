@@ -113,10 +113,12 @@ class RuntimeResourceController:
 
 def build_host_runtime_resources(ctx: RunContext) -> tuple[HostRuntimeResource, ...]:
     """Build the host runtime resources required for a tracked host execution."""
+    from roar.core.models.run import resolve_run_config_start_dir
     from roar.integrations.config import config_get
 
     resources: list[HostRuntimeResource] = []
-    if config_get("proxy.enabled", start_dir=ctx.repo_root):
+    config_start_dir = resolve_run_config_start_dir(ctx)
+    if config_get("proxy.enabled", start_dir=str(config_start_dir)):
         from .proxy_resource import ProxyRuntimeResource
 
         resources.append(ProxyRuntimeResource())

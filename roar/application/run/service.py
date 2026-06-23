@@ -36,19 +36,23 @@ class _FinalizerContext:
 def run_command(request: RunRequest) -> int:
     """Execute the `roar run` application workflow."""
     repo_root = validate_git_clean(verb="run", args=list(request.args), roar_dir=request.roar_dir)
+    config_start_dir = _config_start_dir(request.roar_dir)
     verbosity = resolve_verbosity(
         cli_quiet=bool(request.quiet),
         cli_verbose=request.cli_verbose,
         repo_root=repo_root,
+        config_start_dir=config_start_dir,
     )
     algorithms = get_hash_algorithms(
-        list(request.hash_algorithms) if request.hash_algorithms else None
+        list(request.hash_algorithms) if request.hash_algorithms else None,
+        config_start_dir=config_start_dir,
     )
     execution_inputs = _resolve_run_inputs(request, verbosity=verbosity)
     if execution_inputs is None:
         return 0
     return _execute_tracked_command(
         roar_dir=request.roar_dir,
+        config_start_dir=config_start_dir,
         repo_root=repo_root,
         command=execution_inputs.command,
         job_type=execution_inputs.job_type,
@@ -63,19 +67,23 @@ def run_command(request: RunRequest) -> int:
 def build_command(request: BuildRequest) -> int:
     """Execute the `roar build` application workflow."""
     repo_root = validate_git_clean(verb="build", args=list(request.args), roar_dir=request.roar_dir)
+    config_start_dir = _config_start_dir(request.roar_dir)
     verbosity = resolve_verbosity(
         cli_quiet=bool(request.quiet),
         cli_verbose=request.cli_verbose,
         repo_root=repo_root,
+        config_start_dir=config_start_dir,
     )
     algorithms = get_hash_algorithms(
-        list(request.hash_algorithms) if request.hash_algorithms else None
+        list(request.hash_algorithms) if request.hash_algorithms else None,
+        config_start_dir=config_start_dir,
     )
     command = list(request.args)
     if not command:
         raise ValueError("No command specified")
     return _execute_tracked_command(
         roar_dir=request.roar_dir,
+        config_start_dir=config_start_dir,
         repo_root=repo_root,
         command=command,
         job_type="build",
@@ -90,6 +98,7 @@ def build_command(request: BuildRequest) -> int:
 def _execute_tracked_command(
     *,
     roar_dir: Path,
+    config_start_dir: Path | None = None,
     repo_root: str,
     command: list[str],
     job_type: str | None,
@@ -99,6 +108,7 @@ def _execute_tracked_command(
     tracer_mode: str | None,
     tracer_fallback: bool | None,
 ) -> int:
+    resolved_config_start_dir = config_start_dir or _config_start_dir(roar_dir)
     try:
         planned = plan_execution_command(command)
         backend_name = planned.backend_name
@@ -119,6 +129,7 @@ def _execute_tracked_command(
                 verbosity=verbosity,
                 hash_algorithms=hash_algorithms,
                 repo_root=repo_root,
+                config_start_dir=resolved_config_start_dir,
                 tracer_mode=tracer_mode,
                 tracer_fallback=tracer_fallback,
             )
@@ -155,6 +166,10 @@ def _execute_tracked_command(
     )
 
     return report.exit_code
+
+
+def _config_start_dir(roar_dir: Path) -> Path:
+    return roar_dir.parent
 
 
 def _record_run_telemetry(

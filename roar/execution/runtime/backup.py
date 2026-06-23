@@ -20,9 +20,13 @@ class PreviousOutputBackupService:
     """Backup outputs from the previous execution of the same script."""
 
     def backup_previous_outputs(self, ctx: RunContext, logger: ILogger) -> None:
+        from ...core.models.run import resolve_run_config_start_dir
         from ...integrations.config import config_get
 
-        if not config_get("reversible.enabled"):
+        if not config_get(
+            "reversible.enabled",
+            start_dir=str(resolve_run_config_start_dir(ctx)),
+        ):
             return
 
         from ...db.context import create_database_context

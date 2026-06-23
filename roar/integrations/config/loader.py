@@ -53,6 +53,17 @@ def _infer_search_stop(start: Path) -> Path:
     return start.resolve()
 
 
+def _config_search_start(start_dir: str | None, local_config_path: Path | None) -> Path:
+    """Return the directory whose project root should anchor .roarconfig."""
+    if start_dir:
+        return Path(start_dir)
+    if local_config_path and local_config_path.name == "config.toml":
+        return local_config_path.parent.parent
+    if local_config_path:
+        return local_config_path.parent
+    return Path.cwd()
+
+
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> None:
     """Merge *override* into *base* in-place. Nested dicts are merged recursively;
     all other values (including lists) are replaced by the override."""
@@ -161,7 +172,7 @@ class TomlConfigSource(PydanticBaseSettingsSource):
             path = find_config_file(self._start_dir)
 
         # Load .roarconfig as the base layer (project-level, committed).
-        roarconfig_data = self._load_roarconfig(path)
+        roarconfig_data = self._load_roarconfig(path, start_dir=self._start_dir)
         if roarconfig_data:
             self._data = roarconfig_data
 
@@ -190,16 +201,13 @@ class TomlConfigSource(PydanticBaseSettingsSource):
         return self._data
 
     @staticmethod
-    def _load_roarconfig(local_config_path: Path | None) -> dict[str, Any]:
+    def _load_roarconfig(
+        local_config_path: Path | None,
+        *,
+        start_dir: str | None = None,
+    ) -> dict[str, Any]:
         """Load .roarconfig from the repo root if it exists."""
-        # Infer repo root from the local config path or cwd.
-        if local_config_path and local_config_path.name == "config.toml":
-            # .roar/config.toml → repo root is .roar/..
-            repo_root = local_config_path.parent.parent
-        elif local_config_path:
-            repo_root = local_config_path.parent
-        else:
-            repo_root = Path.cwd()
+        repo_root = _infer_search_stop(_config_search_start(start_dir, local_config_path))
 
         roarconfig = repo_root / ".roarconfig"
         if not roarconfig.exists():
