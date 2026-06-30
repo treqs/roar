@@ -4,6 +4,7 @@ use std::ffi::c_void;
 use std::fs;
 use std::io::Read;
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixListener;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -96,6 +97,10 @@ struct CollectorState {
     root_pid: u32,
     root_command: Vec<String>,
     root_env: HashMap<String, String>,
+    /// First-seen (dev, inode) for each written path, captured while the file
+    /// still exists. Used to recover outputs renamed via syscalls the preload
+    /// tracer can't observe (see `reconcile_renamed_outputs`).
+    seen_inodes: HashMap<String, (u64, u64)>,
 }
 
 impl CollectorState {
@@ -107,6 +112,7 @@ impl CollectorState {
             root_pid,
             root_command,
             root_env: env::vars().collect(),
+            seen_inodes: HashMap::new(),
         }
     }
 
@@ -172,8 +178,85 @@ impl CollectorState {
             return;
         }
         self.ensure_process(pid);
+        // Capture (dev, inode) on first sight, while the file still exists. This lets
+        // build_report() recover an output that is later renamed via a syscall the
+        // preload tracer cannot observe (rustix `linux_raw` inline `renameat2`, used by
+        // `tempfile` and thus by safetensors/torch checkpoint saves): the temp file is
+        // seen written here, then vanishes when atomically renamed to the final name.
+        if !self.seen_inodes.contains_key(&path) {
+            if let Ok(meta) = fs::metadata(&path) {
+                self.seen_inodes
+                    .insert(path.clone(), (meta.dev(), meta.ino()));
+            }
+        }
         self.fd.mark_path_open(path.clone());
         self.fd.mark_path_written_with_thread(path, thread_id);
+    }
+
+    /// Recover written outputs renamed via a syscall the preload tracer cannot observe.
+    ///
+    /// A file recorded as written that no longer exists at report time was almost
+    /// certainly atomically renamed (temp -> final) by an untraced syscall — notably
+    /// rustix's `linux_raw` inline `renameat2`, which `tempfile` uses and which
+    /// safetensors/torch emit when saving checkpoints. `LD_PRELOAD` interposes libc
+    /// symbols, so it never sees that rename. Renames preserve the inode, so we look up
+    /// the captured (dev, inode) in the vanished file's own parent directory and rewrite
+    /// the path to the renamed-to name. Preload-specific: ptrace/eBPF observe the rename
+    /// syscall directly and never produce this class of vanished output.
+    fn reconcile_renamed_outputs(&self, summary: &mut tracer_fd::FileSummary) {
+        let mut remap: HashMap<String, String> = HashMap::new();
+        for rec in &summary.files {
+            if !rec.written || remap.contains_key(&rec.path) {
+                continue;
+            }
+            let path = Path::new(&rec.path);
+            if path.exists() {
+                continue; // still present; nothing to recover
+            }
+            let Some(&(dev, ino)) = self.seen_inodes.get(&rec.path) else {
+                continue;
+            };
+            // The atomic-save pattern renames within the same directory (sibling temp),
+            // so the renamed-to file is in the vanished file's own parent.
+            let parent = path.parent().unwrap_or_else(|| Path::new("."));
+            let Ok(entries) = fs::read_dir(parent) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                if meta.is_file() && meta.dev() == dev && meta.ino() == ino {
+                    remap.insert(
+                        rec.path.clone(),
+                        entry.path().to_string_lossy().into_owned(),
+                    );
+                    break;
+                }
+            }
+        }
+        if remap.is_empty() {
+            return;
+        }
+        for rec in &mut summary.files {
+            if let Some(new_path) = remap.get(&rec.path) {
+                rec.path = new_path.clone();
+            }
+        }
+        // Rebuild the derived path lists from the rewritten records.
+        summary.opened_files = summary.files.iter().map(|f| f.path.clone()).collect();
+        summary.read_files = summary
+            .files
+            .iter()
+            .filter(|f| f.read)
+            .map(|f| f.path.clone())
+            .collect();
+        summary.written_files = summary
+            .files
+            .iter()
+            .filter(|f| f.written)
+            .map(|f| f.path.clone())
+            .collect();
     }
 
     fn ensure_process(&mut self, pid: u32) {
@@ -208,7 +291,8 @@ impl CollectorState {
     fn build_report(&mut self, start_time: f64, end_time: f64) -> TracerReport {
         self.ensure_process(self.root_pid);
 
-        let summary = self.fd.build_summary();
+        let mut summary = self.fd.build_summary();
+        self.reconcile_renamed_outputs(&mut summary);
         let processes: Vec<ProcessInfo> = self.processes.values().cloned().collect();
 
         let env_accessed = self
@@ -810,5 +894,93 @@ fn main() {
             eprintln!("roar-tracer-preload: {e:#}");
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tracer_schema::FileRecord;
+
+    fn written_record(path: &str) -> FileRecord {
+        FileRecord {
+            path: path.to_string(),
+            read: false,
+            written: true,
+            read_threads: None,
+            written_threads: None,
+            chunks_read: None,
+            chunks_written: None,
+        }
+    }
+
+    /// Regression: an output written then atomically renamed via a syscall the
+    /// preload tracer can't observe (rustix inline `renameat2`, as in safetensors
+    /// checkpoint saves) is recovered by inode match instead of being dropped.
+    #[test]
+    fn reconciles_renamed_output_by_inode() {
+        let dir = env::temp_dir().join(format!("roar_recon_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let temp = dir.join(".tmpABCDEF");
+        let final_path = dir.join("checkpoint.safetensors");
+
+        // Tracer saw the temp written (and captured its inode while it existed)...
+        fs::write(&temp, b"weights").unwrap();
+        let meta = fs::metadata(&temp).unwrap();
+        let temp_str = temp.to_string_lossy().into_owned();
+        let final_str = final_path.to_string_lossy().into_owned();
+
+        let mut state = CollectorState::new(1, vec!["test".to_string()]);
+        state
+            .seen_inodes
+            .insert(temp_str.clone(), (meta.dev(), meta.ino()));
+
+        // ...then the (untraced) atomic rename happened.
+        fs::rename(&temp, &final_path).unwrap();
+
+        let mut summary = tracer_fd::FileSummary {
+            files: vec![written_record(&temp_str)],
+            opened_files: vec![temp_str.clone()],
+            read_files: vec![],
+            written_files: vec![temp_str.clone()],
+        };
+
+        state.reconcile_renamed_outputs(&mut summary);
+
+        assert_eq!(summary.files[0].path, final_str, "record rewritten to final name");
+        assert!(summary.written_files.contains(&final_str));
+        assert!(!summary.written_files.contains(&temp_str));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A genuinely-deleted written file (no rename target with the captured inode)
+    /// is left untouched — no false recovery.
+    #[test]
+    fn leaves_deleted_output_untouched() {
+        let dir = env::temp_dir().join(format!("roar_recon_del_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let temp = dir.join(".tmpGONE");
+        fs::write(&temp, b"scratch").unwrap();
+        let meta = fs::metadata(&temp).unwrap();
+        let temp_str = temp.to_string_lossy().into_owned();
+
+        let mut state = CollectorState::new(1, vec!["test".to_string()]);
+        state
+            .seen_inodes
+            .insert(temp_str.clone(), (meta.dev(), meta.ino()));
+        fs::remove_file(&temp).unwrap();
+
+        let mut summary = tracer_fd::FileSummary {
+            files: vec![written_record(&temp_str)],
+            opened_files: vec![temp_str.clone()],
+            read_files: vec![],
+            written_files: vec![temp_str.clone()],
+        };
+        state.reconcile_renamed_outputs(&mut summary);
+
+        assert_eq!(summary.files[0].path, temp_str, "deleted file path unchanged");
+        let _ = fs::remove_dir_all(&dir);
     }
 }
