@@ -308,6 +308,102 @@ class TestOptionalAuth:
             assert second_request.get_header("Authorization") is None
             mock_get_logger.return_value.warning.assert_called_once()
 
+    def test_bearer_401_retries_with_ssh_and_disables_bearer_for_later_requests(self):
+        """An expired bearer should fall back to SSH and not poison staged writes."""
+        client = GlaasClient(
+            base_url="http://localhost:9999",
+            publish_auth=PublishAuthContext(
+                access_token="expired-token",
+                scope_request=None,
+                ssh_auth_available=True,
+            ),
+        )
+
+        unauthorized = urllib.error.HTTPError(
+            url="http://localhost:9999/api/v1/test",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=None,
+        )
+        unauthorized.read = MagicMock(return_value=b'{"detail":"expired"}')
+
+        with (
+            patch(
+                "roar.integrations.glaas.client.make_auth_header",
+                return_value="Signature test-signature",
+            ) as make_auth_header,
+            patch("roar.integrations.glaas.transport._get_logger") as mock_get_logger,
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_urlopen.side_effect = [
+                unauthorized,
+                self._json_response(b'{"success": true, "data": {"id": 1}}'),
+                self._json_response(b'{"success": true, "data": {"id": 2}}'),
+            ]
+
+            first_result, first_error = client._request("GET", "/api/v1/test", None)
+            second_result, second_error = client._request(
+                "POST",
+                "/api/v1/test-2",
+                {"key": "val"},
+                allow_auth_fallback=False,
+            )
+
+            assert first_error is None
+            assert second_error is None
+            assert first_result == {"id": 1}
+            assert second_result == {"id": 2}
+            assert mock_urlopen.call_count == 3
+
+            first_request = mock_urlopen.call_args_list[0][0][0]
+            retry_request = mock_urlopen.call_args_list[1][0][0]
+            later_request = mock_urlopen.call_args_list[2][0][0]
+            assert first_request.get_header("Authorization") == "Bearer expired-token"
+            assert retry_request.get_header("Authorization") == "Signature test-signature"
+            assert later_request.get_header("Authorization") == "Signature test-signature"
+            assert make_auth_header.call_count == 2
+            mock_get_logger.return_value.warning.assert_called_once_with(
+                "GLaaS bearer authentication was rejected; retrying with SSH signature auth."
+            )
+
+    def test_bearer_401_does_not_try_ssh_when_ssh_credentials_are_unavailable(self):
+        """Without SSH credentials, the original bearer rejection is still surfaced."""
+        client = GlaasClient(
+            base_url="http://localhost:9999",
+            publish_auth=PublishAuthContext(
+                access_token="expired-token",
+                scope_request=None,
+                ssh_auth_available=False,
+            ),
+        )
+
+        unauthorized = urllib.error.HTTPError(
+            url="http://localhost:9999/api/v1/test",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=None,
+        )
+        unauthorized.read = MagicMock(return_value=b'{"detail":"expired"}')
+
+        with (
+            patch("roar.integrations.glaas.client.make_auth_header") as make_auth_header,
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_urlopen.side_effect = unauthorized
+
+            result, error = client._request("GET", "/api/v1/test", None)
+
+            assert result is None
+            assert error == "HTTP 401: expired"
+            assert mock_urlopen.call_count == 1
+            assert (
+                mock_urlopen.call_args_list[0][0][0].get_header("Authorization")
+                == "Bearer expired-token"
+            )
+            make_auth_header.assert_not_called()
+
     def test_request_returns_original_401_when_anonymous_retry_also_fails(self):
         """If optional-auth fallback still fails, surface the original auth failure."""
         client = _optional_auth_client()

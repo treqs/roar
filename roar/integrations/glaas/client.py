@@ -116,6 +116,7 @@ class GlaasClient:
         )
         self._registration_session_mode: str | None = None
         self._registration_session_token: str | None = None
+        self._bearer_auth_rejected = False
 
     @property
     def publish_auth(self) -> PublishAuthContext:
@@ -189,6 +190,10 @@ class GlaasClient:
             path=path,
             body=body,
             auth_header_factory=self._make_auth_header,
+            bearer_auth_fallback_factory=(
+                self._make_ssh_auth_header if self._can_fallback_from_bearer_to_ssh() else None
+            ),
+            on_bearer_auth_rejected=self._disable_bearer_auth,
             auth_header_value=auth_header_value,
             allow_auth_fallback=allow_auth_fallback,
         )
@@ -196,9 +201,26 @@ class GlaasClient:
     def _make_auth_header(self, method: str, path: str, body: bytes | None = None) -> str | None:
         if self._force_anonymous:
             return None
-        if self._publish_auth.access_token:
+        if self._publish_auth.access_token and not self._bearer_auth_rejected:
             return f"Bearer {self._publish_auth.access_token}"
         return make_auth_header(method, path, body)
+
+    def _make_ssh_auth_header(
+        self, method: str, path: str, body: bytes | None = None
+    ) -> str | None:
+        if self._force_anonymous:
+            return None
+        return make_auth_header(method, path, body)
+
+    def _can_fallback_from_bearer_to_ssh(self) -> bool:
+        if self._force_anonymous or self._bearer_auth_rejected:
+            return False
+        if not self._publish_auth.access_token:
+            return False
+        return bool(self._publish_auth.ssh_auth_available)
+
+    def _disable_bearer_auth(self) -> None:
+        self._bearer_auth_rejected = True
 
     def probe_publish_auth(self) -> bool | None:
         """Return whether configured non-bearer publish auth is accepted by GLaaS.

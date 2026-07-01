@@ -170,6 +170,8 @@ def request_json(
     path: str,
     body: dict | None,
     auth_header_factory: Callable[[str, str, bytes | None], str | None],
+    bearer_auth_fallback_factory: Callable[[str, str, bytes | None], str | None] | None = None,
+    on_bearer_auth_rejected: Callable[[], None] | None = None,
     auth_header_value: str | None = None,
     allow_auth_fallback: bool = True,
 ) -> tuple[Any | None, str | None]:
@@ -308,6 +310,32 @@ def request_json(
     )
     if error is None:
         return result, None
+
+    if (
+        auth_header_value is None
+        and auth_header
+        and status_code == 401
+        and bearer_auth
+        and bearer_auth_fallback_factory is not None
+    ):
+        fallback_header = bearer_auth_fallback_factory(method, path, body_bytes)
+        if fallback_header and not fallback_header.startswith("Bearer "):
+            if on_bearer_auth_rejected is not None:
+                on_bearer_auth_rejected()
+            _get_logger().warning(
+                "GLaaS bearer authentication was rejected; retrying with SSH signature auth."
+            )
+            retry_result, retry_error, _retry_status = _perform_request(
+                request_method=method,
+                request_path=path,
+                request_url=url,
+                request_body=body_bytes,
+                auth_value=fallback_header,
+            )
+            if retry_error is None:
+                _set_cached_auth_mode(base_url, "authenticated")
+                return retry_result, None
+            return retry_result, retry_error
 
     if allow_auth_fallback and auth_header and status_code == 401 and not bearer_auth:
         _mark_anonymous(base_url, f"The server returned HTTP 401 for {method} {path}.")
