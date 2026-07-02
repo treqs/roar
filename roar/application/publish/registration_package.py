@@ -91,7 +91,19 @@ def export_registration_package(
     git_context = resolve_roar_git_context(
         request.cwd, logger=logger, configured_remote=config_get("git.remote")
     )
+    from ..labels import collect_label_sync_payloads
+
     with create_database_context(request.roar_dir) as db_ctx:
+        # Export the entities' current local labels alongside the lineage so a
+        # package-based publish carries the same labels `roar register` would
+        # sync (e.g. metric labels on the model artifact).
+        labels = collect_label_sync_payloads(
+            db_ctx,
+            session_id=session_id,
+            session_hash=str(session.get("hash") or ""),
+            jobs=lineage.jobs,
+            artifacts=lineage.artifacts,
+        )
         package, encoded = build_registration_package(
             session=session,
             lineage=lineage,
@@ -99,6 +111,7 @@ def export_registration_package(
             cwd=request.cwd,
             db_ctx=db_ctx,
             session_hash=str(session.get("hash") or ""),
+            labels=labels,
             logger=logger,
         )
 
@@ -127,6 +140,7 @@ def build_registration_package(
     db_ctx: Any | None = None,
     session_hash: str | None = None,
     composite_builder: Any | None = None,
+    labels: list[dict[str, Any]] | None = None,
     logger: ILogger | None = None,
     created_at: str | None = None,
     producer_version: str | None = None,
@@ -191,6 +205,9 @@ def build_registration_package(
     )
     if composites:
         package["composites"] = composites
+
+    if labels:
+        package["labels"] = labels
 
     return finalize_registration_package(package)
 

@@ -167,6 +167,42 @@ def test_registration_package_shape_digest_counts_and_redaction(tmp_path: Path) 
     assert {warning["severity"] for warning in package["redaction"]["warnings"]} == {"warning"}
 
 
+def test_registration_package_includes_labels_when_provided(tmp_path: Path) -> None:
+    labels = [
+        {
+            "entity_type": "artifact",
+            "session_hash": "local-hash",
+            "artifact_hash": "b" * 64,
+            "metadata": {"accuracy": 0.9735, "precision": 0.9737, "loss": 0.0864},
+            "key_origins": {"accuracy": "user", "precision": "user", "loss": "user"},
+        }
+    ]
+    package, encoded = build_registration_package(
+        session={"id": 7, "hash": "local-hash", "created_at": 123.0},
+        lineage=_lineage(),
+        git_context=GitContext(repo=None, commit="deadbeef", branch="main"),
+        cwd=tmp_path,
+        labels=labels,
+        created_at="2026-04-29T00:00:00Z",
+        producer_version="test-version",
+    )
+
+    assert package["labels"] == labels
+    # Labels are part of the digested payload.
+    assert package["manifest"]["package_sha256"] == compute_registration_package_sha256(package)
+    assert json.loads(encoded)["labels"] == labels
+
+    no_label_package, _ = build_registration_package(
+        session={"id": 7, "hash": "local-hash", "created_at": 123.0},
+        lineage=_lineage(),
+        git_context=GitContext(repo=None, commit="deadbeef", branch="main"),
+        cwd=tmp_path,
+        created_at="2026-04-29T00:00:00Z",
+        producer_version="test-version",
+    )
+    assert "labels" not in no_label_package
+
+
 def test_registration_package_exports_full_lineage_composite_payload(tmp_path: Path) -> None:
     db_ctx = MagicMock()
     db_ctx.composites = MagicMock()
