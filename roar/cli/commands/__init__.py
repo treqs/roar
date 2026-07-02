@@ -35,6 +35,7 @@ _COMMAND_MODULES: dict[str, tuple[str, str]] = {
     "run": (".run", "run"),
     "show": (".show", "show"),
     "status": (".status", "status"),
+    "tag": (".tag", "tag"),
     "tracer": (".tracer", "tracer"),
     "workflow": (".workflow", "workflow"),
 }
