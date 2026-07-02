@@ -5,19 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from roar.application.query.tag import (
-    build_tag_add_summary,
-    build_tag_history_summary,
-    build_tag_rm_summary,
-    build_tag_show_summary,
-)
 from roar.application.query.requests import (
     TagAddRequest,
     TagHistoryRequest,
     TagRmRequest,
     TagShowRequest,
 )
-
+from roar.application.query.tag import (
+    build_tag_add_summary,
+    build_tag_history_summary,
+    build_tag_rm_summary,
+    build_tag_show_summary,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -112,16 +111,14 @@ class TestTagAdd:
     def test_raises_for_missing_equals(self, tmp_path: Path) -> None:
         import pytest
         db_ctx, svc = _mock_db_and_svc({})
-        with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
-            with pytest.raises(ValueError, match="Expected KIND=VALUE"):
-                build_tag_add_summary(_add_request(tmp_path, kv="license"))
+        with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1], pytest.raises(ValueError, match="Expected KIND=VALUE"):
+            build_tag_add_summary(_add_request(tmp_path, kv="license"))
 
     def test_raises_for_empty_value(self, tmp_path: Path) -> None:
         import pytest
         db_ctx, svc = _mock_db_and_svc({})
-        with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
-            with pytest.raises(ValueError, match="Value cannot be empty"):
-                build_tag_add_summary(_add_request(tmp_path, kv="license="))
+        with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1], pytest.raises(ValueError, match="Value cannot be empty"):
+            build_tag_add_summary(_add_request(tmp_path, kv="license="))
 
     def test_show_empty_message_when_no_tags_after_add(self, tmp_path: Path) -> None:
         db_ctx, svc = _mock_db_and_svc({}, changed=False)

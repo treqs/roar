@@ -8,13 +8,12 @@ requiring the full project dependency chain (blake3, SQLAlchemy, etc.).
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
 from roar.application.labels import LabelTargetRef, LabelWriteResult
 from roar.application.tags import TagService
-
 
 # ---------------------------------------------------------------------------
 # Helpers
