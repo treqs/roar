@@ -324,3 +324,39 @@ def test_drop_local_remotes_keeps_shareable_session_repo():
     gc = GitContext(repo="git@github.com:u/r.git", commit="c", branch="main")
     _lineage_out, out_gc = _drop_local_remotes(LineageData(jobs=[], artifacts=[], pipeline={}), gc)
     assert out_gc.repo == "git@github.com:u/r.git"
+
+
+def test_registration_package_redacts_bare_userinfo_token_git_urls(tmp_path: Path) -> None:
+    """Tokens embedded as bare URL userinfo (https://TOKEN@host) must be redacted.
+
+    Covers the session-level repo, the session record, and per-job git_repo.
+    """
+    lineage = _lineage()
+    fake_gitlab_pat = "glpat-" + "Zx9kQ2mP4vL8nR3tW7yB"
+    lineage.jobs[0]["git_repo"] = f"https://{fake_gitlab_pat}@gitlab.com/org/repo.git"
+
+    package, encoded = build_registration_package(
+        session={"id": 7, "hash": "local-hash", "created_at": 123.0},
+        lineage=lineage,
+        git_context=GitContext(
+            repo="https://a94a8fe5ccb19ba61c4c0873d391e987982fbbd3@git.internal.co/org/repo.git",
+            commit="deadbeef",
+            branch="main",
+        ),
+        cwd=tmp_path,
+        created_at="2026-04-29T00:00:00Z",
+        producer_version="test-version",
+    )
+
+    serialized = encoded.decode("utf-8")
+    assert "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3" not in serialized
+    assert fake_gitlab_pat not in serialized
+
+    assert package["source"]["git_repo"] == "https://[REDACTED]@git.internal.co/org/repo.git"
+    assert package["session"]["git"]["repo"] == "https://[REDACTED]@git.internal.co/org/repo.git"
+    assert (
+        package["jobs"][0]["git_repo"] == "https://[GITLAB_TOKEN_REDACTED]@gitlab.com/org/repo.git"
+    )
+    warning_codes = {warning["code"] for warning in package["redaction"]["warnings"]}
+    assert "roar.redaction.git_url_userinfo" in warning_codes
+    assert "roar.redaction.gitlab_token" in warning_codes

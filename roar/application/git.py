@@ -80,6 +80,18 @@ def resolve_roar_git_context(
     if ctx.repo and not is_shareable_remote(ctx.repo):
         logger.debug("Dropping non-shareable git repo URL from publish context: %s", ctx.repo)
         ctx = replace(ctx, repo=None)
+    # A remote URL can embed credentials (https://user:token@host,
+    # https://TOKEN@host, ssh://user:pass@host). Redact them here, at the
+    # publish-side source, so every publish flow (register, put, package
+    # export) and the canonical session hash see the same credential-free
+    # URL — downstream send paths filter again as defense in depth.
+    if ctx.repo:
+        redacted_repo = _redact_publish_repo_url(ctx.repo, path)
+        if redacted_repo != ctx.repo:
+            logger.warning(
+                "Redacted credentials from git repo URL before publish: %s", redacted_repo
+            )
+            ctx = replace(ctx, repo=redacted_repo)
     logger.debug(
         "Git context resolved: repo=%s, commit=%s, branch=%s",
         ctx.repo,
@@ -87,6 +99,22 @@ def resolve_roar_git_context(
         ctx.branch,
     )
     return ctx
+
+
+def _redact_publish_repo_url(repo_url: str, start_dir: Path) -> str:
+    """Redact embedded credentials from a publish-bound git repo URL.
+
+    Honors the same ``registration.omit`` config (enabled flag, allowlist,
+    custom patterns) as the registration payload filters.
+    """
+    from ..filters.omit import OmitFilter
+    from ..integrations.config.raw import get_raw_registration_omit_config
+
+    omit_config = get_raw_registration_omit_config(start_dir=str(start_dir))
+    if not omit_config.get("enabled", True):
+        return repo_url
+    filtered, _detections = OmitFilter(omit_config).filter_git_url(repo_url)
+    return filtered
 
 
 def build_roar_git_tag_name(commit: str, *, short: bool = False) -> str:

@@ -65,3 +65,53 @@ def test_filter_lineage_secrets_redacts_command_and_metadata() -> None:
     assert result.jobs[0]["command"] == "python train.py"
     assert result.jobs[0]["metadata"] == "{}"
     assert result.jobs[1]["metadata"] == {"safe": True}
+
+
+def test_detect_lineage_secrets_flags_bare_userinfo_git_url_with_real_filter() -> None:
+    from roar.filters.omit import OmitFilter
+
+    detected = detect_lineage_secrets(
+        lineage=LineageData(jobs=[], artifacts=[], artifact_hashes=set(), pipeline=None),
+        git_context=GitContext(
+            repo="https://" + "glpat-" + "Zx9kQ2mP4vL8nR3tW7yB" + "@gitlab.com/org/repo.git",
+            branch="main",
+            commit="deadbeef",
+        ),
+        omit_filter=OmitFilter({}),
+    )
+
+    assert "gitlab_token" in detected
+
+
+def test_filter_git_context_secrets_redacts_embedded_credentials() -> None:
+    from roar.application.publish.secrets import filter_git_context_secrets
+    from roar.filters.omit import OmitFilter
+
+    filtered, detections = filter_git_context_secrets(
+        git_context=GitContext(
+            repo="https://a94a8fe5ccb19ba61c4c0873d391e987982fbbd3@git.internal.co/org/repo.git",
+            branch="main",
+            commit="deadbeef",
+        ),
+        omit_filter=OmitFilter({}),
+    )
+
+    assert filtered.repo == "https://[REDACTED]@git.internal.co/org/repo.git"
+    assert filtered.commit == "deadbeef"
+    assert filtered.branch == "main"
+    assert "git_url_userinfo" in detections
+
+
+def test_filter_git_context_secrets_without_filter_returns_context_unchanged() -> None:
+    from roar.application.publish.secrets import filter_git_context_secrets
+
+    context = GitContext(
+        repo="https://user:token123456@github.com/org/repo.git",
+        branch="main",
+        commit="deadbeef",
+    )
+
+    filtered, detections = filter_git_context_secrets(git_context=context, omit_filter=None)
+
+    assert filtered is context
+    assert detections == []

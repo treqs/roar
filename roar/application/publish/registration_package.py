@@ -29,7 +29,11 @@ from .job_preparation import (
 from .lineage import LineageCollector
 from .lineage_composites import build_lineage_composite_payloads
 from .registration import normalize_registration_hashes, normalize_registration_source_type
-from .secrets import detect_lineage_secrets, filter_lineage_secrets
+from .secrets import (
+    detect_lineage_secrets,
+    filter_git_context_secrets,
+    filter_lineage_secrets,
+)
 
 PACKAGE_FORMAT = "roar.registration_package"
 PACKAGE_VERSION = 1
@@ -247,7 +251,9 @@ def _apply_redaction(
         omit_filter=omit_filter,
     )
     filtered_lineage = filter_lineage_secrets(lineage=lineage, omit_filter=omit_filter)
-    filtered_git_context, git_detections = _filter_git_context(git_context, omit_filter)
+    filtered_git_context, git_detections = filter_git_context_secrets(
+        git_context=git_context, omit_filter=omit_filter
+    )
     detected.extend(git_detections)
     filtered_lineage, job_git_detections = _filter_job_git_repos(filtered_lineage, omit_filter)
     detected.extend(job_git_detections)
@@ -285,23 +291,6 @@ def _drop_local_remotes(
         if isinstance(repo, str) and repo and not is_shareable_remote(repo):
             job["git_repo"] = ""
     return lineage, git_context
-
-
-def _filter_git_context(
-    git_context: GitContext,
-    omit_filter: OmitFilter | None,
-) -> tuple[GitContext, list[str]]:
-    if omit_filter is None or not git_context.repo:
-        return git_context, []
-    filtered_repo, detections = omit_filter.filter_git_url(git_context.repo)
-    return (
-        GitContext(
-            repo=filtered_repo,
-            commit=git_context.commit,
-            branch=git_context.branch,
-        ),
-        detections,
-    )
 
 
 def _filter_job_git_repos(

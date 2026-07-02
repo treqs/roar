@@ -161,3 +161,50 @@ def test_finalize_register_git_creates_tag_when_enabled(tmp_path: Path) -> None:
         )
 
     create_tag.assert_called_once_with(tmp_path, "roar/deadbeef")
+
+
+def test_resolve_roar_git_context_redacts_credentials_from_remote_url(tmp_path: Path) -> None:
+    from roar.core.interfaces.registration import GitContext
+
+    logger = MagicMock()
+    with patch(
+        "roar.application.git.resolve_git_context",
+        return_value=GitContext(
+            repo="https://" + "glpat-" + "Zx9kQ2mP4vL8nR3tW7yB" + "@gitlab.com/org/repo.git",
+            commit="deadbeef",
+            branch="main",
+        ),
+    ):
+        from roar.application.git import resolve_roar_git_context
+
+        ctx = resolve_roar_git_context(tmp_path, logger=logger)
+
+    assert ctx.repo == "https://[GITLAB_TOKEN_REDACTED]@gitlab.com/org/repo.git"
+    assert ctx.commit == "deadbeef"
+    assert ctx.branch == "main"
+    logger.warning.assert_called_once()
+    # The raw credential must not appear in any log call arguments.
+    for call in [*logger.warning.call_args_list, *logger.debug.call_args_list]:
+        assert "glpat-" + "Zx9kQ2mP4vL8nR3tW7yB" not in str(call)
+
+
+def test_resolve_roar_git_context_keeps_credential_free_remote_unchanged(
+    tmp_path: Path,
+) -> None:
+    from roar.core.interfaces.registration import GitContext
+
+    logger = MagicMock()
+    with patch(
+        "roar.application.git.resolve_git_context",
+        return_value=GitContext(
+            repo="ssh://git@github.com/org/repo.git",
+            commit="deadbeef",
+            branch="main",
+        ),
+    ):
+        from roar.application.git import resolve_roar_git_context
+
+        ctx = resolve_roar_git_context(tmp_path, logger=logger)
+
+    assert ctx.repo == "ssh://git@github.com/org/repo.git"
+    logger.warning.assert_not_called()

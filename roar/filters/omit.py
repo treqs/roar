@@ -83,6 +83,12 @@ BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
         re.compile(r"(hf_[a-zA-Z0-9]{34})"),
         "[HF_TOKEN_REDACTED]",
     ),
+    # GitLab personal/project/CI access tokens
+    (
+        "gitlab_token",
+        re.compile(r"(glpat-[A-Za-z0-9_\-]{20,})"),
+        "[GITLAB_TOKEN_REDACTED]",
+    ),
     # Generic API key patterns (command line args)
     (
         "generic_api_key_arg",
@@ -115,11 +121,25 @@ BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
         re.compile(r"(bearer)\s+([a-zA-Z0-9\-._~+/]{20,}=*)", re.IGNORECASE),
         r"\1 [REDACTED]",
     ),
-    # Git URL credentials (https://user:token@host)
+    # Git URL credentials (https://user:token@host, https://:token@host,
+    # ssh://user:pass@host). Userinfo may not contain "/" or whitespace, which
+    # keeps host:port URLs with a later "@" in the path/query from matching,
+    # nor "[" "]", so already-redacted placeholders are not re-detected.
     (
         "git_url_creds",
-        re.compile(r"(https?://)([^:@]+):([^@]+)@"),
+        re.compile(r"((?:https?|ssh|git)://)([^:@/\s]*):([^@/\s\[\]]+)@"),
         r"\1\2:[REDACTED]@",
+    ),
+    # Bare userinfo in git URLs (https://TOKEN@host). A lone userinfo field is
+    # how PATs are commonly embedded (GitLab glpat-, Azure DevOps, generic
+    # OAuth), and a token is indistinguishable from a username, so fail closed
+    # and redact it. "git@" (the near-universal ssh username) is exempt.
+    # Excludes ":" so git_url_creds output (user:[REDACTED]@) is not re-matched,
+    # and "[" "]" so already-redacted placeholders are not double-redacted.
+    (
+        "git_url_userinfo",
+        re.compile(r"((?:https?|ssh|git)://)(?!git@)([^:@/\s\[\]]+)@"),
+        r"\1[REDACTED]@",
     ),
     # Database connection strings
     (
