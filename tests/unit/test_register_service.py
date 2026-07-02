@@ -293,3 +293,93 @@ class TestRegisterService:
                 "session_hash": "session-hash-123",
             }
         ]
+
+
+class TestRegisterServiceGitUrlRedaction:
+    """The session-level git URL must be redacted before it reaches GLaaS."""
+
+    def test_register_prepared_lineage_sends_redacted_git_context(self, tmp_path: Path) -> None:
+        from roar.core.interfaces.registration import SessionRegistrationResult
+        from roar.filters.omit import OmitFilter
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.register_lineage_under_registration_session.return_value = (
+            BatchRegistrationResult(
+                session_registered=True,
+                jobs_created=1,
+                jobs_failed=0,
+                artifacts_registered=1,
+                artifacts_failed=0,
+                links_created=0,
+                links_failed=0,
+                errors=[],
+            )
+        )
+        mock_coordinator.session_service.finalize_registration_session.return_value = (
+            SessionRegistrationResult(
+                success=True,
+                session_hash="final-hash",
+                session_url="https://glaas.example/dag/final-hash",
+            )
+        )
+
+        service = RegisterService(
+            glaas_client=MagicMock(),
+            coordinator=mock_coordinator,
+            omit_filter=OmitFilter({}),
+        )
+
+        prepared = PreparedRegisterExecution(
+            git_context=GitContext(
+                repo="https://user:supersecrettoken123@github.com/org/repo.git",
+                commit="abc123def456",
+                branch="main",
+            ),
+            session_id=None,
+            session_hash="session-hash-123",
+            session_url=None,
+            git_tag_name=None,
+            git_tag_repo_root=None,
+            registration_session_id="rs-123",
+        )
+
+        with patch("roar.application.publish.register_execution.config_get", return_value=False):
+            result = service.register_prepared_lineage(
+                lineage=LineageData(
+                    jobs=[
+                        {
+                            "id": 1,
+                            "job_uid": "job-1",
+                            "step_number": 1,
+                            "timestamp": 10.0,
+                            "command": "python train.py",
+                        }
+                    ],
+                    artifacts=[{"id": "a1", "hash": "f" * 64}],
+                    artifact_hashes={"f" * 64},
+                    pipeline={"id": 1},
+                ),
+                roar_dir=tmp_path / ".roar",
+                artifact_hash="f" * 64,
+                dry_run=False,
+                as_blake3=False,
+                skip_confirmation=True,
+                confirm_callback=None,
+                prepared=prepared,
+            )
+
+        assert result.success is True
+        assert "git_url_creds" in result.secrets_detected
+
+        batch_call = mock_coordinator.register_lineage_under_registration_session.call_args
+        assert (
+            batch_call.kwargs["git_context"].repo
+            == "https://user:[REDACTED]@github.com/org/repo.git"
+        )
+
+        finalize_call = mock_coordinator.session_service.finalize_registration_session.call_args
+        assert (
+            finalize_call.kwargs["git_context"].repo
+            == "https://user:[REDACTED]@github.com/org/repo.git"
+        )
+        assert "supersecrettoken123" not in str(finalize_call)

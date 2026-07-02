@@ -24,7 +24,11 @@ from .job_preparation import (
     order_jobs_for_registration,
 )
 from .remote_job_uids import prepare_jobs_for_remote_publication
-from .secrets import detect_lineage_secrets, filter_lineage_secrets
+from .secrets import (
+    detect_lineage_secrets,
+    filter_git_context_secrets,
+    filter_lineage_secrets,
+)
 from .session import build_staged_lineage_counts
 
 if TYPE_CHECKING:
@@ -263,6 +267,12 @@ class RegisterService:
         if detected_secrets or (omit_filter is not None and omit_filter.enabled):
             lineage = filter_lineage_secrets(
                 lineage=lineage,
+                omit_filter=omit_filter,
+            )
+            # The git repo URL is published at the session level (register /
+            # finalize), so it must be redacted here too, not just detected.
+            git_context, _ = filter_git_context_secrets(
+                git_context=git_context,
                 omit_filter=omit_filter,
             )
 

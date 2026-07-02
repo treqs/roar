@@ -34,6 +34,25 @@ def detect_lineage_secrets(
     return omit_filter.get_detection_summary(all_detections)
 
 
+def filter_git_context_secrets(
+    *,
+    git_context: GitContext,
+    omit_filter: OmitFilter | None,
+) -> tuple[GitContext, list[str]]:
+    """Return a git context copy with credentials redacted from the repo URL."""
+    if omit_filter is None or not git_context.repo:
+        return git_context, []
+    filtered_repo, detections = omit_filter.filter_git_url(git_context.repo)
+    return (
+        GitContext(
+            repo=filtered_repo,
+            commit=git_context.commit,
+            branch=git_context.branch,
+        ),
+        detections,
+    )
+
+
 def filter_lineage_secrets(
     *,
     lineage: LineageData,
