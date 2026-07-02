@@ -22,6 +22,7 @@ from roar.application.query.tag import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _add_request(tmp_path: Path, **overrides) -> TagAddRequest:
     return TagAddRequest(
         roar_dir=overrides.pop("roar_dir", tmp_path / ".roar"),
@@ -86,6 +87,7 @@ def _patch(db_ctx, svc):
 # tag add
 # ---------------------------------------------------------------------------
 
+
 class TestTagAdd:
     def test_reports_tagged_when_value_added(self, tmp_path: Path) -> None:
         db_ctx, svc = _mock_db_and_svc({"license": ["MIT"]}, changed=True)
@@ -110,14 +112,24 @@ class TestTagAdd:
 
     def test_raises_for_missing_equals(self, tmp_path: Path) -> None:
         import pytest
+
         db_ctx, svc = _mock_db_and_svc({})
-        with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1], pytest.raises(ValueError, match="Expected KIND=VALUE"):
+        with (
+            _patch(db_ctx, svc)[0],
+            _patch(db_ctx, svc)[1],
+            pytest.raises(ValueError, match="Expected KIND=VALUE"),
+        ):
             build_tag_add_summary(_add_request(tmp_path, kv="license"))
 
     def test_raises_for_empty_value(self, tmp_path: Path) -> None:
         import pytest
+
         db_ctx, svc = _mock_db_and_svc({})
-        with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1], pytest.raises(ValueError, match="Value cannot be empty"):
+        with (
+            _patch(db_ctx, svc)[0],
+            _patch(db_ctx, svc)[1],
+            pytest.raises(ValueError, match="Value cannot be empty"),
+        ):
             build_tag_add_summary(_add_request(tmp_path, kv="license="))
 
     def test_show_empty_message_when_no_tags_after_add(self, tmp_path: Path) -> None:
@@ -130,6 +142,7 @@ class TestTagAdd:
 # ---------------------------------------------------------------------------
 # tag rm
 # ---------------------------------------------------------------------------
+
 
 class TestTagRm:
     def test_reports_removed_value(self, tmp_path: Path) -> None:
@@ -163,6 +176,7 @@ class TestTagRm:
 # tag show
 # ---------------------------------------------------------------------------
 
+
 class TestTagShow:
     def test_renders_current_tags(self, tmp_path: Path) -> None:
         db_ctx, svc = _mock_db_and_svc({"license": ["MIT"], "contains_pii": ["absent"]})
@@ -189,6 +203,7 @@ class TestTagShow:
 # ---------------------------------------------------------------------------
 # tag history
 # ---------------------------------------------------------------------------
+
 
 class TestTagHistory:
     def test_renders_version_history(self, tmp_path: Path) -> None:

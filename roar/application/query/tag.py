@@ -120,6 +120,7 @@ def build_tag_history_summary(request: TagHistoryRequest) -> LabelHistorySummary
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse_kv(kv: str) -> tuple[str, str]:
     """Parse ``kind=value``. Raises ValueError on bad format."""
     if "=" not in kv:

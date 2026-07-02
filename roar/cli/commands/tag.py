@@ -78,9 +78,7 @@ def tag_add_cmd(ctx: RoarContext, kv: str, target: str) -> None:
     """
     _warn_if_noncanonical(kv)
     try:
-        rendered = tag_add(
-            TagAddRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, kv=kv, target=target)
-        )
+        rendered = tag_add(TagAddRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, kv=kv, target=target))
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(rendered)
@@ -123,9 +121,7 @@ def tag_show_cmd(ctx: RoarContext, target: str) -> None:
         roar tag show a1b2c3d4
     """
     try:
-        rendered = tag_show(
-            TagShowRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, target=target)
-        )
+        rendered = tag_show(TagShowRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, target=target))
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(rendered)
@@ -144,9 +140,7 @@ def tag_history_cmd(ctx: RoarContext, target: str) -> None:
         roar tag history a1b2c3d4
     """
     try:
-        rendered = tag_history(
-            TagHistoryRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, target=target)
-        )
+        rendered = tag_history(TagHistoryRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, target=target))
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(rendered)
