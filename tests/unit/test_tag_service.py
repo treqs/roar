@@ -31,9 +31,7 @@ def _make_service(current_metadata: dict | None = None):
     mock_label_svc.set_metadata.return_value = LabelWriteResult(
         changed=True, metadata={}, version=1
     )
-    mock_label_svc.delete_keys.return_value = LabelWriteResult(
-        changed=True, metadata={}, version=1
-    )
+    mock_label_svc.delete_keys.return_value = LabelWriteResult(changed=True, metadata={}, version=1)
     svc._svc = mock_label_svc
     return svc, mock_label_svc
 
@@ -41,6 +39,7 @@ def _make_service(current_metadata: dict | None = None):
 # ---------------------------------------------------------------------------
 # add
 # ---------------------------------------------------------------------------
+
 
 class TestAdd:
     def test_add_first_value_creates_list(self) -> None:
@@ -96,6 +95,7 @@ class TestAdd:
 # remove
 # ---------------------------------------------------------------------------
 
+
 class TestRemove:
     def test_remove_specific_value(self) -> None:
         svc, label_svc = _make_service({"tag": {"license": ["MIT", "Apache-2.0"]}})
@@ -140,9 +140,7 @@ class TestRemove:
 
     def test_remove_reflects_delete_keys_changed_result(self) -> None:
         svc, label_svc = _make_service({"tag": {"license": ["MIT"]}})
-        label_svc.delete_keys.return_value = LabelWriteResult(
-            changed=False, metadata={}, version=1
-        )
+        label_svc.delete_keys.return_value = LabelWriteResult(changed=False, metadata={}, version=1)
         changed = svc.remove(_RESOLVED, "license", None)
         assert changed is False
 
@@ -150,6 +148,7 @@ class TestRemove:
 # ---------------------------------------------------------------------------
 # get_tags
 # ---------------------------------------------------------------------------
+
 
 class TestGetTags:
     def test_returns_tag_namespace_subtree(self) -> None:
@@ -169,6 +168,7 @@ class TestGetTags:
 # history
 # ---------------------------------------------------------------------------
 
+
 class TestHistory:
     def test_delegates_to_label_service(self) -> None:
         svc, label_svc = _make_service()
@@ -182,6 +182,7 @@ class TestHistory:
 # ---------------------------------------------------------------------------
 # resolve_target — error cases only (happy path needs DB repos)
 # ---------------------------------------------------------------------------
+
 
 class TestResolveTargetErrors:
     def test_rejects_build_step_reference(self) -> None:

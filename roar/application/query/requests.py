@@ -182,7 +182,7 @@ class InputsQueryRequest:
 class TagAddRequest:
     roar_dir: Path
     cwd: Path
-    kv: str    # "kind=value"
+    kv: str  # "kind=value"
     target: str
 
 
