@@ -512,6 +512,90 @@ def collect_label_sync_payloads(
     return payloads
 
 
+def _user_label_key_paths(metadata: Any) -> set[str]:
+    if not isinstance(metadata, dict):
+        return set()
+    return {key for key, _value in flatten_label_metadata(strip_reserved_system_labels(metadata))}
+
+
+def deleted_user_label_keys(
+    db_ctx: _LabelSyncDatabaseContext,
+    *,
+    entity_type: str,
+    session_id: int | None = None,
+    job_id: int | None = None,
+    artifact_id: str | None = None,
+) -> list[str]:
+    """User-label key paths removed locally since the last synced version.
+
+    The newest version stamped ``synced_at`` is the remote baseline: keys
+    present there but absent from the current version were deliberately unset
+    locally and should be deleted remotely on the next reconcile.
+    """
+    history = db_ctx.labels.get_history(
+        entity_type,
+        session_id=session_id,
+        job_id=job_id,
+        artifact_id=artifact_id,
+    )
+    synced = [row for row in history if row.get("synced_at") is not None]
+    if not history or not synced:
+        return []
+    baseline = max(synced, key=lambda row: int(row.get("version") or 0))
+    current = max(history, key=lambda row: int(row.get("version") or 0))
+    if int(baseline.get("version") or 0) >= int(current.get("version") or 0):
+        return []
+    baseline_keys = _user_label_key_paths(baseline.get("metadata"))
+    current_keys = _user_label_key_paths(current.get("metadata"))
+    return sorted(baseline_keys - current_keys)
+
+
+def _attach_deleted_user_keys_for_lineage(
+    db_ctx: _LabelSyncDatabaseContext,
+    payloads: list[dict[str, Any]],
+    *,
+    session_id: int | None,
+    jobs: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
+) -> None:
+    """Stamp locally-unset user keys onto reconcile payloads, per target."""
+    job_id_by_uid: dict[str, int] = {}
+    for job in jobs:
+        job_id = job.get("id")
+        job_uid = job.get("job_uid")
+        remote_job_uid = job.get("remote_job_uid")
+        resolved = remote_job_uid if isinstance(remote_job_uid, str) and remote_job_uid else job_uid
+        if isinstance(job_id, int) and isinstance(resolved, str) and resolved:
+            job_id_by_uid.setdefault(resolved, job_id)
+
+    artifact_id_by_hash: dict[str, str] = {}
+    for artifact in artifacts:
+        artifact_id = artifact.get("id")
+        artifact_hash = artifact.get("hash")
+        if isinstance(artifact_id, str) and isinstance(artifact_hash, str) and artifact_hash:
+            artifact_id_by_hash.setdefault(artifact_hash, artifact_id)
+
+    for payload in payloads:
+        entity_type = payload.get("entity_type")
+        deleted: list[str] = []
+        if entity_type == "dag" and session_id is not None:
+            deleted = deleted_user_label_keys(db_ctx, entity_type="dag", session_id=session_id)
+        elif entity_type == "job":
+            job_id = job_id_by_uid.get(str(payload.get("job_uid") or ""))
+            if job_id is not None:
+                deleted = deleted_user_label_keys(db_ctx, entity_type="job", job_id=job_id)
+        elif entity_type == "artifact":
+            artifact_id = artifact_id_by_hash.get(str(payload.get("artifact_hash") or ""))
+            if artifact_id is not None:
+                deleted = deleted_user_label_keys(
+                    db_ctx,
+                    entity_type="artifact",
+                    artifact_id=artifact_id,
+                )
+        if deleted:
+            payload["deleted_keys"] = deleted
+
+
 def collect_current_label_ids(
     db_ctx: _LabelSyncDatabaseContext,
     *,
@@ -576,8 +660,13 @@ def build_reconcile_payload_for_current_lineage(
     db_ctx: _RemoteLabelMutationDatabaseContext,
     *,
     roar_dir: Path,
-) -> tuple[str, list[dict[str, Any]]]:
-    """Build a user-managed reconcile payload for the active local lineage."""
+) -> tuple[str, list[dict[str, Any]], list[int]]:
+    """Build a user-managed reconcile payload for the active local lineage.
+
+    Returns the published session hash, the reconcile label payloads (including
+    per-target ``deleted_keys`` for locally-unset user labels), and the local
+    label row ids to stamp ``synced_at`` after a successful push.
+    """
     session = db_ctx.sessions.get_active()
     if not isinstance(session, dict) or not isinstance(session.get("id"), int):
         raise ValueError("No active session.")
@@ -594,14 +683,28 @@ def build_reconcile_payload_for_current_lineage(
         list(getattr(lineage, "jobs", []) or []),
         session,
     )
+    artifacts = list(getattr(lineage, "artifacts", []) or [])
     payloads = collect_label_sync_payloads(
         db_ctx,
         session_id=session_id,
         session_hash=session_hash,
         jobs=jobs,
-        artifacts=list(getattr(lineage, "artifacts", []) or []),
+        artifacts=artifacts,
     )
-    return session_hash, _user_managed_reconcile_payloads(payloads)
+    _attach_deleted_user_keys_for_lineage(
+        db_ctx,
+        payloads,
+        session_id=session_id,
+        jobs=jobs,
+        artifacts=artifacts,
+    )
+    label_ids = collect_current_label_ids(
+        db_ctx,
+        session_id=session_id,
+        jobs=jobs,
+        artifacts=artifacts,
+    )
+    return session_hash, _user_managed_reconcile_payloads(payloads), label_ids
 
 
 def build_reconcile_payload_for_target(
@@ -610,7 +713,7 @@ def build_reconcile_payload_for_target(
     roar_dir: Path,
     target: LabelTargetRef,
     metadata: dict[str, Any],
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[str, list[dict[str, Any]], list[int]]:
     """Build a single-target user-managed reconcile payload."""
     payload = build_remote_label_mutation_payload(
         db_ctx,
@@ -619,6 +722,15 @@ def build_reconcile_payload_for_target(
         metadata=metadata,
         require_published_session=True,
     )
+    deleted = deleted_user_label_keys(
+        db_ctx,
+        entity_type=target.entity_type,
+        session_id=target.session_id,
+        job_id=target.job_id,
+        artifact_id=target.artifact_id,
+    )
+    if deleted:
+        payload["deleted_keys"] = deleted
     session_hash = payload.get("session_hash")
     if not isinstance(session_hash, str) or not session_hash:
         session_hash = _canonical_remote_session_hash_for_target(
@@ -627,7 +739,18 @@ def build_reconcile_payload_for_target(
             target=target,
             require_published=True,
         )
-    return session_hash, _user_managed_reconcile_payloads([payload])
+    current = db_ctx.labels.get_current(
+        target.entity_type,
+        session_id=target.session_id,
+        job_id=target.job_id,
+        artifact_id=target.artifact_id,
+    )
+    label_ids = (
+        [int(current["id"])]
+        if isinstance(current, dict) and isinstance(current.get("id"), int)
+        else []
+    )
+    return session_hash, _user_managed_reconcile_payloads([payload]), label_ids
 
 
 def _canonical_remote_session_hash(
@@ -730,14 +853,18 @@ def _user_managed_reconcile_payloads(payloads: list[dict[str, Any]]) -> list[dic
         if not isinstance(metadata, dict):
             continue
         user_metadata = _prune_empty_containers(strip_reserved_system_labels(metadata))
-        if not user_metadata:
+        deleted_keys = payload.get("deleted_keys")
+        has_deletions = isinstance(deleted_keys, list) and bool(deleted_keys)
+        # A target whose user labels were all unset still needs a reconcile item
+        # so the deletions propagate remotely.
+        if not user_metadata and not has_deletions:
             continue
         filtered.append(
             {
                 key: value
                 for key, value in {
                     **payload,
-                    "metadata": user_metadata,
+                    "metadata": user_metadata if isinstance(user_metadata, dict) else {},
                 }.items()
                 if key != "key_origins"
             }
