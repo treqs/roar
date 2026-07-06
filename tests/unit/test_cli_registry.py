@@ -1,11 +1,13 @@
 """Unit tests for top-level CLI command registry behavior."""
 
+from importlib import import_module
 from unittest.mock import patch
 
+import click
 from click.testing import CliRunner
 
 from roar.cli import LAZY_COMMANDS, cli
-from roar.cli.command_registry import build_help_groups
+from roar.cli.command_registry import _COMMAND_SPECS, build_help_groups
 
 
 def test_help_groups_are_built_from_command_specs() -> None:
@@ -23,6 +25,7 @@ def test_help_groups_are_built_from_command_specs() -> None:
         "register",
         "get",
         "label",
+        "tag",
     )
     assert help_groups["Setup and Admin"] == (
         "config",
@@ -109,6 +112,39 @@ def test_cli_allows_account_commands_by_default() -> None:
 
     assert projects_result.exit_code == 0, projects_result.output
     assert "Inspect and manage GLaaS projects." in projects_result.output
+
+
+def test_tag_command_is_registered_and_reachable() -> None:
+    runner = CliRunner()
+
+    top_level_help = runner.invoke(cli, ["--help"])
+    assert top_level_help.exit_code == 0, top_level_help.output
+    assert "tag" in top_level_help.output
+    assert "Manage hereditary compliance tags" in top_level_help.output
+
+    tag_help = runner.invoke(cli, ["tag", "--help"])
+    assert tag_help.exit_code == 0, tag_help.output
+    assert "add" in tag_help.output
+    assert "rm" in tag_help.output
+    assert "show" in tag_help.output
+    assert "history" in tag_help.output
+
+
+def test_every_registered_command_spec_resolves_to_a_click_command() -> None:
+    """Every CommandSpec must point at a real, importable click Command.
+
+    A command module can exist and be fully tested in isolation while still
+    being unreachable from the CLI if nobody adds its CommandSpec to
+    `_COMMAND_SPECS` (this happened with `roar tag`). This walks the
+    registry itself rather than the rendered --help text, so it fails loudly
+    for any future command in the same situation.
+    """
+    for spec in _COMMAND_SPECS:
+        module = import_module(spec.module_path)
+        command = getattr(module, spec.attr_name)
+        assert isinstance(command, click.BaseCommand), (
+            f"{spec.name!r} ({spec.module_path}.{spec.attr_name}) is not a click command"
+        )
 
 
 def test_subcommand_help_reports_import_errors_cleanly() -> None:

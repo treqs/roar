@@ -151,6 +151,13 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "label", "roar.cli.commands.label", "label", "Manage local labels", "Share and Publish"
     ),
     CommandSpec(
+        "tag",
+        "roar.cli.commands.tag",
+        "tag",
+        "Manage hereditary compliance tags",
+        "Share and Publish",
+    ),
+    CommandSpec(
         "auth",
         "roar.cli.commands.auth",
         "auth",
