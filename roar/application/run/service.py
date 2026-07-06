@@ -61,6 +61,8 @@ def run_command(request: RunRequest) -> int:
         hash_algorithms=algorithms,
         tracer_mode=request.tracer_mode,
         tracer_fallback=request.tracer_fallback,
+        block_tags=list(request.block_tags),
+        add_tags=list(request.add_tags),
     )
 
 
@@ -107,6 +109,8 @@ def _execute_tracked_command(
     hash_algorithms: list[str],
     tracer_mode: str | None,
     tracer_fallback: bool | None,
+    block_tags: list[str] | None = None,
+    add_tags: list[str] | None = None,
 ) -> int:
     resolved_config_start_dir = config_start_dir or _config_start_dir(roar_dir)
     try:
@@ -132,6 +136,8 @@ def _execute_tracked_command(
                 config_start_dir=resolved_config_start_dir,
                 tracer_mode=tracer_mode,
                 tracer_fallback=tracer_fallback,
+                block_tags=block_tags,
+                add_tags=add_tags,
             )
         )
     except Exception:

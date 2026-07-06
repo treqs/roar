@@ -8,9 +8,28 @@ Usage: roar run [options] <command>
 import click
 
 from ...application.run import RunRequest, run_command
+from ...application.tags import parse_tag_kv
+from ...core.label_constants import CANONICAL_TAG_KINDS
 from ...core.tracer_modes import TRACER_MODE_VALUES
 from ..context import RoarContext
 from ..decorators import require_init
+
+
+def _validate_add_tags(
+    ctx: click.Context, param: click.Parameter, value: tuple[str, ...]
+) -> tuple[str, ...]:
+    for item in value:
+        try:
+            kind, _value = parse_tag_kv(item)
+        except ValueError as exc:
+            raise click.BadParameter(str(exc)) from exc
+        if kind not in CANONICAL_TAG_KINDS:
+            click.echo(
+                f"Warning: '{kind}' is not a canonical tag kind. "
+                f"Canonical kinds: {', '.join(sorted(CANONICAL_TAG_KINDS))}.",
+                err=True,
+            )
+    return value
 
 
 @click.command(
@@ -51,6 +70,21 @@ from ..decorators import require_init
     help="Allow runtime fallback to another tracer backend",
 )
 @click.option("--hash", "hash_algorithms", multiple=True, help="Add hash algorithm")
+@click.option(
+    "--block-tag",
+    "block_tags",
+    multiple=True,
+    metavar="KIND",
+    help="Exempt a compliance tag kind from automatic inheritance for this run (repeatable).",
+)
+@click.option(
+    "--add-tag",
+    "add_tags",
+    multiple=True,
+    metavar="KIND=VALUE",
+    callback=_validate_add_tags,
+    help="Stamp KIND=VALUE onto this run's output artifacts (repeatable).",
+)
 @click.pass_obj
 @require_init
 def run(
@@ -62,6 +96,8 @@ def run(
     tracer_mode: str | None,
     tracer_fallback: bool | None,
     hash_algorithms: tuple[str, ...],
+    block_tags: tuple[str, ...],
+    add_tags: tuple[str, ...],
 ) -> None:
     """Run a command with provenance tracking.
 
@@ -101,6 +137,8 @@ def run(
                 tracer_mode=tracer_mode,
                 tracer_fallback=tracer_fallback,
                 hash_algorithms=tuple(hash_algorithms),
+                block_tags=tuple(block_tags),
+                add_tags=tuple(add_tags),
             )
         )
     except ValueError as exc:
@@ -139,6 +177,8 @@ Options:
   --no-tracer-fallback    Disable runtime tracer fallback
   --hash <algo>           Add hash algorithm (can be repeated)
   -n, --name <name>       Set the name label for this step
+  --block-tag <kind>      Exempt a tag kind from automatic inheritance (repeatable)
+  --add-tag <kind=value>  Stamp a tag onto this run's outputs (repeatable)
 
 Hash algorithms: blake3 (default), sha256, sha512, md5
 

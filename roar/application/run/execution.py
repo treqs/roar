@@ -190,6 +190,8 @@ def execute_and_report(
     config_start_dir: str | Path | None = None,
     tracer_mode: str | None = None,
     tracer_fallback: bool | None = None,
+    block_tags: list[str] | None = None,
+    add_tags: list[str] | None = None,
 ) -> ExecutionReport:
     """Execute command via selected backend and show the run report."""
     hash_algos = cast(list[Literal["blake3", "sha256", "sha512", "md5"]], hash_algorithms)
@@ -210,6 +212,8 @@ def execute_and_report(
         hash_algorithms=hash_algos,
         tracer_mode=tracer_mode,  # type: ignore[arg-type]
         tracer_fallback=tracer_fallback,
+        block_tags=block_tags or [],
+        add_tags=add_tags or [],
     )
 
     backend = get_execution_backend(backend_name)

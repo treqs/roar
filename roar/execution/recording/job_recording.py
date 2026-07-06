@@ -340,6 +340,8 @@ class ExecutionJobRecorder:
                 repo_root=ctx.repo_root,
                 telemetry=telemetry_json,
                 hash_algorithms=list(ctx.hash_algorithms),
+                block_tags=tuple(ctx.block_tags),
+                add_tags=tuple(ctx.add_tags),
             )
 
             # Register proxy artifacts first so downstream output/input queries include them.

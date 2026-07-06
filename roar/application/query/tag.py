@@ -5,7 +5,7 @@ from __future__ import annotations
 from ...core.label_constants import TAG_NAMESPACE
 from ...db.context import create_database_context
 from ..label_rendering import flatten_label_metadata
-from ..tags import TagService
+from ..tags import TagService, parse_tag_kv
 from .requests import TagAddRequest, TagHistoryRequest, TagRmRequest, TagShowRequest
 from .results import (
     LabelCurrentSummary,
@@ -22,7 +22,7 @@ def tag_add(request: TagAddRequest) -> str:
 
 def build_tag_add_summary(request: TagAddRequest) -> LabelCurrentSummary:
     """Build the typed summary for a tag add operation."""
-    kind, value = _parse_kv(request.kv)
+    kind, value = parse_tag_kv(request.kv)
     with create_database_context(request.roar_dir) as db_ctx:
         svc = TagService(db_ctx, request.cwd)
         resolved = svc.resolve_target(request.target)
@@ -121,24 +121,10 @@ def build_tag_history_summary(request: TagHistoryRequest) -> LabelHistorySummary
 # ---------------------------------------------------------------------------
 
 
-def _parse_kv(kv: str) -> tuple[str, str]:
-    """Parse ``kind=value``. Raises ValueError on bad format."""
-    if "=" not in kv:
-        raise ValueError(f"Expected KIND=VALUE (e.g. license=MIT), got: {kv!r}")
-    kind, _, value = kv.partition("=")
-    kind = kind.strip()
-    value = value.strip()
-    if not kind:
-        raise ValueError(f"Kind cannot be empty in: {kv!r}")
-    if not value:
-        raise ValueError(f"Value cannot be empty in: {kv!r}")
-    return kind, value
-
-
 def _parse_kind_or_kv(key_or_kv: str) -> tuple[str, str | None]:
     """Parse ``kind`` or ``kind=value``. Returns (kind, value_or_None)."""
     if "=" in key_or_kv:
-        kind, value = _parse_kv(key_or_kv)
+        kind, value = parse_tag_kv(key_or_kv)
         return kind, value
     kind = key_or_kv.strip()
     if not kind:

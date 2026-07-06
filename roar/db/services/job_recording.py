@@ -10,7 +10,7 @@ import os
 from sqlalchemy.orm import Session as SASession
 
 from ...application.system_labels import refresh_job_system_labels
-from ...application.tags import propagate_tags
+from ...application.tags import parse_add_tags, propagate_tags, stamp_tags
 from ...core.label_origins import LABEL_ORIGIN_USER
 from ...core.step_name import STEP_NAME_LABEL_KEY, get_step_name_label
 from ..repositories import (
@@ -96,6 +96,8 @@ class JobRecordingService:
         repo_root: str | None = None,
         telemetry: str | None = None,
         hash_algorithms: list[str] | None = None,
+        block_tags: tuple[str, ...] = (),
+        add_tags: tuple[str, ...] = (),
     ) -> tuple[int, str]:
         """
         Record a job with its inputs and outputs.
@@ -119,6 +121,8 @@ class JobRecordingService:
             job_type: Job type ('run', 'build', etc.)
             repo_root: Repository root path for path normalization
             telemetry: JSON telemetry data (external service links)
+            block_tags: Tag kinds exempted from automatic inheritance from inputs
+            add_tags: Extra "KIND=VALUE" tags to stamp onto this job's outputs
             hash_algorithms: Hash algorithms to use (default: ['blake3'])
 
         Returns:
@@ -209,7 +213,14 @@ class JobRecordingService:
             self._label_repo,
             input_artifact_ids=input_artifact_ids,
             output_artifact_ids=output_artifact_ids,
+            blocked_kinds=frozenset(kind.strip() for kind in block_tags if kind.strip()),
         )
+        if add_tags:
+            stamp_tags(
+                self._label_repo,
+                output_artifact_ids=output_artifact_ids,
+                tags=parse_add_tags(add_tags),
+            )
 
         # Commit transaction
         self._session.commit()

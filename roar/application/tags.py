@@ -19,7 +19,7 @@ from collections.abc import Iterable
 from typing import Any, Protocol
 
 from ..core.label_constants import TAG_NAMESPACE
-from ..core.label_origins import LABEL_ORIGIN_SYSTEM
+from ..core.label_origins import LABEL_ORIGIN_SYSTEM, LABEL_ORIGIN_USER
 from ..db.context import DatabaseContext
 from .label_rendering import flatten_label_metadata
 from .labels import LabelService, LabelTargetRef
@@ -177,34 +177,92 @@ def propagate_tags(
         return
 
     for artifact_id in output_ids:
-        current = label_repo.get_current("artifact", artifact_id=artifact_id)
-        current_metadata = current.get("metadata") if isinstance(current, dict) else {}
-        if not isinstance(current_metadata, dict):
-            current_metadata = {}
+        _merge_tags_into_artifact(label_repo, artifact_id, inherited, LABEL_ORIGIN_SYSTEM)
 
-        existing_tag_ns = current_metadata.get(TAG_NAMESPACE)
-        tag_ns = dict(existing_tag_ns) if isinstance(existing_tag_ns, dict) else {}
-        changed = False
-        for kind, incoming_values in inherited.items():
-            existing_values = _as_value_list(tag_ns.get(kind))
-            union = list(existing_values)
-            for value in incoming_values:
-                if value not in union:
-                    union.append(value)
-                    changed = True
-            tag_ns[kind] = union
 
-        if not changed:
-            continue
+def stamp_tags(
+    label_repo: _TagLabelRepo,
+    *,
+    output_artifact_ids: Iterable[str],
+    tags: dict[str, list[str]],
+) -> None:
+    """Stamp explicit ``KIND=VALUE`` tags directly onto a job's output artifacts.
 
-        merged_metadata = dict(current_metadata)
-        merged_metadata[TAG_NAMESPACE] = tag_ns
-        label_repo.create_version(
-            "artifact",
-            merged_metadata,
-            artifact_id=artifact_id,
-            write_origin=LABEL_ORIGIN_SYSTEM,
-        )
+    Unlike ``propagate_tags`` (inherited from inputs), these values were
+    explicitly requested by the user at record time (e.g. via
+    ``roar run --add-tag license=MIT``), so writes use the user write-origin
+    — the same origin as a manual ``roar tag add``.
+    """
+    if not tags:
+        return
+    output_ids = list(dict.fromkeys(o for o in output_artifact_ids if o))
+    if not output_ids:
+        return
+
+    for artifact_id in output_ids:
+        _merge_tags_into_artifact(label_repo, artifact_id, tags, LABEL_ORIGIN_USER)
+
+
+def parse_tag_kv(kv: str) -> tuple[str, str]:
+    """Parse ``kind=value``. Raises ValueError on bad format."""
+    if "=" not in kv:
+        raise ValueError(f"Expected KIND=VALUE (e.g. license=MIT), got: {kv!r}")
+    kind, _, value = kv.partition("=")
+    kind = kind.strip()
+    value = value.strip()
+    if not kind:
+        raise ValueError(f"Kind cannot be empty in: {kv!r}")
+    if not value:
+        raise ValueError(f"Value cannot be empty in: {kv!r}")
+    return kind, value
+
+
+def parse_add_tags(pairs: Iterable[str]) -> dict[str, list[str]]:
+    """Parse repeated ``KIND=VALUE`` strings into a grouped, deduped tag dict."""
+    grouped: dict[str, list[str]] = {}
+    for pair in pairs:
+        kind, value = parse_tag_kv(pair)
+        bucket = grouped.setdefault(kind, [])
+        if value not in bucket:
+            bucket.append(value)
+    return grouped
+
+
+def _merge_tags_into_artifact(
+    label_repo: _TagLabelRepo,
+    artifact_id: str,
+    incoming: dict[str, list[str]],
+    write_origin: str,
+) -> None:
+    """Union *incoming* kind/value pairs into one artifact's current tag namespace."""
+    current = label_repo.get_current("artifact", artifact_id=artifact_id)
+    current_metadata = current.get("metadata") if isinstance(current, dict) else {}
+    if not isinstance(current_metadata, dict):
+        current_metadata = {}
+
+    existing_tag_ns = current_metadata.get(TAG_NAMESPACE)
+    tag_ns = dict(existing_tag_ns) if isinstance(existing_tag_ns, dict) else {}
+    changed = False
+    for kind, incoming_values in incoming.items():
+        existing_values = _as_value_list(tag_ns.get(kind))
+        union = list(existing_values)
+        for value in incoming_values:
+            if value not in union:
+                union.append(value)
+                changed = True
+        tag_ns[kind] = union
+
+    if not changed:
+        return
+
+    merged_metadata = dict(current_metadata)
+    merged_metadata[TAG_NAMESPACE] = tag_ns
+    label_repo.create_version(
+        "artifact",
+        merged_metadata,
+        artifact_id=artifact_id,
+        write_origin=write_origin,
+    )
 
 
 def _current_tag_namespace(label_repo: _TagLabelRepo, artifact_id: str) -> dict[str, Any]:

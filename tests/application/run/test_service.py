@@ -73,6 +73,36 @@ def test_run_command_resolves_dag_reference_and_can_abort_on_stale_upstream(
     presenter.print.assert_called_with("Aborted.")
 
 
+def test_run_command_forwards_block_and_add_tags_to_execute_and_report(tmp_path: Path) -> None:
+    planned = SimpleNamespace(
+        backend_name="local",
+        command=["python", "train.py"],
+        execution_role="host",
+        finalize_run=None,
+    )
+    mock_report = MagicMock(exit_code=0)
+
+    with (
+        patch("roar.application.run.service.validate_git_clean", return_value=str(tmp_path)),
+        patch("roar.application.run.service.resolve_verbosity", return_value="normal"),
+        patch("roar.application.run.service.get_hash_algorithms", return_value=["blake3"]),
+        patch("roar.application.run.service.plan_execution_command", return_value=planned),
+        patch(
+            "roar.application.run.service.execute_and_report", return_value=mock_report
+        ) as mock_exec,
+    ):
+        run_command(
+            _run_request(
+                tmp_path,
+                block_tags=("license",),
+                add_tags=("jurisdiction=EU",),
+            )
+        )
+
+    assert mock_exec.call_args.kwargs["block_tags"] == ["license"]
+    assert mock_exec.call_args.kwargs["add_tags"] == ["jurisdiction=EU"]
+
+
 def test_run_command_raises_when_backend_does_not_provide_execution_role(tmp_path: Path) -> None:
     planned = SimpleNamespace(
         backend_name="local",
