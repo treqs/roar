@@ -291,9 +291,7 @@ def test_label_sync_propagates_local_unsets_as_remote_deletions(
     ]
     remote_state = fake_glaas_publish_server.current_labels_by_target
     remote_label = next(
-        label
-        for label in remote_state.values()
-        if label.get("artifactHash") == artifact_hash
+        label for label in remote_state.values() if label.get("artifactHash") == artifact_hash
     )
     assert remote_label["metadata"] == {"owner": "ml"}
 
@@ -336,8 +334,6 @@ def test_label_sync_syncs_a_fully_unset_target_as_pure_deletions(
     assert request["labels"][0]["deleted_keys"] == ["stage"]
     remote_state = fake_glaas_publish_server.current_labels_by_target
     remote_label = next(
-        label
-        for label in remote_state.values()
-        if label.get("artifactHash") == artifact_hash
+        label for label in remote_state.values() if label.get("artifactHash") == artifact_hash
     )
     assert remote_label["metadata"] == {}
