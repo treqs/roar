@@ -67,13 +67,14 @@ def test_resolve_consumes_view_edge_via_sha256_crosswalk_and_prunes():
         find=lambda digest, algo="sha256": ["anchor-1"] if digest == shard_sha else [],
     )
 
-    edges, prune = resolve_view_edges_for_job(db_ctx=db, input_hashes=[shard_blake3])
+    edges, prune, leaf_hashes = resolve_view_edges_for_job(db_ctx=db, input_hashes=[shard_blake3])
     assert len(edges) == 1
     assert edges[0]["relation"] == "consumes"
     assert edges[0]["target_hash"] == "d" * 64
     assert edges[0]["parent_total"] == 6543
     assert edges[0]["selected_count"] == 1
     assert prune == {shard_blake3}
+    assert leaf_hashes == {shard_blake3}
     assert _bloom_member(edges[0]["bloom"], "sha256", shard_sha) is True
 
 
@@ -95,11 +96,12 @@ def test_resolve_blake3_leaf_for_local_put_composite():
         ),
     )
 
-    edges, prune = resolve_view_edges_for_job(db_ctx=db, input_hashes=[leaf_blake3])
+    edges, prune, leaf_hashes = resolve_view_edges_for_job(db_ctx=db, input_hashes=[leaf_blake3])
     assert len(edges) == 1
     assert edges[0]["target_hash"] == "c" * 64
     assert edges[0]["parent_total"] == 8
     assert prune == {leaf_blake3}
+    assert leaf_hashes == {leaf_blake3}
     # Bloom is keyed by blake3, not sha256.
     assert _bloom_member(edges[0]["bloom"], "blake3", leaf_blake3) is True
     assert _bloom_member(edges[0]["bloom"], "sha256", leaf_blake3) is False
@@ -132,7 +134,7 @@ def test_resolve_produces_view_edge_for_run_written_dataset():
         ["zarr-anchor"] if digest in (leaf_a, leaf_b) and algo == "blake3" else []
     )
 
-    edges, prune = resolve_view_edges_for_job(
+    edges, prune, leaf_hashes = resolve_view_edges_for_job(
         db_ctx=db, input_hashes=[leaf_a, leaf_b, anchor], relation="produces"
     )
     assert len(edges) == 1
@@ -142,6 +144,10 @@ def test_resolve_produces_view_edge_for_run_written_dataset():
     assert edges[0]["selected_count"] == 2
     # Both produced leaves and the directly-linked anchor collapse out of the bundle.
     assert prune == {leaf_a, leaf_b, anchor}
+    # But only the true leaves are reported as composite-member hashes — the anchor's
+    # own hash must never be excluded from label sync just because it was also pruned
+    # from the plain job edges.
+    assert leaf_hashes == {leaf_a, leaf_b}
     assert _bloom_member(edges[0]["bloom"], "blake3", leaf_a) is True
 
 
@@ -152,9 +158,10 @@ def test_resolve_no_crosswalk_means_no_view_edges():
         anchors_by_id={},
         find=lambda digest, algo="sha256": [],
     )
-    edges, prune = resolve_view_edges_for_job(db_ctx=db, input_hashes=[plain])
+    edges, prune, leaf_hashes = resolve_view_edges_for_job(db_ctx=db, input_hashes=[plain])
     assert edges == []
     assert prune == set()
+    assert leaf_hashes == set()
 
 
 def _bloom_member_raw(bloom: dict, key: bytes) -> bool:

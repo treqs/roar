@@ -115,16 +115,23 @@ def resolve_view_edges_for_job(
     db_ctx: Any,
     input_hashes: list[str],
     relation: Literal["consumes", "produces"] = "consumes",
-) -> tuple[list[dict[str, Any]], set[str]]:
+) -> tuple[list[dict[str, Any]], set[str], set[str]]:
     """Resolve a job's leaf *hashes* into view edges + hashes to prune.
 
     Works from the collected-lineage hashes (not artifact ids). ``relation`` is the side
     being resolved: ``consumes`` over a job's input hashes (a run that read part of a
     dataset) or ``produces`` over its output hashes (a run that wrote one). The resolution
     is identical either way — each leaf is matched to the anchor composite(s) that carry
-    it as a component. Returns ``(view_edges, prune_hashes)`` — the second being the leaf
-    hashes that collapse into a view edge plus any anchor composite hash linked as a plain
-    input/output (the view edge replaces it).
+    it as a component. Returns ``(view_edges, prune_hashes, leaf_hashes)``:
+
+    - ``prune_hashes``: the leaf hashes that collapse into a view edge plus any anchor
+      composite hash linked as a plain input/output (the view edge replaces it). Used to
+      drop these from a job's plain input/output edges.
+    - ``leaf_hashes``: strictly the true component/leaf hashes subsumed into a view edge
+      (a subset of ``prune_hashes`` that excludes a directly-linked anchor's own hash).
+      A composite member never has its own session-scoped edge on GLaaS — it has no
+      standing to carry its own labels/tags either, so callers use this set to keep
+      per-leaf label/tag documents out of publish-time label sync.
 
     BOUNDARY: matching uses ``find_by_component_digest``, which only knows the anchor's
     *stored* components (capped at ``_MAX_STORED_COMPONENTS`` = 1000). For a dataset with
@@ -138,7 +145,7 @@ def resolve_view_edges_for_job(
     artifacts_repo: Any = optional_repo(db_ctx, "artifacts")
     composites_repo: Any = optional_repo(db_ctx, "composites")
     if artifacts_repo is None or composites_repo is None:
-        return [], set()
+        return [], set(), set()
 
     # anchor_id -> {"algorithm": str, "leaves": set, "shards": set}
     by_anchor: dict[str, dict[str, Any]] = {}
@@ -174,6 +181,7 @@ def resolve_view_edges_for_job(
                 _attribute(blake3_digest, "blake3", digest)
 
     view_edges: list[dict[str, Any]] = []
+    leaf_hashes: set[str] = set()
     for anchor_id, bucket in by_anchor.items():
         anchor = artifacts_repo.get(anchor_id)
         anchor_digest = _primary_composite_digest(anchor)
@@ -189,8 +197,9 @@ def resolve_view_edges_for_job(
             )
         )
         prune |= bucket["shards"]
+        leaf_hashes |= bucket["shards"]
 
-    return view_edges, prune
+    return view_edges, prune, leaf_hashes
 
 
 def _primary_composite_digest(artifact: dict[str, Any] | None) -> str | None:

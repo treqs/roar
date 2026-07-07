@@ -496,7 +496,7 @@ def _load_remote_job_uid_mapping(*, roar_dir: Path, session_id: Any) -> dict[str
 
 def _prepare_view_edges_for_lineage(
     *, roar_dir: Path, lineage: Any, logger: Any
-) -> dict[str, list[Any]]:
+) -> tuple[dict[str, list[Any]], set[str]]:
     """Compute consumes/produces view edges per job and prune the subsumed leaves in-place.
 
     A job that read part of a dataset gets a ``consumes`` view edge over its inputs; a job
@@ -505,15 +505,21 @@ def _prepare_view_edges_for_lineage(
     and any anchor linked as a plain input/output — are removed from the bundle so the job
     links the dataset *view* (job -> view -> anchor -> leaves), not the loose leaves or the
     anchor directly. The anchor composite stays in ``lineage.artifacts`` (already
-    collected) so it is still registered. Returns ``{job_uid: [view_edge, ...]}`` to push
-    after the main registration.
+    collected) so it is still registered.
+
+    Returns ``({job_uid: [view_edge, ...]}, composite_leaf_hashes)``: the view edges to
+    push after the main registration, and the union of true component/leaf hashes (never
+    the anchor's own hash) subsumed across all jobs — a leaf has no session-scoped edge on
+    GLaaS, so the caller uses this set to keep leaf label/tag documents out of publish-time
+    label sync too.
     """
     from .view_edges import resolve_view_edges_for_job
 
     jobs = getattr(lineage, "jobs", []) or []
     if not jobs:
-        return {}
+        return {}, set()
     view_edges_by_job: dict[str, list[Any]] = {}
+    composite_leaf_hashes: set[str] = set()
     with create_database_context(roar_dir) as db:
         for job in jobs:
             if not isinstance(job, dict):
@@ -530,7 +536,7 @@ def _prepare_view_edges_for_lineage(
                 hashes = list(job.get(hashes_key) or [])
                 if not hashes:
                     continue
-                resolved, prune = resolve_view_edges_for_job(
+                resolved, prune, leaf_hashes = resolve_view_edges_for_job(
                     db_ctx=db, input_hashes=hashes, relation=relation
                 )
                 if not resolved:
@@ -539,9 +545,10 @@ def _prepare_view_edges_for_lineage(
                 job[hashes_key] = [h for h in hashes if h not in prune]
                 if isinstance(job.get(items_key), list):
                     job[items_key] = [i for i in job[items_key] if i.get("hash") not in prune]
+                composite_leaf_hashes |= leaf_hashes
             if edges:
                 view_edges_by_job[str(job_uid)] = edges
-    return view_edges_by_job
+    return view_edges_by_job, composite_leaf_hashes
 
 
 def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageResponse:
@@ -628,13 +635,15 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         # bloom over the touched leaves) and prune the subsumed leaves from the bundle.
         # Pushed after the main registration. Best-effort.
         view_edges_by_job: dict[str, list[Any]] = {}
+        composite_leaf_hashes: frozenset[str] = frozenset()
         if not request.dry_run:
             try:
-                view_edges_by_job = _prepare_view_edges_for_lineage(
+                view_edges_by_job, leaf_hashes = _prepare_view_edges_for_lineage(
                     roar_dir=request.roar_dir,
                     lineage=collected_lineage.lineage,
                     logger=logger,
                 )
+                composite_leaf_hashes = frozenset(leaf_hashes)
             except Exception as exc:  # view-edge prep is best-effort
                 logger.debug("view-edge preparation skipped: %s", exc)
 
@@ -728,6 +737,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             skip_confirmation=request.skip_confirmation,
             confirm_callback=request.confirm_callback,
             prepared=prepared,
+            composite_leaf_hashes=composite_leaf_hashes,
         )
 
         # Push the consumes view edges now that the jobs + the anchor composite are
