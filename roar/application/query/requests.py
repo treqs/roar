@@ -110,6 +110,40 @@ class LabelSyncRequest:
     output_json: bool = False
 
 
+@dataclass(frozen=True)
+class RemoteLabelSetRequest:
+    cwd: Path
+    entity_type: str
+    target: str
+    pairs: tuple[str, ...]
+    session_hash: str | None = None
+
+
+@dataclass(frozen=True)
+class RemoteLabelUnsetRequest:
+    cwd: Path
+    entity_type: str
+    target: str
+    keys: tuple[str, ...]
+    session_hash: str | None = None
+
+
+@dataclass(frozen=True)
+class RemoteLabelShowRequest:
+    cwd: Path
+    entity_type: str
+    target: str
+    session_hash: str | None = None
+
+
+@dataclass(frozen=True)
+class RemoteLabelHistoryRequest:
+    cwd: Path
+    entity_type: str
+    target: str
+    session_hash: str | None = None
+
+
 DiffFormat = Literal["summary", "category", "dag"]
 
 

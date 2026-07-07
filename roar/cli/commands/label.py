@@ -1,13 +1,18 @@
 """
-Local label command group.
+Label command group.
 
 Usage:
-    roar label set <dag|job|artifact> <target> key=value [...]
-    roar label unset <dag|job|artifact> <target> key [...]
-    roar label cp <dag|job|artifact> <source> <dag|job|artifact> <dest>
-    roar label show <dag|job|artifact> <target>
-    roar label history <dag|job|artifact> <target>
-    roar label sync [dag|job|artifact] [target]
+    roar label set <dag|job|composite|artifact> <target> key=value [...]
+    roar label unset <dag|job|composite|artifact> <target> key [...]
+    roar label cp <dag|job|composite|artifact> <source> <dag|job|composite|artifact> <dest>
+    roar label show <dag|job|composite|artifact> <target>
+    roar label history <dag|job|composite|artifact> <target>
+    roar label sync [dag|job|composite|artifact] [target]
+
+Local mode (default) edits the versioned label documents in `.roar/roar.db`;
+`roar label sync` pushes them to GLaaS. With `--remote`, set/unset/show/history
+operate directly on GLaaS by remote identifiers (session hash, job uid,
+artifact/composite hash) — no local project or session required.
 """
 
 from __future__ import annotations
@@ -16,6 +21,10 @@ import click
 
 from ...application.query.label import (
     copy_labels,
+    remote_label_history,
+    remote_set_labels,
+    remote_show_labels,
+    remote_unset_labels,
     set_labels,
     show_labels,
     sync_labels,
@@ -31,17 +40,38 @@ from ...application.query.requests import (
     LabelShowRequest,
     LabelSyncRequest,
     LabelUnsetRequest,
+    RemoteLabelHistoryRequest,
+    RemoteLabelSetRequest,
+    RemoteLabelShowRequest,
+    RemoteLabelUnsetRequest,
 )
 from ..context import RoarContext
-from ..decorators import require_init
+from ..decorators import ensure_initialized, require_init
 
-_ENTITY_TYPE = click.Choice(["dag", "job", "artifact"], case_sensitive=False)
+_ENTITY_TYPE = click.Choice(["dag", "job", "composite", "artifact"], case_sensitive=False)
+
+_REMOTE_HELP = (
+    "Edit labels directly on GLaaS by remote identifiers "
+    "(session hash, job uid, artifact hash); no local project required."
+)
+_SESSION_HELP = "Session hash for --remote job targets (optional for artifact targets)."
+
+
+def _local_entity_type(entity_type: str) -> str:
+    """Composite artifacts are labeled as artifact targets."""
+    normalized = entity_type.strip().lower()
+    return "artifact" if normalized == "composite" else normalized
+
+
+def _require_remote_for_session(remote: bool, session_hash: str | None) -> None:
+    if session_hash and not remote:
+        raise ValueError("--session is only valid together with --remote.")
 
 
 @click.group("label", invoke_without_command=True)
 @click.pass_context
 def label(ctx: click.Context) -> None:
-    """Manage local labels and sync user-managed label updates to GLaaS."""
+    """Manage labels locally and on GLaaS."""
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 
@@ -50,20 +80,41 @@ def label(ctx: click.Context) -> None:
 @click.argument("entity_type", type=_ENTITY_TYPE)
 @click.argument("target")
 @click.argument("pairs", nargs=-1, required=True)
+@click.option("--remote", is_flag=True, help=_REMOTE_HELP)
+@click.option("--session", "session_hash", default=None, help=_SESSION_HELP)
 @click.pass_obj
-@require_init
-def label_set(ctx: RoarContext, entity_type: str, target: str, pairs: tuple[str, ...]) -> None:
+def label_set(
+    ctx: RoarContext,
+    entity_type: str,
+    target: str,
+    pairs: tuple[str, ...],
+    remote: bool,
+    session_hash: str | None,
+) -> None:
     """Patch the current label document for a target."""
     try:
-        rendered = set_labels(
-            LabelSetRequest(
-                roar_dir=ctx.roar_dir,
-                cwd=ctx.cwd,
-                entity_type=entity_type,
-                target=target,
-                pairs=pairs,
+        _require_remote_for_session(remote, session_hash)
+        if remote:
+            rendered = remote_set_labels(
+                RemoteLabelSetRequest(
+                    cwd=ctx.cwd,
+                    entity_type=entity_type,
+                    target=target,
+                    pairs=pairs,
+                    session_hash=session_hash,
+                )
             )
-        )
+        else:
+            ensure_initialized(ctx)
+            rendered = set_labels(
+                LabelSetRequest(
+                    roar_dir=ctx.roar_dir,
+                    cwd=ctx.cwd,
+                    entity_type=_local_entity_type(entity_type),
+                    target=target,
+                    pairs=pairs,
+                )
+            )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(rendered)
@@ -73,20 +124,41 @@ def label_set(ctx: RoarContext, entity_type: str, target: str, pairs: tuple[str,
 @click.argument("entity_type", type=_ENTITY_TYPE)
 @click.argument("target")
 @click.argument("keys", nargs=-1, required=True)
+@click.option("--remote", is_flag=True, help=_REMOTE_HELP)
+@click.option("--session", "session_hash", default=None, help=_SESSION_HELP)
 @click.pass_obj
-@require_init
-def label_unset(ctx: RoarContext, entity_type: str, target: str, keys: tuple[str, ...]) -> None:
-    """Remove label keys from the current local label document for a target."""
+def label_unset(
+    ctx: RoarContext,
+    entity_type: str,
+    target: str,
+    keys: tuple[str, ...],
+    remote: bool,
+    session_hash: str | None,
+) -> None:
+    """Remove label keys from the current label document for a target."""
     try:
-        rendered = unset_labels(
-            LabelUnsetRequest(
-                roar_dir=ctx.roar_dir,
-                cwd=ctx.cwd,
-                entity_type=entity_type,
-                target=target,
-                keys=keys,
+        _require_remote_for_session(remote, session_hash)
+        if remote:
+            rendered = remote_unset_labels(
+                RemoteLabelUnsetRequest(
+                    cwd=ctx.cwd,
+                    entity_type=entity_type,
+                    target=target,
+                    keys=keys,
+                    session_hash=session_hash,
+                )
             )
-        )
+        else:
+            ensure_initialized(ctx)
+            rendered = unset_labels(
+                LabelUnsetRequest(
+                    roar_dir=ctx.roar_dir,
+                    cwd=ctx.cwd,
+                    entity_type=_local_entity_type(entity_type),
+                    target=target,
+                    keys=keys,
+                )
+            )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(rendered)
@@ -112,9 +184,9 @@ def label_cp(
             LabelCopyRequest(
                 roar_dir=ctx.roar_dir,
                 cwd=ctx.cwd,
-                source_entity_type=source_entity_type,
+                source_entity_type=_local_entity_type(source_entity_type),
                 source_target=source_target,
-                destination_entity_type=destination_entity_type,
+                destination_entity_type=_local_entity_type(destination_entity_type),
                 destination_target=destination_target,
             )
         )
@@ -126,19 +198,38 @@ def label_cp(
 @label.command("show")
 @click.argument("entity_type", type=_ENTITY_TYPE)
 @click.argument("target")
+@click.option("--remote", is_flag=True, help=_REMOTE_HELP)
+@click.option("--session", "session_hash", default=None, help=_SESSION_HELP)
 @click.pass_obj
-@require_init
-def label_show(ctx: RoarContext, entity_type: str, target: str) -> None:
-    """Show the current local label document for a target."""
+def label_show(
+    ctx: RoarContext,
+    entity_type: str,
+    target: str,
+    remote: bool,
+    session_hash: str | None,
+) -> None:
+    """Show the current label document for a target."""
     try:
-        rendered = show_labels(
-            LabelShowRequest(
-                roar_dir=ctx.roar_dir,
-                cwd=ctx.cwd,
-                entity_type=entity_type,
-                target=target,
+        _require_remote_for_session(remote, session_hash)
+        if remote:
+            rendered = remote_show_labels(
+                RemoteLabelShowRequest(
+                    cwd=ctx.cwd,
+                    entity_type=entity_type,
+                    target=target,
+                    session_hash=session_hash,
+                )
             )
-        )
+        else:
+            ensure_initialized(ctx)
+            rendered = show_labels(
+                LabelShowRequest(
+                    roar_dir=ctx.roar_dir,
+                    cwd=ctx.cwd,
+                    entity_type=_local_entity_type(entity_type),
+                    target=target,
+                )
+            )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(rendered)
@@ -168,7 +259,7 @@ def label_sync(
             LabelSyncRequest(
                 roar_dir=ctx.roar_dir,
                 cwd=ctx.cwd,
-                entity_type=entity_type,
+                entity_type=_local_entity_type(entity_type) if entity_type else entity_type,
                 target=target,
                 dry_run=dry_run,
                 output_json=output_json,
@@ -182,19 +273,38 @@ def label_sync(
 @label.command("history")
 @click.argument("entity_type", type=_ENTITY_TYPE)
 @click.argument("target")
+@click.option("--remote", is_flag=True, help=_REMOTE_HELP)
+@click.option("--session", "session_hash", default=None, help=_SESSION_HELP)
 @click.pass_obj
-@require_init
-def label_history(ctx: RoarContext, entity_type: str, target: str) -> None:
-    """Show all local label versions for a target."""
+def label_history(
+    ctx: RoarContext,
+    entity_type: str,
+    target: str,
+    remote: bool,
+    session_hash: str | None,
+) -> None:
+    """Show all label versions for a target."""
     try:
-        rendered = render_label_history(
-            LabelHistoryRequest(
-                roar_dir=ctx.roar_dir,
-                cwd=ctx.cwd,
-                entity_type=entity_type,
-                target=target,
+        _require_remote_for_session(remote, session_hash)
+        if remote:
+            rendered = remote_label_history(
+                RemoteLabelHistoryRequest(
+                    cwd=ctx.cwd,
+                    entity_type=entity_type,
+                    target=target,
+                    session_hash=session_hash,
+                )
             )
-        )
+        else:
+            ensure_initialized(ctx)
+            rendered = render_label_history(
+                LabelHistoryRequest(
+                    roar_dir=ctx.roar_dir,
+                    cwd=ctx.cwd,
+                    entity_type=_local_entity_type(entity_type),
+                    target=target,
+                )
+            )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(rendered)

@@ -527,3 +527,351 @@ def test_build_label_history_summary_returns_versioned_entries(tmp_path: Path) -
         summary.render()
         == "Version 1:\n  owner=ml\n  stage=raw\n\nVersion 2:\n  owner=ml\n  stage=gold"
     )
+
+
+def _mock_remote_client(
+    *,
+    current: tuple[dict | None, str | None] = (None, "HTTP 404: Label not found"),
+    reconcile: tuple[dict | None, str | None] | None = None,
+    history: tuple[dict | None, str | None] | None = None,
+    scope_request: dict | None = None,
+) -> MagicMock:
+    client = MagicMock()
+    client.publish_auth = SimpleNamespace(
+        access_token="test-token",
+        ssh_auth_available=False,
+        scope_request=scope_request,
+    )
+    client.get_current_labels.return_value = current
+    if reconcile is not None:
+        client.reconcile_labels.return_value = reconcile
+    if history is not None:
+        client.get_label_history.return_value = history
+    return client
+
+
+def _remote_patches(client: MagicMock):
+    return (
+        patch(
+            "roar.application.query.label.load_publish_auth_context",
+            return_value=client.publish_auth,
+        ),
+        patch("roar.application.query.label.GlaasClient", return_value=client),
+    )
+
+
+def test_remote_target_params_validates_identifiers() -> None:
+    from roar.application.query.label import _remote_target_params
+
+    session = "a" * 64
+    assert _remote_target_params("dag", session.upper(), None) == {
+        "entity_type": "dag",
+        "session_hash": session,
+    }
+    assert _remote_target_params("job", "step-1", session) == {
+        "entity_type": "job",
+        "session_hash": session,
+        "job_uid": "step-1",
+    }
+    assert _remote_target_params("composite", "ABCD1234", None) == {
+        "entity_type": "artifact",
+        "artifact_hash": "abcd1234",
+    }
+    assert _remote_target_params("artifact", "b" * 64, session) == {
+        "entity_type": "artifact",
+        "artifact_hash": "b" * 64,
+        "session_hash": session,
+    }
+
+    for entity_type, target, session_hash, message in [
+        ("dag", "abc123", None, "64-character"),
+        ("job", "step-1", None, "--session"),
+        ("job", "", session, "job uid"),
+        ("artifact", "xyz", None, "8 hex"),
+        ("dag", "a" * 64, "b" * 64, "conflicts"),
+        ("artifact", "b" * 64, "not-a-hash", "--session must be"),
+    ]:
+        try:
+            _remote_target_params(entity_type, target, session_hash)
+        except ValueError as exc:
+            assert message in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError(f"Expected ValueError for {entity_type}:{target}")
+
+
+def test_remote_set_sends_patch_with_base_version(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelSetRequest
+    from roar.application.query.label import build_remote_set_labels_summary
+
+    session = "a" * 64
+    client = _mock_remote_client(
+        current=({"version": 3, "metadata": {"team": "nlp"}, "canEdit": True}, None),
+        reconcile=(
+            {
+                "processed": 1,
+                "created": 0,
+                "updated": 1,
+                "noops": 0,
+                "results": [
+                    {"entityType": "dag", "sessionHash": session, "action": "updated", "version": 4}
+                ],
+            },
+            None,
+        ),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        summary = build_remote_set_labels_summary(
+            RemoteLabelSetRequest(
+                cwd=tmp_path,
+                entity_type="dag",
+                target=session,
+                pairs=("team=cv", "priority=2"),
+            )
+        )
+
+    client.reconcile_labels.assert_called_once_with(
+        {
+            "session_hash": session,
+            "mode": "sync_user_labels",
+            "dry_run": False,
+            "prune": False,
+            "labels": [
+                {
+                    "entity_type": "dag",
+                    "session_hash": session,
+                    "metadata": {"priority": 2, "team": "cv"},
+                    "base_version": 3,
+                }
+            ],
+        }
+    )
+    assert summary.heading == "Updated remote labels: processed=1 created=0 updated=1 noops=0"
+
+
+def test_remote_set_creates_when_no_labels_exist(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelSetRequest
+    from roar.application.query.label import build_remote_set_labels_summary
+
+    session = "a" * 64
+    client = _mock_remote_client(
+        current=(None, "HTTP 404: Label not found"),
+        reconcile=(
+            {"processed": 1, "created": 1, "updated": 0, "noops": 0, "results": []},
+            None,
+        ),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        build_remote_set_labels_summary(
+            RemoteLabelSetRequest(
+                cwd=tmp_path, entity_type="dag", target=session, pairs=("team=cv",)
+            )
+        )
+
+    sent = client.reconcile_labels.call_args.args[0]["labels"][0]
+    assert sent["base_version"] == 0
+    assert sent["metadata"] == {"team": "cv"}
+
+
+def test_remote_set_rejects_reserved_keys(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelSetRequest
+    from roar.application.query.label import build_remote_set_labels_summary
+
+    try:
+        build_remote_set_labels_summary(
+            RemoteLabelSetRequest(
+                cwd=tmp_path,
+                entity_type="dag",
+                target="a" * 64,
+                pairs=("roar.pipeline=hijack",),
+            )
+        )
+    except ValueError as exc:
+        assert "Reserved label keys" in str(exc)
+    else:  # pragma: no cover - defensive assertion style
+        raise AssertionError("Expected ValueError for reserved keys")
+
+
+def test_remote_unset_sends_deleted_keys(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelUnsetRequest
+    from roar.application.query.label import build_remote_unset_labels_summary
+
+    session = "a" * 64
+    artifact = "b" * 64
+    client = _mock_remote_client(
+        current=(
+            {
+                "version": 2,
+                "metadata": {"stage": "gold", "team": "nlp"},
+                "sessionHash": session,
+                "artifactHash": artifact,
+            },
+            None,
+        ),
+        reconcile=(
+            {
+                "processed": 1,
+                "created": 0,
+                "updated": 1,
+                "noops": 0,
+                "deletedKeys": 1,
+                "results": [
+                    {
+                        "entityType": "artifact",
+                        "artifactHash": artifact,
+                        "action": "updated",
+                        "version": 3,
+                        "deletedKeys": ["stage"],
+                    }
+                ],
+            },
+            None,
+        ),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        summary = build_remote_unset_labels_summary(
+            RemoteLabelUnsetRequest(
+                cwd=tmp_path,
+                entity_type="artifact",
+                target=artifact[:12],
+                keys=("stage",),
+            )
+        )
+
+    sent = client.reconcile_labels.call_args.args[0]
+    assert sent["session_hash"] == session
+    assert sent["labels"][0] == {
+        "entity_type": "artifact",
+        "session_hash": session,
+        "artifact_hash": artifact,
+        "metadata": {},
+        "deleted_keys": ["stage"],
+        "base_version": 2,
+    }
+    assert "deleted_keys=1" in summary.heading
+    assert "(deleted: stage)" in summary.render()
+
+
+def test_remote_unset_requires_existing_labels(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelUnsetRequest
+    from roar.application.query.label import build_remote_unset_labels_summary
+
+    client = _mock_remote_client(current=(None, "HTTP 404: Label not found"))
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_unset_labels_summary(
+                RemoteLabelUnsetRequest(
+                    cwd=tmp_path, entity_type="dag", target="a" * 64, keys=("stage",)
+                )
+            )
+        except ValueError as exc:
+            assert "No remote labels found" in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for missing labels")
+
+
+def test_remote_show_renders_version_and_editability(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelShowRequest
+    from roar.application.query.label import build_remote_show_labels_summary
+
+    client = _mock_remote_client(
+        current=({"version": 5, "metadata": {"team": "nlp"}, "canEdit": False}, None)
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        summary = build_remote_show_labels_summary(
+            RemoteLabelShowRequest(cwd=tmp_path, entity_type="dag", target="a" * 64)
+        )
+
+    assert summary.heading == "Remote labels (version 5, read-only):"
+    assert summary.render() == "Remote labels (version 5, read-only):\n  team=nlp"
+
+
+def test_remote_history_renders_versions(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelHistoryRequest
+    from roar.application.query.label import build_remote_label_history_summary
+
+    client = _mock_remote_client(
+        history=(
+            {
+                "labels": [
+                    {"version": 1, "metadata": {"stage": "gold", "team": "nlp"}},
+                    {"version": 2, "metadata": {"team": "nlp"}},
+                ]
+            },
+            None,
+        )
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        summary = build_remote_label_history_summary(
+            RemoteLabelHistoryRequest(cwd=tmp_path, entity_type="dag", target="a" * 64)
+        )
+
+    assert [version.version for version in summary.versions] == [1, 2]
+
+
+def test_remote_edit_maps_permission_errors(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelSetRequest
+    from roar.application.query.label import build_remote_set_labels_summary
+
+    client = _mock_remote_client(
+        current=({"version": 1, "metadata": {}}, None),
+        reconcile=(None, "HTTP 403: Public label writes require the lineage creator"),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_set_labels_summary(
+                RemoteLabelSetRequest(
+                    cwd=tmp_path, entity_type="dag", target="a" * 64, pairs=("team=cv",)
+                )
+            )
+        except ValueError as exc:
+            assert "Remote label edit was denied" in str(exc)
+            assert "write access to the lineage's scope" in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for 403")
+
+
+def test_remote_set_resolves_artifact_session_when_unlabeled(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelSetRequest
+    from roar.application.query.label import build_remote_set_labels_summary
+
+    session = "a" * 64
+    artifact = "b" * 64
+    client = _mock_remote_client(
+        current=(None, "HTTP 404: Label not found"),
+        reconcile=(
+            {"processed": 1, "created": 1, "updated": 0, "noops": 0, "results": []},
+            None,
+        ),
+    )
+    client.get_artifact.return_value = {"hash": artifact, "originalSessionHash": session}
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        build_remote_set_labels_summary(
+            RemoteLabelSetRequest(
+                cwd=tmp_path,
+                entity_type="artifact",
+                target=artifact[:12],
+                pairs=("stage=gold",),
+            )
+        )
+
+    client.get_artifact.assert_called_once_with(artifact[:12])
+    sent = client.reconcile_labels.call_args.args[0]
+    assert sent["session_hash"] == session
+    assert sent["labels"][0]["artifact_hash"] == artifact
+    assert sent["labels"][0]["session_hash"] == session

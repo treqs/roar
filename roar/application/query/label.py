@@ -1,8 +1,9 @@
-"""Application orchestration for local label workflows."""
+"""Application orchestration for local and remote label workflows."""
 
 from __future__ import annotations
 
 import json
+import re
 import time
 from copy import deepcopy
 from typing import Any
@@ -17,7 +18,7 @@ from ..labels import (
     build_reconcile_payload_for_target,
     parse_label_pairs,
 )
-from ..system_labels import strip_reserved_system_labels
+from ..system_labels import is_reserved_system_label_path, strip_reserved_system_labels
 from .requests import (
     LabelCopyRequest,
     LabelHistoryRequest,
@@ -25,6 +26,10 @@ from .requests import (
     LabelShowRequest,
     LabelSyncRequest,
     LabelUnsetRequest,
+    RemoteLabelHistoryRequest,
+    RemoteLabelSetRequest,
+    RemoteLabelShowRequest,
+    RemoteLabelUnsetRequest,
 )
 from .results import (
     LabelCurrentSummary,
@@ -149,17 +154,7 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
                     "No local user-managed labels or label deletions to sync for current lineage."
                 )
 
-    publish_auth = _load_label_sync_publish_auth(request.cwd)
-
-    client = GlaasClient(
-        start_dir=str(request.cwd),
-        publish_auth=publish_auth,
-        allow_public_without_binding=publish_auth.scope_request is None,
-    )
-    if not client.publish_auth.access_token and not client.publish_auth.ssh_auth_available:
-        raise ValueError(
-            "Remote label sync requires authentication. Run `roar login` or configure SSH auth."
-        )
+    client = _create_remote_label_client(request.cwd, action="sync")
 
     payload: dict[str, Any] = {
         "session_hash": session_hash,
@@ -173,22 +168,7 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
 
     result, error = client.reconcile_labels(payload)
     if error:
-        if _is_missing_reconcile_route_error(error):
-            raise ValueError(
-                "Remote label sync requires GLaaS support for /api/v1/labels/reconcile."
-            ) from None
-        if error.startswith("HTTP 401"):
-            raise ValueError(
-                "Remote label sync was rejected as unauthenticated. "
-                "Run `roar login` (or configure SSH auth) and retry."
-            )
-        if error.startswith("HTTP 403"):
-            raise ValueError(
-                f"Remote label sync was denied: {error}. Editing remote labels requires "
-                "write access to the lineage's scope (lineage creator, publication "
-                "author, project writer, or org admin)."
-            )
-        raise ValueError(f"Remote label sync failed: {error}")
+        raise ValueError(_map_remote_label_error(error, action="sync")) from None
 
     if not request.dry_run:
         _mark_labels_synced(request.roar_dir, label_ids)
@@ -231,6 +211,318 @@ def _is_missing_reconcile_route_error(error: str) -> bool:
         return False
     normalized = error.lower()
     return "cannot post" in normalized and "/api/v1/labels/reconcile" in normalized
+
+
+def _create_remote_label_client(cwd: Any, *, action: str) -> GlaasClient:
+    """Build an authenticated GLaaS client for label operations.
+
+    Works from any directory: uses the repo scope binding when present and
+    falls back to global auth without a binding otherwise.
+    """
+    publish_auth = _load_label_sync_publish_auth(cwd)
+    client = GlaasClient(
+        start_dir=str(cwd),
+        publish_auth=publish_auth,
+        allow_public_without_binding=publish_auth.scope_request is None,
+    )
+    if not client.publish_auth.access_token and not client.publish_auth.ssh_auth_available:
+        raise ValueError(
+            f"Remote label {action} requires authentication. "
+            "Run `roar login` or configure SSH auth."
+        )
+    return client
+
+
+def _map_remote_label_error(error: str, *, action: str) -> str:
+    if _is_missing_reconcile_route_error(error):
+        return f"Remote label {action} requires GLaaS support for /api/v1/labels/reconcile."
+    if error.startswith("HTTP 401"):
+        return (
+            f"Remote label {action} was rejected as unauthenticated. "
+            "Run `roar login` (or configure SSH auth) and retry."
+        )
+    if error.startswith("HTTP 403"):
+        return (
+            f"Remote label {action} was denied: {error}. Editing remote labels requires "
+            "write access to the lineage's scope (lineage creator, publication "
+            "author, project writer, or org admin)."
+        )
+    if error.startswith("HTTP 409"):
+        return (
+            f"Remote label {action} conflicted with a concurrent edit: {error}. "
+            "Retry to apply the change against the latest version."
+        )
+    return f"Remote label {action} failed: {error}"
+
+
+_REMOTE_SESSION_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_REMOTE_ARTIFACT_HASH_PATTERN = re.compile(r"^[0-9a-f]{8,64}$")
+
+
+def _normalize_remote_entity_type(entity_type: str) -> str:
+    normalized = str(entity_type or "").strip().lower()
+    # Composite artifacts are labeled as artifact targets by their composite hash.
+    if normalized == "composite":
+        return "artifact"
+    return normalized
+
+
+def _remote_target_params(
+    entity_type: str,
+    target: str,
+    session_hash: str | None,
+) -> dict[str, str]:
+    """Validate remote identifiers and build the GLaaS label target params."""
+    entity = _normalize_remote_entity_type(entity_type)
+    normalized_target = str(target or "").strip()
+    normalized_session = str(session_hash or "").strip().lower() or None
+    if normalized_session and not _REMOTE_SESSION_HASH_PATTERN.match(normalized_session):
+        raise ValueError("--session must be a full 64-character hex session hash.")
+
+    if entity == "dag":
+        normalized_target = normalized_target.lower()
+        if not _REMOTE_SESSION_HASH_PATTERN.match(normalized_target):
+            raise ValueError(
+                "Remote dag targets are full 64-character hex session hashes "
+                "(the hash in the /dag/<hash> URL)."
+            )
+        if normalized_session and normalized_session != normalized_target:
+            raise ValueError("--session conflicts with the dag target; pass one session hash.")
+        return {"entity_type": "dag", "session_hash": normalized_target}
+
+    if entity == "job":
+        if not normalized_session:
+            raise ValueError("Remote job targets require --session <session-hash>.")
+        if not normalized_target:
+            raise ValueError("Remote job targets require a job uid.")
+        return {
+            "entity_type": "job",
+            "session_hash": normalized_session,
+            "job_uid": normalized_target,
+        }
+
+    if entity == "artifact":
+        normalized_target = normalized_target.lower()
+        if not _REMOTE_ARTIFACT_HASH_PATTERN.match(normalized_target):
+            raise ValueError(
+                "Remote artifact targets are content hashes (at least 8 hex characters)."
+            )
+        params = {"entity_type": "artifact", "artifact_hash": normalized_target}
+        if normalized_session:
+            params["session_hash"] = normalized_session
+        return params
+
+    raise ValueError(f"Unsupported remote label entity type: {entity_type}")
+
+
+def _reject_reserved_remote_label_keys(keys: list[str], *, operation: str) -> None:
+    reserved = sorted({key for key in keys if is_reserved_system_label_path(key)})
+    if reserved:
+        raise ValueError(
+            f"Reserved label keys cannot be {operation} manually: {', '.join(reserved)}"
+        )
+
+
+def _fetch_remote_current_label(
+    client: GlaasClient,
+    params: dict[str, str],
+    *,
+    action: str,
+) -> dict[str, Any] | None:
+    """Fetch the current remote label doc; None when the target has no labels."""
+    result, error = client.get_current_labels(params)
+    if error:
+        if error.startswith("HTTP 404"):
+            return None
+        raise ValueError(_map_remote_label_error(error, action=action))
+    return result if isinstance(result, dict) else None
+
+
+def _remote_reconcile_item(
+    client: GlaasClient,
+    params: dict[str, str],
+    current: dict[str, Any] | None,
+) -> tuple[dict[str, Any], str]:
+    """Build the reconcile item target ref plus the envelope session hash."""
+    entity = params["entity_type"]
+    if entity == "dag":
+        session_hash = params["session_hash"]
+        return {"entity_type": "dag", "session_hash": session_hash}, session_hash
+
+    if entity == "job":
+        session_hash = params["session_hash"]
+        return {
+            "entity_type": "job",
+            "session_hash": session_hash,
+            "job_uid": params["job_uid"],
+        }, session_hash
+
+    resolved_session: str | None = params.get("session_hash")
+    artifact_hash = params["artifact_hash"]
+    if isinstance(current, dict):
+        current_session = current.get("sessionHash")
+        if not resolved_session and isinstance(current_session, str) and current_session:
+            resolved_session = current_session
+        current_artifact = current.get("artifactHash")
+        if isinstance(current_artifact, str) and current_artifact:
+            artifact_hash = current_artifact
+    if not resolved_session:
+        resolved_session, artifact_hash = _resolve_remote_artifact_session(client, artifact_hash)
+    return {
+        "entity_type": "artifact",
+        "session_hash": resolved_session,
+        "artifact_hash": artifact_hash,
+    }, resolved_session
+
+
+def _resolve_remote_artifact_session(
+    client: GlaasClient,
+    artifact_hash: str,
+) -> tuple[str, str]:
+    """Resolve an unlabeled artifact's session hash from the artifact record."""
+    from ...core.exceptions import GlaasError
+
+    try:
+        artifact = client.get_artifact(artifact_hash)
+    except GlaasError as exc:
+        raise ValueError(f"Remote artifact not found: {artifact_hash} ({exc})") from exc
+
+    resolved_hash = artifact.get("hash") if isinstance(artifact, dict) else None
+    session = None
+    if isinstance(artifact, dict):
+        session = artifact.get("originalSessionHash") or artifact.get("original_session_hash")
+    if not isinstance(session, str) or not session:
+        raise ValueError(
+            "Could not resolve the artifact's session automatically; pass --session <session-hash>."
+        )
+    return session, str(resolved_hash or artifact_hash)
+
+
+def _post_remote_reconcile(
+    client: GlaasClient,
+    session_hash: str,
+    item: dict[str, Any],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "session_hash": session_hash,
+        "mode": "sync_user_labels",
+        "dry_run": False,
+        "prune": False,
+        "labels": [item],
+    }
+    if client.publish_auth.scope_request:
+        payload["scope"] = dict(client.publish_auth.scope_request)
+    result, error = client.reconcile_labels(payload)
+    if error:
+        raise ValueError(_map_remote_label_error(error, action="edit"))
+    return result if isinstance(result, dict) else {}
+
+
+def remote_set_labels(request: RemoteLabelSetRequest) -> str:
+    """Patch the remote label document for a target directly on GLaaS."""
+    return build_remote_set_labels_summary(request).render()
+
+
+def build_remote_set_labels_summary(request: RemoteLabelSetRequest) -> LabelCurrentSummary:
+    params = _remote_target_params(request.entity_type, request.target, request.session_hash)
+    patch = parse_label_pairs(request.pairs)
+    _reject_reserved_remote_label_keys(
+        [key for key, _value in flatten_label_metadata(patch)],
+        operation="set",
+    )
+
+    client = _create_remote_label_client(request.cwd, action="edit")
+    current = _fetch_remote_current_label(client, params, action="edit")
+    item, session_hash = _remote_reconcile_item(client, params, current)
+    item["metadata"] = patch
+    item["base_version"] = int(current.get("version") or 0) if isinstance(current, dict) else 0
+
+    result = _post_remote_reconcile(client, session_hash, item)
+    return LabelCurrentSummary(
+        heading=_render_sync_heading(result, dry_run=False, prefix="Updated remote labels"),
+        entries=_build_sync_entries(result),
+        empty_message="No label changes.",
+    )
+
+
+def remote_unset_labels(request: RemoteLabelUnsetRequest) -> str:
+    """Delete label keys from a remote target directly on GLaaS."""
+    return build_remote_unset_labels_summary(request).render()
+
+
+def build_remote_unset_labels_summary(request: RemoteLabelUnsetRequest) -> LabelCurrentSummary:
+    params = _remote_target_params(request.entity_type, request.target, request.session_hash)
+    keys = sorted({str(key).strip() for key in request.keys if str(key).strip()})
+    if not keys:
+        raise ValueError("Specify at least one label key to unset.")
+    _reject_reserved_remote_label_keys(keys, operation="deleted")
+
+    client = _create_remote_label_client(request.cwd, action="edit")
+    current = _fetch_remote_current_label(client, params, action="edit")
+    if current is None:
+        raise ValueError("No remote labels found for the target.")
+    item, session_hash = _remote_reconcile_item(client, params, current)
+    item["metadata"] = {}
+    item["deleted_keys"] = keys
+    item["base_version"] = int(current.get("version") or 0)
+
+    result = _post_remote_reconcile(client, session_hash, item)
+    return LabelCurrentSummary(
+        heading=_render_sync_heading(result, dry_run=False, prefix="Removed remote labels"),
+        entries=_build_sync_entries(result),
+        empty_message="No label changes.",
+    )
+
+
+def remote_show_labels(request: RemoteLabelShowRequest) -> str:
+    """Show the current remote label document for a target."""
+    return build_remote_show_labels_summary(request).render()
+
+
+def build_remote_show_labels_summary(request: RemoteLabelShowRequest) -> LabelCurrentSummary:
+    params = _remote_target_params(request.entity_type, request.target, request.session_hash)
+    client = _create_remote_label_client(request.cwd, action="show")
+    current = _fetch_remote_current_label(client, params, action="show")
+    if current is None:
+        raise ValueError("No remote labels found for the target.")
+
+    version = current.get("version")
+    can_edit = current.get("canEdit")
+    editability = "" if can_edit is None else (", editable" if can_edit else ", read-only")
+    metadata = current.get("metadata")
+    return _build_current_summary(
+        metadata if isinstance(metadata, dict) else {},
+        heading=f"Remote labels (version {version}{editability}):",
+    )
+
+
+def remote_label_history(request: RemoteLabelHistoryRequest) -> str:
+    """Show all remote label versions for a target."""
+    return build_remote_label_history_summary(request).render()
+
+
+def build_remote_label_history_summary(request: RemoteLabelHistoryRequest) -> LabelHistorySummary:
+    params = _remote_target_params(request.entity_type, request.target, request.session_hash)
+    client = _create_remote_label_client(request.cwd, action="history")
+    result, error = client.get_label_history(params)
+    if error:
+        if error.startswith("HTTP 404"):
+            raise ValueError("No remote labels found for the target.")
+        raise ValueError(_map_remote_label_error(error, action="history"))
+
+    rows = result.get("labels") if isinstance(result, dict) else None
+    versions: list[LabelHistoryVersionSummary] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        metadata = row.get("metadata")
+        versions.append(
+            LabelHistoryVersionSummary(
+                version=int(row.get("version") or 0),
+                entries=_build_label_entries(metadata if isinstance(metadata, dict) else {}),
+            )
+        )
+    return LabelHistorySummary(versions=versions)
 
 
 def _load_label_sync_publish_auth(cwd: Any) -> PublishAuthContext:
@@ -283,9 +575,10 @@ def build_label_history_summary(request: LabelHistoryRequest) -> LabelHistorySum
     )
 
 
-def _render_sync_heading(result: Any, *, dry_run: bool) -> str:
+def _render_sync_heading(result: Any, *, dry_run: bool, prefix: str | None = None) -> str:
     payload = result if isinstance(result, dict) else {}
-    prefix = "Remote label sync dry run" if dry_run else "Synced remote labels"
+    if prefix is None:
+        prefix = "Remote label sync dry run" if dry_run else "Synced remote labels"
     processed = int(payload.get("processed") or 0)
     created = int(payload.get("created") or 0)
     updated = int(payload.get("updated") or 0)
