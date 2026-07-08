@@ -8,12 +8,15 @@ import time
 from copy import deepcopy
 from typing import Any
 
+import click
+
 from ...db.context import create_database_context
 from ...integrations.glaas import GlaasClient
 from ...publish_auth import PublishAuthContext, PublishAuthError, load_publish_auth_context
 from ..label_rendering import flatten_label_metadata
 from ..labels import (
     LabelService,
+    ReconcileTargetSync,
     build_reconcile_payload_for_current_lineage,
     build_reconcile_payload_for_target,
     parse_label_pairs,
@@ -134,7 +137,7 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
         if request.entity_type and request.target:
             resolved = service.resolve_target(request.entity_type, request.target)
             metadata = strip_reserved_system_labels(service.current_metadata(resolved))
-            session_hash, labels, label_ids = build_reconcile_payload_for_target(
+            session_hash, labels, sync_targets = build_reconcile_payload_for_target(
                 db_ctx,
                 roar_dir=request.roar_dir,
                 target=resolved,
@@ -145,7 +148,7 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
                     f"No local user-managed labels or label deletions to sync for {request.target}."
                 )
         else:
-            session_hash, labels, label_ids = build_reconcile_payload_for_current_lineage(
+            session_hash, labels, sync_targets = build_reconcile_payload_for_current_lineage(
                 db_ctx,
                 roar_dir=request.roar_dir,
             )
@@ -171,7 +174,7 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
         raise ValueError(_map_remote_label_error(error, action="sync")) from None
 
     if not request.dry_run:
-        _mark_labels_synced(request.roar_dir, label_ids)
+        _mark_labels_synced_confirming_deletions(request.roar_dir, sync_targets, result)
 
     if request.output_json:
         return json.dumps(result if isinstance(result, dict) else {}, indent=2, sort_keys=True)
@@ -187,6 +190,98 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
 def show_labels(request: LabelShowRequest) -> str:
     """Show the current local label document for a target."""
     return build_show_labels_summary(request).render()
+
+
+def _target_display_name(target: ReconcileTargetSync) -> str:
+    """Human-readable identifier for a reconcile target (for prompts/warnings)."""
+    if target.entity_type == "job" and target.job_uid:
+        return target.job_uid
+    if target.entity_type == "artifact" and target.artifact_hash:
+        return target.artifact_hash
+    if target.session_hash:
+        return target.session_hash
+    return target.entity_type or "target"
+
+
+def _reconcile_target_key(
+    *,
+    entity_type: Any,
+    session_hash: Any,
+    job_uid: Any,
+    artifact_hash: Any,
+) -> tuple[str, str, str, str]:
+    """Identity key used to correlate an outbound target with a response row."""
+    return (
+        str(entity_type or ""),
+        str(session_hash or ""),
+        str(job_uid or ""),
+        str(artifact_hash or ""),
+    )
+
+
+def _confirmed_deleted_keys_by_target(result: Any) -> dict[tuple[str, str, str, str], set[str]]:
+    """Per-target sets of keys the server's reconcile response confirms deleted."""
+    rows = result.get("results") if isinstance(result, dict) else None
+    confirmed: dict[tuple[str, str, str, str], set[str]] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        key = _reconcile_target_key(
+            entity_type=row.get("entityType") or row.get("entity_type"),
+            session_hash=row.get("sessionHash") or row.get("session_hash"),
+            job_uid=row.get("jobUid") or row.get("job_uid"),
+            artifact_hash=row.get("artifactHash") or row.get("artifact_hash"),
+        )
+        row_deleted = row.get("deletedKeys")
+        if isinstance(row_deleted, list):
+            confirmed.setdefault(key, set()).update(k for k in row_deleted if isinstance(k, str))
+    return confirmed
+
+
+def _mark_labels_synced_confirming_deletions(
+    roar_dir: Any,
+    sync_targets: list[ReconcileTargetSync],
+    result: Any,
+) -> None:
+    """Advance the local ``synced_at`` baseline for pushed label rows.
+
+    A target whose payload requested key deletions only advances its baseline
+    when the server's response confirms *all* of those keys were actually
+    deleted. This matters because an old, not-yet-upgraded GLaaS server may
+    accept the reconcile POST, silently ignore the unrecognized ``deleted_keys``
+    field, and still return HTTP 200 — reading that as unconditional success
+    would permanently desync local and remote state (the key never actually
+    gets deleted, and roar would never retry because the baseline already
+    advanced). Targets with no pending deletions, or with server-confirmed
+    deletions, advance normally.
+    """
+    confirmed_by_key = _confirmed_deleted_keys_by_target(result)
+
+    label_ids_to_mark: list[int] = []
+    for target in sync_targets:
+        if not target.deleted_keys:
+            label_ids_to_mark.extend(target.label_ids)
+            continue
+
+        key = _reconcile_target_key(
+            entity_type=target.entity_type,
+            session_hash=target.session_hash,
+            job_uid=target.job_uid,
+            artifact_hash=target.artifact_hash,
+        )
+        confirmed = confirmed_by_key.get(key, set())
+        if set(target.deleted_keys).issubset(confirmed):
+            label_ids_to_mark.extend(target.label_ids)
+        else:
+            click.echo(
+                f"Warning: sent {len(target.deleted_keys)} label deletion(s) for "
+                f"{_target_display_name(target)} but the server did not confirm they were "
+                "applied — this GLaaS server may not support remote label deletion yet. "
+                "Local state was not marked as synced; retry once the server is upgraded.",
+                err=True,
+            )
+
+    _mark_labels_synced(roar_dir, label_ids_to_mark)
 
 
 def _mark_labels_synced(roar_dir: Any, label_ids: list[int]) -> None:

@@ -43,6 +43,11 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.supports_anonymous_public_registration_sessions = True
         self.supports_finalize_expected_hash = True
         self.force_authoritative_finalize_hash = False
+        # Simulates an old, not-yet-upgraded glaas-api: the reconcile route
+        # exists (it predates the deletion feature) and returns HTTP 200, but
+        # any `deleted_keys` sent on a label item are silently ignored rather
+        # than applied.
+        self.ignore_deleted_keys_in_reconcile = False
         self._next_job_id = 1
         self._next_registration_session_id = 1
         self._next_finalized_hash = 1
@@ -661,7 +666,9 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 merged_metadata = _deep_merge(current_metadata, metadata)
                 requested_deletions = label.get("deleted_keys")
                 deleted_paths: list[str] = []
-                if isinstance(requested_deletions, list):
+                if isinstance(requested_deletions, list) and not (
+                    self.server.ignore_deleted_keys_in_reconcile
+                ):
                     for path in requested_deletions:
                         if isinstance(path, str) and _remove_label_key_path(
                             merged_metadata, path.split(".")
@@ -1296,6 +1303,14 @@ class FakeGlaasServer:
     @property
     def label_mutations(self) -> list[dict[str, Any]]:
         return self._server.label_mutations
+
+    @property
+    def ignore_deleted_keys_in_reconcile(self) -> bool:
+        return self._server.ignore_deleted_keys_in_reconcile
+
+    @ignore_deleted_keys_in_reconcile.setter
+    def ignore_deleted_keys_in_reconcile(self, value: bool) -> None:
+        self._server.ignore_deleted_keys_in_reconcile = value
 
     @property
     def force_authoritative_finalize_hash(self) -> bool:

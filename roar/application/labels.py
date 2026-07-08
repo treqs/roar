@@ -42,6 +42,27 @@ class LabelWriteResult:
     version: int | None = None
 
 
+@dataclass(frozen=True)
+class ReconcileTargetSync:
+    """Correlates one outbound label-reconcile payload item to the local label
+    row(s) it came from and the deletion keys (if any) requested for it.
+
+    A single ``roar label sync`` call can push several targets (dag, jobs,
+    artifacts) in one reconcile request. This lets the caller match each
+    target's entry in the GLaaS response back to the local rows that should
+    (or, if a requested deletion wasn't confirmed, should NOT) get their
+    ``synced_at`` baseline advanced. See
+    ``roar/application/query/label.py::_mark_labels_synced_confirming_deletions``.
+    """
+
+    entity_type: str
+    session_hash: str | None
+    job_uid: str | None
+    artifact_hash: str | None
+    label_ids: list[int]
+    deleted_keys: list[str]
+
+
 class _LabelSyncDatabaseContext(Protocol):
     @property
     def labels(self) -> Any: ...
@@ -550,6 +571,26 @@ def deleted_user_label_keys(
     return sorted(baseline_keys - current_keys)
 
 
+def _current_label_row_id(
+    db_ctx: _LabelSyncDatabaseContext,
+    *,
+    entity_type: str,
+    session_id: int | None = None,
+    job_id: int | None = None,
+    artifact_id: str | None = None,
+) -> int | None:
+    """Local row id of the current label version for a target, if any."""
+    current = db_ctx.labels.get_current(
+        entity_type,
+        session_id=session_id,
+        job_id=job_id,
+        artifact_id=artifact_id,
+    )
+    if isinstance(current, dict) and isinstance(current.get("id"), int):
+        return int(current["id"])
+    return None
+
+
 def _attach_deleted_user_keys_for_lineage(
     db_ctx: _LabelSyncDatabaseContext,
     payloads: list[dict[str, Any]],
@@ -558,7 +599,13 @@ def _attach_deleted_user_keys_for_lineage(
     jobs: list[dict[str, Any]],
     artifacts: list[dict[str, Any]],
 ) -> None:
-    """Stamp locally-unset user keys onto reconcile payloads, per target."""
+    """Stamp locally-unset user keys and the source label row id onto reconcile
+    payloads, per target.
+
+    ``_label_row_id`` is transient bookkeeping consumed by ``_split_label_row_ids``
+    below (it is never sent to GLaaS) so the caller can correlate the server's
+    response back to the local row(s) that should have ``synced_at`` advanced.
+    """
     job_id_by_uid: dict[str, int] = {}
     for job in jobs:
         job_id = job.get("id")
@@ -578,12 +625,15 @@ def _attach_deleted_user_keys_for_lineage(
     for payload in payloads:
         entity_type = payload.get("entity_type")
         deleted: list[str] = []
+        label_id: int | None = None
         if entity_type == "dag" and session_id is not None:
             deleted = deleted_user_label_keys(db_ctx, entity_type="dag", session_id=session_id)
+            label_id = _current_label_row_id(db_ctx, entity_type="dag", session_id=session_id)
         elif entity_type == "job":
             job_id = job_id_by_uid.get(str(payload.get("job_uid") or ""))
             if job_id is not None:
                 deleted = deleted_user_label_keys(db_ctx, entity_type="job", job_id=job_id)
+                label_id = _current_label_row_id(db_ctx, entity_type="job", job_id=job_id)
         elif entity_type == "artifact":
             artifact_id = artifact_id_by_hash.get(str(payload.get("artifact_hash") or ""))
             if artifact_id is not None:
@@ -592,8 +642,45 @@ def _attach_deleted_user_keys_for_lineage(
                     entity_type="artifact",
                     artifact_id=artifact_id,
                 )
+                label_id = _current_label_row_id(
+                    db_ctx, entity_type="artifact", artifact_id=artifact_id
+                )
         if deleted:
             payload["deleted_keys"] = deleted
+        if label_id is not None:
+            payload["_label_row_id"] = label_id
+
+
+def _split_label_row_ids(
+    payloads: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[ReconcileTargetSync]]:
+    """Strip the transient ``_label_row_id`` key from outbound wire payloads.
+
+    Returns the cleaned payloads (safe to JSON-serialize to GLaaS) alongside a
+    parallel, same-order list of ``ReconcileTargetSync`` records so the caller
+    can verify server-confirmed deletions before advancing each target's local
+    ``synced_at`` baseline.
+    """
+    wire_payloads: list[dict[str, Any]] = []
+    targets: list[ReconcileTargetSync] = []
+    for payload in payloads:
+        label_row_id = payload.get("_label_row_id")
+        wire_payloads.append({k: v for k, v in payload.items() if k != "_label_row_id"})
+        deleted_keys = payload.get("deleted_keys")
+        session_hash = payload.get("session_hash")
+        job_uid = payload.get("job_uid")
+        artifact_hash = payload.get("artifact_hash")
+        targets.append(
+            ReconcileTargetSync(
+                entity_type=str(payload.get("entity_type") or ""),
+                session_hash=session_hash if isinstance(session_hash, str) else None,
+                job_uid=job_uid if isinstance(job_uid, str) else None,
+                artifact_hash=artifact_hash if isinstance(artifact_hash, str) else None,
+                label_ids=[int(label_row_id)] if isinstance(label_row_id, int) else [],
+                deleted_keys=list(deleted_keys) if isinstance(deleted_keys, list) else [],
+            )
+        )
+    return wire_payloads, targets
 
 
 def collect_current_label_ids(
@@ -660,12 +747,14 @@ def build_reconcile_payload_for_current_lineage(
     db_ctx: _RemoteLabelMutationDatabaseContext,
     *,
     roar_dir: Path,
-) -> tuple[str, list[dict[str, Any]], list[int]]:
+) -> tuple[str, list[dict[str, Any]], list[ReconcileTargetSync]]:
     """Build a user-managed reconcile payload for the active local lineage.
 
     Returns the published session hash, the reconcile label payloads (including
-    per-target ``deleted_keys`` for locally-unset user labels), and the local
-    label row ids to stamp ``synced_at`` after a successful push.
+    per-target ``deleted_keys`` for locally-unset user labels), and a per-target
+    ``ReconcileTargetSync`` list (same order as the payloads) the caller uses to
+    decide which local label rows may have ``synced_at`` stamped after a push —
+    see ``roar/application/query/label.py::_mark_labels_synced_confirming_deletions``.
     """
     session = db_ctx.sessions.get_active()
     if not isinstance(session, dict) or not isinstance(session.get("id"), int):
@@ -698,13 +787,8 @@ def build_reconcile_payload_for_current_lineage(
         jobs=jobs,
         artifacts=artifacts,
     )
-    label_ids = collect_current_label_ids(
-        db_ctx,
-        session_id=session_id,
-        jobs=jobs,
-        artifacts=artifacts,
-    )
-    return session_hash, _user_managed_reconcile_payloads(payloads), label_ids
+    wire_payloads, sync_targets = _split_label_row_ids(_user_managed_reconcile_payloads(payloads))
+    return session_hash, wire_payloads, sync_targets
 
 
 def build_reconcile_payload_for_target(
@@ -713,8 +797,12 @@ def build_reconcile_payload_for_target(
     roar_dir: Path,
     target: LabelTargetRef,
     metadata: dict[str, Any],
-) -> tuple[str, list[dict[str, Any]], list[int]]:
-    """Build a single-target user-managed reconcile payload."""
+) -> tuple[str, list[dict[str, Any]], list[ReconcileTargetSync]]:
+    """Build a single-target user-managed reconcile payload.
+
+    See ``build_reconcile_payload_for_current_lineage`` for what the returned
+    ``ReconcileTargetSync`` list is used for.
+    """
     payload = build_remote_label_mutation_payload(
         db_ctx,
         roar_dir=roar_dir,
@@ -739,18 +827,17 @@ def build_reconcile_payload_for_target(
             target=target,
             require_published=True,
         )
-    current = db_ctx.labels.get_current(
-        target.entity_type,
+    label_id = _current_label_row_id(
+        db_ctx,
+        entity_type=target.entity_type,
         session_id=target.session_id,
         job_id=target.job_id,
         artifact_id=target.artifact_id,
     )
-    label_ids = (
-        [int(current["id"])]
-        if isinstance(current, dict) and isinstance(current.get("id"), int)
-        else []
-    )
-    return session_hash, _user_managed_reconcile_payloads([payload]), label_ids
+    if label_id is not None:
+        payload["_label_row_id"] = label_id
+    wire_payloads, sync_targets = _split_label_row_ids(_user_managed_reconcile_payloads([payload]))
+    return session_hash, wire_payloads, sync_targets
 
 
 def _canonical_remote_session_hash(

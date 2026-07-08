@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import ANY, MagicMock, call, patch
 
+from roar.application.labels import ReconcileTargetSync
 from roar.application.query import (
     LabelCopyRequest,
     LabelHistoryRequest,
@@ -263,7 +264,16 @@ def test_build_sync_labels_summary_reconciles_target_labels(tmp_path: Path) -> N
                         "metadata": {"owner": "ml", "stage": "gold"},
                     }
                 ],
-                [41],
+                [
+                    ReconcileTargetSync(
+                        entity_type="artifact",
+                        session_hash="s" * 64,
+                        job_uid=None,
+                        artifact_hash="a" * 64,
+                        label_ids=[41],
+                        deleted_keys=[],
+                    )
+                ],
             ),
         ) as build_payload,
         patch(
@@ -331,7 +341,16 @@ def test_build_sync_labels_summary_falls_back_to_public_auth_without_repo_bindin
             return_value=(
                 "s" * 64,
                 [{"entity_type": "dag", "session_hash": "s" * 64, "metadata": {"phase": "gold"}}],
-                [7],
+                [
+                    ReconcileTargetSync(
+                        entity_type="dag",
+                        session_hash="s" * 64,
+                        job_uid=None,
+                        artifact_hash=None,
+                        label_ids=[7],
+                        deleted_keys=[],
+                    )
+                ],
             ),
         ),
         patch(
@@ -437,7 +456,16 @@ def test_build_sync_labels_summary_supports_json_dry_run(tmp_path: Path) -> None
             return_value=(
                 "s" * 64,
                 [{"entity_type": "dag", "session_hash": "s" * 64, "metadata": {"phase": "gold"}}],
-                [9],
+                [
+                    ReconcileTargetSync(
+                        entity_type="dag",
+                        session_hash="s" * 64,
+                        job_uid=None,
+                        artifact_hash=None,
+                        label_ids=[9],
+                        deleted_keys=[],
+                    )
+                ],
             ),
         ),
         patch(
@@ -499,6 +527,108 @@ def test_build_sync_labels_summary_rejects_missing_user_managed_labels(tmp_path:
             assert str(exc) == "No local user-managed labels or label deletions to sync for @1."
         else:  # pragma: no cover - defensive assertion style
             raise AssertionError("Expected ValueError for missing user-managed labels")
+
+
+def test_mark_labels_synced_confirming_deletions_skips_unconfirmed_targets(
+    tmp_path: Path, capsys
+) -> None:
+    """Task A: an old server that echoes back an empty deletedKeys list for a
+    target whose payload requested deletions must not have its baseline
+    advanced, and the user should see a clear warning. Other targets in the
+    same sync (no deletions requested, or confirmed) still advance."""
+    from roar.application.query.label import _mark_labels_synced_confirming_deletions
+
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+
+    sync_targets = [
+        ReconcileTargetSync(
+            entity_type="artifact",
+            session_hash="s" * 64,
+            job_uid=None,
+            artifact_hash="a" * 64,
+            label_ids=[41],
+            deleted_keys=["stage"],
+        ),
+        ReconcileTargetSync(
+            entity_type="dag",
+            session_hash="s" * 64,
+            job_uid=None,
+            artifact_hash=None,
+            label_ids=[7],
+            deleted_keys=[],
+        ),
+    ]
+    # Old server: HTTP 200, reconcile "succeeds", but the artifact row's
+    # deletedKeys is empty even though `stage` deletion was requested.
+    result = {
+        "results": [
+            {
+                "entityType": "artifact",
+                "sessionHash": "s" * 64,
+                "artifactHash": "a" * 64,
+                "action": "noop",
+                "deletedKeys": [],
+            },
+            {
+                "entityType": "dag",
+                "sessionHash": "s" * 64,
+                "action": "updated",
+                "deletedKeys": [],
+            },
+        ]
+    }
+
+    with patch("roar.application.query.label.create_database_context", return_value=db_ctx):
+        _mark_labels_synced_confirming_deletions(tmp_path / ".roar", sync_targets, result)
+
+    db_ctx.labels.mark_synced.assert_called_once_with([7], ANY)
+    captured = capsys.readouterr()
+    assert "Warning: sent 1 label deletion(s) for" in captured.err
+    assert "a" * 64 in captured.err
+    assert "did not confirm they were applied" in captured.err
+    assert "Local state was not marked as synced" in captured.err
+
+
+def test_mark_labels_synced_confirming_deletions_advances_confirmed_targets(
+    tmp_path: Path, capsys
+) -> None:
+    """Task A: when the response confirms the exact deleted keys, the
+    baseline advances normally and no warning is printed."""
+    from roar.application.query.label import _mark_labels_synced_confirming_deletions
+
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+
+    sync_targets = [
+        ReconcileTargetSync(
+            entity_type="artifact",
+            session_hash="s" * 64,
+            job_uid=None,
+            artifact_hash="a" * 64,
+            label_ids=[41],
+            deleted_keys=["stage"],
+        )
+    ]
+    result = {
+        "results": [
+            {
+                "entityType": "artifact",
+                "sessionHash": "s" * 64,
+                "artifactHash": "a" * 64,
+                "action": "updated",
+                "deletedKeys": ["stage"],
+            }
+        ]
+    }
+
+    with patch("roar.application.query.label.create_database_context", return_value=db_ctx):
+        _mark_labels_synced_confirming_deletions(tmp_path / ".roar", sync_targets, result)
+
+    db_ctx.labels.mark_synced.assert_called_once_with([41], ANY)
+    assert capsys.readouterr().err == ""
 
 
 def test_build_label_history_summary_returns_versioned_entries(tmp_path: Path) -> None:
