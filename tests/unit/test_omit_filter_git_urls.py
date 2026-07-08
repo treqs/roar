@@ -156,3 +156,48 @@ def test_filter_git_url_userinfo_respects_allowlist() -> None:
 
     assert filtered == "https://myorg@dev.azure.com/myorg/proj/_git/repo"
     assert detections == []
+
+
+def test_filter_git_url_redacts_scp_style_opaque_token_userinfo(
+    omit_filter: OmitFilter,
+) -> None:
+    """A schemeless scp-style remote whose "user" is actually an opaque deploy
+    token (e.g. a GitLab CI/deploy token embedded ahead of an internal host) must
+    not slip through unredacted just because it lacks a "scheme://" prefix.
+    """
+    token = "deploytoken12345678901234567890"
+    filtered, detections = omit_filter.filter_git_url(
+        f"{token}@gitlab.internal.co:group/project.git"
+    )
+
+    assert token not in filtered
+    assert filtered == "[REDACTED]@gitlab.internal.co:group/project.git"
+    assert detections == ["git_url_scp_userinfo"]
+
+
+def test_filter_git_url_scp_style_git_user_unchanged(omit_filter: OmitFilter) -> None:
+    """The literal "git@" scp username (the near-universal ssh username) must
+    never be redacted -- regressing this would corrupt every ordinary scp-style
+    clone URL (git@github.com:org/repo.git and friends).
+    """
+    url = "git@host.internal.co:group/project.git"
+    filtered, detections = omit_filter.filter_git_url(url)
+
+    assert filtered == url
+    assert detections == []
+
+
+def test_filter_string_does_not_redact_docker_digest_shaped_text(
+    omit_filter: OmitFilter,
+) -> None:
+    """The scp-style fix lives only inside filter_git_url(), never in the shared
+    BUILTIN_PATTERNS list used by filter_string() for free-text redaction. Proves
+    it: an incidental "x@y:z" substring in a command/metadata blob (a Docker
+    digest reference is the canonical example) must pass through untouched.
+    """
+    text = "docker pull myimage@sha256:" + "a" * 64
+
+    result = omit_filter.filter_string(text)
+
+    assert result.filtered == text
+    assert result.detections == []
