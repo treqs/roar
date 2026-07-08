@@ -596,6 +596,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             created = 0
             updated = 0
             noops = 0
+            deleted_total = 0
             results: list[dict[str, Any]] = []
             for label in labels:
                 if not isinstance(label, dict):
@@ -607,6 +608,15 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 if not isinstance(current_metadata, dict):
                     current_metadata = {}
                 merged_metadata = _deep_merge(current_metadata, metadata)
+                requested_deletions = label.get("deleted_keys")
+                deleted_paths: list[str] = []
+                if isinstance(requested_deletions, list):
+                    for path in requested_deletions:
+                        if isinstance(path, str) and _remove_label_key_path(
+                            merged_metadata, path.split(".")
+                        ):
+                            deleted_paths.append(path)
+                deleted_total += len(deleted_paths)
                 if not current and metadata:
                     action = "created"
                     version = 1
@@ -621,6 +631,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                     noops += 1
 
                 result_row = _label_response_row(label, action=action, version=version)
+                result_row["deletedKeys"] = deleted_paths
                 results.append(result_row)
                 if dry_run or action == "noop":
                     continue
@@ -641,7 +652,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                     "processed": len(labels),
                     "created": created,
                     "updated": updated,
-                    "deletedKeys": 0,
+                    "deletedKeys": deleted_total,
                     "preservedKeys": 0,
                     "noops": noops,
                     "conflicts": [],
@@ -1126,6 +1137,23 @@ def _deep_merge(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any
     return merged
 
 
+def _remove_label_key_path(metadata: dict[str, Any], segments: list[str]) -> bool:
+    """Remove a dotted key path (leaf or subtree), pruning emptied parents."""
+    if not segments or segments[0] not in metadata:
+        return False
+    key = segments[0]
+    if len(segments) == 1:
+        metadata.pop(key, None)
+        return True
+    child = metadata.get(key)
+    if not isinstance(child, dict):
+        return False
+    removed = _remove_label_key_path(child, segments[1:])
+    if removed and not child:
+        metadata.pop(key, None)
+    return removed
+
+
 class FakeGlaasServer:
     """Context-managed fake GLaaS server."""
 
@@ -1200,6 +1228,10 @@ class FakeGlaasServer:
     @property
     def label_reconciles(self) -> list[dict[str, Any]]:
         return self._server.label_reconciles
+
+    @property
+    def current_labels_by_target(self) -> dict[str, dict[str, Any]]:
+        return self._server.current_labels_by_target
 
     @property
     def label_mutation_attempts(self) -> list[dict[str, Any]]:
