@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -31,6 +32,7 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.label_mutation_attempts: list[dict[str, Any]] = []
         self.label_mutations: list[dict[str, Any]] = []
         self.current_labels_by_target: dict[str, dict[str, Any]] = {}
+        self.label_history_by_target: dict[str, list[dict[str, Any]]] = {}
         self.composite_registrations: list[dict[str, Any]] = []
         self.artifacts_by_digest: dict[str, dict[str, Any]] = {}
         self.artifact_dags_by_digest: dict[str, dict[str, Any]] = {}
@@ -397,7 +399,54 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             self._write_json(404, {"error": f"Session reproduction not found: {session_hash}"})
             return
 
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path in ("/api/v1/labels/current", "/api/v1/labels/history"):
+            self.server.auth_headers.append({"path": self.path, "authorization": authorization})
+            params = {key: values[0] for key, values in urllib.parse.parse_qs(parsed.query).items()}
+            current = self._find_current_label(params)
+            if current is None:
+                self._write_json(404, {"error": {"message": "Label not found"}})
+                return
+            if parsed.path.endswith("/current"):
+                self._write_json(200, {**current, "canEdit": bool(authorization)})
+                return
+            target_key = _label_target_key(
+                {
+                    "entity_type": current.get("entityType"),
+                    "session_hash": current.get("sessionHash", ""),
+                    "job_uid": current.get("jobUid", ""),
+                    "artifact_hash": current.get("artifactHash", ""),
+                }
+            )
+            history = self.server.label_history_by_target.get(target_key) or [current]
+            self._write_json(200, {"labels": history})
+            return
+
         self._write_json(404, {"error": f"Unhandled GET path: {self.path}"})
+
+    def _find_current_label(self, params: dict[str, str]) -> dict[str, Any] | None:
+        current = self.server.current_labels_by_target.get(_label_target_key(params))
+        if current:
+            return current
+        entity_type = params.get("entity_type")
+        if entity_type == "artifact":
+            prefix = str(params.get("artifact_hash") or "")
+            session_hash = params.get("session_hash")
+            for candidate in self.server.current_labels_by_target.values():
+                if candidate.get("entityType") != "artifact":
+                    continue
+                if not str(candidate.get("artifactHash") or "").startswith(prefix):
+                    continue
+                if session_hash and candidate.get("sessionHash") != session_hash:
+                    continue
+                return candidate
+        if entity_type == "job":
+            for candidate in self.server.current_labels_by_target.values():
+                if candidate.get("entityType") == "job" and candidate.get("jobUid") == params.get(
+                    "job_uid"
+                ):
+                    return candidate
+        return None
 
     def do_PATCH(self) -> None:
         payload = self._read_json()
@@ -438,6 +487,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 "metadata": merged_metadata,
             }
             self.server.current_labels_by_target[target_key] = updated
+            self.server.label_history_by_target.setdefault(target_key, []).append(updated)
             self._write_json(200, updated)
             return
 
@@ -577,6 +627,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                         current_label["sessionHash"] = label.get("session_hash")
                         current_label["artifactHash"] = label.get("artifact_hash")
                     self.server.current_labels_by_target[target_key] = current_label
+                self.server.label_history_by_target.setdefault(target_key, []).append(current_label)
                 self._write_json(
                     200,
                     {"created": 0, "updated": 0, "unchanged": len(labels)},
@@ -643,6 +694,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                     "createdAt": "2026-01-01T00:00:00Z",
                 }
                 self.server.current_labels_by_target[target_key] = current_label
+                self.server.label_history_by_target.setdefault(target_key, []).append(current_label)
 
             self._write_json(
                 200,
@@ -1232,6 +1284,10 @@ class FakeGlaasServer:
     @property
     def current_labels_by_target(self) -> dict[str, dict[str, Any]]:
         return self._server.current_labels_by_target
+
+    @property
+    def label_history_by_target(self) -> dict[str, list[dict[str, Any]]]:
+        return self._server.label_history_by_target
 
     @property
     def label_mutation_attempts(self) -> list[dict[str, Any]]:

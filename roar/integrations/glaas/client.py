@@ -2,6 +2,7 @@
 
 import contextlib
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -672,6 +673,22 @@ class GlaasClient:
             payload,
             allow_auth_fallback=False,
         )
+
+    def get_current_labels(
+        self,
+        params: dict[str, str],
+    ) -> tuple[dict | None, str | None]:
+        """Fetch the current remote label document for one target."""
+        query = urllib.parse.urlencode(params)
+        return self._request("GET", f"/api/v1/labels/current?{query}")
+
+    def get_label_history(
+        self,
+        params: dict[str, str],
+    ) -> tuple[dict | None, str | None]:
+        """Fetch the remote label version history for one target."""
+        query = urllib.parse.urlencode(params)
+        return self._request("GET", f"/api/v1/labels/history?{query}")
 
     def register_job_under_registration_session(
         self,

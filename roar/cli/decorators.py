@@ -47,6 +47,39 @@ def _auto_init_for_backend_job(ctx: RoarContext) -> None:
         ctx.roar_dir = roar_dir
 
 
+def ensure_initialized(ctx: RoarContext) -> None:
+    """Validate roar initialization, exiting exactly like ``require_init``.
+
+    For commands where only some code paths need a local ``.roar`` project
+    (e.g. ``roar label ... --remote`` works from any directory), call this in
+    the local path instead of decorating the whole command.
+    """
+    initialized = bool(ctx.is_initialized) or _has_roar_dir(ctx)
+
+    if not initialized:
+        from ..execution.framework.registry import is_execution_backend_job_environment
+
+        should_auto_init = is_execution_backend_job_environment(os.environ)
+    else:
+        should_auto_init = False
+
+    if should_auto_init:
+        try:
+            _auto_init_for_backend_job(ctx)
+        except Exception as e:
+            raise click.ClickException(
+                f"Failed to auto-initialize roar project in backend job: {e}"
+            ) from e
+        initialized = bool(ctx.is_initialized) or _has_roar_dir(ctx)
+
+    if not initialized:
+        # Output to stdout to match legacy command behavior
+        click.echo("Error: roar is not initialized in this directory.")
+        click.echo("")
+        click.echo("Run 'roar init' first to set up roar.")
+        raise SystemExit(1)
+
+
 def require_init(f: F) -> F:
     """Decorator to require roar initialization.
 
@@ -77,30 +110,7 @@ def require_init(f: F) -> F:
             )
         ctx: RoarContext = ctx_maybe
 
-        initialized = bool(ctx.is_initialized) or _has_roar_dir(ctx)
-
-        if not initialized:
-            from ..execution.framework.registry import is_execution_backend_job_environment
-
-            should_auto_init = is_execution_backend_job_environment(os.environ)
-        else:
-            should_auto_init = False
-
-        if should_auto_init:
-            try:
-                _auto_init_for_backend_job(ctx)
-            except Exception as e:
-                raise click.ClickException(
-                    f"Failed to auto-initialize roar project in backend job: {e}"
-                ) from e
-            initialized = bool(ctx.is_initialized) or _has_roar_dir(ctx)
-
-        if not initialized:
-            # Output to stdout to match legacy command behavior
-            click.echo("Error: roar is not initialized in this directory.")
-            click.echo("")
-            click.echo("Run 'roar init' first to set up roar.")
-            raise SystemExit(1)
+        ensure_initialized(ctx)
 
         return f(*args, **kwargs)
 
