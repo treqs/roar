@@ -1,19 +1,23 @@
-"""Unit tests for TagService set-accumulation semantics.
+"""Unit tests for TagService set-accumulation + bind-ledger semantics.
 
-TagService wraps LabelService with array set semantics over the tag.* namespace.
-These tests mock LabelService to focus on TagService's own logic without
+TagService writes directly through the raw label repository (db_ctx.labels),
+not LabelService — its own reserved-namespace writes must bypass the
+tag.*/attach.* reservation that protects the generic `roar label` path (see
+system_labels.py). These tests mock that repository directly rather than
 requiring the full project dependency chain (blake3, SQLAlchemy, etc.).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
-from roar.application.labels import LabelTargetRef, LabelWriteResult
+from roar.application.labels import LabelTargetRef
 from roar.application.tags import TagService
+from roar.core.label_origins import LABEL_ORIGIN_USER
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -22,18 +26,25 @@ from roar.application.tags import TagService
 _RESOLVED = LabelTargetRef(entity_type="job", job_id=1, display_target="@1")
 
 
-def _make_service(current_metadata: dict | None = None):
-    """Return (TagService, mock_label_service) with stubbed current_metadata."""
+def _make_service(current_metadata: dict[str, Any] | None = None):
+    """Return (TagService, mock_label_repo) with stubbed get_current/create_version."""
     db_ctx = MagicMock()
-    svc = TagService(db_ctx, Path("."))
-    mock_label_svc = MagicMock()
-    mock_label_svc.current_metadata.return_value = current_metadata or {}
-    mock_label_svc.set_metadata.return_value = LabelWriteResult(
-        changed=True, metadata={}, version=1
+    mock_label_repo = db_ctx.labels
+    mock_label_repo.get_current.return_value = (
+        {"metadata": current_metadata, "version": 1} if current_metadata is not None else None
     )
-    mock_label_svc.delete_keys.return_value = LabelWriteResult(changed=True, metadata={}, version=1)
-    svc._svc = mock_label_svc
-    return svc, mock_label_svc
+    svc = TagService(db_ctx, Path("."))
+    return svc, mock_label_repo
+
+
+def _written_tag_subtree(mock_label_repo: MagicMock) -> dict[str, Any]:
+    """The `tag` subtree from the most recent create_version call's metadata."""
+    metadata = mock_label_repo.create_version.call_args.args[1]
+    return metadata.get("tag", {})
+
+
+def _values(kind_data: dict[str, Any]) -> list[str]:
+    return [record["value"] for record in kind_data["values"]]
 
 
 # ---------------------------------------------------------------------------
@@ -42,53 +53,67 @@ def _make_service(current_metadata: dict | None = None):
 
 
 class TestAdd:
-    def test_add_first_value_creates_list(self) -> None:
-        svc, label_svc = _make_service()
+    def test_add_first_value_writes_user_origin_and_implicit_bind(self) -> None:
+        svc, label_repo = _make_service()
         changed = svc.add(_RESOLVED, "license", "MIT")
         assert changed is True
-        label_svc.set_metadata.assert_called_once_with(_RESOLVED, {"tag": {"license": ["MIT"]}})
+        tag = _written_tag_subtree(label_repo)
+        assert tag["license"] == {"values": [{"value": "MIT", "origin": LABEL_ORIGIN_USER}]}
+        assert tag["bind"] == {"events": [{"action": "bind", "covers": {"license": ["MIT"]}}]}
 
     def test_add_second_value_appends_to_existing_list(self) -> None:
-        svc, label_svc = _make_service({"tag": {"license": ["MIT"]}})
+        svc, label_repo = _make_service(
+            {"tag": {"license": {"values": [{"value": "MIT", "origin": "user"}]}}}
+        )
         changed = svc.add(_RESOLVED, "license", "Apache-2.0")
         assert changed is True
-        label_svc.set_metadata.assert_called_once_with(
-            _RESOLVED, {"tag": {"license": ["MIT", "Apache-2.0"]}}
-        )
+        tag = _written_tag_subtree(label_repo)
+        assert _values(tag["license"]) == ["MIT", "Apache-2.0"]
+        # Implicit bind covers only the value just added, not the pre-existing one.
+        assert tag["bind"]["events"][-1] == {
+            "action": "bind",
+            "covers": {"license": ["Apache-2.0"]},
+        }
 
     def test_add_duplicate_returns_false_without_writing(self) -> None:
-        svc, label_svc = _make_service({"tag": {"license": ["MIT"]}})
-        changed = svc.add(_RESOLVED, "license", "MIT")
-        assert changed is False
-        label_svc.set_metadata.assert_not_called()
-        label_svc.delete_keys.assert_not_called()
-
-    def test_add_promotes_legacy_scalar_to_list(self) -> None:
-        svc, label_svc = _make_service({"tag": {"license": "MIT"}})
-        changed = svc.add(_RESOLVED, "license", "Apache-2.0")
-        assert changed is True
-        label_svc.set_metadata.assert_called_once_with(
-            _RESOLVED, {"tag": {"license": ["MIT", "Apache-2.0"]}}
+        svc, label_repo = _make_service(
+            {"tag": {"license": {"values": [{"value": "MIT", "origin": "user"}]}}}
         )
-
-    def test_add_duplicate_scalar_returns_false(self) -> None:
-        svc, label_svc = _make_service({"tag": {"license": "MIT"}})
         changed = svc.add(_RESOLVED, "license", "MIT")
         assert changed is False
-        label_svc.set_metadata.assert_not_called()
+        label_repo.create_version.assert_not_called()
 
     def test_add_different_kind_does_not_touch_others(self) -> None:
-        svc, label_svc = _make_service({"tag": {"license": ["MIT"]}})
-        svc.add(_RESOLVED, "contains_pii", "absent")
-        label_svc.set_metadata.assert_called_once_with(
-            _RESOLVED, {"tag": {"contains_pii": ["absent"]}}
+        svc, label_repo = _make_service(
+            {"tag": {"license": {"values": [{"value": "MIT", "origin": "user"}]}}}
         )
+        svc.add(_RESOLVED, "contains_pii", "absent")
+        tag = _written_tag_subtree(label_repo)
+        assert _values(tag["license"]) == ["MIT"]
+        assert _values(tag["contains_pii"]) == ["absent"]
 
-    def test_add_when_no_tag_namespace_yet(self) -> None:
-        svc, label_svc = _make_service({"owner": "ml"})
+    def test_add_when_no_tag_namespace_yet_preserves_other_metadata(self) -> None:
+        svc, label_repo = _make_service({"owner": "ml"})
         changed = svc.add(_RESOLVED, "license", "MIT")
         assert changed is True
-        label_svc.set_metadata.assert_called_once_with(_RESOLVED, {"tag": {"license": ["MIT"]}})
+        metadata = label_repo.create_version.call_args.args[1]
+        assert metadata["owner"] == "ml"
+        assert _values(metadata["tag"]["license"]) == ["MIT"]
+
+    def test_add_appends_to_an_existing_bind_ledger_rather_than_overwriting(self) -> None:
+        svc, label_repo = _make_service(
+            {
+                "tag": {
+                    "bind": {"events": [{"action": "bind", "covers": {"jurisdiction": ["EU"]}}]},
+                }
+            }
+        )
+        svc.add(_RESOLVED, "license", "MIT")
+        tag = _written_tag_subtree(label_repo)
+        assert tag["bind"]["events"] == [
+            {"action": "bind", "covers": {"jurisdiction": ["EU"]}},
+            {"action": "bind", "covers": {"license": ["MIT"]}},
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -98,51 +123,198 @@ class TestAdd:
 
 class TestRemove:
     def test_remove_specific_value(self) -> None:
-        svc, label_svc = _make_service({"tag": {"license": ["MIT", "Apache-2.0"]}})
-        changed = svc.remove(_RESOLVED, "license", "MIT")
-        assert changed is True
-        label_svc.set_metadata.assert_called_once_with(
-            _RESOLVED, {"tag": {"license": ["Apache-2.0"]}}
+        svc, label_repo = _make_service(
+            {
+                "tag": {
+                    "license": {
+                        "values": [
+                            {"value": "MIT", "origin": "user"},
+                            {"value": "Apache-2.0", "origin": "user"},
+                        ]
+                    }
+                }
+            }
         )
-
-    def test_remove_last_value_calls_delete_keys(self) -> None:
-        svc, label_svc = _make_service({"tag": {"license": ["MIT"]}})
         changed = svc.remove(_RESOLVED, "license", "MIT")
         assert changed is True
-        label_svc.delete_keys.assert_called_once_with(_RESOLVED, ["tag.license"])
-        label_svc.set_metadata.assert_not_called()
+        tag = _written_tag_subtree(label_repo)
+        assert _values(tag["license"]) == ["Apache-2.0"]
 
-    def test_remove_whole_kind_calls_delete_keys(self) -> None:
-        svc, label_svc = _make_service({"tag": {"license": ["MIT", "Apache-2.0"]}})
+    def test_remove_last_value_drops_the_kind(self) -> None:
+        svc, label_repo = _make_service(
+            {"tag": {"license": {"values": [{"value": "MIT", "origin": "user"}]}}}
+        )
+        changed = svc.remove(_RESOLVED, "license", "MIT")
+        assert changed is True
+        tag = _written_tag_subtree(label_repo)
+        assert "license" not in tag
+
+    def test_remove_whole_kind(self) -> None:
+        svc, label_repo = _make_service(
+            {
+                "tag": {
+                    "license": {
+                        "values": [
+                            {"value": "MIT", "origin": "user"},
+                            {"value": "Apache-2.0", "origin": "user"},
+                        ]
+                    }
+                }
+            }
+        )
         changed = svc.remove(_RESOLVED, "license", None)
         assert changed is True
-        label_svc.delete_keys.assert_called_once_with(_RESOLVED, ["tag.license"])
+        tag = _written_tag_subtree(label_repo)
+        assert "license" not in tag
 
     def test_remove_absent_kind_returns_false(self) -> None:
-        svc, label_svc = _make_service({})
+        svc, label_repo = _make_service({})
         changed = svc.remove(_RESOLVED, "license", None)
         assert changed is False
-        label_svc.set_metadata.assert_not_called()
-        label_svc.delete_keys.assert_not_called()
+        label_repo.create_version.assert_not_called()
 
     def test_remove_absent_value_returns_false(self) -> None:
-        svc, label_svc = _make_service({"tag": {"license": ["MIT"]}})
+        svc, label_repo = _make_service(
+            {"tag": {"license": {"values": [{"value": "MIT", "origin": "user"}]}}}
+        )
         changed = svc.remove(_RESOLVED, "license", "GPL-3.0")
         assert changed is False
-        label_svc.set_metadata.assert_not_called()
-        label_svc.delete_keys.assert_not_called()
+        label_repo.create_version.assert_not_called()
 
-    def test_remove_scalar_value_when_matches(self) -> None:
-        svc, label_svc = _make_service({"tag": {"license": "MIT"}})
-        changed = svc.remove(_RESOLVED, "license", "MIT")
-        assert changed is True
-        label_svc.delete_keys.assert_called_once_with(_RESOLVED, ["tag.license"])
+    def test_remove_does_not_touch_the_bind_ledger(self) -> None:
+        """rm is a history event, not a hard delete — past binds stay, append-only."""
+        svc, label_repo = _make_service(
+            {
+                "tag": {
+                    "license": {"values": [{"value": "MIT", "origin": "user"}]},
+                    "bind": {"events": [{"action": "bind", "covers": {"license": ["MIT"]}}]},
+                }
+            }
+        )
+        svc.remove(_RESOLVED, "license", "MIT")
+        tag = _written_tag_subtree(label_repo)
+        assert tag["bind"] == {"events": [{"action": "bind", "covers": {"license": ["MIT"]}}]}
 
-    def test_remove_reflects_delete_keys_changed_result(self) -> None:
-        svc, label_svc = _make_service({"tag": {"license": ["MIT"]}})
-        label_svc.delete_keys.return_value = LabelWriteResult(changed=False, metadata={}, version=1)
-        changed = svc.remove(_RESOLVED, "license", None)
-        assert changed is False
+
+# ---------------------------------------------------------------------------
+# bind / unbind
+# ---------------------------------------------------------------------------
+
+
+class TestBind:
+    def test_bind_covers_every_current_kind_and_value(self) -> None:
+        svc, label_repo = _make_service(
+            {
+                "tag": {
+                    "license": {"values": [{"value": "MIT", "origin": "user"}]},
+                    "jurisdiction": {"values": [{"value": "EU", "origin": "system", "job": "j1"}]},
+                }
+            }
+        )
+        result = svc.bind(_RESOLVED)
+        assert result.changed is True
+        assert result.promoted == {"license": ["MIT"], "jurisdiction": ["EU"]}
+        tag = _written_tag_subtree(label_repo)
+        assert tag["bind"]["events"][-1] == {
+            "action": "bind",
+            "covers": {"license": ["MIT"], "jurisdiction": ["EU"]},
+        }
+
+    def test_bind_appends_to_an_existing_ledger_when_the_covered_set_grew(self) -> None:
+        svc, label_repo = _make_service(
+            {
+                "tag": {
+                    "license": {"values": [{"value": "MIT", "origin": "user"}]},
+                    "jurisdiction": {"values": [{"value": "EU", "origin": "user"}]},
+                    "bind": {"events": [{"action": "bind", "covers": {"license": ["MIT"]}}]},
+                }
+            }
+        )
+        result = svc.bind(_RESOLVED)
+        assert result.changed is True
+        tag = _written_tag_subtree(label_repo)
+        assert len(tag["bind"]["events"]) == 2
+
+    def test_rebinding_the_exact_same_set_is_a_noop(self) -> None:
+        """Re-binding an artifact whose tags haven't changed since the last bind
+        shouldn't add a redundant ledger entry every time `roar register` runs."""
+        svc, label_repo = _make_service(
+            {
+                "tag": {
+                    "license": {"values": [{"value": "MIT", "origin": "user"}]},
+                    "bind": {"events": [{"action": "bind", "covers": {"license": ["MIT"]}}]},
+                }
+            }
+        )
+        result = svc.bind(_RESOLVED)
+        assert result.changed is False
+        assert result.promoted == {"license": ["MIT"]}
+        label_repo.create_version.assert_not_called()
+
+    def test_bind_with_no_tags_is_a_noop(self) -> None:
+        svc, label_repo = _make_service({})
+        result = svc.bind(_RESOLVED)
+        assert result.changed is False
+        assert result.promoted == {}
+        label_repo.create_version.assert_not_called()
+
+
+class TestUnbind:
+    def test_unbind_revokes_currently_bound_pairs(self) -> None:
+        svc, label_repo = _make_service(
+            {
+                "tag": {
+                    "license": {"values": [{"value": "MIT", "origin": "user"}]},
+                    "bind": {"events": [{"action": "bind", "covers": {"license": ["MIT"]}}]},
+                }
+            }
+        )
+        result = svc.unbind(_RESOLVED)
+        assert result.changed is True
+        assert result.promoted == {"license": ["MIT"]}
+        tag = _written_tag_subtree(label_repo)
+        assert tag["bind"]["events"][-1] == {"action": "unbind", "covers": {"license": ["MIT"]}}
+
+    def test_unbind_with_nothing_ever_bound_is_a_noop(self) -> None:
+        svc, label_repo = _make_service(
+            {"tag": {"license": {"values": [{"value": "MIT", "origin": "user"}]}}}
+        )
+        result = svc.unbind(_RESOLVED)
+        assert result.changed is False
+        label_repo.create_version.assert_not_called()
+
+    def test_unbind_after_unbind_is_a_noop(self) -> None:
+        svc, label_repo = _make_service(
+            {
+                "tag": {
+                    "license": {"values": [{"value": "MIT", "origin": "user"}]},
+                    "bind": {
+                        "events": [
+                            {"action": "bind", "covers": {"license": ["MIT"]}},
+                            {"action": "unbind", "covers": {"license": ["MIT"]}},
+                        ]
+                    },
+                }
+            }
+        )
+        result = svc.unbind(_RESOLVED)
+        assert result.changed is False
+        label_repo.create_version.assert_not_called()
+
+    def test_unbind_does_not_delete_the_revoked_event(self) -> None:
+        """Append-only revocation: unbind writes a new event, never deletes the bind."""
+        svc, label_repo = _make_service(
+            {
+                "tag": {
+                    "license": {"values": [{"value": "MIT", "origin": "user"}]},
+                    "bind": {"events": [{"action": "bind", "covers": {"license": ["MIT"]}}]},
+                }
+            }
+        )
+        svc.unbind(_RESOLVED)
+        tag = _written_tag_subtree(label_repo)
+        assert tag["bind"]["events"][0] == {"action": "bind", "covers": {"license": ["MIT"]}}
+        assert len(tag["bind"]["events"]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +323,19 @@ class TestRemove:
 
 
 class TestGetTags:
-    def test_returns_tag_namespace_subtree(self) -> None:
-        svc, _ = _make_service({"tag": {"license": ["MIT"]}, "owner": "ml"})
-        assert svc.get_tags(_RESOLVED) == {"license": ["MIT"]}
+    def test_returns_tag_namespace_subtree_excluding_the_bind_ledger(self) -> None:
+        svc, _ = _make_service(
+            {
+                "tag": {
+                    "license": {"values": [{"value": "MIT", "origin": "user"}]},
+                    "bind": {"events": [{"action": "bind", "covers": {"license": ["MIT"]}}]},
+                },
+                "owner": "ml",
+            }
+        )
+        assert svc.get_tags(_RESOLVED) == {
+            "license": {"values": [{"value": "MIT", "origin": "user"}]}
+        }
 
     def test_returns_empty_dict_when_no_tags(self) -> None:
         svc, _ = _make_service({"owner": "ml"})
@@ -171,11 +353,14 @@ class TestGetTags:
 
 class TestHistory:
     def test_delegates_to_label_service(self) -> None:
-        svc, label_svc = _make_service()
+        db_ctx = MagicMock()
+        svc = TagService(db_ctx, Path("."))
+        mock_label_svc = MagicMock()
         expected = [{"version": 1, "metadata": {}}]
-        label_svc.history.return_value = expected
+        mock_label_svc.history.return_value = expected
+        svc._svc = mock_label_svc
         result = svc.history(_RESOLVED)
-        label_svc.history.assert_called_once_with(_RESOLVED)
+        mock_label_svc.history.assert_called_once_with(_RESOLVED)
         assert result is expected
 
 

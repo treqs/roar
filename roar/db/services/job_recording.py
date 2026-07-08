@@ -213,6 +213,9 @@ class JobRecordingService:
             self._label_repo,
             input_artifact_ids=input_artifact_ids,
             output_artifact_ids=output_artifact_ids,
+            current_session_id=session_id,
+            resolve_job_session_id=self._resolve_job_session_id,
+            job_uid=job_uid,
             blocked_kinds=frozenset(kind.strip() for kind in block_tags if kind.strip()),
         )
         if add_tags:
@@ -220,6 +223,7 @@ class JobRecordingService:
                 self._label_repo,
                 output_artifact_ids=output_artifact_ids,
                 tags=parse_add_tags(add_tags),
+                job_uid=job_uid,
             )
 
         # Commit transaction
@@ -230,6 +234,12 @@ class JobRecordingService:
             self._session_repo.update_hash(session_id, self._job_repo)
 
         return job_id, job_uid
+
+    def _resolve_job_session_id(self, job_uid: str) -> int | None:
+        """Look up which local session produced *job_uid* (for tag scope checks)."""
+        job = self._job_repo.get_by_uid(job_uid)
+        session_id = job.get("session_id") if job else None
+        return int(session_id) if isinstance(session_id, int) else None
 
     def _record_step_name_label(self, job_id: int, step_name: str) -> None:
         """Store the canonical step name as current job label metadata."""

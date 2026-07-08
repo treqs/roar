@@ -90,30 +90,34 @@ class TestParseAddTags:
             parse_add_tags(["license=MIT", "badpair"])
 
 
+def _values(doc: dict[str, Any], kind: str) -> list[str]:
+    return [record["value"] for record in doc["tag"][kind]["values"]]
+
+
 class TestStampTags:
     def test_stamps_new_kind_onto_output(self) -> None:
         repo = FakeLabelRepo()
         stamp_tags(repo, output_artifact_ids=["out1"], tags={"license": ["MIT"]})
-        assert repo.docs["out1"]["tag"] == {"license": ["MIT"]}
+        assert _values(repo.docs["out1"], "license") == ["MIT"]
 
     def test_unions_with_existing_tags(self) -> None:
         repo = FakeLabelRepo()
-        repo.seed("out1", {"tag": {"license": ["MIT"]}})
+        repo.seed("out1", {"tag": {"license": {"values": [{"value": "MIT", "origin": "user"}]}}})
         stamp_tags(repo, output_artifact_ids=["out1"], tags={"license": ["Apache-2.0"]})
-        assert set(repo.docs["out1"]["tag"]["license"]) == {"MIT", "Apache-2.0"}
+        assert set(_values(repo.docs["out1"], "license")) == {"MIT", "Apache-2.0"}
 
     def test_preserves_non_tag_metadata(self) -> None:
         repo = FakeLabelRepo()
         repo.seed("out1", {"owner": "ml-team"})
         stamp_tags(repo, output_artifact_ids=["out1"], tags={"license": ["MIT"]})
         assert repo.docs["out1"]["owner"] == "ml-team"
-        assert repo.docs["out1"]["tag"]["license"] == ["MIT"]
+        assert _values(repo.docs["out1"], "license") == ["MIT"]
 
     def test_stamps_all_outputs(self) -> None:
         repo = FakeLabelRepo()
         stamp_tags(repo, output_artifact_ids=["out1", "out2"], tags={"license": ["MIT"]})
-        assert repo.docs["out1"]["tag"]["license"] == ["MIT"]
-        assert repo.docs["out2"]["tag"]["license"] == ["MIT"]
+        assert _values(repo.docs["out1"], "license") == ["MIT"]
+        assert _values(repo.docs["out2"], "license") == ["MIT"]
 
     def test_uses_user_write_origin(self) -> None:
         repo = FakeLabelRepo()
@@ -122,7 +126,7 @@ class TestStampTags:
 
     def test_noop_when_value_already_present(self) -> None:
         repo = FakeLabelRepo()
-        repo.seed("out1", {"tag": {"license": ["MIT"]}})
+        repo.seed("out1", {"tag": {"license": {"values": [{"value": "MIT", "origin": "user"}]}}})
         stamp_tags(repo, output_artifact_ids=["out1"], tags={"license": ["MIT"]})
         assert repo.write_calls == []
 
@@ -135,3 +139,13 @@ class TestStampTags:
         repo = FakeLabelRepo()
         stamp_tags(repo, output_artifact_ids=[], tags={"license": ["MIT"]})
         assert repo.write_calls == []
+
+    def test_stamped_record_carries_the_job_but_origin_stays_user(self) -> None:
+        """--add-tag is user-origin (an explicit assertion) but still job-stamped, so
+        it propagates normally within the same session — it just doesn't imply a bind
+        (the named-artifact rule: it quantifies over the whole output set)."""
+        repo = FakeLabelRepo()
+        stamp_tags(repo, output_artifact_ids=["out1"], tags={"license": ["MIT"]}, job_uid="job-x")
+        record = repo.docs["out1"]["tag"]["license"]["values"][0]
+        assert record == {"value": "MIT", "origin": LABEL_ORIGIN_USER, "job": "job-x"}
+        assert "bind" not in repo.docs["out1"]["tag"]

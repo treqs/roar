@@ -7,20 +7,29 @@ from unittest.mock import MagicMock, patch
 
 from roar.application.query.requests import (
     TagAddRequest,
+    TagBindRequest,
     TagHistoryRequest,
     TagRmRequest,
     TagShowRequest,
+    TagUnbindRequest,
 )
 from roar.application.query.tag import (
     build_tag_add_summary,
+    build_tag_bind_summary,
     build_tag_history_summary,
     build_tag_rm_summary,
     build_tag_show_summary,
+    build_tag_unbind_summary,
 )
+from roar.application.tags import BindResult
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _kind(*values: str, origin: str = "user") -> dict:
+    return {"values": [{"value": v, "origin": origin} for v in values]}
 
 
 def _add_request(tmp_path: Path, **overrides) -> TagAddRequest:
@@ -61,6 +70,24 @@ def _history_request(tmp_path: Path, **overrides) -> TagHistoryRequest:
     )
 
 
+def _bind_request(tmp_path: Path, **overrides) -> TagBindRequest:
+    return TagBindRequest(
+        roar_dir=overrides.pop("roar_dir", tmp_path / ".roar"),
+        cwd=overrides.pop("cwd", tmp_path),
+        targets=overrides.pop("targets", ("model.pt",)),
+        **overrides,
+    )
+
+
+def _unbind_request(tmp_path: Path, **overrides) -> TagUnbindRequest:
+    return TagUnbindRequest(
+        roar_dir=overrides.pop("roar_dir", tmp_path / ".roar"),
+        cwd=overrides.pop("cwd", tmp_path),
+        targets=overrides.pop("targets", ("model.pt",)),
+        **overrides,
+    )
+
+
 def _mock_db_and_svc(tags: dict, *, changed: bool = True, history: list | None = None):
     """Return (db_ctx_mock, tag_svc_mock) with sensible defaults."""
     db_ctx = MagicMock()
@@ -90,25 +117,25 @@ def _patch(db_ctx, svc):
 
 class TestTagAdd:
     def test_reports_tagged_when_value_added(self, tmp_path: Path) -> None:
-        db_ctx, svc = _mock_db_and_svc({"license": ["MIT"]}, changed=True)
+        db_ctx, svc = _mock_db_and_svc({"license": _kind("MIT")}, changed=True)
         with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
             summary = build_tag_add_summary(_add_request(tmp_path))
         assert "Tagged @1" in summary.heading
         assert "license" in summary.heading
 
     def test_reports_no_change_when_value_already_present(self, tmp_path: Path) -> None:
-        db_ctx, svc = _mock_db_and_svc({"license": ["MIT"]}, changed=False)
+        db_ctx, svc = _mock_db_and_svc({"license": _kind("MIT")}, changed=False)
         with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
             summary = build_tag_add_summary(_add_request(tmp_path))
         assert "No change" in summary.heading
         assert "MIT" in summary.heading
 
     def test_renders_current_tag_entries(self, tmp_path: Path) -> None:
-        db_ctx, svc = _mock_db_and_svc({"license": ["MIT", "Apache-2.0"]})
+        db_ctx, svc = _mock_db_and_svc({"license": _kind("MIT", "Apache-2.0")})
         with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
             summary = build_tag_add_summary(_add_request(tmp_path))
-        keys = [e.key for e in summary.entries]
-        assert "license.0" in keys or any("license" in k for k in keys)
+        entry = next(e for e in summary.entries if e.key == "license")
+        assert entry.display_value == "MIT, Apache-2.0"
 
     def test_raises_for_missing_equals(self, tmp_path: Path) -> None:
         import pytest
@@ -166,7 +193,7 @@ class TestTagRm:
         assert "No change" in summary.heading
 
     def test_renders_remaining_tags(self, tmp_path: Path) -> None:
-        db_ctx, svc = _mock_db_and_svc({"license": ["Apache-2.0"]}, changed=True)
+        db_ctx, svc = _mock_db_and_svc({"license": _kind("Apache-2.0")}, changed=True)
         with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
             summary = build_tag_rm_summary(_rm_request(tmp_path))
         assert any("Apache" in e.display_value for e in summary.entries)
@@ -179,12 +206,12 @@ class TestTagRm:
 
 class TestTagShow:
     def test_renders_current_tags(self, tmp_path: Path) -> None:
-        db_ctx, svc = _mock_db_and_svc({"license": ["MIT"], "contains_pii": ["absent"]})
+        db_ctx, svc = _mock_db_and_svc({"license": _kind("MIT"), "contains_pii": _kind("absent")})
         with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
             summary = build_tag_show_summary(_show_request(tmp_path))
         keys = [e.key for e in summary.entries]
-        assert any("license" in k for k in keys)
-        assert any("contains_pii" in k for k in keys)
+        assert "license" in keys
+        assert "contains_pii" in keys
 
     def test_renders_no_tags_message_when_empty(self, tmp_path: Path) -> None:
         db_ctx, svc = _mock_db_and_svc({})
@@ -210,8 +237,8 @@ class TestTagHistory:
         db_ctx, svc = _mock_db_and_svc(
             {},
             history=[
-                {"version": 1, "metadata": {"tag": {"license": ["MIT"]}}},
-                {"version": 2, "metadata": {"tag": {"license": ["MIT", "Apache-2.0"]}}},
+                {"version": 1, "metadata": {"tag": {"license": _kind("MIT")}}},
+                {"version": 2, "metadata": {"tag": {"license": _kind("MIT", "Apache-2.0")}}},
             ],
         )
         with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
@@ -225,7 +252,7 @@ class TestTagHistory:
             {},
             history=[
                 {"version": 1, "metadata": {"other": "value"}},
-                {"version": 2, "metadata": {"tag": {"license": ["MIT"]}}},
+                {"version": 2, "metadata": {"tag": {"license": _kind("MIT")}}},
             ],
         )
         with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
@@ -238,3 +265,113 @@ class TestTagHistory:
         with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
             summary = build_tag_history_summary(_history_request(tmp_path))
         assert summary.render() == "No labels."
+
+    def test_bind_ledger_is_excluded_from_history_entries(self, tmp_path: Path) -> None:
+        db_ctx, svc = _mock_db_and_svc(
+            {},
+            history=[
+                {
+                    "version": 1,
+                    "metadata": {
+                        "tag": {
+                            "license": _kind("MIT"),
+                            "bind": {
+                                "events": [{"action": "bind", "covers": {"license": ["MIT"]}}]
+                            },
+                        }
+                    },
+                },
+            ],
+        )
+        with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
+            summary = build_tag_history_summary(_history_request(tmp_path))
+        keys = [e.key for e in summary.versions[0].entries]
+        assert keys == ["license"]
+
+
+# ---------------------------------------------------------------------------
+# tag bind / unbind
+# ---------------------------------------------------------------------------
+
+
+class TestTagBind:
+    def test_binds_each_target_and_echoes_promoted_tags(self, tmp_path: Path) -> None:
+        db_ctx = MagicMock()
+        db_ctx.__enter__.return_value = db_ctx
+        db_ctx.__exit__.return_value = None
+        db_ctx.artifacts.get.return_value = {"size": 1024}
+
+        svc = MagicMock()
+        resolved = MagicMock(entity_type="artifact", artifact_id="a1", display_target="model.pt")
+        svc.resolve_target.return_value = resolved
+        svc.bind.return_value = BindResult(changed=True, promoted={"license": ["MIT"]})
+
+        with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
+            summary = build_tag_bind_summary(_bind_request(tmp_path, targets=("model.pt",)))
+
+        assert len(summary.artifacts) == 1
+        entry = summary.artifacts[0]
+        assert entry.display_target == "model.pt"
+        assert entry.action == "bind"
+        assert entry.changed is True
+        assert entry.promoted == {"license": ["MIT"]}
+        assert entry.size == 1024
+
+    def test_binds_multiple_targets_in_order(self, tmp_path: Path) -> None:
+        db_ctx = MagicMock()
+        db_ctx.__enter__.return_value = db_ctx
+        db_ctx.__exit__.return_value = None
+        db_ctx.artifacts.get.return_value = None
+
+        svc = MagicMock()
+        svc.resolve_target.side_effect = [
+            MagicMock(entity_type="artifact", artifact_id="a1", display_target="one.pt"),
+            MagicMock(entity_type="artifact", artifact_id="a2", display_target="two.pt"),
+        ]
+        svc.bind.return_value = BindResult(changed=False, promoted={})
+
+        with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
+            summary = build_tag_bind_summary(_bind_request(tmp_path, targets=("one.pt", "two.pt")))
+
+        assert [a.display_target for a in summary.artifacts] == ["one.pt", "two.pt"]
+
+    def test_no_change_renders_a_no_op_line(self, tmp_path: Path) -> None:
+        db_ctx = MagicMock()
+        db_ctx.__enter__.return_value = db_ctx
+        db_ctx.__exit__.return_value = None
+        db_ctx.artifacts.get.return_value = {"size": 0}
+
+        svc = MagicMock()
+        svc.resolve_target.return_value = MagicMock(
+            entity_type="artifact", artifact_id="a1", display_target="empty.bin"
+        )
+        svc.bind.return_value = BindResult(changed=False, promoted={})
+
+        with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
+            summary = build_tag_bind_summary(_bind_request(tmp_path))
+
+        rendered = summary.render()
+        assert "no change" in rendered
+        assert "empty-content hash" in rendered  # size == 0 warning
+
+
+class TestTagUnbind:
+    def test_unbinds_each_target(self, tmp_path: Path) -> None:
+        db_ctx = MagicMock()
+        db_ctx.__enter__.return_value = db_ctx
+        db_ctx.__exit__.return_value = None
+        db_ctx.artifacts.get.return_value = {"size": 2048}
+
+        svc = MagicMock()
+        svc.resolve_target.return_value = MagicMock(
+            entity_type="artifact", artifact_id="a1", display_target="model.pt"
+        )
+        svc.unbind.return_value = BindResult(changed=True, promoted={"license": ["MIT"]})
+
+        with _patch(db_ctx, svc)[0], _patch(db_ctx, svc)[1]:
+            summary = build_tag_unbind_summary(_unbind_request(tmp_path))
+
+        assert summary.artifacts[0].action == "unbind"
+        assert "Unbound" in summary.render()
+        svc.unbind.assert_called_once()
+        svc.bind.assert_not_called()

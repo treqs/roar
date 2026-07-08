@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ...core.label_constants import TAG_NAMESPACE
 from ...db.context import create_database_context
-from ..label_rendering import flatten_label_metadata
-from ..tags import TagService, parse_tag_kv
-from .requests import TagAddRequest, TagHistoryRequest, TagRmRequest, TagShowRequest
+from ..tags import BIND_KIND, BindResult, TagService, parse_tag_kv, tag_display_values
+from .requests import (
+    TagAddRequest,
+    TagBindRequest,
+    TagHistoryRequest,
+    TagRmRequest,
+    TagShowRequest,
+    TagUnbindRequest,
+)
 from .results import (
     LabelCurrentSummary,
     LabelEntrySummary,
     LabelHistorySummary,
     LabelHistoryVersionSummary,
+    TagBindArtifactSummary,
+    TagBindSummary,
 )
 
 
@@ -116,6 +126,58 @@ def build_tag_history_summary(request: TagHistoryRequest) -> LabelHistorySummary
     )
 
 
+def tag_bind(request: TagBindRequest) -> str:
+    """Promote each target's current tags to cross-session scope and return a rendered summary."""
+    return build_tag_bind_summary(request).render()
+
+
+def build_tag_bind_summary(request: TagBindRequest) -> TagBindSummary:
+    """Build the typed summary for a tag bind operation."""
+    return _build_bind_or_unbind_summary(
+        request.roar_dir, request.cwd, request.targets, action="bind"
+    )
+
+
+def tag_unbind(request: TagUnbindRequest) -> str:
+    """Revoke each target's currently-bound tags and return a rendered summary."""
+    return build_tag_unbind_summary(request).render()
+
+
+def build_tag_unbind_summary(request: TagUnbindRequest) -> TagBindSummary:
+    """Build the typed summary for a tag unbind operation."""
+    return _build_bind_or_unbind_summary(
+        request.roar_dir, request.cwd, request.targets, action="unbind"
+    )
+
+
+def _build_bind_or_unbind_summary(
+    roar_dir: Path, cwd: Path, targets: tuple[str, ...], *, action: str
+) -> TagBindSummary:
+    artifacts: list[TagBindArtifactSummary] = []
+    with create_database_context(roar_dir) as db_ctx:
+        svc = TagService(db_ctx, cwd)
+        for target in targets:
+            resolved = svc.resolve_target(target)
+            result: BindResult = svc.bind(resolved) if action == "bind" else svc.unbind(resolved)
+
+            size = None
+            if resolved.entity_type == "artifact" and resolved.artifact_id:
+                artifact = db_ctx.artifacts.get(resolved.artifact_id)
+                if artifact:
+                    size = artifact.get("size")
+
+            artifacts.append(
+                TagBindArtifactSummary(
+                    display_target=resolved.display_target or target,
+                    action=action,
+                    changed=result.changed,
+                    promoted=result.promoted,
+                    size=size,
+                )
+            )
+    return TagBindSummary(artifacts=artifacts)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -133,8 +195,9 @@ def _parse_kind_or_kv(key_or_kv: str) -> tuple[str, str | None]:
 
 
 def _tag_entries(tags: dict) -> list[LabelEntrySummary]:
-    """Convert a tag.* subtree to display entries."""
+    """Convert a tag.* subtree to display entries (values only — skips the bind ledger)."""
     return [
-        LabelEntrySummary(key=key.removeprefix(f"{TAG_NAMESPACE}."), display_value=display)
-        for key, display in flatten_label_metadata({TAG_NAMESPACE: tags})
+        LabelEntrySummary(key=kind, display_value=", ".join(tag_display_values(tags[kind])))
+        for kind in sorted(tags)
+        if kind != BIND_KIND and tag_display_values(tags[kind])
     ]

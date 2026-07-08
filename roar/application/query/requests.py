@@ -206,3 +206,17 @@ class TagHistoryRequest:
     roar_dir: Path
     cwd: Path
     target: str
+
+
+@dataclass(frozen=True)
+class TagBindRequest:
+    roar_dir: Path
+    cwd: Path
+    targets: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TagUnbindRequest:
+    roar_dir: Path
+    cwd: Path
+    targets: tuple[str, ...]
