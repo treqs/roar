@@ -279,3 +279,73 @@ def test_remote_label_edit_rejects_invalid_targets_and_flags(
     )
     assert local_without_project.returncode != 0
     assert "roar is not initialized" in local_without_project.stdout
+
+
+def test_remote_label_edit_reports_missing_get_routes_on_old_servers(
+    temp_git_repo: Path,
+    roar_cli,
+    fake_glaas_publish_server: FakeGlaasServer,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Task C: an old, not-yet-upgraded glaas-api doesn't have the GET
+    /api/v1/labels/current or /api/v1/labels/history routes at all — a
+    genuine "route not found" 404, distinct from the app-level "no labels
+    for this target yet" 404. Both `roar label set --remote` (which reads
+    the current doc first to resolve base_version / create-vs-update) and
+    `roar label history --remote` must surface this as a clear, actionable
+    error rather than silently treating the target as unlabeled.
+    """
+    server = fake_glaas_publish_server
+    env = _configure_label_sync_repo(temp_git_repo, roar_cli, server.base_url)
+    bare_dir = tmp_path_factory.mktemp("no-roar-old-server")
+    remote_env = _remote_env(env, server)
+    session_hash = "a" * 64
+
+    server.supports_get_label_routes = False
+
+    set_result = _run_roar_cmd(
+        "label",
+        "set",
+        "--remote",
+        "dag",
+        session_hash,
+        "team=nlp",
+        cwd=bare_dir,
+        env_overrides=remote_env,
+        check=False,
+    )
+    assert set_result.returncode != 0
+    assert "GET /api/v1/labels/current" in set_result.stderr
+    assert "may not be upgraded yet" in set_result.stderr
+    assert not server.label_reconciles
+
+    history_result = _run_roar_cmd(
+        "label",
+        "history",
+        "--remote",
+        "dag",
+        session_hash,
+        cwd=bare_dir,
+        env_overrides=remote_env,
+        check=False,
+    )
+    assert history_result.returncode != 0
+    assert "GET /api/v1/labels/history" in history_result.stderr
+    assert "may not be upgraded yet" in history_result.stderr
+
+    # Once the server is "upgraded", the same commands work normally again
+    # (and a target that genuinely has no labels yet still behaves as before).
+    server.supports_get_label_routes = True
+    recovered = _run_roar_cmd(
+        "label",
+        "set",
+        "--remote",
+        "dag",
+        session_hash,
+        "team=nlp",
+        cwd=bare_dir,
+        env_overrides=remote_env,
+        check=False,
+    )
+    assert recovered.returncode == 0
+    assert "Updated remote labels: processed=1 created=1" in recovered.stdout

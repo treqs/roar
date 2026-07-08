@@ -1194,3 +1194,128 @@ def test_remote_set_resolves_artifact_session_when_unlabeled(tmp_path: Path) -> 
     assert sent["session_hash"] == session
     assert sent["labels"][0]["artifact_hash"] == artifact
     assert sent["labels"][0]["session_hash"] == session
+
+
+# Task C: GET /api/v1/labels/current and /api/v1/labels/history 404s are
+# ambiguous — "no labels yet" on an upgraded server vs. "route doesn't exist"
+# on an old one. Only the latter should surface as a clear, actionable error;
+# the former must keep behaving as "no labels yet" (covered by the
+# `current=(None, "HTTP 404: Label not found")` tests above, which are
+# unaffected by this change since that message never contains "Endpoint not
+# found").
+
+
+def test_remote_set_raises_clear_error_when_get_current_route_is_missing(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelSetRequest
+    from roar.application.query.label import build_remote_set_labels_summary
+
+    client = _mock_remote_client(
+        current=(None, "HTTP 404: Endpoint not found"),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_set_labels_summary(
+                RemoteLabelSetRequest(
+                    cwd=tmp_path, entity_type="dag", target="a" * 64, pairs=("team=cv",)
+                )
+            )
+        except ValueError as exc:
+            assert "GET /api/v1/labels/current" in str(exc)
+            assert "may not be upgraded yet" in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for a missing GET route")
+    client.reconcile_labels.assert_not_called()
+
+
+def test_remote_unset_raises_clear_error_when_get_current_route_is_missing(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelUnsetRequest
+    from roar.application.query.label import build_remote_unset_labels_summary
+
+    client = _mock_remote_client(
+        current=(None, "HTTP 404: Endpoint not found"),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_unset_labels_summary(
+                RemoteLabelUnsetRequest(
+                    cwd=tmp_path, entity_type="dag", target="a" * 64, keys=("stage",)
+                )
+            )
+        except ValueError as exc:
+            assert "GET /api/v1/labels/current" in str(exc)
+            assert "may not be upgraded yet" in str(exc)
+            # Must NOT be misread as the (misleading, for this case) "no
+            # remote labels found" message.
+            assert "No remote labels found" not in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for a missing GET route")
+
+
+def test_remote_show_raises_clear_error_when_get_current_route_is_missing(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelShowRequest
+    from roar.application.query.label import build_remote_show_labels_summary
+
+    client = _mock_remote_client(
+        current=(None, "HTTP 404: Endpoint not found"),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_show_labels_summary(
+                RemoteLabelShowRequest(cwd=tmp_path, entity_type="dag", target="a" * 64)
+            )
+        except ValueError as exc:
+            assert "GET /api/v1/labels/current" in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for a missing GET route")
+
+
+def test_remote_history_raises_clear_error_when_get_history_route_is_missing(
+    tmp_path: Path,
+) -> None:
+    from roar.application.query import RemoteLabelHistoryRequest
+    from roar.application.query.label import build_remote_label_history_summary
+
+    client = _mock_remote_client(
+        history=(None, "HTTP 404: Endpoint not found"),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_label_history_summary(
+                RemoteLabelHistoryRequest(cwd=tmp_path, entity_type="dag", target="a" * 64)
+            )
+        except ValueError as exc:
+            assert "GET /api/v1/labels/history" in str(exc)
+            assert "may not be upgraded yet" in str(exc)
+            assert "No remote labels found" not in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for a missing GET route")
+
+
+def test_remote_history_still_treats_genuine_404_as_no_labels(tmp_path: Path) -> None:
+    """The app-level 'no labels yet' 404 (a different message than 'Endpoint
+    not found') must keep behaving as before for history, too."""
+    from roar.application.query import RemoteLabelHistoryRequest
+    from roar.application.query.label import build_remote_label_history_summary
+
+    client = _mock_remote_client(
+        history=(None, "HTTP 404: Label not found"),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_label_history_summary(
+                RemoteLabelHistoryRequest(cwd=tmp_path, entity_type="dag", target="a" * 64)
+            )
+        except ValueError as exc:
+            assert str(exc) == "No remote labels found for the target."
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for missing labels")

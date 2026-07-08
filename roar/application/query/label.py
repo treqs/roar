@@ -335,6 +335,29 @@ def _is_missing_reconcile_route_error(error: str) -> bool:
     return "cannot post" in normalized and "/api/v1/labels/reconcile" in normalized
 
 
+def _is_missing_get_labels_route_error(error: str) -> bool:
+    """True when a 404 means the GET route itself is missing (old server).
+
+    Distinguishes this from the app-level "no labels for this target yet" 404
+    (a ``NotFoundError`` raised from GLaaS's label service), which must keep
+    being treated as "no labels yet". A real glaas-api server's generic
+    404 middleware for a genuinely unrecognized route returns a body whose
+    message is literally "Endpoint not found"; the app-level case never
+    produces that exact string (see roar/integrations/glaas/transport.py's
+    ``HTTP {code}: {detail}`` formatting).
+    """
+    if not error.startswith("HTTP 404:"):
+        return False
+    return "endpoint not found" in error.lower()
+
+
+def _missing_get_labels_route_error(path: str) -> str:
+    return (
+        f"Remote label read requires GLaaS support for GET {path} — "
+        "this server may not be upgraded yet."
+    )
+
+
 def _create_remote_label_client(cwd: Any, *, action: str) -> GlaasClient:
     """Build an authenticated GLaaS client for label operations.
 
@@ -451,10 +474,20 @@ def _fetch_remote_current_label(
     *,
     action: str,
 ) -> dict[str, Any] | None:
-    """Fetch the current remote label doc; None when the target has no labels."""
+    """Fetch the current remote label doc; None when the target has no labels.
+
+    A 404 is ambiguous on its own: it means "no labels for this target yet"
+    on an up-to-date server, but "this route doesn't exist" on an old,
+    not-yet-upgraded one. Only the former should be swallowed into ``None``
+    (which callers like `remote_set_labels` read as "create") — the latter
+    must surface as a clear error instead of silently being treated as
+    version 0 or "no remote labels found".
+    """
     result, error = client.get_current_labels(params)
     if error:
         if error.startswith("HTTP 404"):
+            if _is_missing_get_labels_route_error(error):
+                raise ValueError(_missing_get_labels_route_error("/api/v1/labels/current"))
             return None
         raise ValueError(_map_remote_label_error(error, action=action))
     return result if isinstance(result, dict) else None
@@ -629,6 +662,8 @@ def build_remote_label_history_summary(request: RemoteLabelHistoryRequest) -> La
     result, error = client.get_label_history(params)
     if error:
         if error.startswith("HTTP 404"):
+            if _is_missing_get_labels_route_error(error):
+                raise ValueError(_missing_get_labels_route_error("/api/v1/labels/history"))
             raise ValueError("No remote labels found for the target.")
         raise ValueError(_map_remote_label_error(error, action="history"))
 
