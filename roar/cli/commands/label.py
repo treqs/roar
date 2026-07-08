@@ -240,6 +240,12 @@ def label_show(
 @click.argument("target", required=False)
 @click.option("--dry-run", is_flag=True, help="Preview remote reconcile without writing.")
 @click.option("--json", "output_json", is_flag=True, help="Render the GLaaS reconcile response.")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Skip the confirmation prompt when the sync would delete remote label keys.",
+)
 @click.pass_obj
 @require_init
 def label_sync(
@@ -248,11 +254,14 @@ def label_sync(
     target: str | None,
     dry_run: bool,
     output_json: bool,
+    yes: bool,
 ) -> None:
     """Sync current local user-managed labels to GLaaS.
 
     Pushes current user labels and propagates local `label unset` removals as
-    remote key deletions (keys unset since the last successful sync).
+    remote key deletions (keys unset since the last successful sync). If any
+    keys would be deleted remotely, you will be prompted to confirm unless
+    --yes or --dry-run is given.
     """
     try:
         rendered = sync_labels(
@@ -263,6 +272,7 @@ def label_sync(
                 target=target,
                 dry_run=dry_run,
                 output_json=output_json,
+                skip_confirmation=yes,
             )
         )
     except (ValueError, RuntimeError) as exc:

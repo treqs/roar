@@ -157,6 +157,9 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
                     "No local user-managed labels or label deletions to sync for current lineage."
                 )
 
+    if not request.dry_run and not request.skip_confirmation:
+        _confirm_pending_label_deletions(sync_targets)
+
     client = _create_remote_label_client(request.cwd, action="sync")
 
     payload: dict[str, Any] = {
@@ -201,6 +204,30 @@ def _target_display_name(target: ReconcileTargetSync) -> str:
     if target.session_hash:
         return target.session_hash
     return target.entity_type or "target"
+
+
+def _confirm_pending_label_deletions(sync_targets: list[ReconcileTargetSync]) -> None:
+    """Prompt before a sync that would delete remote label keys.
+
+    Mirrors the preview-then-confirm shape used for anonymous public publishes
+    (see ``roar/cli/publish_intent.py::confirm_anonymous_public_publish``),
+    reimplemented locally so this module doesn't couple to that one. Aborts
+    the process cleanly (no traceback) if the user declines.
+    """
+    pending = [target for target in sync_targets if target.deleted_keys]
+    if not pending:
+        return
+
+    click.echo("")
+    click.echo("This sync will delete the following remote label keys:")
+    for target in pending:
+        keys = ", ".join(target.deleted_keys)
+        click.echo(f"  {_target_display_name(target)}: {keys}")
+    click.echo("Use `roar label sync -y` (or `--yes`) to skip this confirmation in scripts.")
+    click.echo("")
+    if not click.confirm("Proceed with these remote label deletions?", default=False):
+        click.echo("Sync aborted.")
+        raise SystemExit(1)
 
 
 def _reconcile_target_key(

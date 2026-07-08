@@ -274,7 +274,7 @@ def test_label_sync_propagates_local_unsets_as_remote_deletions(
     published_session_hash = fake_glaas_publish_server.registration_session_finalizations[0]["hash"]
 
     roar_cli("label", "unset", "artifact", "processed.csv", "stage", env_overrides=env)
-    result = roar_cli("label", "sync", "artifact", "processed.csv", env_overrides=env)
+    result = roar_cli("label", "sync", "artifact", "processed.csv", "-y", env_overrides=env)
 
     assert result.returncode == 0
     assert "deleted_keys=1" in result.stdout
@@ -326,7 +326,7 @@ def test_label_sync_syncs_a_fully_unset_target_as_pure_deletions(
     artifact_hash = _artifact_hash_for(roar_cli, "processed.csv")
 
     roar_cli("label", "unset", "artifact", "processed.csv", "stage", env_overrides=env)
-    result = roar_cli("label", "sync", "artifact", "processed.csv", env_overrides=env)
+    result = roar_cli("label", "sync", "artifact", "processed.csv", "-y", env_overrides=env)
 
     assert result.returncode == 0
     request = fake_glaas_publish_server.label_reconciles[-1]
@@ -378,7 +378,7 @@ def test_label_sync_does_not_advance_baseline_when_old_server_ignores_deletions(
     roar_cli("label", "unset", "artifact", "processed.csv", "stage", env_overrides=env)
 
     fake_glaas_publish_server.ignore_deleted_keys_in_reconcile = True
-    result = roar_cli("label", "sync", "artifact", "processed.csv", env_overrides=env)
+    result = roar_cli("label", "sync", "artifact", "processed.csv", "-y", env_overrides=env)
 
     # (a) does not crash/error.
     assert result.returncode == 0
@@ -400,7 +400,7 @@ def test_label_sync_does_not_advance_baseline_when_old_server_ignores_deletions(
     # follow-up sync resends the same deletion instead of treating it as
     # already synced.
     fake_glaas_publish_server.ignore_deleted_keys_in_reconcile = False
-    retry = roar_cli("label", "sync", "artifact", "processed.csv", env_overrides=env)
+    retry = roar_cli("label", "sync", "artifact", "processed.csv", "-y", env_overrides=env)
 
     assert retry.returncode == 0
     retry_request = fake_glaas_publish_server.label_reconciles[-1]

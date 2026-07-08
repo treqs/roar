@@ -529,6 +529,195 @@ def test_build_sync_labels_summary_rejects_missing_user_managed_labels(tmp_path:
             raise AssertionError("Expected ValueError for missing user-managed labels")
 
 
+def _deletion_target_payload() -> tuple[str, list[dict], list[ReconcileTargetSync]]:
+    return (
+        "s" * 64,
+        [
+            {
+                "entity_type": "artifact",
+                "session_hash": "s" * 64,
+                "artifact_hash": "a" * 64,
+                "metadata": {"owner": "ml"},
+                "deleted_keys": ["stage"],
+            }
+        ],
+        [
+            ReconcileTargetSync(
+                entity_type="artifact",
+                session_hash="s" * 64,
+                job_uid=None,
+                artifact_hash="a" * 64,
+                label_ids=[41],
+                deleted_keys=["stage"],
+            )
+        ],
+    )
+
+
+def test_build_sync_labels_summary_prompts_and_aborts_when_deletion_is_declined(
+    tmp_path: Path,
+) -> None:
+    """Task B: declining the deletion-confirmation prompt aborts before any
+    network call is made — nothing is sent to GLaaS."""
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.resolve_target.return_value = object()
+    service.current_metadata.return_value = {"owner": "ml"}
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_target",
+            return_value=_deletion_target_payload(),
+        ),
+        patch("roar.application.query.label.GlaasClient") as client_class,
+        patch("roar.application.query.label.click.confirm", return_value=False) as confirm,
+    ):
+        try:
+            build_sync_labels_summary(_sync_request(tmp_path))
+        except SystemExit as exc:
+            assert exc.code == 1
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected SystemExit when the deletion prompt is declined")
+
+    confirm.assert_called_once()
+    client_class.assert_not_called()
+
+
+def test_build_sync_labels_summary_prompts_and_proceeds_when_deletion_is_accepted(
+    tmp_path: Path,
+) -> None:
+    """Task B: accepting the prompt proceeds with the sync as before."""
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.resolve_target.return_value = object()
+    service.current_metadata.return_value = {"owner": "ml"}
+    client = MagicMock()
+    client.publish_auth = SimpleNamespace(
+        access_token="test-token", ssh_auth_available=False, scope_request=None
+    )
+    client.reconcile_labels.return_value = (
+        {
+            "processed": 1,
+            "created": 0,
+            "updated": 1,
+            "noops": 0,
+            "results": [
+                {
+                    "entityType": "artifact",
+                    "sessionHash": "s" * 64,
+                    "artifactHash": "a" * 64,
+                    "action": "updated",
+                    "version": 2,
+                    "deletedKeys": ["stage"],
+                }
+            ],
+        },
+        None,
+    )
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_target",
+            return_value=_deletion_target_payload(),
+        ),
+        patch(
+            "roar.application.query.label.load_publish_auth_context",
+            return_value=client.publish_auth,
+        ),
+        patch("roar.application.query.label.GlaasClient", return_value=client),
+        patch("roar.application.query.label.click.confirm", return_value=True) as confirm,
+    ):
+        summary = build_sync_labels_summary(_sync_request(tmp_path))
+
+    confirm.assert_called_once()
+    client.reconcile_labels.assert_called_once()
+    assert not isinstance(summary, str)
+    db_ctx.labels.mark_synced.assert_called_once_with([41], ANY)
+
+
+def test_build_sync_labels_summary_skip_confirmation_bypasses_prompt(tmp_path: Path) -> None:
+    """Task B: -y/--yes (skip_confirmation) never prompts."""
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.resolve_target.return_value = object()
+    service.current_metadata.return_value = {"owner": "ml"}
+    client = MagicMock()
+    client.publish_auth = SimpleNamespace(
+        access_token="test-token", ssh_auth_available=False, scope_request=None
+    )
+    client.reconcile_labels.return_value = (
+        {"processed": 1, "created": 0, "updated": 1, "noops": 0, "results": []},
+        None,
+    )
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_target",
+            return_value=_deletion_target_payload(),
+        ),
+        patch(
+            "roar.application.query.label.load_publish_auth_context",
+            return_value=client.publish_auth,
+        ),
+        patch("roar.application.query.label.GlaasClient", return_value=client),
+        patch("roar.application.query.label.click.confirm") as confirm,
+    ):
+        build_sync_labels_summary(_sync_request(tmp_path, skip_confirmation=True))
+
+    confirm.assert_not_called()
+    client.reconcile_labels.assert_called_once()
+
+
+def test_build_sync_labels_summary_dry_run_bypasses_prompt(tmp_path: Path) -> None:
+    """Task B: --dry-run never prompts, even with pending deletions."""
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.resolve_target.return_value = object()
+    service.current_metadata.return_value = {"owner": "ml"}
+    client = MagicMock()
+    client.publish_auth = SimpleNamespace(
+        access_token="test-token", ssh_auth_available=False, scope_request=None
+    )
+    client.reconcile_labels.return_value = (
+        {"processed": 1, "created": 0, "updated": 0, "noops": 0, "dryRun": True, "results": []},
+        None,
+    )
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_target",
+            return_value=_deletion_target_payload(),
+        ),
+        patch(
+            "roar.application.query.label.load_publish_auth_context",
+            return_value=client.publish_auth,
+        ),
+        patch("roar.application.query.label.GlaasClient", return_value=client),
+        patch("roar.application.query.label.click.confirm") as confirm,
+    ):
+        build_sync_labels_summary(_sync_request(tmp_path, dry_run=True))
+
+    confirm.assert_not_called()
+    client.reconcile_labels.assert_called_once()
+    db_ctx.labels.mark_synced.assert_not_called()
+
+
 def test_mark_labels_synced_confirming_deletions_skips_unconfirmed_targets(
     tmp_path: Path, capsys
 ) -> None:
