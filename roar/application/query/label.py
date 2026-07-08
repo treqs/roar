@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import time
 from copy import deepcopy
 from typing import Any
 
@@ -129,25 +128,23 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
         if request.entity_type and request.target:
             resolved = service.resolve_target(request.entity_type, request.target)
             metadata = strip_reserved_system_labels(service.current_metadata(resolved))
-            session_hash, labels, label_ids = build_reconcile_payload_for_target(
+            if not metadata:
+                raise ValueError(f"No local user-managed labels to sync for {request.target}.")
+            session_hash, labels = build_reconcile_payload_for_target(
                 db_ctx,
                 roar_dir=request.roar_dir,
                 target=resolved,
                 metadata=metadata,
             )
             if not labels:
-                raise ValueError(
-                    f"No local user-managed labels or label deletions to sync for {request.target}."
-                )
+                raise ValueError(f"No local user-managed labels to sync for {request.target}.")
         else:
-            session_hash, labels, label_ids = build_reconcile_payload_for_current_lineage(
+            session_hash, labels = build_reconcile_payload_for_current_lineage(
                 db_ctx,
                 roar_dir=request.roar_dir,
             )
             if not labels:
-                raise ValueError(
-                    "No local user-managed labels or label deletions to sync for current lineage."
-                )
+                raise ValueError("No local user-managed labels to sync for current lineage.")
 
     publish_auth = _load_label_sync_publish_auth(request.cwd)
 
@@ -177,21 +174,7 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
             raise ValueError(
                 "Remote label sync requires GLaaS support for /api/v1/labels/reconcile."
             ) from None
-        if error.startswith("HTTP 401"):
-            raise ValueError(
-                "Remote label sync was rejected as unauthenticated. "
-                "Run `roar login` (or configure SSH auth) and retry."
-            )
-        if error.startswith("HTTP 403"):
-            raise ValueError(
-                f"Remote label sync was denied: {error}. Editing remote labels requires "
-                "write access to the lineage's scope (lineage creator, publication "
-                "author, project writer, or org admin)."
-            )
         raise ValueError(f"Remote label sync failed: {error}")
-
-    if not request.dry_run:
-        _mark_labels_synced(request.roar_dir, label_ids)
 
     if request.output_json:
         return json.dumps(result if isinstance(result, dict) else {}, indent=2, sort_keys=True)
@@ -207,23 +190,6 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
 def show_labels(request: LabelShowRequest) -> str:
     """Show the current local label document for a target."""
     return build_show_labels_summary(request).render()
-
-
-def _mark_labels_synced(roar_dir: Any, label_ids: list[int]) -> None:
-    """Stamp synced_at on pushed label rows; the stamp is the deletion baseline.
-
-    Best-effort: a bookkeeping failure must not fail a sync that already
-    succeeded remotely.
-    """
-    if not label_ids:
-        return
-    try:
-        with create_database_context(roar_dir) as db_ctx:
-            mark_synced = getattr(getattr(db_ctx, "labels", None), "mark_synced", None)
-            if callable(mark_synced):
-                mark_synced(label_ids, time.time())
-    except Exception:
-        pass
 
 
 def _is_missing_reconcile_route_error(error: str) -> bool:
@@ -292,10 +258,7 @@ def _render_sync_heading(result: Any, *, dry_run: bool) -> str:
     noops = int(payload.get("noops") or 0)
     conflicts = payload.get("conflicts")
     conflict_count = len(conflicts) if isinstance(conflicts, list) else 0
-    deleted_keys = int(payload.get("deletedKeys") or 0)
     suffix = f" processed={processed} created={created} updated={updated} noops={noops}"
-    if deleted_keys:
-        suffix += f" deleted_keys={deleted_keys}"
     if conflict_count:
         suffix += f" conflicts={conflict_count}"
     return f"{prefix}:{suffix}"
@@ -319,10 +282,6 @@ def _build_sync_entries(result: Any) -> list[LabelEntrySummary]:
         display = action
         if isinstance(version, int):
             display = f"{display} version {version}"
-        deleted_keys = row.get("deletedKeys")
-        if isinstance(deleted_keys, list) and deleted_keys:
-            joined = ", ".join(str(key) for key in deleted_keys)
-            display = f"{display} (deleted: {joined})"
         entries.append(LabelEntrySummary(key=f"{entity}:{target}", display_value=display))
     return entries
 

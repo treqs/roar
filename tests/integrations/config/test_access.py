@@ -72,6 +72,7 @@ class TestConfigGetDoesNotDiscoverBackends:
     """
 
     def test_non_backend_key_skips_to_dict(self) -> None:
+
         settings = _SettingsStub(
             backend_config_source={},
             to_dict_must_not_be_called=True,
