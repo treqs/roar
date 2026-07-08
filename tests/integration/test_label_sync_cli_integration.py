@@ -240,3 +240,100 @@ def test_label_sync_current_lineage_sends_all_user_managed_labels(
     sent = request["labels"]
     assert {label["entity_type"] for label in sent} == {"dag", "job", "artifact"}
     assert all("roar" not in label["metadata"] for label in sent)
+
+
+def test_label_sync_propagates_local_unsets_as_remote_deletions(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    fake_glaas_publish_server.force_authoritative_finalize_hash = True
+    env = _configure_label_sync_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    _create_tracked_output(
+        temp_git_repo,
+        roar_cli=roar_cli,
+        git_commit=git_commit,
+        python_exe=python_exe,
+        env_overrides=env,
+    )
+
+    roar_cli(
+        "label",
+        "set",
+        "artifact",
+        "processed.csv",
+        "owner=ml",
+        "stage=gold",
+        env_overrides=env,
+    )
+    roar_cli("register", "processed.csv", "--yes", env_overrides=env)
+
+    artifact_hash = _artifact_hash_for(roar_cli, "processed.csv")
+    published_session_hash = fake_glaas_publish_server.registration_session_finalizations[0]["hash"]
+
+    roar_cli("label", "unset", "artifact", "processed.csv", "stage", env_overrides=env)
+    result = roar_cli("label", "sync", "artifact", "processed.csv", env_overrides=env)
+
+    assert result.returncode == 0
+    assert "deleted_keys=1" in result.stdout
+    assert "(deleted: stage)" in result.stdout
+    request = fake_glaas_publish_server.label_reconciles[-1]
+    assert request["labels"] == [
+        {
+            "entity_type": "artifact",
+            "session_hash": published_session_hash,
+            "artifact_hash": artifact_hash,
+            "metadata": {"owner": "ml"},
+            "deleted_keys": ["stage"],
+        }
+    ]
+    remote_state = fake_glaas_publish_server.current_labels_by_target
+    remote_label = next(
+        label for label in remote_state.values() if label.get("artifactHash") == artifact_hash
+    )
+    assert remote_label["metadata"] == {"owner": "ml"}
+
+    # The successful sync advances the local baseline: a second sync sends no
+    # deletions and reconciles as a noop.
+    second = roar_cli("label", "sync", "artifact", "processed.csv", env_overrides=env)
+    assert second.returncode == 0
+    second_request = fake_glaas_publish_server.label_reconciles[-1]
+    assert "deleted_keys" not in second_request["labels"][0]
+    assert "noops=1" in second.stdout
+
+
+def test_label_sync_syncs_a_fully_unset_target_as_pure_deletions(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    fake_glaas_publish_server.force_authoritative_finalize_hash = True
+    env = _configure_label_sync_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    _create_tracked_output(
+        temp_git_repo,
+        roar_cli=roar_cli,
+        git_commit=git_commit,
+        python_exe=python_exe,
+        env_overrides=env,
+    )
+
+    roar_cli("label", "set", "artifact", "processed.csv", "stage=gold", env_overrides=env)
+    roar_cli("register", "processed.csv", "--yes", env_overrides=env)
+    artifact_hash = _artifact_hash_for(roar_cli, "processed.csv")
+
+    roar_cli("label", "unset", "artifact", "processed.csv", "stage", env_overrides=env)
+    result = roar_cli("label", "sync", "artifact", "processed.csv", env_overrides=env)
+
+    assert result.returncode == 0
+    request = fake_glaas_publish_server.label_reconciles[-1]
+    assert request["labels"][0]["metadata"] == {}
+    assert request["labels"][0]["deleted_keys"] == ["stage"]
+    remote_state = fake_glaas_publish_server.current_labels_by_target
+    remote_label = next(
+        label for label in remote_state.values() if label.get("artifactHash") == artifact_hash
+    )
+    assert remote_label["metadata"] == {}

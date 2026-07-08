@@ -263,6 +263,7 @@ def test_build_sync_labels_summary_reconciles_target_labels(tmp_path: Path) -> N
                         "metadata": {"owner": "ml", "stage": "gold"},
                     }
                 ],
+                [41],
             ),
         ) as build_payload,
         patch(
@@ -330,6 +331,7 @@ def test_build_sync_labels_summary_falls_back_to_public_auth_without_repo_bindin
             return_value=(
                 "s" * 64,
                 [{"entity_type": "dag", "session_hash": "s" * 64, "metadata": {"phase": "gold"}}],
+                [7],
             ),
         ),
         patch(
@@ -387,6 +389,7 @@ def test_build_sync_labels_summary_preserves_reconcile_application_404s(tmp_path
             return_value=(
                 "s" * 64,
                 [{"entity_type": "dag", "session_hash": "s" * 64, "metadata": {"phase": "gold"}}],
+                [],
             ),
         ),
         patch(
@@ -434,6 +437,7 @@ def test_build_sync_labels_summary_supports_json_dry_run(tmp_path: Path) -> None
             return_value=(
                 "s" * 64,
                 [{"entity_type": "dag", "session_hash": "s" * 64, "metadata": {"phase": "gold"}}],
+                [9],
             ),
         ),
         patch(
@@ -483,11 +487,16 @@ def test_build_sync_labels_summary_rejects_missing_user_managed_labels(tmp_path:
     with (
         patch("roar.application.query.label.create_database_context", return_value=db_ctx),
         patch("roar.application.query.label.LabelService", return_value=service),
+        # System-only metadata and no pending local deletions → nothing to sync.
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_target",
+            return_value=("s" * 64, [], []),
+        ),
     ):
         try:
             build_sync_labels_summary(_sync_request(tmp_path, target="@1", entity_type="job"))
         except ValueError as exc:
-            assert str(exc) == "No local user-managed labels to sync for @1."
+            assert str(exc) == "No local user-managed labels or label deletions to sync for @1."
         else:  # pragma: no cover - defensive assertion style
             raise AssertionError("Expected ValueError for missing user-managed labels")
 

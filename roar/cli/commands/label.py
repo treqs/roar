@@ -158,7 +158,11 @@ def label_sync(
     dry_run: bool,
     output_json: bool,
 ) -> None:
-    """Sync current local user-managed labels to GLaaS."""
+    """Sync current local user-managed labels to GLaaS.
+
+    Pushes current user labels and propagates local `label unset` removals as
+    remote key deletions (keys unset since the last successful sync).
+    """
     try:
         rendered = sync_labels(
             LabelSyncRequest(
