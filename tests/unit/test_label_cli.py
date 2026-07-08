@@ -1,11 +1,12 @@
-"""Unit tests for the `roar label sync` CLI surface (Task B of
+"""Unit tests for the `roar label` CLI surface (Tasks B and D of
 tb/label-sync-safety).
 
 These tests exercise the Click command layer directly (flag plumbing, error
 rendering) with the application layer mocked out; the underlying confirmation
-gate logic is covered in tests/application/query/test_label.py, and full
-end-to-end behavior against a fake GLaaS server is covered in
-tests/integration/test_label_sync_cli_integration.py.
+gate and deletion-baseline logic are covered in
+tests/application/query/test_label.py, and full end-to-end behavior against a
+fake GLaaS server is covered in tests/integration/test_label_sync_cli_integration.py
+and tests/integration/test_label_remote_cli_integration.py.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
 from roar.application.query.requests import LabelSyncRequest
-from roar.cli.commands.label import label_sync
+from roar.cli.commands.label import label_set, label_sync
 
 
 def _mock_context(tmp_path: Path) -> MagicMock:
@@ -107,3 +108,30 @@ def test_label_sync_value_error_becomes_clean_click_exception(tmp_path: Path) ->
     assert result.exit_code != 0
     assert "Traceback" not in result.output
     assert "No local user-managed labels" in result.output
+
+
+def test_remote_label_set_conflict_error_surfaces_cleanly_not_as_a_traceback(
+    tmp_path: Path,
+) -> None:
+    """Task D: a 409 conflict from the --remote edit path (mapped by
+    _map_remote_label_error to a "conflicted with a concurrent edit... retry"
+    message) must reach the user as a clean CLI error, not a raw traceback."""
+    runner = CliRunner()
+    conflict_message = (
+        "Remote label edit conflicted with a concurrent edit: HTTP 409: version mismatch. "
+        "Retry to apply the change against the latest version."
+    )
+    with patch(
+        "roar.cli.commands.label.remote_set_labels",
+        side_effect=ValueError(conflict_message),
+    ):
+        result = runner.invoke(
+            label_set,
+            ["--remote", "dag", "a" * 64, "team=cv"],
+            obj=_mock_context(tmp_path),
+        )
+
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "conflicted with a concurrent edit" in result.output
+    assert "Retry" in result.output

@@ -1319,3 +1319,35 @@ def test_remote_history_still_treats_genuine_404_as_no_labels(tmp_path: Path) ->
             assert str(exc) == "No remote labels found for the target."
         else:  # pragma: no cover - defensive assertion style
             raise AssertionError("Expected ValueError for missing labels")
+
+
+# Task D: the --remote edit path's optimistic locking (base_version) maps a
+# 409 conflict to a clear, actionable message rather than a raw traceback.
+
+
+def test_remote_edit_maps_conflict_errors(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelSetRequest
+    from roar.application.query.label import build_remote_set_labels_summary
+
+    client = _mock_remote_client(
+        current=({"version": 4, "metadata": {"team": "nlp"}}, None),
+        reconcile=(
+            None,
+            "HTTP 409: Label was modified concurrently (expected version 4, found 5)",
+        ),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_set_labels_summary(
+                RemoteLabelSetRequest(
+                    cwd=tmp_path, entity_type="dag", target="a" * 64, pairs=("team=cv",)
+                )
+            )
+        except ValueError as exc:
+            message = str(exc)
+            assert "conflicted with a concurrent edit" in message
+            assert "Retry" in message
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for 409")
