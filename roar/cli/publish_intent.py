@@ -95,6 +95,34 @@ def warn_defaulted_anonymous() -> None:
     )
 
 
+def _preview_hash(value: str) -> str:
+    """Shorten hashes in confirmation prompts (mirrors register.py's _preview_hash)."""
+    return f"{value[:12]}..." if len(value) > 12 else value
+
+
+def confirm_defaulted_active_session_publish(
+    *, session_hash: str, command_name: str, start_dir: str | None = None
+) -> bool:
+    """Prompt before a target-less invocation publishes the whole active session.
+
+    With no target, ``roar register`` publishes every job and artifact in the
+    active session (the same scope ``roar status`` shows) rather than a single
+    artifact's narrower upstream lineage — a materially bigger, easy-to-trigger-
+    by-accident publish. This gate fires independent of ``publish_intent.anonymous``:
+    an attributed, private publish of the wrong (too-broad) scope is still a real
+    mistake, so it can't rely on the anonymous/public confirmation to catch it.
+    """
+    click.echo("")
+    click.echo(f"Will publish to: {_publish_url_preview(start_dir, session_hash)}")
+    click.echo(
+        f"No target given — the whole active session ({_preview_hash(session_hash)}) will be "
+        "published, including every job and artifact recorded in it so far."
+    )
+    click.echo(f"Use `{command_name} -y` to skip this confirmation in scripts.")
+    click.echo("")
+    return click.confirm("Publish the whole active session?", default=False)
+
+
 def confirm_anonymous_public_publish(*, command_name: str, start_dir: str | None = None) -> bool:
     """Prompt before an anonymous public publication.
 
@@ -113,9 +141,15 @@ def confirm_anonymous_public_publish(*, command_name: str, start_dir: str | None
     return click.confirm("Publish anonymously and publicly?", default=False)
 
 
-def _publish_url_preview(start_dir: str | None) -> str:
-    """Return the dag URL pattern using the configured GLaaS host."""
+def _publish_url_preview(start_dir: str | None, session_hash: str | None = None) -> str:
+    """Return the dag URL using the configured GLaaS host.
+
+    ``session_hash`` is the real, already-resolved hash when the caller has one
+    (e.g. the defaulted-active-session gate, which runs after target resolution).
+    Falls back to a ``<session-hash>`` placeholder when the real hash isn't known
+    yet (e.g. the anonymous-publish gate, which runs before registration).
+    """
     from ..integrations.config.raw import get_raw_glaas_web_url
 
     web_url = get_raw_glaas_web_url(start_dir=start_dir) or "https://glaas.ai"
-    return f"{web_url}/dag/<session-hash>"
+    return f"{web_url}/dag/{session_hash or '<session-hash>'}"
