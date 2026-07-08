@@ -1429,7 +1429,7 @@ wheels = [
 
 [[package]]
 name = "roar-cli"
-version = "0.3.6"
+version = "0.3.7"
 source = { editable = "." }
 dependencies = [
     { name = "blake3" },
