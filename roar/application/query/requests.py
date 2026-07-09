@@ -108,6 +108,9 @@ class LabelSyncRequest:
     target: str | None = None
     dry_run: bool = False
     output_json: bool = False
+    # Skip the confirmation prompt shown when the sync would delete remote
+    # label keys (populated from `roar label sync -y/--yes`).
+    skip_confirmation: bool = False
 
 
 @dataclass(frozen=True)

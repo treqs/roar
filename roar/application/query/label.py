@@ -8,12 +8,15 @@ import time
 from copy import deepcopy
 from typing import Any
 
+import click
+
 from ...db.context import create_database_context
 from ...integrations.glaas import GlaasClient
 from ...publish_auth import PublishAuthContext, PublishAuthError, load_publish_auth_context
 from ..label_rendering import flatten_label_metadata
 from ..labels import (
     LabelService,
+    ReconcileTargetSync,
     build_reconcile_payload_for_current_lineage,
     build_reconcile_payload_for_target,
     parse_label_pairs,
@@ -134,7 +137,7 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
         if request.entity_type and request.target:
             resolved = service.resolve_target(request.entity_type, request.target)
             metadata = strip_reserved_system_labels(service.current_metadata(resolved))
-            session_hash, labels, label_ids = build_reconcile_payload_for_target(
+            session_hash, labels, sync_targets = build_reconcile_payload_for_target(
                 db_ctx,
                 roar_dir=request.roar_dir,
                 target=resolved,
@@ -145,7 +148,7 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
                     f"No local user-managed labels or label deletions to sync for {request.target}."
                 )
         else:
-            session_hash, labels, label_ids = build_reconcile_payload_for_current_lineage(
+            session_hash, labels, sync_targets = build_reconcile_payload_for_current_lineage(
                 db_ctx,
                 roar_dir=request.roar_dir,
             )
@@ -153,6 +156,9 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
                 raise ValueError(
                     "No local user-managed labels or label deletions to sync for current lineage."
                 )
+
+    if not request.dry_run and not request.skip_confirmation:
+        _confirm_pending_label_deletions(sync_targets)
 
     client = _create_remote_label_client(request.cwd, action="sync")
 
@@ -171,7 +177,7 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
         raise ValueError(_map_remote_label_error(error, action="sync")) from None
 
     if not request.dry_run:
-        _mark_labels_synced(request.roar_dir, label_ids)
+        _mark_labels_synced_confirming_deletions(request.roar_dir, sync_targets, result)
 
     if request.output_json:
         return json.dumps(result if isinstance(result, dict) else {}, indent=2, sort_keys=True)
@@ -187,6 +193,138 @@ def build_sync_labels_summary(request: LabelSyncRequest) -> LabelCurrentSummary 
 def show_labels(request: LabelShowRequest) -> str:
     """Show the current local label document for a target."""
     return build_show_labels_summary(request).render()
+
+
+def _target_display_name(target: ReconcileTargetSync) -> str:
+    """Human-readable identifier for a reconcile target (for prompts/warnings)."""
+    if target.entity_type == "job" and target.job_uid:
+        return target.job_uid
+    if target.entity_type == "artifact" and target.artifact_hash:
+        return target.artifact_hash
+    if target.session_hash:
+        return target.session_hash
+    return target.entity_type or "target"
+
+
+def _confirm_pending_label_deletions(sync_targets: list[ReconcileTargetSync]) -> None:
+    """Prompt before a sync that would delete remote label keys.
+
+    Mirrors the preview-then-confirm shape used for anonymous public publishes
+    (see ``roar/cli/publish_intent.py::confirm_anonymous_public_publish``),
+    reimplemented locally so this module doesn't couple to that one. Aborts
+    the process cleanly (no traceback) if the user declines.
+    """
+    pending = [target for target in sync_targets if target.deleted_keys]
+    if not pending:
+        return
+
+    click.echo("")
+    click.echo("This sync will delete the following remote label keys:")
+    for target in pending:
+        keys = ", ".join(target.deleted_keys)
+        click.echo(f"  {_target_display_name(target)}: {keys}")
+    click.echo("Use `roar label sync -y` (or `--yes`) to skip this confirmation in scripts.")
+    click.echo("")
+    try:
+        proceed = click.confirm("Proceed with these remote label deletions?", default=False)
+    except click.Abort:
+        # click.confirm() raises Abort on EOF (closed/absent stdin) -- the shape a
+        # workflow-orchestrated subprocess with no terminal attached actually hits,
+        # not a real decline. Without this, that collapses into Click's generic
+        # "Aborted!" with no indication why or what to do about it. Deliberately not
+        # an up-front sys.stdin.isatty() check: Click's own CliRunner test harness
+        # feeds simulated prompt input through a non-tty stream, so isatty() can't
+        # tell a real prompt test apart from genuine non-interactive automation --
+        # catching the actual EOF click.confirm() raises does.
+        raise click.ClickException(
+            "Refusing to proceed without confirmation in a non-interactive session "
+            "(no input available on stdin). Pass `roar label sync -y` to skip this "
+            "confirmation in scripts, CI, or workflow automation."
+        ) from None
+    if not proceed:
+        click.echo("Sync aborted.")
+        raise SystemExit(1)
+
+
+def _reconcile_target_key(
+    *,
+    entity_type: Any,
+    session_hash: Any,
+    job_uid: Any,
+    artifact_hash: Any,
+) -> tuple[str, str, str, str]:
+    """Identity key used to correlate an outbound target with a response row."""
+    return (
+        str(entity_type or ""),
+        str(session_hash or ""),
+        str(job_uid or ""),
+        str(artifact_hash or ""),
+    )
+
+
+def _confirmed_deleted_keys_by_target(result: Any) -> dict[tuple[str, str, str, str], set[str]]:
+    """Per-target sets of keys the server's reconcile response confirms deleted."""
+    rows = result.get("results") if isinstance(result, dict) else None
+    confirmed: dict[tuple[str, str, str, str], set[str]] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        key = _reconcile_target_key(
+            entity_type=row.get("entityType") or row.get("entity_type"),
+            session_hash=row.get("sessionHash") or row.get("session_hash"),
+            job_uid=row.get("jobUid") or row.get("job_uid"),
+            artifact_hash=row.get("artifactHash") or row.get("artifact_hash"),
+        )
+        row_deleted = row.get("deletedKeys")
+        if isinstance(row_deleted, list):
+            confirmed.setdefault(key, set()).update(k for k in row_deleted if isinstance(k, str))
+    return confirmed
+
+
+def _mark_labels_synced_confirming_deletions(
+    roar_dir: Any,
+    sync_targets: list[ReconcileTargetSync],
+    result: Any,
+) -> None:
+    """Advance the local ``synced_at`` baseline for pushed label rows.
+
+    A target whose payload requested key deletions only advances its baseline
+    when the server's response confirms *all* of those keys were actually
+    deleted. This matters because an old, not-yet-upgraded GLaaS server may
+    accept the reconcile POST, silently ignore the unrecognized ``deleted_keys``
+    field, and still return HTTP 200 — reading that as unconditional success
+    would permanently desync local and remote state (the key never actually
+    gets deleted, and roar would never retry because the baseline already
+    advanced). Targets with no pending deletions, or with server-confirmed
+    deletions, advance normally.
+    """
+    confirmed_by_key = _confirmed_deleted_keys_by_target(result)
+
+    label_ids_to_mark: list[int] = []
+    for target in sync_targets:
+        if not target.deleted_keys:
+            label_ids_to_mark.extend(target.label_ids)
+            continue
+
+        key = _reconcile_target_key(
+            entity_type=target.entity_type,
+            session_hash=target.session_hash,
+            job_uid=target.job_uid,
+            artifact_hash=target.artifact_hash,
+        )
+        confirmed = confirmed_by_key.get(key, set())
+        if set(target.deleted_keys).issubset(confirmed):
+            label_ids_to_mark.extend(target.label_ids)
+        else:
+            click.echo(
+                f"Warning: sent {len(target.deleted_keys)} label deletion(s) for "
+                f"{_target_display_name(target)} but the server did not confirm they were "
+                "applied — this GLaaS server may not support remote label deletion yet. "
+                "Local state was not marked as synced; retry once the server is upgraded.",
+                err=True,
+            )
+
+    _mark_labels_synced(roar_dir, label_ids_to_mark)
 
 
 def _mark_labels_synced(roar_dir: Any, label_ids: list[int]) -> None:
@@ -211,6 +349,29 @@ def _is_missing_reconcile_route_error(error: str) -> bool:
         return False
     normalized = error.lower()
     return "cannot post" in normalized and "/api/v1/labels/reconcile" in normalized
+
+
+def _is_missing_get_labels_route_error(error: str) -> bool:
+    """True when a 404 means the GET route itself is missing (old server).
+
+    Distinguishes this from the app-level "no labels for this target yet" 404
+    (a ``NotFoundError`` raised from GLaaS's label service), which must keep
+    being treated as "no labels yet". A real glaas-api server's generic
+    404 middleware for a genuinely unrecognized route returns a body whose
+    message is literally "Endpoint not found"; the app-level case never
+    produces that exact string (see roar/integrations/glaas/transport.py's
+    ``HTTP {code}: {detail}`` formatting).
+    """
+    if not error.startswith("HTTP 404:"):
+        return False
+    return "endpoint not found" in error.lower()
+
+
+def _missing_get_labels_route_error(path: str) -> str:
+    return (
+        f"Remote label read requires GLaaS support for GET {path} — "
+        "this server may not be upgraded yet."
+    )
 
 
 def _create_remote_label_client(cwd: Any, *, action: str) -> GlaasClient:
@@ -329,10 +490,20 @@ def _fetch_remote_current_label(
     *,
     action: str,
 ) -> dict[str, Any] | None:
-    """Fetch the current remote label doc; None when the target has no labels."""
+    """Fetch the current remote label doc; None when the target has no labels.
+
+    A 404 is ambiguous on its own: it means "no labels for this target yet"
+    on an up-to-date server, but "this route doesn't exist" on an old,
+    not-yet-upgraded one. Only the former should be swallowed into ``None``
+    (which callers like `remote_set_labels` read as "create") — the latter
+    must surface as a clear error instead of silently being treated as
+    version 0 or "no remote labels found".
+    """
     result, error = client.get_current_labels(params)
     if error:
         if error.startswith("HTTP 404"):
+            if _is_missing_get_labels_route_error(error):
+                raise ValueError(_missing_get_labels_route_error("/api/v1/labels/current"))
             return None
         raise ValueError(_map_remote_label_error(error, action=action))
     return result if isinstance(result, dict) else None
@@ -507,6 +678,8 @@ def build_remote_label_history_summary(request: RemoteLabelHistoryRequest) -> La
     result, error = client.get_label_history(params)
     if error:
         if error.startswith("HTTP 404"):
+            if _is_missing_get_labels_route_error(error):
+                raise ValueError(_missing_get_labels_route_error("/api/v1/labels/history"))
             raise ValueError("No remote labels found for the target.")
         raise ValueError(_map_remote_label_error(error, action="history"))
 

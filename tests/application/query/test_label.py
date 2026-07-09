@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import ANY, MagicMock, call, patch
 
+import click
+
+from roar.application.labels import ReconcileTargetSync
 from roar.application.query import (
     LabelCopyRequest,
     LabelHistoryRequest,
@@ -263,7 +266,16 @@ def test_build_sync_labels_summary_reconciles_target_labels(tmp_path: Path) -> N
                         "metadata": {"owner": "ml", "stage": "gold"},
                     }
                 ],
-                [41],
+                [
+                    ReconcileTargetSync(
+                        entity_type="artifact",
+                        session_hash="s" * 64,
+                        job_uid=None,
+                        artifact_hash="a" * 64,
+                        label_ids=[41],
+                        deleted_keys=[],
+                    )
+                ],
             ),
         ) as build_payload,
         patch(
@@ -331,7 +343,16 @@ def test_build_sync_labels_summary_falls_back_to_public_auth_without_repo_bindin
             return_value=(
                 "s" * 64,
                 [{"entity_type": "dag", "session_hash": "s" * 64, "metadata": {"phase": "gold"}}],
-                [7],
+                [
+                    ReconcileTargetSync(
+                        entity_type="dag",
+                        session_hash="s" * 64,
+                        job_uid=None,
+                        artifact_hash=None,
+                        label_ids=[7],
+                        deleted_keys=[],
+                    )
+                ],
             ),
         ),
         patch(
@@ -437,7 +458,16 @@ def test_build_sync_labels_summary_supports_json_dry_run(tmp_path: Path) -> None
             return_value=(
                 "s" * 64,
                 [{"entity_type": "dag", "session_hash": "s" * 64, "metadata": {"phase": "gold"}}],
-                [9],
+                [
+                    ReconcileTargetSync(
+                        entity_type="dag",
+                        session_hash="s" * 64,
+                        job_uid=None,
+                        artifact_hash=None,
+                        label_ids=[9],
+                        deleted_keys=[],
+                    )
+                ],
             ),
         ),
         patch(
@@ -499,6 +529,334 @@ def test_build_sync_labels_summary_rejects_missing_user_managed_labels(tmp_path:
             assert str(exc) == "No local user-managed labels or label deletions to sync for @1."
         else:  # pragma: no cover - defensive assertion style
             raise AssertionError("Expected ValueError for missing user-managed labels")
+
+
+def _deletion_target_payload() -> tuple[str, list[dict], list[ReconcileTargetSync]]:
+    return (
+        "s" * 64,
+        [
+            {
+                "entity_type": "artifact",
+                "session_hash": "s" * 64,
+                "artifact_hash": "a" * 64,
+                "metadata": {"owner": "ml"},
+                "deleted_keys": ["stage"],
+            }
+        ],
+        [
+            ReconcileTargetSync(
+                entity_type="artifact",
+                session_hash="s" * 64,
+                job_uid=None,
+                artifact_hash="a" * 64,
+                label_ids=[41],
+                deleted_keys=["stage"],
+            )
+        ],
+    )
+
+
+def test_build_sync_labels_summary_prompts_and_aborts_when_deletion_is_declined(
+    tmp_path: Path,
+) -> None:
+    """Task B: declining the deletion-confirmation prompt aborts before any
+    network call is made — nothing is sent to GLaaS."""
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.resolve_target.return_value = object()
+    service.current_metadata.return_value = {"owner": "ml"}
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_target",
+            return_value=_deletion_target_payload(),
+        ),
+        patch("roar.application.query.label.GlaasClient") as client_class,
+        patch("roar.application.query.label.click.confirm", return_value=False) as confirm,
+    ):
+        try:
+            build_sync_labels_summary(_sync_request(tmp_path))
+        except SystemExit as exc:
+            assert exc.code == 1
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected SystemExit when the deletion prompt is declined")
+
+    confirm.assert_called_once()
+    client_class.assert_not_called()
+
+
+def test_build_sync_labels_summary_deletion_prompt_noninteractive_gives_clear_error(
+    tmp_path: Path,
+) -> None:
+    """click.confirm() raises click.Abort on EOF (closed/absent stdin) — the shape
+    a workflow-orchestrated subprocess with no terminal attached actually hits,
+    distinct from the simulated-decline test above (return_value=False models a
+    real "n" keystroke). This must surface as an actionable ClickException, not
+    Click's generic "Aborted!", and must not touch the network either way."""
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.resolve_target.return_value = object()
+    service.current_metadata.return_value = {"owner": "ml"}
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_target",
+            return_value=_deletion_target_payload(),
+        ),
+        patch("roar.application.query.label.GlaasClient") as client_class,
+        patch("roar.application.query.label.click.confirm", side_effect=click.Abort()) as confirm,
+    ):
+        try:
+            build_sync_labels_summary(_sync_request(tmp_path))
+        except click.ClickException as exc:
+            assert "non-interactive session" in str(exc)
+            assert "label sync -y" in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ClickException on a non-interactive EOF")
+
+    confirm.assert_called_once()
+    client_class.assert_not_called()
+
+
+def test_build_sync_labels_summary_prompts_and_proceeds_when_deletion_is_accepted(
+    tmp_path: Path,
+) -> None:
+    """Task B: accepting the prompt proceeds with the sync as before."""
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.resolve_target.return_value = object()
+    service.current_metadata.return_value = {"owner": "ml"}
+    client = MagicMock()
+    client.publish_auth = SimpleNamespace(
+        access_token="test-token", ssh_auth_available=False, scope_request=None
+    )
+    client.reconcile_labels.return_value = (
+        {
+            "processed": 1,
+            "created": 0,
+            "updated": 1,
+            "noops": 0,
+            "results": [
+                {
+                    "entityType": "artifact",
+                    "sessionHash": "s" * 64,
+                    "artifactHash": "a" * 64,
+                    "action": "updated",
+                    "version": 2,
+                    "deletedKeys": ["stage"],
+                }
+            ],
+        },
+        None,
+    )
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_target",
+            return_value=_deletion_target_payload(),
+        ),
+        patch(
+            "roar.application.query.label.load_publish_auth_context",
+            return_value=client.publish_auth,
+        ),
+        patch("roar.application.query.label.GlaasClient", return_value=client),
+        patch("roar.application.query.label.click.confirm", return_value=True) as confirm,
+    ):
+        summary = build_sync_labels_summary(_sync_request(tmp_path))
+
+    confirm.assert_called_once()
+    client.reconcile_labels.assert_called_once()
+    assert not isinstance(summary, str)
+    db_ctx.labels.mark_synced.assert_called_once_with([41], ANY)
+
+
+def test_build_sync_labels_summary_skip_confirmation_bypasses_prompt(tmp_path: Path) -> None:
+    """Task B: -y/--yes (skip_confirmation) never prompts."""
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.resolve_target.return_value = object()
+    service.current_metadata.return_value = {"owner": "ml"}
+    client = MagicMock()
+    client.publish_auth = SimpleNamespace(
+        access_token="test-token", ssh_auth_available=False, scope_request=None
+    )
+    client.reconcile_labels.return_value = (
+        {"processed": 1, "created": 0, "updated": 1, "noops": 0, "results": []},
+        None,
+    )
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_target",
+            return_value=_deletion_target_payload(),
+        ),
+        patch(
+            "roar.application.query.label.load_publish_auth_context",
+            return_value=client.publish_auth,
+        ),
+        patch("roar.application.query.label.GlaasClient", return_value=client),
+        patch("roar.application.query.label.click.confirm") as confirm,
+    ):
+        build_sync_labels_summary(_sync_request(tmp_path, skip_confirmation=True))
+
+    confirm.assert_not_called()
+    client.reconcile_labels.assert_called_once()
+
+
+def test_build_sync_labels_summary_dry_run_bypasses_prompt(tmp_path: Path) -> None:
+    """Task B: --dry-run never prompts, even with pending deletions."""
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.resolve_target.return_value = object()
+    service.current_metadata.return_value = {"owner": "ml"}
+    client = MagicMock()
+    client.publish_auth = SimpleNamespace(
+        access_token="test-token", ssh_auth_available=False, scope_request=None
+    )
+    client.reconcile_labels.return_value = (
+        {"processed": 1, "created": 0, "updated": 0, "noops": 0, "dryRun": True, "results": []},
+        None,
+    )
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_target",
+            return_value=_deletion_target_payload(),
+        ),
+        patch(
+            "roar.application.query.label.load_publish_auth_context",
+            return_value=client.publish_auth,
+        ),
+        patch("roar.application.query.label.GlaasClient", return_value=client),
+        patch("roar.application.query.label.click.confirm") as confirm,
+    ):
+        build_sync_labels_summary(_sync_request(tmp_path, dry_run=True))
+
+    confirm.assert_not_called()
+    client.reconcile_labels.assert_called_once()
+    db_ctx.labels.mark_synced.assert_not_called()
+
+
+def test_mark_labels_synced_confirming_deletions_skips_unconfirmed_targets(
+    tmp_path: Path, capsys
+) -> None:
+    """Task A: an old server that echoes back an empty deletedKeys list for a
+    target whose payload requested deletions must not have its baseline
+    advanced, and the user should see a clear warning. Other targets in the
+    same sync (no deletions requested, or confirmed) still advance."""
+    from roar.application.query.label import _mark_labels_synced_confirming_deletions
+
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+
+    sync_targets = [
+        ReconcileTargetSync(
+            entity_type="artifact",
+            session_hash="s" * 64,
+            job_uid=None,
+            artifact_hash="a" * 64,
+            label_ids=[41],
+            deleted_keys=["stage"],
+        ),
+        ReconcileTargetSync(
+            entity_type="dag",
+            session_hash="s" * 64,
+            job_uid=None,
+            artifact_hash=None,
+            label_ids=[7],
+            deleted_keys=[],
+        ),
+    ]
+    # Old server: HTTP 200, reconcile "succeeds", but the artifact row's
+    # deletedKeys is empty even though `stage` deletion was requested.
+    result = {
+        "results": [
+            {
+                "entityType": "artifact",
+                "sessionHash": "s" * 64,
+                "artifactHash": "a" * 64,
+                "action": "noop",
+                "deletedKeys": [],
+            },
+            {
+                "entityType": "dag",
+                "sessionHash": "s" * 64,
+                "action": "updated",
+                "deletedKeys": [],
+            },
+        ]
+    }
+
+    with patch("roar.application.query.label.create_database_context", return_value=db_ctx):
+        _mark_labels_synced_confirming_deletions(tmp_path / ".roar", sync_targets, result)
+
+    db_ctx.labels.mark_synced.assert_called_once_with([7], ANY)
+    captured = capsys.readouterr()
+    assert "Warning: sent 1 label deletion(s) for" in captured.err
+    assert "a" * 64 in captured.err
+    assert "did not confirm they were applied" in captured.err
+    assert "Local state was not marked as synced" in captured.err
+
+
+def test_mark_labels_synced_confirming_deletions_advances_confirmed_targets(
+    tmp_path: Path, capsys
+) -> None:
+    """Task A: when the response confirms the exact deleted keys, the
+    baseline advances normally and no warning is printed."""
+    from roar.application.query.label import _mark_labels_synced_confirming_deletions
+
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+
+    sync_targets = [
+        ReconcileTargetSync(
+            entity_type="artifact",
+            session_hash="s" * 64,
+            job_uid=None,
+            artifact_hash="a" * 64,
+            label_ids=[41],
+            deleted_keys=["stage"],
+        )
+    ]
+    result = {
+        "results": [
+            {
+                "entityType": "artifact",
+                "sessionHash": "s" * 64,
+                "artifactHash": "a" * 64,
+                "action": "updated",
+                "deletedKeys": ["stage"],
+            }
+        ]
+    }
+
+    with patch("roar.application.query.label.create_database_context", return_value=db_ctx):
+        _mark_labels_synced_confirming_deletions(tmp_path / ".roar", sync_targets, result)
+
+    db_ctx.labels.mark_synced.assert_called_once_with([41], ANY)
+    assert capsys.readouterr().err == ""
 
 
 def test_build_label_history_summary_returns_versioned_entries(tmp_path: Path) -> None:
@@ -875,3 +1233,160 @@ def test_remote_set_resolves_artifact_session_when_unlabeled(tmp_path: Path) -> 
     assert sent["session_hash"] == session
     assert sent["labels"][0]["artifact_hash"] == artifact
     assert sent["labels"][0]["session_hash"] == session
+
+
+# Task C: GET /api/v1/labels/current and /api/v1/labels/history 404s are
+# ambiguous — "no labels yet" on an upgraded server vs. "route doesn't exist"
+# on an old one. Only the latter should surface as a clear, actionable error;
+# the former must keep behaving as "no labels yet" (covered by the
+# `current=(None, "HTTP 404: Label not found")` tests above, which are
+# unaffected by this change since that message never contains "Endpoint not
+# found").
+
+
+def test_remote_set_raises_clear_error_when_get_current_route_is_missing(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelSetRequest
+    from roar.application.query.label import build_remote_set_labels_summary
+
+    client = _mock_remote_client(
+        current=(None, "HTTP 404: Endpoint not found"),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_set_labels_summary(
+                RemoteLabelSetRequest(
+                    cwd=tmp_path, entity_type="dag", target="a" * 64, pairs=("team=cv",)
+                )
+            )
+        except ValueError as exc:
+            assert "GET /api/v1/labels/current" in str(exc)
+            assert "may not be upgraded yet" in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for a missing GET route")
+    client.reconcile_labels.assert_not_called()
+
+
+def test_remote_unset_raises_clear_error_when_get_current_route_is_missing(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelUnsetRequest
+    from roar.application.query.label import build_remote_unset_labels_summary
+
+    client = _mock_remote_client(
+        current=(None, "HTTP 404: Endpoint not found"),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_unset_labels_summary(
+                RemoteLabelUnsetRequest(
+                    cwd=tmp_path, entity_type="dag", target="a" * 64, keys=("stage",)
+                )
+            )
+        except ValueError as exc:
+            assert "GET /api/v1/labels/current" in str(exc)
+            assert "may not be upgraded yet" in str(exc)
+            # Must NOT be misread as the (misleading, for this case) "no
+            # remote labels found" message.
+            assert "No remote labels found" not in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for a missing GET route")
+
+
+def test_remote_show_raises_clear_error_when_get_current_route_is_missing(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelShowRequest
+    from roar.application.query.label import build_remote_show_labels_summary
+
+    client = _mock_remote_client(
+        current=(None, "HTTP 404: Endpoint not found"),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_show_labels_summary(
+                RemoteLabelShowRequest(cwd=tmp_path, entity_type="dag", target="a" * 64)
+            )
+        except ValueError as exc:
+            assert "GET /api/v1/labels/current" in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for a missing GET route")
+
+
+def test_remote_history_raises_clear_error_when_get_history_route_is_missing(
+    tmp_path: Path,
+) -> None:
+    from roar.application.query import RemoteLabelHistoryRequest
+    from roar.application.query.label import build_remote_label_history_summary
+
+    client = _mock_remote_client(
+        history=(None, "HTTP 404: Endpoint not found"),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_label_history_summary(
+                RemoteLabelHistoryRequest(cwd=tmp_path, entity_type="dag", target="a" * 64)
+            )
+        except ValueError as exc:
+            assert "GET /api/v1/labels/history" in str(exc)
+            assert "may not be upgraded yet" in str(exc)
+            assert "No remote labels found" not in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for a missing GET route")
+
+
+def test_remote_history_still_treats_genuine_404_as_no_labels(tmp_path: Path) -> None:
+    """The app-level 'no labels yet' 404 (a different message than 'Endpoint
+    not found') must keep behaving as before for history, too."""
+    from roar.application.query import RemoteLabelHistoryRequest
+    from roar.application.query.label import build_remote_label_history_summary
+
+    client = _mock_remote_client(
+        history=(None, "HTTP 404: Label not found"),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_label_history_summary(
+                RemoteLabelHistoryRequest(cwd=tmp_path, entity_type="dag", target="a" * 64)
+            )
+        except ValueError as exc:
+            assert str(exc) == "No remote labels found for the target."
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for missing labels")
+
+
+# Task D: the --remote edit path's optimistic locking (base_version) maps a
+# 409 conflict to a clear, actionable message rather than a raw traceback.
+
+
+def test_remote_edit_maps_conflict_errors(tmp_path: Path) -> None:
+    from roar.application.query import RemoteLabelSetRequest
+    from roar.application.query.label import build_remote_set_labels_summary
+
+    client = _mock_remote_client(
+        current=({"version": 4, "metadata": {"team": "nlp"}}, None),
+        reconcile=(
+            None,
+            "HTTP 409: Label was modified concurrently (expected version 4, found 5)",
+        ),
+    )
+
+    auth_patch, client_patch = _remote_patches(client)
+    with auth_patch, client_patch:
+        try:
+            build_remote_set_labels_summary(
+                RemoteLabelSetRequest(
+                    cwd=tmp_path, entity_type="dag", target="a" * 64, pairs=("team=cv",)
+                )
+            )
+        except ValueError as exc:
+            message = str(exc)
+            assert "conflicted with a concurrent edit" in message
+            assert "Retry" in message
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ValueError for 409")

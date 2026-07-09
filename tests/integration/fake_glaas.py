@@ -43,6 +43,16 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.supports_anonymous_public_registration_sessions = True
         self.supports_finalize_expected_hash = True
         self.force_authoritative_finalize_hash = False
+        # Simulates an old, not-yet-upgraded glaas-api: the reconcile route
+        # exists (it predates the deletion feature) and returns HTTP 200, but
+        # any `deleted_keys` sent on a label item are silently ignored rather
+        # than applied.
+        self.ignore_deleted_keys_in_reconcile = False
+        # Simulates an old, not-yet-upgraded glaas-api that doesn't have the
+        # GET /api/v1/labels/current and /api/v1/labels/history routes at all
+        # (as opposed to the route existing but returning an app-level 404 for
+        # "no labels yet").
+        self.supports_get_label_routes = True
         self._next_job_id = 1
         self._next_registration_session_id = 1
         self._next_finalized_hash = 1
@@ -402,6 +412,19 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path in ("/api/v1/labels/current", "/api/v1/labels/history"):
             self.server.auth_headers.append({"path": self.path, "authorization": authorization})
+            if not self.server.supports_get_label_routes:
+                # Mirrors glaas-api's generic 404 middleware for a genuinely
+                # unrecognized route (never hit for the app-level "no labels
+                # yet" case, which raises a NotFoundError with a different
+                # message instead — see `_find_current_label` below).
+                self._write_json(
+                    404,
+                    {
+                        "success": False,
+                        "error": {"code": "NOT_FOUND", "message": "Endpoint not found"},
+                    },
+                )
+                return
             params = {key: values[0] for key, values in urllib.parse.parse_qs(parsed.query).items()}
             current = self._find_current_label(params)
             if current is None:
@@ -661,7 +684,9 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 merged_metadata = _deep_merge(current_metadata, metadata)
                 requested_deletions = label.get("deleted_keys")
                 deleted_paths: list[str] = []
-                if isinstance(requested_deletions, list):
+                if isinstance(requested_deletions, list) and not (
+                    self.server.ignore_deleted_keys_in_reconcile
+                ):
                     for path in requested_deletions:
                         if isinstance(path, str) and _remove_label_key_path(
                             merged_metadata, path.split(".")
@@ -1296,6 +1321,22 @@ class FakeGlaasServer:
     @property
     def label_mutations(self) -> list[dict[str, Any]]:
         return self._server.label_mutations
+
+    @property
+    def ignore_deleted_keys_in_reconcile(self) -> bool:
+        return self._server.ignore_deleted_keys_in_reconcile
+
+    @ignore_deleted_keys_in_reconcile.setter
+    def ignore_deleted_keys_in_reconcile(self, value: bool) -> None:
+        self._server.ignore_deleted_keys_in_reconcile = value
+
+    @property
+    def supports_get_label_routes(self) -> bool:
+        return self._server.supports_get_label_routes
+
+    @supports_get_label_routes.setter
+    def supports_get_label_routes(self, value: bool) -> None:
+        self._server.supports_get_label_routes = value
 
     @property
     def force_authoritative_finalize_hash(self) -> bool:
