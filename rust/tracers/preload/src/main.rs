@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::ffi::c_void;
 use std::fs;
@@ -101,6 +102,23 @@ struct CollectorState {
     /// still exists. Used to recover outputs renamed via syscalls the preload
     /// tracer can't observe (see `reconcile_renamed_outputs`).
     seen_inodes: HashMap<String, (u64, u64)>,
+    /// First-seen (dev, inode) for each directory a written file's parent
+    /// resolved to, captured while the directory still exists. Lets
+    /// `reconcile_renamed_outputs` recover a whole-directory rename (e.g. a
+    /// sharded checkpoint written into a temp directory that is atomically
+    /// renamed into place as a whole) with the same inode-match strategy used
+    /// for individual files.
+    seen_dir_inodes: HashMap<String, (u64, u64)>,
+}
+
+/// The directory a path lives in, defaulting to "." when `Path::parent` has
+/// nothing to report (e.g. a bare relative filename).
+fn parent_dir(path: &str) -> PathBuf {
+    Path::new(path)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
 }
 
 impl CollectorState {
@@ -113,6 +131,7 @@ impl CollectorState {
             root_command,
             root_env: env::vars().collect(),
             seen_inodes: HashMap::new(),
+            seen_dir_inodes: HashMap::new(),
         }
     }
 
@@ -189,6 +208,19 @@ impl CollectorState {
                     .insert(path.clone(), (meta.dev(), meta.ino()));
             }
         }
+        // Likewise capture the parent directory's (dev, inode) on first sight,
+        // while it still exists. This lets `reconcile_renamed_outputs` recover a
+        // *whole directory* that gets atomically renamed into place (e.g. a
+        // sharded checkpoint written into a temp dir, then the temp dir itself
+        // renamed to the final dir) the same way it recovers a single renamed
+        // file.
+        let parent = parent_dir(&path);
+        let parent_str = parent.to_string_lossy().into_owned();
+        if let Entry::Vacant(entry) = self.seen_dir_inodes.entry(parent_str) {
+            if let Ok(meta) = fs::metadata(&parent) {
+                entry.insert((meta.dev(), meta.ino()));
+            }
+        }
         self.fd.mark_path_open(path.clone());
         self.fd.mark_path_written_with_thread(path, thread_id);
     }
@@ -200,41 +232,137 @@ impl CollectorState {
     /// rustix's `linux_raw` inline `renameat2`, which `tempfile` uses and which
     /// safetensors/torch emit when saving checkpoints. `LD_PRELOAD` interposes libc
     /// symbols, so it never sees that rename. Renames preserve the inode, so we look up
-    /// the captured (dev, inode) in the vanished file's own parent directory and rewrite
+    /// the captured (dev, inode) among a bounded set of candidate directories and rewrite
     /// the path to the renamed-to name. Preload-specific: ptrace/eBPF observe the rename
     /// syscall directly and never produce this class of vanished output.
+    ///
+    /// The candidate search space is NOT limited to the vanished file's own parent
+    /// directory (that would miss a rename into a different directory, e.g. temp file in
+    /// `/tmp` renamed into `./checkpoints/`). Instead it's every directory the tracer
+    /// actually observed I/O touch during the trace: parents of every written path
+    /// (`seen_inodes`), parents of every path the fd tracker knows about at all
+    /// (`summary.opened_files`, covering reads too), and parents of every directory a
+    /// write was seen in (`seen_dir_inodes`, one level up — see below). This is bounded by
+    /// the trace's own I/O, not the filesystem: it is never an unbounded or recursive
+    /// directory walk. Residual limitation: a rename into a directory the tracer never
+    /// otherwise touched (no read, no write, and not the parent of an observed
+    /// write-directory) still won't be recovered — nothing about that directory's identity
+    /// was ever observed to search for.
+    ///
+    /// Whole-directory renames (e.g. a sharded checkpoint written into a temp directory
+    /// that is atomically renamed into place as a whole) get the same treatment one level
+    /// up: `seen_dir_inodes` tracks the first-seen (dev, inode) of every directory a write
+    /// was observed in. If such a directory has vanished by report time, we resolve it by
+    /// inode match in the candidate set exactly like a file, then fold its *current*
+    /// contents into the file-search index — so the individual files inside it (already
+    /// tracked in `seen_inodes` under their stale, temp-directory path) are found by their
+    /// own inode in the pass below. Same residual limitation applies one level up: the
+    /// moved directory is only found if ITS new parent was independently observed.
+    ///
+    /// Inode-reuse guard: once a (dev, inode) has been used to resolve one vanished
+    /// record, it's removed from the candidate index so a second, unrelated vanished
+    /// record can't also claim the same recovered file — e.g. two different paths the
+    /// tracer wrote to during the trace whose captured inodes happen to collide. Vanished
+    /// file records are processed in a fixed (path-sorted) order, so which one wins a
+    /// collision is deterministic. This does NOT protect against the OS recycling a
+    /// deleted file's inode number for a brand-new, wholly unrelated file that a
+    /// *different*, non-colliding `seen_inodes` entry then spuriously matches — closing
+    /// that gap would need file generation numbers or content hashing, which we don't have
+    /// here. For a long-running job with heavy scratch-file churn, that residual risk
+    /// remains: a genuinely-deleted output could in principle be misattributed to an
+    /// unrelated later file that reused its inode number.
     fn reconcile_renamed_outputs(&self, summary: &mut tracer_fd::FileSummary) {
-        let mut remap: HashMap<String, String> = HashMap::new();
-        for rec in &summary.files {
-            if !rec.written || remap.contains_key(&rec.path) {
-                continue;
-            }
-            let path = Path::new(&rec.path);
-            if path.exists() {
-                continue; // still present; nothing to recover
-            }
-            let Some(&(dev, ino)) = self.seen_inodes.get(&rec.path) else {
-                continue;
-            };
-            // The atomic-save pattern renames within the same directory (sibling temp),
-            // so the renamed-to file is in the vanished file's own parent.
-            let parent = path.parent().unwrap_or_else(|| Path::new("."));
-            let Ok(entries) = fs::read_dir(parent) else {
+        // Vanished, write-tracked file records: still marked written, no longer on disk at
+        // their recorded path, and we captured an inode for them while they existed.
+        let mut vanished_files: Vec<(String, (u64, u64))> = summary
+            .files
+            .iter()
+            .filter(|rec| rec.written && !Path::new(&rec.path).exists())
+            .filter_map(|rec| {
+                self.seen_inodes
+                    .get(&rec.path)
+                    .map(|&ino| (rec.path.clone(), ino))
+            })
+            .collect();
+        // Vanished write-target directories.
+        let vanished_dirs: Vec<(String, (u64, u64))> = self
+            .seen_dir_inodes
+            .iter()
+            .filter(|(dir, _)| !Path::new(dir.as_str()).exists())
+            .map(|(dir, &ino)| (dir.clone(), ino))
+            .collect();
+
+        if vanished_files.is_empty() && vanished_dirs.is_empty() {
+            return; // nothing to recover; skip the directory scan entirely
+        }
+        // Deterministic match order for the inode-reuse guard below.
+        vanished_files.sort();
+
+        // Bounded candidate directory set (see doc comment above).
+        let mut candidate_dirs: HashSet<PathBuf> = HashSet::new();
+        for path in self.seen_inodes.keys() {
+            candidate_dirs.insert(parent_dir(path));
+        }
+        for path in &summary.opened_files {
+            candidate_dirs.insert(parent_dir(path));
+        }
+        for dir in self.seen_dir_inodes.keys() {
+            candidate_dirs.insert(parent_dir(dir));
+        }
+
+        // One-shot (dev, ino) -> path index over the candidate directories, split by file
+        // vs. directory entries.
+        let mut file_index: HashMap<(u64, u64), PathBuf> = HashMap::new();
+        let mut dir_index: HashMap<(u64, u64), PathBuf> = HashMap::new();
+        for dir in &candidate_dirs {
+            let Ok(entries) = fs::read_dir(dir) else {
                 continue;
             };
             for entry in entries.flatten() {
                 let Ok(meta) = entry.metadata() else {
                     continue;
                 };
-                if meta.is_file() && meta.dev() == dev && meta.ino() == ino {
-                    remap.insert(
-                        rec.path.clone(),
-                        entry.path().to_string_lossy().into_owned(),
-                    );
-                    break;
+                let key = (meta.dev(), meta.ino());
+                if meta.is_file() {
+                    file_index.entry(key).or_insert_with(|| entry.path());
+                } else if meta.is_dir() {
+                    dir_index.entry(key).or_insert_with(|| entry.path());
                 }
             }
         }
+
+        // Directory-level: resolve a vanished write-target directory by inode match, then
+        // fold its current contents into the file index so files inside it are found by
+        // the file-level pass below.
+        for (_old_dir, ino) in &vanished_dirs {
+            let Some(new_dir) = dir_index.get(ino) else {
+                continue;
+            };
+            let Ok(entries) = fs::read_dir(new_dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                if meta.is_file() {
+                    file_index
+                        .entry((meta.dev(), meta.ino()))
+                        .or_insert_with(|| entry.path());
+                }
+            }
+        }
+
+        // File-level match (covers both plain renamed files and files recovered via a
+        // directory-level match above). Inode-reuse guard: remove a matched entry from the
+        // index so a later, unrelated vanished record can't also claim it.
+        let mut remap: HashMap<String, String> = HashMap::new();
+        for (old_path, ino) in vanished_files {
+            if let Some(new_path) = file_index.remove(&ino) {
+                remap.insert(old_path, new_path.to_string_lossy().into_owned());
+            }
+        }
+
         if remap.is_empty() {
             return;
         }
@@ -981,6 +1109,194 @@ mod tests {
         state.reconcile_renamed_outputs(&mut summary);
 
         assert_eq!(summary.files[0].path, temp_str, "deleted file path unchanged");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Regression for the cross-directory gap: the atomic-save temp file lives in one
+    /// directory and the untraced rename lands it in a *different* directory. Recovery
+    /// must not be limited to the vanished file's own parent — it should find the sibling
+    /// in any directory the tracer actually observed I/O in (here, `dst_dir`, because the
+    /// tracer separately wrote a sentinel file directly into it).
+    #[test]
+    fn reconciles_rename_across_tracer_observed_directories() {
+        let base = env::temp_dir().join(format!("roar_recon_cross_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let src_dir = base.join("src");
+        let dst_dir = base.join("dst");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::create_dir_all(&dst_dir).unwrap();
+
+        let temp = src_dir.join(".tmpABCDEF");
+        let sentinel = dst_dir.join("metadata.json");
+        let final_path = dst_dir.join("checkpoint.safetensors");
+
+        fs::write(&temp, b"weights").unwrap();
+        fs::write(&sentinel, b"{}").unwrap();
+        let temp_meta = fs::metadata(&temp).unwrap();
+        let sentinel_meta = fs::metadata(&sentinel).unwrap();
+        let temp_str = temp.to_string_lossy().into_owned();
+        let sentinel_str = sentinel.to_string_lossy().into_owned();
+        let final_str = final_path.to_string_lossy().into_owned();
+
+        let mut state = CollectorState::new(1, vec!["test".to_string()]);
+        state
+            .seen_inodes
+            .insert(temp_str.clone(), (temp_meta.dev(), temp_meta.ino()));
+        // The tracer directly observed a write into dst_dir (the sentinel) — that's what
+        // puts dst_dir into the bounded candidate search space.
+        state.seen_inodes.insert(
+            sentinel_str.clone(),
+            (sentinel_meta.dev(), sentinel_meta.ino()),
+        );
+
+        // Untraced cross-directory atomic rename: src_dir/.tmpABCDEF -> dst_dir/checkpoint.safetensors
+        fs::rename(&temp, &final_path).unwrap();
+
+        let mut summary = tracer_fd::FileSummary {
+            files: vec![written_record(&temp_str), written_record(&sentinel_str)],
+            opened_files: vec![temp_str.clone(), sentinel_str.clone()],
+            read_files: vec![],
+            written_files: vec![temp_str.clone(), sentinel_str.clone()],
+        };
+
+        state.reconcile_renamed_outputs(&mut summary);
+
+        let rewritten: Vec<&str> = summary.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(
+            rewritten.contains(&final_str.as_str()),
+            "cross-directory rename recovered: {rewritten:?}"
+        );
+        assert!(!rewritten.contains(&temp_str.as_str()));
+        assert!(summary.written_files.contains(&final_str));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Whole-directory rename: a sharded checkpoint is written into a temp directory,
+    /// which is then atomically renamed into place as a whole (the individual shard
+    /// filenames are already final; only the containing directory's name changes). No
+    /// single traced write ever touches the destination directly, so this exercises
+    /// `seen_dir_inodes` and the directory-level fold-in, not just `seen_inodes`.
+    #[test]
+    fn reconciles_whole_directory_rename_via_seen_dir_inodes() {
+        let base = env::temp_dir().join(format!("roar_recon_dir_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let temp_dir = base.join(".tmp_ckpt_XYZ");
+        let final_dir = base.join("checkpoints");
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let shard0 = temp_dir.join("shard0.safetensors");
+        let shard1 = temp_dir.join("shard1.safetensors");
+        fs::write(&shard0, b"a").unwrap();
+        fs::write(&shard1, b"b").unwrap();
+
+        let dir_meta = fs::metadata(&temp_dir).unwrap();
+        let shard0_meta = fs::metadata(&shard0).unwrap();
+        let shard1_meta = fs::metadata(&shard1).unwrap();
+        let temp_dir_str = temp_dir.to_string_lossy().into_owned();
+        let shard0_str = shard0.to_string_lossy().into_owned();
+        let shard1_str = shard1.to_string_lossy().into_owned();
+
+        let mut state = CollectorState::new(1, vec!["test".to_string()]);
+        state
+            .seen_inodes
+            .insert(shard0_str.clone(), (shard0_meta.dev(), shard0_meta.ino()));
+        state
+            .seen_inodes
+            .insert(shard1_str.clone(), (shard1_meta.dev(), shard1_meta.ino()));
+        state
+            .seen_dir_inodes
+            .insert(temp_dir_str, (dir_meta.dev(), dir_meta.ino()));
+
+        // Untraced whole-directory atomic rename.
+        fs::rename(&temp_dir, &final_dir).unwrap();
+
+        let final_shard0 = final_dir
+            .join("shard0.safetensors")
+            .to_string_lossy()
+            .into_owned();
+        let final_shard1 = final_dir
+            .join("shard1.safetensors")
+            .to_string_lossy()
+            .into_owned();
+
+        let mut summary = tracer_fd::FileSummary {
+            files: vec![written_record(&shard0_str), written_record(&shard1_str)],
+            opened_files: vec![shard0_str.clone(), shard1_str.clone()],
+            read_files: vec![],
+            written_files: vec![shard0_str.clone(), shard1_str.clone()],
+        };
+
+        state.reconcile_renamed_outputs(&mut summary);
+
+        let rewritten: Vec<&str> = summary.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(
+            rewritten.contains(&final_shard0.as_str()),
+            "shard0 recovered: {rewritten:?}"
+        );
+        assert!(
+            rewritten.contains(&final_shard1.as_str()),
+            "shard1 recovered: {rewritten:?}"
+        );
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Inode-reuse guard: two different tracked write paths whose captured (dev, ino)
+    /// collide (simulating the OS reusing a freed inode number) must not both be resolved
+    /// to the same recovered file. Only one match should be claimed; the other is left
+    /// unresolved (safer than a duplicate/false attribution).
+    #[test]
+    fn does_not_double_claim_a_recovered_file_for_colliding_seen_inodes() {
+        let dir = env::temp_dir().join(format!("roar_recon_dupe_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        // A genuinely-renamed file: temp -> final.
+        let temp = dir.join(".tmpREAL");
+        let final_path = dir.join("real.safetensors");
+        fs::write(&temp, b"weights").unwrap();
+        let real_meta = fs::metadata(&temp).unwrap();
+        let temp_str = temp.to_string_lossy().into_owned();
+        let final_str = final_path.to_string_lossy().into_owned();
+        fs::rename(&temp, &final_path).unwrap();
+
+        // A second, unrelated path whose captured inode happens to collide with the first
+        // (simulating OS inode-number reuse). It was NOT renamed to `final_path` — it was
+        // genuinely deleted and left nothing behind.
+        let unrelated_str = dir.join(".tmpUNRELATED").to_string_lossy().into_owned();
+
+        let mut state = CollectorState::new(1, vec!["test".to_string()]);
+        state
+            .seen_inodes
+            .insert(temp_str.clone(), (real_meta.dev(), real_meta.ino()));
+        state
+            .seen_inodes
+            .insert(unrelated_str.clone(), (real_meta.dev(), real_meta.ino()));
+
+        let mut summary = tracer_fd::FileSummary {
+            files: vec![written_record(&temp_str), written_record(&unrelated_str)],
+            opened_files: vec![temp_str.clone(), unrelated_str.clone()],
+            read_files: vec![],
+            written_files: vec![temp_str.clone(), unrelated_str.clone()],
+        };
+
+        state.reconcile_renamed_outputs(&mut summary);
+
+        let claimants: Vec<&str> = summary
+            .files
+            .iter()
+            .filter(|f| f.path == final_str)
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(
+            claimants.len(),
+            1,
+            "exactly one record claims the recovered file, not both: {:?}",
+            summary.files
+        );
+
         let _ = fs::remove_dir_all(&dir);
     }
 }
