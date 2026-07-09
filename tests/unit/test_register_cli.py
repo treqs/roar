@@ -432,6 +432,34 @@ def test_register_cli_prompts_before_defaulted_active_session_publish_and_declin
     mock_register.assert_not_called()
 
 
+def test_register_cli_defaulted_active_session_prompt_noninteractive_gives_clear_error(
+    tmp_path: Path,
+) -> None:
+    """No --yes and no input available (e.g. a workflow-orchestrated subprocess with
+    stdin closed/empty) must fail with an actionable message, not Click's generic
+    "Aborted!" — this is the realistic non-interactive-automation shape, distinct
+    from the simulated-decline test above (which supplies real "n\n" input).
+    """
+    runner = CliRunner()
+    session_hash = "2" * 64
+    with (
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
+        patch(
+            "roar.application.query.status.compute_active_session_hash",
+            return_value=session_hash,
+        ),
+        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
+    ):
+        # input="" simulates EOF on stdin (no interactive terminal, nothing piped in)
+        # rather than a real keystroke — matching a daemon-launched subprocess.
+        result = runner.invoke(register, [], input="", obj=_mock_context(tmp_path))
+
+    assert result.exit_code != 0
+    assert "non-interactive session" in result.output
+    assert "register -y" in result.output
+    mock_register.assert_not_called()
+
+
 def test_register_cli_accepts_defaulted_active_session_publish_prompt(tmp_path: Path) -> None:
     """Confirming the defaulted-active-session prompt proceeds exactly as before."""
     runner = CliRunner()

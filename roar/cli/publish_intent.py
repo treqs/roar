@@ -100,6 +100,32 @@ def _preview_hash(value: str) -> str:
     return f"{value[:12]}..." if len(value) > 12 else value
 
 
+def _confirm_or_explain_noninteractive(prompt: str, *, default: bool, command_name: str) -> bool:
+    """``click.confirm()``, but turns a non-interactive EOF into an actionable error.
+
+    Without this, ``click.confirm()`` on closed/absent stdin (the normal case for
+    workflow-orchestrated automation — e.g. a treqs-agent job subprocess with no
+    terminal attached) raises ``click.Abort`` on EOF, which Click's default
+    top-level handling turns into a bare "Aborted!" with no indication of *why*
+    or what to do about it. This still fails fast (it never silently proceeds
+    past an unanswered prompt) but tells the operator to pass ``-y`` instead of
+    leaving them to guess. Deliberately keyed off catching the actual EOF
+    ``click.confirm()`` raises rather than checking ``sys.stdin.isatty()`` up
+    front — Click's own ``CliRunner`` test harness feeds simulated input through
+    a non-tty stream, so an ``isatty()`` precheck would misfire on real prompt
+    tests, not just genuine non-interactive automation.
+    """
+    try:
+        return click.confirm(prompt, default=default)
+    except click.Abort:
+        raise click.ClickException(
+            "Refusing to proceed without confirmation in a non-interactive session "
+            "(no input available on stdin). Pass "
+            f"`{command_name} -y` to skip this confirmation in scripts, CI, or "
+            "workflow automation."
+        ) from None
+
+
 def confirm_defaulted_active_session_publish(
     *, session_hash: str, command_name: str, start_dir: str | None = None
 ) -> bool:
@@ -120,7 +146,9 @@ def confirm_defaulted_active_session_publish(
     )
     click.echo(f"Use `{command_name} -y` to skip this confirmation in scripts.")
     click.echo("")
-    return click.confirm("Publish the whole active session?", default=False)
+    return _confirm_or_explain_noninteractive(
+        "Publish the whole active session?", default=False, command_name=command_name
+    )
 
 
 def confirm_anonymous_public_publish(*, command_name: str, start_dir: str | None = None) -> bool:
