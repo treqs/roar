@@ -225,7 +225,23 @@ def _confirm_pending_label_deletions(sync_targets: list[ReconcileTargetSync]) ->
         click.echo(f"  {_target_display_name(target)}: {keys}")
     click.echo("Use `roar label sync -y` (or `--yes`) to skip this confirmation in scripts.")
     click.echo("")
-    if not click.confirm("Proceed with these remote label deletions?", default=False):
+    try:
+        proceed = click.confirm("Proceed with these remote label deletions?", default=False)
+    except click.Abort:
+        # click.confirm() raises Abort on EOF (closed/absent stdin) -- the shape a
+        # workflow-orchestrated subprocess with no terminal attached actually hits,
+        # not a real decline. Without this, that collapses into Click's generic
+        # "Aborted!" with no indication why or what to do about it. Deliberately not
+        # an up-front sys.stdin.isatty() check: Click's own CliRunner test harness
+        # feeds simulated prompt input through a non-tty stream, so isatty() can't
+        # tell a real prompt test apart from genuine non-interactive automation --
+        # catching the actual EOF click.confirm() raises does.
+        raise click.ClickException(
+            "Refusing to proceed without confirmation in a non-interactive session "
+            "(no input available on stdin). Pass `roar label sync -y` to skip this "
+            "confirmation in scripts, CI, or workflow automation."
+        ) from None
+    if not proceed:
         click.echo("Sync aborted.")
         raise SystemExit(1)
 

@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, call, patch
 
+import click
+
 from roar.application.labels import ReconcileTargetSync
 from roar.application.query import (
     LabelCopyRequest,
@@ -582,6 +584,43 @@ def test_build_sync_labels_summary_prompts_and_aborts_when_deletion_is_declined(
             assert exc.code == 1
         else:  # pragma: no cover - defensive assertion style
             raise AssertionError("Expected SystemExit when the deletion prompt is declined")
+
+    confirm.assert_called_once()
+    client_class.assert_not_called()
+
+
+def test_build_sync_labels_summary_deletion_prompt_noninteractive_gives_clear_error(
+    tmp_path: Path,
+) -> None:
+    """click.confirm() raises click.Abort on EOF (closed/absent stdin) — the shape
+    a workflow-orchestrated subprocess with no terminal attached actually hits,
+    distinct from the simulated-decline test above (return_value=False models a
+    real "n" keystroke). This must surface as an actionable ClickException, not
+    Click's generic "Aborted!", and must not touch the network either way."""
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.resolve_target.return_value = object()
+    service.current_metadata.return_value = {"owner": "ml"}
+
+    with (
+        patch("roar.application.query.label.create_database_context", return_value=db_ctx),
+        patch("roar.application.query.label.LabelService", return_value=service),
+        patch(
+            "roar.application.query.label.build_reconcile_payload_for_target",
+            return_value=_deletion_target_payload(),
+        ),
+        patch("roar.application.query.label.GlaasClient") as client_class,
+        patch("roar.application.query.label.click.confirm", side_effect=click.Abort()) as confirm,
+    ):
+        try:
+            build_sync_labels_summary(_sync_request(tmp_path))
+        except click.ClickException as exc:
+            assert "non-interactive session" in str(exc)
+            assert "label sync -y" in str(exc)
+        else:  # pragma: no cover - defensive assertion style
+            raise AssertionError("Expected ClickException on a non-interactive EOF")
 
     confirm.assert_called_once()
     client_class.assert_not_called()
