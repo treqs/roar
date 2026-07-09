@@ -404,6 +404,118 @@ class TestOptionalAuth:
             )
             make_auth_header.assert_not_called()
 
+    def test_bearer_401_then_ssh_fallback_also_rejected_returns_ssh_error(self):
+        """If the SSH fallback after a bearer 401 also fails, the call must not crash
+        or hang, and the returned error should surface the SSH failure while noting
+        that bearer auth was tried (and failed) first."""
+        client = GlaasClient(
+            base_url="http://localhost:9999",
+            publish_auth=PublishAuthContext(
+                access_token="expired-token",
+                scope_request=None,
+                ssh_auth_available=True,
+            ),
+        )
+
+        bearer_unauthorized = urllib.error.HTTPError(
+            url="http://localhost:9999/api/v1/test",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=None,
+        )
+        bearer_unauthorized.read = MagicMock(return_value=b'{"detail":"expired"}')
+
+        ssh_unauthorized = urllib.error.HTTPError(
+            url="http://localhost:9999/api/v1/test",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=None,
+        )
+        ssh_unauthorized.read = MagicMock(return_value=b'{"detail":"ssh signature invalid"}')
+
+        with (
+            patch(
+                "roar.integrations.glaas.client.make_auth_header",
+                return_value="Signature test-signature",
+            ) as make_auth_header,
+            patch("roar.integrations.glaas.transport._get_logger") as mock_get_logger,
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_urlopen.side_effect = [bearer_unauthorized, ssh_unauthorized]
+
+            result, error = client._request("GET", "/api/v1/test", None)
+
+            assert result is None
+            assert error == (
+                "HTTP 401: ssh signature invalid "
+                "(bearer authentication was tried first and also failed)"
+            )
+            assert mock_urlopen.call_count == 2
+
+            first_request = mock_urlopen.call_args_list[0][0][0]
+            retry_request = mock_urlopen.call_args_list[1][0][0]
+            assert first_request.get_header("Authorization") == "Bearer expired-token"
+            assert retry_request.get_header("Authorization") == "Signature test-signature"
+            assert make_auth_header.call_count == 1
+
+            # The rejection warning is the only user-visible trace of the bearer
+            # attempt once the final error text is inspected in isolation, so a
+            # regression that silently drops it should fail this test.
+            mock_get_logger.return_value.warning.assert_called_once_with(
+                "GLaaS bearer authentication was rejected; retrying with SSH signature auth."
+            )
+
+            # Bearer auth is still permanently disabled for later requests on this
+            # client instance, same as the single-failure path (intentional).
+            assert client._bearer_auth_rejected is True
+
+    def test_bearer_401_then_ssh_fallback_connection_error_returns_ssh_error(self):
+        """A non-HTTP failure (e.g. network error) on the SSH fallback attempt should
+        also be surfaced cleanly rather than crashing or masking as the bearer error."""
+        client = GlaasClient(
+            base_url="http://localhost:9999",
+            publish_auth=PublishAuthContext(
+                access_token="expired-token",
+                scope_request=None,
+                ssh_auth_available=True,
+            ),
+        )
+
+        bearer_unauthorized = urllib.error.HTTPError(
+            url="http://localhost:9999/api/v1/test",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=None,
+        )
+        bearer_unauthorized.read = MagicMock(return_value=b'{"detail":"expired"}')
+
+        ssh_connection_error = urllib.error.URLError("Connection refused")
+
+        with (
+            patch(
+                "roar.integrations.glaas.client.make_auth_header",
+                return_value="Signature test-signature",
+            ),
+            patch("roar.integrations.glaas.transport._get_logger") as mock_get_logger,
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_urlopen.side_effect = [bearer_unauthorized, ssh_connection_error]
+
+            result, error = client._request("GET", "/api/v1/test", None)
+
+            assert result is None
+            assert error == (
+                "Connection error: <urlopen error Connection refused> "
+                "(bearer authentication was tried first and also failed)"
+            )
+            assert mock_urlopen.call_count == 2
+            mock_get_logger.return_value.warning.assert_called_once_with(
+                "GLaaS bearer authentication was rejected; retrying with SSH signature auth."
+            )
+
     def test_request_returns_original_401_when_anonymous_retry_also_fails(self):
         """If optional-auth fallback still fails, surface the original auth failure."""
         client = _optional_auth_client()

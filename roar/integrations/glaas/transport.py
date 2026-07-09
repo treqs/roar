@@ -335,7 +335,10 @@ def request_json(
             if retry_error is None:
                 _set_cached_auth_mode(base_url, "authenticated")
                 return retry_result, None
-            return retry_result, retry_error
+            return (
+                retry_result,
+                f"{retry_error} (bearer authentication was tried first and also failed)",
+            )
 
     if allow_auth_fallback and auth_header and status_code == 401 and not bearer_auth:
         _mark_anonymous(base_url, f"The server returned HTTP 401 for {method} {path}.")

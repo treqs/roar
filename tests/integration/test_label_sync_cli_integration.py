@@ -274,7 +274,7 @@ def test_label_sync_propagates_local_unsets_as_remote_deletions(
     published_session_hash = fake_glaas_publish_server.registration_session_finalizations[0]["hash"]
 
     roar_cli("label", "unset", "artifact", "processed.csv", "stage", env_overrides=env)
-    result = roar_cli("label", "sync", "artifact", "processed.csv", env_overrides=env)
+    result = roar_cli("label", "sync", "artifact", "processed.csv", "-y", env_overrides=env)
 
     assert result.returncode == 0
     assert "deleted_keys=1" in result.stdout
@@ -326,7 +326,7 @@ def test_label_sync_syncs_a_fully_unset_target_as_pure_deletions(
     artifact_hash = _artifact_hash_for(roar_cli, "processed.csv")
 
     roar_cli("label", "unset", "artifact", "processed.csv", "stage", env_overrides=env)
-    result = roar_cli("label", "sync", "artifact", "processed.csv", env_overrides=env)
+    result = roar_cli("label", "sync", "artifact", "processed.csv", "-y", env_overrides=env)
 
     assert result.returncode == 0
     request = fake_glaas_publish_server.label_reconciles[-1]
@@ -337,3 +337,78 @@ def test_label_sync_syncs_a_fully_unset_target_as_pure_deletions(
         label for label in remote_state.values() if label.get("artifactHash") == artifact_hash
     )
     assert remote_label["metadata"] == {}
+
+
+def test_label_sync_does_not_advance_baseline_when_old_server_ignores_deletions(
+    temp_git_repo: Path,
+    roar_cli,
+    git_commit,
+    python_exe: str,
+    fake_glaas_publish_server: FakeGlaasServer,
+) -> None:
+    """Task A: an old, not-yet-upgraded glaas-api accepts the reconcile POST,
+    silently ignores `deleted_keys` (permissive JSON parsing), and returns
+    HTTP 200 with the key never actually deleted. `roar label sync` must not
+    read that as success: it should warn and leave the local baseline
+    unadvanced so the same deletion is retried on the next sync, rather than
+    silently and permanently diverging from remote state.
+    """
+    fake_glaas_publish_server.force_authoritative_finalize_hash = True
+    env = _configure_label_sync_repo(temp_git_repo, roar_cli, fake_glaas_publish_server.base_url)
+    _create_tracked_output(
+        temp_git_repo,
+        roar_cli=roar_cli,
+        git_commit=git_commit,
+        python_exe=python_exe,
+        env_overrides=env,
+    )
+
+    roar_cli(
+        "label",
+        "set",
+        "artifact",
+        "processed.csv",
+        "owner=ml",
+        "stage=gold",
+        env_overrides=env,
+    )
+    roar_cli("register", "processed.csv", "--yes", env_overrides=env)
+    artifact_hash = _artifact_hash_for(roar_cli, "processed.csv")
+
+    roar_cli("label", "unset", "artifact", "processed.csv", "stage", env_overrides=env)
+
+    fake_glaas_publish_server.ignore_deleted_keys_in_reconcile = True
+    result = roar_cli("label", "sync", "artifact", "processed.csv", "-y", env_overrides=env)
+
+    # (a) does not crash/error.
+    assert result.returncode == 0
+    # (b) a warning is shown.
+    assert "Warning:" in result.stderr
+    assert "did not confirm they were applied" in result.stderr
+    assert artifact_hash in result.stderr
+
+    # The old server left the key in place remotely (it never applied the
+    # deletion — this is exactly what makes the unconfirmed-baseline check
+    # necessary).
+    remote_state = fake_glaas_publish_server.current_labels_by_target
+    remote_label = next(
+        label for label in remote_state.values() if label.get("artifactHash") == artifact_hash
+    )
+    assert remote_label["metadata"] == {"owner": "ml", "stage": "gold"}
+
+    # (c) synced_at was NOT advanced: once the server is "upgraded", a
+    # follow-up sync resends the same deletion instead of treating it as
+    # already synced.
+    fake_glaas_publish_server.ignore_deleted_keys_in_reconcile = False
+    retry = roar_cli("label", "sync", "artifact", "processed.csv", "-y", env_overrides=env)
+
+    assert retry.returncode == 0
+    retry_request = fake_glaas_publish_server.label_reconciles[-1]
+    assert retry_request["labels"][0]["deleted_keys"] == ["stage"]
+    assert "deleted_keys=1" in retry.stdout
+    remote_label_after_retry = next(
+        label
+        for label in fake_glaas_publish_server.current_labels_by_target.values()
+        if label.get("artifactHash") == artifact_hash
+    )
+    assert remote_label_after_retry["metadata"] == {"owner": "ml"}

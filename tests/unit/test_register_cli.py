@@ -400,6 +400,150 @@ def test_register_cli_no_target_without_active_session_errors(tmp_path: Path) ->
     mock_register.assert_not_called()
 
 
+def test_register_cli_prompts_before_defaulted_active_session_publish_and_declines(
+    tmp_path: Path,
+) -> None:
+    """Bare `roar register` (no target, no --yes) must confirm before publishing
+    the whole active session — independent of the anonymous/public gate.
+
+    Before this gate, a logged-in user's default (non-anonymous) publish intent
+    skipped the anonymous-only confirmation entirely, so the whole session was
+    published with zero preview and zero confirmation. Declining here must abort
+    cleanly without ever calling the registration service.
+    """
+    runner = CliRunner()
+    session_hash = "d" * 64
+    with (
+        # Pin login state so publish intent resolves to private/attributed —
+        # isolates this gate from the separate anonymous-public confirmation.
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
+        patch(
+            "roar.application.query.status.compute_active_session_hash",
+            return_value=session_hash,
+        ),
+        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
+    ):
+        result = runner.invoke(register, [], input="n\n", obj=_mock_context(tmp_path))
+
+    assert result.exit_code != 0
+    assert "No target given" in result.output
+    assert "Publish the whole active session?" in result.output
+    assert "Registration aborted." in result.output
+    mock_register.assert_not_called()
+
+
+def test_register_cli_defaulted_active_session_prompt_noninteractive_gives_clear_error(
+    tmp_path: Path,
+) -> None:
+    """No --yes and no input available (e.g. a workflow-orchestrated subprocess with
+    stdin closed/empty) must fail with an actionable message, not Click's generic
+    "Aborted!" — this is the realistic non-interactive-automation shape, distinct
+    from the simulated-decline test above (which supplies real "n\n" input).
+    """
+    runner = CliRunner()
+    session_hash = "2" * 64
+    with (
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
+        patch(
+            "roar.application.query.status.compute_active_session_hash",
+            return_value=session_hash,
+        ),
+        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
+    ):
+        # input="" simulates EOF on stdin (no interactive terminal, nothing piped in)
+        # rather than a real keystroke — matching a daemon-launched subprocess.
+        result = runner.invoke(register, [], input="", obj=_mock_context(tmp_path))
+
+    assert result.exit_code != 0
+    assert "non-interactive session" in result.output
+    assert "register -y" in result.output
+    mock_register.assert_not_called()
+
+
+def test_register_cli_accepts_defaulted_active_session_publish_prompt(tmp_path: Path) -> None:
+    """Confirming the defaulted-active-session prompt proceeds exactly as before."""
+    runner = CliRunner()
+    session_hash = "e" * 64
+    with (
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
+        patch(
+            "roar.application.query.status.compute_active_session_hash",
+            return_value=session_hash,
+        ),
+        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
+    ):
+        mock_register.return_value = _fake_result()
+        result = runner.invoke(register, [], input="y\n", obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    request = mock_register.call_args.args[0]
+    assert request.target == session_hash
+
+
+def test_register_cli_yes_skips_defaulted_active_session_prompt(tmp_path: Path) -> None:
+    """--yes bypasses the new prompt (as well as the pre-existing ones)."""
+    runner = CliRunner()
+    session_hash = "f" * 64
+    with (
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
+        patch(
+            "roar.application.query.status.compute_active_session_hash",
+            return_value=session_hash,
+        ),
+        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
+    ):
+        mock_register.return_value = _fake_result()
+        # No `input=` supplied: if the prompt fired anyway, click would hit EOF
+        # reading it and the run would abort — a clean success proves it did not.
+        result = runner.invoke(register, ["--yes"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert "Publish the whole active session?" not in result.output
+    request = mock_register.call_args.args[0]
+    assert request.target == session_hash
+
+
+def test_register_cli_dry_run_skips_defaulted_active_session_prompt(tmp_path: Path) -> None:
+    """--dry-run bypasses the new prompt too — it's a no-op preview, not a publish."""
+    runner = CliRunner()
+    session_hash = "1" * 64
+    with (
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
+        patch(
+            "roar.application.query.status.compute_active_session_hash",
+            return_value=session_hash,
+        ),
+        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
+    ):
+        mock_register.return_value = _fake_result()
+        result = runner.invoke(register, ["--dry-run"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert "Publish the whole active session?" not in result.output
+    request = mock_register.call_args.args[0]
+    assert request.target == session_hash
+    assert request.dry_run is True
+
+
+def test_register_cli_explicit_target_skips_defaulted_active_session_prompt(
+    tmp_path: Path,
+) -> None:
+    """The new gate only fires when the target was defaulted, never for an
+    explicit CLI target argument."""
+    runner = CliRunner()
+    with (
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
+        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
+    ):
+        mock_register.return_value = _fake_result()
+        result = runner.invoke(register, ["model.pt"], obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert "Publish the whole active session?" not in result.output
+    request = mock_register.call_args.args[0]
+    assert request.target == "model.pt"
+
+
 def test_register_cli_renders_already_registered(tmp_path: Path) -> None:
     """A full re-register reports a no-op clearly, not a fresh publish."""
     runner = CliRunner()

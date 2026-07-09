@@ -170,6 +170,23 @@ BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     ),
 ]
 
+# Schemeless scp-style git remotes: user@host:path (e.g. git@github.com:org/repo.git,
+# or an opaque deploy token used as the "user": deploytoken123@gitlab.internal.co:group/repo.git).
+#
+# This is intentionally NOT part of BUILTIN_PATTERNS above. BUILTIN_PATTERNS is applied by
+# filter_string() to substring-search arbitrary free text (commands, metadata blobs), where a
+# schemeless "x@y:z" pattern would false-positive on incidental substrings such as Docker
+# digest references ("image@sha256:...") embedded in a command line. filter_git_url()'s input
+# is always a complete, isolated git remote URL string -- never a text blob to substring-search
+# -- so it is safe to anchor this check to the WHOLE string and apply it only there.
+#
+# "git@" (the near-universal ssh username, mirrored from git_url_userinfo's `(?!git@)`
+# exemption) is exempt. Any other userinfo is indistinguishable from an opaque token, so -- same
+# "fail closed" philosophy as git_url_userinfo -- it gets redacted. "[" "]" are excluded from the
+# userinfo class so an already-redacted placeholder (e.g. from a more specific BUILTIN_PATTERNS
+# match applied first by filter_string) is not re-matched and downgraded to a generic tag.
+_SCP_STYLE_USERINFO_RE = re.compile(r"^(?!git@)([^@\s\[\]]+)@(\S+)$")
+
 
 class OmitFilter:
     """
@@ -341,8 +358,37 @@ class OmitFilter:
             Tuple of (filtered_url, list_of_detection_ids)
         """
         result = self.filter_string(url, field="git_url")
-        detection_ids = [d.pattern_id for d in result.detections]
-        return result.filtered, detection_ids
+        scp_filtered, scp_detections = self._redact_scp_style_userinfo(
+            result.filtered, field="git_url"
+        )
+        detection_ids = [d.pattern_id for d in result.detections] + [
+            d.pattern_id for d in scp_detections
+        ]
+        return scp_filtered, detection_ids
+
+    def _redact_scp_style_userinfo(self, url: str, field: str = "") -> tuple[str, list[OmitMatch]]:
+        """Redact the userinfo of a schemeless scp-style remote (user@host:path).
+
+        Only ever called from filter_git_url() on a complete, isolated git remote URL
+        -- never on free text -- so the full-string anchor in _SCP_STYLE_USERINFO_RE is
+        safe here in a way it would not be for the shared BUILTIN_PATTERNS list used by
+        filter_string(). See the comment above _SCP_STYLE_USERINFO_RE for details.
+        """
+        if not self.enabled or not url or "://" in url:
+            return url, []
+
+        match = _SCP_STYLE_USERINFO_RE.match(url)
+        if not match or ":" not in match.group(2):
+            return url, []
+
+        if self._is_allowlisted(match.group(0)):
+            return url, []
+
+        user, rest = match.group(1), match.group(2)
+        return (
+            f"[REDACTED]@{rest}",
+            [OmitMatch(pattern_id="git_url_scp_userinfo", original_length=len(user), field=field)],
+        )
 
     def filter_metadata(self, metadata: dict) -> tuple[dict, list[str]]:
         """
