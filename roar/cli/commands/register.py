@@ -17,6 +17,7 @@ from ..context import RoarContext
 from ..decorators import require_init
 from ..publish_intent import (
     confirm_anonymous_public_publish,
+    confirm_defaulted_active_session_publish,
     resolve_publish_intent,
     warn_defaulted_anonymous,
     warn_public_default,
@@ -342,6 +343,7 @@ def register(
     if anonymous and public is False:
         raise click.ClickException("--anonymous requires public visibility; remove --private.")
 
+    target_was_defaulted = target is None
     if target is None:
         # No target -> register the whole active session. Resolving to the
         # session's canonical hash routes through the session_hash collection
@@ -353,6 +355,23 @@ def register(
             target = compute_active_session_hash(ctx.roar_dir)
         except StatusQueryError as exc:
             raise click.ClickException(str(exc)) from exc
+
+    # The target-defaulted-to-active-session gate is independent of anonymous/
+    # public visibility: publishing the WHOLE session with zero preview is a
+    # real, hard-to-undo action regardless of who it's attributed to. This is
+    # deliberately separate from (and composes with) the anonymous-public gate
+    # below — a defaulted + anonymous + public register can show both prompts,
+    # each warning about a different risk (scope vs. visibility).
+    if (
+        target_was_defaulted
+        and not yes
+        and not dry_run
+        and not confirm_defaulted_active_session_publish(
+            session_hash=target, command_name="roar register", start_dir=str(ctx.cwd)
+        )
+    ):
+        click.echo("Registration aborted.")
+        raise SystemExit(1)
 
     publish_intent = resolve_publish_intent(
         public,
