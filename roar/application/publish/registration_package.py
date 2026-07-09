@@ -147,7 +147,7 @@ def build_registration_package(
 ) -> tuple[dict[str, Any], bytes]:
     """Build a finalized `RoarRegistrationPackageV1` payload and bytes."""
     resolved_logger = logger or get_logger()
-    redacted_lineage, redacted_git_context, redaction = _apply_redaction(
+    redacted_lineage, redacted_git_context, redaction, omit_filter = _apply_redaction(
         lineage=lineage,
         git_context=git_context,
         cwd=cwd,
@@ -207,7 +207,9 @@ def build_registration_package(
         package["composites"] = composites
 
     if labels:
-        package["labels"] = labels
+        filtered_labels, label_detections = _filter_label_secrets(labels, omit_filter)
+        package["labels"] = filtered_labels
+        _merge_redaction_detections(redaction, label_detections)
 
     return finalize_registration_package(package)
 
@@ -258,7 +260,7 @@ def _apply_redaction(
     lineage: LineageData,
     git_context: GitContext,
     cwd: Path,
-) -> tuple[LineageData, GitContext, dict[str, Any]]:
+) -> tuple[LineageData, GitContext, dict[str, Any], OmitFilter | None]:
     omit_config = get_raw_registration_omit_config(start_dir=str(cwd))
     omit_filter = OmitFilter(omit_config) if omit_config.get("enabled", True) else None
 
@@ -286,7 +288,55 @@ def _apply_redaction(
             "applied": applied,
             "warnings": [_redaction_warning(pattern_id) for pattern_id in warning_ids],
         },
+        omit_filter,
     )
+
+
+def _filter_label_secrets(
+    labels: list[dict[str, Any]],
+    omit_filter: OmitFilter | None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Run each label's ``metadata`` values through the same redaction as the rest
+    of the package before it is attached to ``package["labels"]``.
+
+    Labels are user-authored key/value metadata (e.g. metric labels synced onto a
+    published artifact) and, like commands and job metadata, can contain
+    accidentally-embedded secrets -- so they must not be published raw.
+    """
+    if omit_filter is None or not labels:
+        return labels, []
+
+    detections: list[str] = []
+    filtered_labels: list[dict[str, Any]] = []
+    for label in labels:
+        filtered_label = dict(label)
+        metadata = filtered_label.get("metadata")
+        if isinstance(metadata, dict):
+            filtered_metadata, metadata_detections = omit_filter.filter_metadata(metadata)
+            filtered_label["metadata"] = filtered_metadata
+            detections.extend(metadata_detections)
+        filtered_labels.append(filtered_label)
+
+    return filtered_labels, detections
+
+
+def _merge_redaction_detections(redaction: dict[str, Any], detections: list[str]) -> None:
+    """Fold additional detection pattern IDs into an already-built redaction summary.
+
+    Mutates ``redaction`` in place (it is the same dict object already referenced by
+    ``package["redaction"]``), so callers that build the package payload before all
+    redaction passes have run still end up with an accurate summary.
+    """
+    if not detections:
+        return
+    redaction["applied"] = True
+    warnings = redaction.setdefault("warnings", [])
+    existing_codes = {w["code"] for w in warnings if isinstance(w, dict) and "code" in w}
+    for pattern_id in sorted(set(detections)):
+        warning = _redaction_warning(pattern_id)
+        if warning["code"] not in existing_codes:
+            warnings.append(warning)
+            existing_codes.add(warning["code"])
 
 
 def _drop_local_remotes(

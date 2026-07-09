@@ -203,6 +203,50 @@ def test_registration_package_includes_labels_when_provided(tmp_path: Path) -> N
     assert "labels" not in no_label_package
 
 
+def test_registration_package_redacts_secret_shaped_label_metadata(tmp_path: Path) -> None:
+    """Label metadata is user-authored key/value data synced alongside lineage --
+    like commands and job metadata, it can accidentally carry a real secret, and
+    must go through the same OmitFilter pass as everything else before being
+    attached to the outbound package (it must not be published raw).
+    """
+    labels = [
+        {
+            "entity_type": "artifact",
+            "session_hash": "local-hash",
+            "artifact_hash": "b" * 64,
+            "metadata": {
+                "accuracy": 0.9735,
+                "note": "API_TOKEN=abcdefghijklmnopqrstuvwxyz123456",
+            },
+            "key_origins": {"accuracy": "user", "note": "user"},
+        }
+    ]
+    package, encoded = build_registration_package(
+        session={"id": 7, "hash": "local-hash", "created_at": 123.0},
+        lineage=_lineage(),
+        git_context=GitContext(repo=None, commit="deadbeef", branch="main"),
+        cwd=tmp_path,
+        labels=labels,
+        created_at="2026-04-29T00:00:00Z",
+        producer_version="test-version",
+    )
+
+    label_metadata = package["labels"][0]["metadata"]
+    assert label_metadata["accuracy"] == 0.9735
+    assert "abcdefghijklmnopqrstuvwxyz123456" not in label_metadata["note"]
+    assert label_metadata["note"] == "API_TOKEN=[REDACTED]"
+
+    # The digest/encoded bytes reflect the redacted labels, not the raw ones.
+    assert package["manifest"]["package_sha256"] == compute_registration_package_sha256(package)
+    assert json.loads(encoded)["labels"][0]["metadata"]["note"] == "API_TOKEN=[REDACTED]"
+
+    # The package-level redaction summary reflects the label detection too.
+    assert package["redaction"]["applied"] is True
+    assert any(
+        "env_var_assignment" in warning["code"] for warning in package["redaction"]["warnings"]
+    )
+
+
 def test_registration_package_exports_full_lineage_composite_payload(tmp_path: Path) -> None:
     db_ctx = MagicMock()
     db_ctx.composites = MagicMock()
