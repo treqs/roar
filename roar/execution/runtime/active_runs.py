@@ -25,9 +25,7 @@ def _markers_dir(roar_dir: Path) -> Path:
     return Path(roar_dir) / "active_runs"
 
 
-def write_marker(
-    roar_dir: Path, *, pid: int, command: list[str], job_type: str | None
-) -> None:
+def write_marker(roar_dir: Path, *, pid: int, command: list[str], job_type: str | None) -> None:
     """Record that `pid` has a run/build in flight against `roar_dir`.
 
     Best-effort: a missing/unwritable `.roar` dir must never fail the run.
