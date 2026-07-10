@@ -13,7 +13,7 @@ from roar.backends.k8s.config import load_k8s_backend_config
 from roar.backends.k8s.manifest import (
     K8sManifestError,
     dump_manifest_documents,
-    find_job_documents,
+    find_workload_documents,
     load_manifest_documents,
     rewrite_manifest_for_lineage,
 )
@@ -31,6 +31,8 @@ class K8sSubmitContext:
     original_command: list[str]
     manifest_path: str
     prepared_path: str
+    workload_kind: str
+    kubectl_resource: str
     job_name: str
     namespace: str
     secret_name: str
@@ -61,7 +63,7 @@ def matches_kubectl_job_submit_command(command: list[str]) -> bool:
         documents = load_manifest_documents(manifest_path)
     except K8sManifestError:
         return False
-    return len(find_job_documents(documents)) == 1
+    return len(find_workload_documents(documents)) == 1
 
 
 def plan_kubectl_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
@@ -137,6 +139,8 @@ def plan_kubectl_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
         original_command=list(command),
         manifest_path=str(manifest_path),
         prepared_path=str(prepared_path),
+        workload_kind=rewrite.workload_kind,
+        kubectl_resource=rewrite.kubectl_resource,
         job_name=rewrite.job_name,
         namespace=rewrite.namespace,
         secret_name=secret_name,

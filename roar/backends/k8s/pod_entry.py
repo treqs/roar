@@ -80,9 +80,14 @@ def task_identity_from_environment(environ: dict[str, str] | None = None) -> tup
     env = os.environ if environ is None else environ
     pod_uid = str(env.get("ROAR_K8S_POD_UID") or "unknown-pod").strip() or "unknown-pod"
     container = str(env.get("ROAR_K8S_CONTAINER") or "main").strip() or "main"
+    # Node-index chain: Indexed Job/JobSet completion index, then torchrun's
+    # PET_NODE_RANK, then PyTorchJob v1's operator-injected pod-level RANK
+    # (stable node rank there — process-level RANK is never read because
+    # pod_entry runs above the launcher).
     completion_index = (
         str(env.get("JOB_COMPLETION_INDEX") or "").strip()
         or str(env.get("PET_NODE_RANK") or "").strip()
+        or str(env.get("RANK") or "").strip()
         or "0"
     )
     restart_attempt = (

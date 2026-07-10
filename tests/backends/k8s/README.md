@@ -3,13 +3,18 @@
 KIND-based harness for pressure-testing roar lineage capture in Kubernetes
 training pods (`design-docs/k8s-training-lineage-integration.md`).
 
-Two test layers share this harness:
+Three test layers share this harness:
 
 - `e2e/test_k8s_product_path.py` — the Phase-1 product path through the real
   `roar.backends.k8s` backend: `roar run kubectl apply -f job.yaml` with a
   roar-unaware manifest, plan-time rewriting, Secret-delivered credentials,
   wheel served to pods over HTTP, and shared-finalizer reconstitution into
   the submitting project's `.roar/roar.db`. This is the confidence test.
+- `e2e/test_k8s_distributed.py` — Phase-2 coverage: two-pod Indexed Job with
+  completion-index identity, child-process capture, and a cross-pod artifact
+  edge over a shared volume; `roar k8s attach` from a fresh project via the
+  cluster Secret; and a JobSet run through the real controller (skipped
+  unless bootstrapped with `--with-jobset`).
 - `e2e/test_k8s_smoke.py` — the Phase-0 runtime diagnostic: fixtures
   hand-wrap the manifest (no backend involved) to isolate the runtime pieces
   (in-pod tracing, fragment streaming, identity contract) when the product
@@ -31,8 +36,9 @@ live in `unit/` and run in the default gate — no cluster needed.
 # one-time (and after wheel changes)
 bash scripts/build_wheel_with_bins.sh
 
-# create cluster + wire glaas + preflight (add --with-minio for S3 scenarios)
-bash tests/backends/k8s/scripts/bootstrap_k8s.sh
+# create cluster + wire glaas + preflight
+# (--with-minio for S3 scenarios, --with-jobset for the JobSet operator e2e)
+bash tests/backends/k8s/scripts/bootstrap_k8s.sh --with-jobset
 
 # run the smoke tests (addopts override needed: e2e dirs are ignored by default)
 pytest tests/backends/k8s/e2e -o addopts='' -m k8s_e2e -v

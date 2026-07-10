@@ -121,7 +121,7 @@ def test_multiple_jobs_rejected() -> None:
     second = copy.deepcopy(SINGLE_JOB_MANIFEST)
     second["metadata"]["name"] = "train-demo-2"
 
-    with pytest.raises(K8sManifestError, match="exactly one Job"):
+    with pytest.raises(K8sManifestError, match="exactly one workload"):
         _rewrite([first, second])
 
 

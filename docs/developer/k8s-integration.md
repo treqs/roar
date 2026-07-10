@@ -2,22 +2,30 @@
 
 ## 1. High-level summary
 
-The k8s backend instruments plain `batch/v1` Jobs submitted with
+The k8s backend instruments Kubernetes training workloads submitted with
 `kubectl apply|create -f <manifest>` through `roar run`. Unlike Ray (runtime
 hooks) it works at the manifest layer, like OSMO — but transports lineage via
 GLaaS fragment streaming, like Ray, rather than bundle files.
 
-Phase 1 scope (see `design-docs/k8s-training-lineage-integration.md` in the
-dev meta-repo): exactly one Job per manifest, explicit container commands
-only, streaming transport only. Kubeflow TrainJob/JobSet/RayJob adapters,
-bundle fallback, `roar k8s attach`, and the admission-webhook injector are
-later phases.
+Supported workload kinds (exactly one per manifest; other documents pass
+through): `batch/v1` Job (plain or Indexed), `jobset.x-k8s.io` JobSet,
+`kubeflow.org/v1` PyTorchJob, and `trainer.kubeflow.org` TrainJob. All pods
+of a workload share one fragment session and one parent job uid; per-pod
+identity comes from the downward API plus the completion-index/node-rank
+env chain (`JOB_COMPLETION_INDEX` → `PET_NODE_RANK` → pod-level `RANK`).
+
+Current phase status (see `design-docs/k8s-training-lineage-integration.md`
+in the dev meta-repo): Phases 1–2 implemented (submit wrapping, operator
+adapters, multi-pod capture, `roar k8s attach`). Remaining: bundle-mode
+fallback for GLaaS-less pods, boto3/fsspec hooks via sitecustomize,
+mount-map path rewriting, RayJob delegation, and the admission-webhook
+injector.
 
 ## 2. Flow
 
 1. **Match** (`roar/backends/k8s/submit.py`): binary `kubectl`, verb
    `apply|create`, `-f` pointing at a manifest containing exactly one
-   `batch/v1` Job; gated by `k8s.enabled` (default off).
+   supported workload; gated by `k8s.enabled` (default off).
 2. **Plan** (same module): pre-registers a GLaaS fragment session (saves the
    `.key` under `.roar/fragment-sessions/`), rewrites the manifest
    (`manifest.py`), writes it 0600 under `.roar/k8s/prepared/` with a
@@ -25,20 +33,25 @@ later phases.
    `session_id` — the framework attaches the shared submit finalizer.
    GLaaS/registration failures degrade to an uninstrumented submit with a
    warning; lineage never blocks training.
-3. **Rewrite** (`manifest.py`): wraps each container that has an explicit
-   `command` with a `/bin/sh -c` script that pip-installs the roar runtime
-   (`k8s.runtime_install_requirement`, default pinned `roar-cli`) and execs
-   `python3 -m roar.backends.k8s.pod_entry "$@"`; on any bootstrap failure it
-   falls back to exec'ing the original command uninstrumented. Injects the
-   env contract (`GLAAS_URL` = cluster-visible URL, Secret-backed
-   `ROAR_SESSION_ID`/`ROAR_FRAGMENT_TOKEN`, downward-API identity fields) and
-   appends the Secret document. Containers without an explicit command are
-   skipped with a warning; a Job with none fails actionably (ENTRYPOINT
-   resolution is a later phase).
-4. **Host execution** (`host_execution.py`): runs kubectl, deletes the
-   prepared manifest (it embeds the token Secret), polls the Job to a
-   terminal condition (`k8s.wait_for_completion`, default on), and records
-   the submit as a local job — with the **original** command and the
+3. **Rewrite** (`manifest.py`): a `WORKLOAD_KINDS` adapter registry locates
+   pod templates per kind (Job: `spec.template.spec`; JobSet:
+   `spec.replicatedJobs[*].template.spec.template.spec`; PyTorchJob:
+   `spec.pytorchReplicaSpecs.{Role}.template.spec`; TrainJob has no inline
+   template — its `spec.trainer.command/env` override is wrapped instead).
+   Each container with an explicit `command` gets a `/bin/sh -c` script that
+   pip-installs the roar runtime (`k8s.runtime_install_requirement`, default
+   pinned `roar-cli`) and execs `python3 -m roar.backends.k8s.pod_entry "$@"`;
+   on any bootstrap failure it falls back to exec'ing the original command
+   uninstrumented. Injects the env contract (`GLAAS_URL` = cluster-visible
+   URL, Secret-backed `ROAR_SESSION_ID`/`ROAR_FRAGMENT_TOKEN`, downward-API
+   identity fields) and appends the Secret document. Containers without an
+   explicit command are skipped with a warning; a workload with none fails
+   actionably (ENTRYPOINT resolution is a later phase).
+4. **Host execution** (`host_execution.py` + `workload_wait.py`): runs
+   kubectl, deletes the prepared manifest (it embeds the token Secret),
+   polls the workload to a terminal condition (`k8s.wait_for_completion`,
+   default on; condition types unioned across kinds), and records the
+   submit as a local job — with the **original** command and the
    plan-generated `parent_job_uid`, so reproduce re-enters the backend and
    pod fragments link to the submit node.
 5. **In pod** (`pod_entry.py`): `roar init -n` + `roar run --tracer preload`
@@ -57,6 +70,14 @@ later phases.
 `roar k8s prepare -f job.yaml -o prepared.yaml` runs the same rewriter for
 inspection: no session is registered and no Secret is embedded; the user
 creates the named Secret out of band or uses the managed path.
+
+`roar k8s attach WORKLOAD [-n ns] [--context ctx] [--wait/--no-wait]
+[--session-file key]` (`attach.py`) recovers lineage from an
+already-submitted workload — the CI/fire-and-forget flow. It reads the
+parent job uid and Secret name from the cluster object's own env contract,
+resolves credentials (local `.key` → cluster Secret → `--session-file`),
+optionally waits for completion, records a local `attach` job under the
+recovered parent uid, and reconstitutes the streamed fragments.
 
 ## 4. Config
 

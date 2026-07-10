@@ -5,6 +5,7 @@ from pathlib import Path
 
 import click
 
+from ...backends.k8s.attach import K8sAttachError, attach_k8s_workload
 from ...backends.k8s.config import load_k8s_backend_config
 from ...backends.k8s.manifest import (
     K8sManifestError,
@@ -13,14 +14,81 @@ from ...backends.k8s.manifest import (
     rewrite_manifest_for_lineage,
 )
 from ...backends.k8s.submit import resolve_runtime_requirement
+from ..context import RoarContext
+from ..decorators import require_init
 
 
 @click.group("k8s", invoke_without_command=True)
 @click.pass_context
 def k8s(ctx: click.Context) -> None:
-    """Prepare Kubernetes Jobs for lineage capture."""
+    """Prepare and attach Kubernetes workloads for lineage capture."""
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
+
+
+@k8s.command("attach")
+@click.argument("workload")
+@click.option(
+    "-n",
+    "--namespace",
+    default="default",
+    show_default=True,
+    help="Namespace of the workload",
+)
+@click.option(
+    "--context",
+    "kube_context",
+    default=None,
+    help="kubectl context to use",
+)
+@click.option(
+    "--wait/--no-wait",
+    default=None,
+    help="Override k8s.wait_for_completion for this attach",
+)
+@click.option(
+    "--session-file",
+    type=click.Path(path_type=Path, dir_okay=False, exists=True),
+    default=None,
+    help="Fragment-session .key file when the cluster Secret is not readable",
+)
+@click.pass_obj
+@require_init
+def k8s_attach(
+    ctx: RoarContext,
+    workload: str,
+    namespace: str,
+    kube_context: str | None,
+    wait: bool | None,
+    session_file: Path | None,
+) -> None:
+    """Reconstitute lineage from an already-submitted workload.
+
+    WORKLOAD is a name or KIND/NAME (job, jobset, pytorchjob, trainjob) that
+    was instrumented at submit time. Credentials come from a locally saved
+    fragment-session key, the cluster Secret, or --session-file.
+    """
+    global_flags = ["--context", kube_context] if kube_context else []
+    try:
+        result = attach_k8s_workload(
+            roar_dir=ctx.roar_dir,
+            repo_root=str(ctx.repo_root or ctx.roar_dir.parent),
+            workload=workload,
+            namespace=namespace,
+            global_flags=global_flags,
+            wait=wait,
+            session_file=session_file,
+        )
+    except K8sAttachError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(
+        f"[roar] lineage reconstituted from {result.workload}: "
+        f"{result.jobs_merged} jobs, {result.artifacts_merged} artifacts "
+        f"({result.fragments_processed} fragments)"
+    )
+    if result.exit_code != 0:
+        raise SystemExit(result.exit_code)
 
 
 @k8s.command("prepare")
@@ -94,7 +162,10 @@ def k8s_prepare(
     output_path.write_text(dump_manifest_documents(rewrite.documents), encoding="utf-8")
 
     click.echo(f"Prepared manifest written to {output_path}")
-    click.echo(f"  job:                {rewrite.job_name} (namespace {rewrite.namespace})")
+    click.echo(
+        f"  workload:           {rewrite.workload_kind}/{rewrite.job_name} "
+        f"(namespace {rewrite.namespace})"
+    )
     click.echo(f"  wrapped containers: {', '.join(rewrite.wrapped_containers)}")
     if rewrite.skipped_containers:
         click.echo(f"  skipped (no explicit command): {', '.join(rewrite.skipped_containers)}")

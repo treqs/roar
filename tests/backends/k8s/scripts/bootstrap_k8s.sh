@@ -16,9 +16,11 @@ set -euo pipefail
 #      with a probe pod, so infra failures are diagnosed here rather than
 #      inside product tests.
 #   6. Optionally deploys MinIO for S3 scenarios (--with-minio).
+#   7. Optionally installs the JobSet controller (--with-jobset) for the
+#      Tier-2 distributed operator e2e tests.
 #
 # Usage:
-#   bash tests/backends/k8s/scripts/bootstrap_k8s.sh [--with-minio] [--skip-glaas]
+#   bash tests/backends/k8s/scripts/bootstrap_k8s.sh [--with-minio] [--with-jobset] [--skip-glaas]
 
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$HARNESS_DIR/../../.." && pwd)"
@@ -34,11 +36,15 @@ WORKLOAD_IMAGE="docker.io/library/python:3.12-slim"
 HOST_GLAAS_URL="${HOST_GLAAS_URL:-http://localhost:3001}"
 CLUSTER_GLAAS_PORT=3001
 
+JOBSET_VERSION="v0.12.0"
+
 WITH_MINIO=0
+WITH_JOBSET=0
 SKIP_GLAAS=0
 for arg in "$@"; do
   case "$arg" in
     --with-minio) WITH_MINIO=1 ;;
+    --with-jobset) WITH_JOBSET=1 ;;
     --skip-glaas) SKIP_GLAAS=1 ;;
     *)
       echo "error: unknown flag: $arg" >&2
@@ -170,6 +176,13 @@ if ((WITH_MINIO == 1)); then
   echo "▶ Deploying MinIO"
   kubectl_ctx apply -f "$HARNESS_DIR/manifests/minio.yaml"
   kubectl_ctx -n "$NAMESPACE" rollout status deployment/minio --timeout=180s
+fi
+
+if ((WITH_JOBSET == 1)); then
+  echo "▶ Installing JobSet controller ${JOBSET_VERSION}"
+  kubectl_ctx apply --server-side \
+    -f "https://github.com/kubernetes-sigs/jobset/releases/download/${JOBSET_VERSION}/manifests.yaml"
+  kubectl_ctx -n jobset-system rollout status deployment/jobset-controller-manager --timeout=300s
 fi
 
 echo

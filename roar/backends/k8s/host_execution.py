@@ -1,4 +1,4 @@
-"""Host-side execution for kubectl Job submits."""
+"""Host-side execution for kubectl workload submits."""
 
 from __future__ import annotations
 
@@ -17,6 +17,10 @@ from roar.backends.k8s.submit import (
     discard_submit_context,
     load_submit_context,
 )
+from roar.backends.k8s.workload_wait import (
+    extract_kubectl_global_flags,
+    wait_for_workload_completion,
+)
 from roar.core.bootstrap import bootstrap
 from roar.core.models.run import RunContext, RunResult, resolve_run_config_start_dir
 from roar.core.operation_metadata import build_operation_metadata_json
@@ -24,9 +28,6 @@ from roar.db.context import create_database_context
 from roar.db.hashing import hash_files_blake3
 from roar.execution.recording import LocalJobRecorder, LocalRecordedArtifact
 from roar.execution.runtime.errors import ExecutionSetupError
-
-_TERMINAL_SUCCESS_CONDITIONS = ("Complete", "SuccessCriteriaMet")
-_TERMINAL_FAILURE_CONDITIONS = ("Failed", "FailureTarget")
 
 
 def execute_k8s_job_submit(ctx: RunContext) -> RunResult:
@@ -67,9 +68,12 @@ def execute_k8s_job_submit(ctx: RunContext) -> RunResult:
         and submit_context is not None
         and bool(config.get("wait_for_completion", True))
     ):
-        succeeded, wait_payload = _wait_for_job_completion(
-            ctx=ctx,
-            submit_context=submit_context,
+        succeeded, wait_payload = wait_for_workload_completion(
+            kubectl_binary=ctx.command[0],
+            global_flags=extract_kubectl_global_flags(ctx.command),
+            kubectl_resource=submit_context.kubectl_resource,
+            name=submit_context.job_name,
+            namespace=submit_context.namespace,
             timeout_seconds=int(config.get("wait_timeout_seconds", 30 * 60)),
             poll_interval_seconds=float(config.get("poll_interval_seconds", 5.0)),
         )
@@ -125,77 +129,6 @@ def execute_k8s_job_submit(ctx: RunContext) -> RunResult:
     )
 
 
-def _wait_for_job_completion(
-    *,
-    ctx: RunContext,
-    submit_context: K8sSubmitContext,
-    timeout_seconds: int,
-    poll_interval_seconds: float,
-) -> tuple[bool, dict[str, Any]]:
-    kubectl_binary = ctx.command[0]
-    global_flags = _extract_kubectl_global_flags(ctx.command)
-    get_command = [
-        kubectl_binary,
-        *global_flags,
-        "get",
-        f"job/{submit_context.job_name}",
-        "-n",
-        submit_context.namespace,
-        "-o",
-        "json",
-    ]
-
-    print(
-        f"[roar-k8s] waiting for job/{submit_context.job_name} in namespace "
-        f"{submit_context.namespace} (timeout {timeout_seconds}s)"
-    )
-    deadline = time.time() + timeout_seconds
-    last_error = ""
-    while time.time() < deadline:
-        result = subprocess.run(get_command, capture_output=True, text=True, check=False)
-        if result.returncode == 0:
-            try:
-                status = json.loads(result.stdout).get("status", {}) or {}
-            except json.JSONDecodeError:
-                status = {}
-            for condition in status.get("conditions") or []:
-                if not isinstance(condition, dict) or condition.get("status") != "True":
-                    continue
-                condition_type = str(condition.get("type") or "")
-                if condition_type in _TERMINAL_SUCCESS_CONDITIONS:
-                    print(f"[roar-k8s] job/{submit_context.job_name} completed")
-                    return True, {"terminal_condition": condition_type}
-                if condition_type in _TERMINAL_FAILURE_CONDITIONS:
-                    message = str(condition.get("message") or "job failed")
-                    print(
-                        f"[roar-k8s] job/{submit_context.job_name} failed: {message}",
-                        file=sys.stderr,
-                    )
-                    return False, {
-                        "terminal_condition": condition_type,
-                        "message": message,
-                    }
-        else:
-            last_error = result.stderr.strip()
-        time.sleep(poll_interval_seconds)
-
-    message = f"timed out after {timeout_seconds}s"
-    if last_error:
-        message = f"{message}; last kubectl error: {last_error}"
-    print(f"[roar-k8s] wait for job/{submit_context.job_name} {message}", file=sys.stderr)
-    return False, {"terminal_condition": None, "message": message}
-
-
-def _extract_kubectl_global_flags(command: list[str]) -> list[str]:
-    flags: list[str] = []
-    for index, arg in enumerate(command):
-        if arg in ("--context", "--kubeconfig", "--cluster", "--user") and index + 1 < len(command):
-            flags.extend([arg, command[index + 1]])
-        elif arg.startswith(("--context=", "--kubeconfig=", "--cluster=", "--user=")):
-            flags.append(arg)
-    return flags
-
-
 def _build_submit_input_artifacts(
     submit_context: K8sSubmitContext | None,
 ) -> list[LocalRecordedArtifact]:
@@ -236,6 +169,7 @@ def _build_submit_payload(
     if submit_context is not None:
         payload.update(
             {
+                "workload_kind": submit_context.workload_kind,
                 "job_name": submit_context.job_name,
                 "namespace": submit_context.namespace,
                 "manifest_path": submit_context.manifest_path,
