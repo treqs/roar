@@ -123,6 +123,7 @@ markers = [
     "diagnostic: Opt-in diagnostics or aspirational performance budgets outside the default gate",
     "large_pipeline: Stress-style pipeline coverage with larger DAG fixtures",
     "osmo_e2e: OSMO end-to-end tests requiring a Docker Compose managed KIND harness",
+    "k8s_e2e: Kubernetes end-to-end tests requiring the KIND harness (tests/backends/k8s)",
     "ray_e2e: Ray end-to-end tests requiring a running Docker cluster",
     "ray_contract: User-facing Ray contract tests using `roar run ray job submit ...`",
     "ray_diagnostic: Diagnostic Ray tests that intentionally inspect internal runtime details",
