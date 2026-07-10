@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -129,50 +127,6 @@ def _confirm_or_explain_noninteractive(prompt: str, *, default: bool, command_na
         ) from None
 
 
-def _format_elapsed(seconds: float) -> str:
-    """Render a small elapsed-time hint, e.g. ``2m14s`` or ``43s``."""
-    total = max(0, int(seconds))
-    minutes, secs = divmod(total, 60)
-    return f"{minutes}m{secs}s" if minutes else f"{secs}s"
-
-
-def _in_flight_run_warnings(roar_dir: Path | None) -> list[str]:
-    """Warning lines for `roar run`/`roar build` processes still active on this host.
-
-    Best-effort: a missing/unreadable marker dir means "nothing detected",
-    not an error — this must never block or fail the surrounding prompt.
-    """
-    if roar_dir is None:
-        return []
-    try:
-        from ..execution.runtime.active_runs import list_active_runs
-
-        markers = list_active_runs(roar_dir)
-    except Exception:
-        return []
-
-    now = time.time()
-    own_pid = os.getpid()
-    lines: list[str] = []
-    for marker in markers:
-        pid = marker.get("pid")
-        if pid == own_pid:
-            continue
-        job_type = marker.get("job_type") or "run"
-        started_at = marker.get("started_at")
-        elapsed = _format_elapsed(now - started_at) if isinstance(started_at, (int, float)) else "?"
-        command = marker.get("command")
-        command_preview = " ".join(command) if isinstance(command, list) and command else None
-        detail = f"pid {pid}, started {elapsed} ago"
-        if command_preview:
-            detail += f": `{command_preview}`"
-        lines.append(
-            f"Warning: a roar {job_type} ({detail}) appears to still be in progress — "
-            "the active session may be incomplete."
-        )
-    return lines
-
-
 def confirm_defaulted_active_session_publish(
     *,
     session_hash: str,
@@ -195,13 +149,15 @@ def confirm_defaulted_active_session_publish(
     `roar_dir`, when given, is checked for other live in-flight run markers so
     that risk can be named here instead of passing silently.
     """
+    from ..execution.runtime.active_runs import in_flight_run_warnings
+
     click.echo("")
     click.echo(f"Will publish to: {_publish_url_preview(start_dir, session_hash)}")
     click.echo(
         f"No target given — the whole active session ({_preview_hash(session_hash)}) will be "
         "published, including every job and artifact recorded in it so far."
     )
-    for warning in _in_flight_run_warnings(roar_dir):
+    for warning in in_flight_run_warnings(roar_dir):
         click.echo(warning)
     click.echo(f"Use `{command_name} -y` to skip this confirmation in scripts.")
     click.echo("")

@@ -96,3 +96,49 @@ def list_active_runs(roar_dir: Path) -> list[dict[str, Any]]:
             marker_path.unlink(missing_ok=True)
 
     return active
+
+
+def format_elapsed(seconds: float) -> str:
+    """Render a small elapsed-time hint, e.g. ``2m14s`` or ``43s``."""
+    total = max(0, int(seconds))
+    minutes, secs = divmod(total, 60)
+    return f"{minutes}m{secs}s" if minutes else f"{secs}s"
+
+
+def in_flight_run_warnings(roar_dir: Path | None) -> list[str]:
+    """Warning lines for `roar run`/`roar build` processes still active on this host.
+
+    Shared by any surface that wants to name this risk — `roar register`'s
+    defaulted-active-session prompt and `roar status`'s summary both call this
+    rather than duplicating the marker lookup + formatting.
+
+    Best-effort: a missing/unreadable marker dir means "nothing detected", not
+    an error — this must never block or fail the caller.
+    """
+    if roar_dir is None:
+        return []
+    try:
+        markers = list_active_runs(roar_dir)
+    except Exception:
+        return []
+
+    now = time.time()
+    own_pid = os.getpid()
+    lines: list[str] = []
+    for marker in markers:
+        pid = marker.get("pid")
+        if pid == own_pid:
+            continue
+        job_type = marker.get("job_type") or "run"
+        started_at = marker.get("started_at")
+        elapsed = format_elapsed(now - started_at) if isinstance(started_at, (int, float)) else "?"
+        command = marker.get("command")
+        command_preview = " ".join(command) if isinstance(command, list) and command else None
+        detail = f"pid {pid}, started {elapsed} ago"
+        if command_preview:
+            detail += f": `{command_preview}`"
+        lines.append(
+            f"Warning: a roar {job_type} ({detail}) appears to still be in progress — "
+            "the active session may be incomplete."
+        )
+    return lines

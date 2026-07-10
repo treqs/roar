@@ -8,6 +8,8 @@ from pathlib import Path
 
 from roar.execution.runtime.active_runs import (
     active_run_marker,
+    format_elapsed,
+    in_flight_run_warnings,
     list_active_runs,
     remove_marker,
     write_marker,
@@ -99,3 +101,39 @@ def test_list_active_runs_self_heals_corrupt_marker(tmp_path: Path) -> None:
 
     assert active == []
     assert not (markers_dir / "garbage.json").exists()
+
+
+def test_format_elapsed_under_a_minute() -> None:
+    assert format_elapsed(43) == "43s"
+
+
+def test_format_elapsed_over_a_minute() -> None:
+    assert format_elapsed(134) == "2m14s"
+
+
+def test_in_flight_run_warnings_empty_when_roar_dir_is_none() -> None:
+    assert in_flight_run_warnings(None) == []
+
+
+def test_in_flight_run_warnings_empty_with_no_markers(tmp_path: Path) -> None:
+    assert in_flight_run_warnings(tmp_path / ".roar") == []
+
+
+def test_in_flight_run_warnings_excludes_own_pid(tmp_path: Path) -> None:
+    roar_dir = tmp_path / ".roar"
+    write_marker(roar_dir, pid=os.getpid(), command=["python", "train.py"], job_type="run")
+    assert in_flight_run_warnings(roar_dir) == []
+
+
+def test_in_flight_run_warnings_reports_other_live_pid(tmp_path: Path) -> None:
+    roar_dir = tmp_path / ".roar"
+    other_pid = os.getppid()  # guaranteed alive for the duration of the test
+    write_marker(roar_dir, pid=other_pid, command=["python", "train.py"], job_type="build")
+
+    warnings = in_flight_run_warnings(roar_dir)
+
+    assert len(warnings) == 1
+    assert f"pid {other_pid}" in warnings[0]
+    assert "train.py" in warnings[0]
+    assert "roar build" in warnings[0]
+    assert "still be in progress" in warnings[0]
