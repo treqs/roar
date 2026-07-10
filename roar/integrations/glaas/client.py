@@ -407,6 +407,32 @@ class GlaasClient:
             raise GlaasApiError(error, status_code=status_code)
         return result  # type: ignore[return-value]
 
+    def get_public_artifact(self, hash_prefix: str) -> dict:
+        """
+        Look up an artifact by hash prefix via the public, optionally-authenticated
+        endpoint. Unlike `get_artifact`, this works anonymously for public artifacts
+        (no SSH key or bearer token required).
+
+        Args:
+            hash_prefix: Hash or hash prefix to look up
+
+        Returns:
+            Artifact dict from server
+
+        Raises:
+            GlaasApiError: If request fails (connection, auth, or API error)
+        """
+        from ...core.exceptions import GlaasApiError
+
+        result, error = self._request("GET", f"/api/v1/public/artifacts/{hash_prefix}")
+        if error:
+            status_code = None
+            if error.startswith("HTTP "):
+                with contextlib.suppress(IndexError, ValueError):
+                    status_code = int(error.split(":")[0].split()[1])
+            raise GlaasApiError(error, status_code=status_code)
+        return result  # type: ignore[return-value]
+
     def get_artifact_lineage(
         self, hash_prefix: str, depth: int = 1
     ) -> tuple[dict | None, str | None]:

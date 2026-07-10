@@ -302,6 +302,10 @@ class ShowArtifactSummary:
     produced_by: list[ShowArtifactJobSummary] = field(default_factory=list)
     consumed_by: list[ShowArtifactJobSummary] = field(default_factory=list)
     components: list[ShowArtifactComponentSummary] = field(default_factory=list)
+    # Owner/visibility of a remote (GLaaS) artifact, e.g. "acme/ml-project" +
+    # "public". None for local artifacts, which have no such concept.
+    remote_owner: str | None = None
+    remote_visibility: str | None = None
 
     def to_renderer_args(
         self,
@@ -324,6 +328,8 @@ class ShowArtifactSummary:
             "first_seen_present": self.first_seen_present,
             "metadata": self.metadata,
             "hashes": [asdict(hash_summary) for hash_summary in self.hashes],
+            "remote_owner": self.remote_owner,
+            "remote_visibility": self.remote_visibility,
         }
         locations = [location.to_renderer_dict() for location in self.locations]
         jobs = {

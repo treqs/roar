@@ -29,6 +29,7 @@ class ShowQueryRequest:
     selector: ShowQuerySelector = "auto"
     show_all: bool = False
     session_ref: str | None = None  # full hash or hash prefix; None means active session
+    force_remote: bool = False  # --remote: allow remote fallback regardless of config
 
 
 @dataclass(frozen=True)

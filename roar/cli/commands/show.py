@@ -8,7 +8,12 @@ from ...application.query.requests import ShowQueryRequest, ShowQuerySelector
 from ...application.query.results import ShowArtifactSummary
 from ...application.query.show import ShowQueryError, render_show_with_summary
 from ..context import RoarContext
-from ..decorators import require_init
+from ..decorators import ensure_initialized
+
+_REMOTE_HELP = (
+    "Look up the artifact on GLaaS if it isn't found locally "
+    "(labels, owner/scope, producing job); no local project required."
+)
 
 
 def _primary_artifact_hash(summary: ShowArtifactSummary) -> str | None:
@@ -35,6 +40,7 @@ def _primary_artifact_hash(summary: ShowArtifactSummary) -> str | None:
 )
 @click.option("--artifact", "artifact_ref", metavar="HASH", help="Show an artifact by hash.")
 @click.option("--session", "show_session", is_flag=True, help="Show the active session.")
+@click.option("--remote", is_flag=True, help=_REMOTE_HELP)
 @click.option(
     "--all",
     "show_all",
@@ -43,13 +49,13 @@ def _primary_artifact_hash(summary: ShowArtifactSummary) -> str | None:
 )
 @click.argument("ref", required=False)
 @click.pass_obj
-@require_init
 def show(
     ctx: RoarContext,
     path_ref: str | None,
     job_ref: str | None,
     artifact_ref: str | None,
     show_session: bool,
+    remote: bool,
     show_all: bool,
     ref: str | None,
 ) -> None:
@@ -78,7 +84,11 @@ def show(
         roar show a1b2c3d4e5f67890...      # Show artifact by hash
         roar show --path deadbeef          # Force path lookup for an ambiguous filename
         roar show ./output/model.pkl       # Show artifact by path
+        roar show <hash> --remote          # Look up a published artifact on GLaaS,
+                                            # even with no local .roar project
     """
+    if not remote:
+        ensure_initialized(ctx)
     request = _build_show_request(
         ctx=ctx,
         ref=ref,
@@ -86,6 +96,7 @@ def show(
         job_ref=job_ref,
         artifact_ref=artifact_ref,
         show_session=show_session,
+        remote=remote,
         show_all=show_all,
     )
     from .._format import print_brand_header
@@ -122,8 +133,12 @@ def _build_show_request(
     job_ref: str | None,
     artifact_ref: str | None,
     show_session: bool,
+    remote: bool,
     show_all: bool,
 ) -> ShowQueryRequest:
+    if remote and (path_ref is not None or job_ref is not None or show_session):
+        raise click.UsageError("--remote only supports artifact lookups.")
+
     explicit_targets: list[tuple[str, str | None, ShowQuerySelector]] = []
     if path_ref is not None:
         explicit_targets.append(("--path", path_ref, "path"))
@@ -149,6 +164,22 @@ def _build_show_request(
             ref=explicit_ref,
             selector=selector,
             show_all=show_all,
+            force_remote=remote,
+        )
+
+    if remote:
+        # No local project to disambiguate against, and there's no "active
+        # session" concept on GLaaS — a hash is required, and it's always
+        # an artifact lookup.
+        if ref is None:
+            raise click.UsageError("REF (an artifact hash) is required with --remote.")
+        return ShowQueryRequest(
+            roar_dir=ctx.roar_dir,
+            cwd=ctx.cwd,
+            ref=ref,
+            selector="artifact",
+            show_all=show_all,
+            force_remote=True,
         )
 
     return ShowQueryRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, ref=ref, show_all=show_all)

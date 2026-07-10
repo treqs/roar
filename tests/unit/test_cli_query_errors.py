@@ -19,6 +19,16 @@ def _ctx(tmp_path):
     return ctx
 
 
+def _bare_ctx(tmp_path):
+    """A context with no local `.roar` project — the state `roar show
+    --remote` must work from, same as `roar label ... --remote`."""
+    ctx = MagicMock()
+    ctx.roar_dir = tmp_path / ".roar"
+    ctx.cwd = tmp_path
+    ctx.is_initialized = False
+    return ctx
+
+
 def test_log_cli_exits_non_zero_without_active_session(tmp_path) -> None:
     result = CliRunner().invoke(log, obj=_ctx(tmp_path))
 
@@ -70,6 +80,81 @@ def test_show_cli_rejects_multiple_explicit_selectors(tmp_path) -> None:
 
     assert result.exit_code == 2
     assert "Specify only one of --path, --job, --artifact, or --session." in result.output
+
+
+def test_show_cli_remote_rejects_path_job_and_session_selectors(tmp_path) -> None:
+    for args in (
+        ["--remote", "--path", "a"],
+        ["--remote", "--job", "@1"],
+        ["--remote", "--session"],
+    ):
+        result = CliRunner().invoke(show, args, obj=_bare_ctx(tmp_path))
+
+        assert result.exit_code == 2, result.output
+        assert "--remote only supports artifact lookups." in result.output
+
+
+def test_show_cli_remote_requires_a_ref(tmp_path) -> None:
+    result = CliRunner().invoke(show, ["--remote"], obj=_bare_ctx(tmp_path))
+
+    assert result.exit_code == 2
+    assert "REF (an artifact hash) is required with --remote." in result.output
+
+
+def test_show_cli_remote_works_without_local_init(tmp_path) -> None:
+    """`roar show <hash> --remote` must not require `.roar` to exist —
+    same "from any directory" contract as `label ... --remote`."""
+    ctx = _bare_ctx(tmp_path)
+    assert not ctx.roar_dir.exists()
+
+    from roar.application.query.results import ShowArtifactSummary
+
+    artifact_summary = ShowArtifactSummary(
+        id="remotehash", size=1, first_seen_at=0, source="remote"
+    )
+    with patch(
+        "roar.cli.commands.show.render_show_with_summary",
+        return_value=("remote output", artifact_summary),
+    ) as render_show:
+        result = CliRunner().invoke(show, ["deadbeefcafe", "--remote"], obj=ctx)
+
+    assert result.exit_code == 0, result.output
+    assert not ctx.roar_dir.exists()
+    render_show.assert_called_once_with(
+        ShowQueryRequest(
+            roar_dir=ctx.roar_dir,
+            cwd=ctx.cwd,
+            ref="deadbeefcafe",
+            selector="artifact",
+            force_remote=True,
+        )
+    )
+
+
+def test_show_cli_remote_with_explicit_artifact_flag(tmp_path) -> None:
+    ctx = _bare_ctx(tmp_path)
+
+    from roar.application.query.results import ShowArtifactSummary
+
+    artifact_summary = ShowArtifactSummary(
+        id="remotehash", size=1, first_seen_at=0, source="remote"
+    )
+    with patch(
+        "roar.cli.commands.show.render_show_with_summary",
+        return_value=("remote output", artifact_summary),
+    ) as render_show:
+        result = CliRunner().invoke(show, ["--artifact", "deadbeef", "--remote"], obj=ctx)
+
+    assert result.exit_code == 0, result.output
+    render_show.assert_called_once_with(
+        ShowQueryRequest(
+            roar_dir=ctx.roar_dir,
+            cwd=ctx.cwd,
+            ref="deadbeef",
+            selector="artifact",
+            force_remote=True,
+        )
+    )
 
 
 def test_show_cli_rejects_positional_ref_with_explicit_selector(tmp_path) -> None:
