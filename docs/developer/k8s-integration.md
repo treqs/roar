@@ -16,10 +16,30 @@ env chain (`JOB_COMPLETION_INDEX` → `PET_NODE_RANK` → pod-level `RANK`).
 
 Current phase status (see `design-docs/k8s-training-lineage-integration.md`
 in the dev meta-repo): Phases 1–2 implemented (submit wrapping, operator
-adapters, multi-pod capture, `roar k8s attach`). Remaining: bundle-mode
-fallback for GLaaS-less pods, boto3/fsspec hooks via sitecustomize,
-mount-map path rewriting, RayJob delegation, and the admission-webhook
+adapters, multi-pod capture, `roar k8s attach`, bundle-mode fallback,
+object-store I/O hooks). Remaining: mount-map path rewriting, RayJob
+delegation, kill-pod retry chaos coverage, and the admission-webhook
 injector.
+
+Two capture channels feed each pod's fragment:
+
+- **File I/O**: the preload tracer under `roar run` (process tree included).
+- **Object-store I/O** (`object_io.py`): direct S3 access is HTTP, invisible
+  to the tracer. The k8s backend's `RuntimeImportAdapter` (dispatched by
+  `roar_inject.pth`/sitecustomize inside every `ROAR_WRAP` child) patches
+  `botocore.client.BaseClient._make_api_call` (and aiobotocore's async
+  variant, covering s3fs/fsspec) to append S3 data-op events to
+  `ROAR_K8S_OBJECT_IO_FILE`; `pod_entry` folds them into the fragment as
+  `s3://` refs with etag hashes. Hooks no-op outside pods (env unset) and
+  never raise into user code.
+
+Transport is streaming-first with a bundle fallback: when `k8s.bundle_dir`
+names a mounted shared volume and GLaaS is unreachable from the pod (probe
+or non-streamed emit), `pod_entry` writes `roar-fragments-<pod>.json` there
+instead; `roar k8s ingest-bundles <dir>` merges a host-visible copy later.
+Note the fragment streamer swallows per-batch POST failures (reports
+"streamed" regardless), which is why the fallback needs its own probe —
+surfacing streamer failure counts is an open follow-up.
 
 ## 2. Flow
 
@@ -82,8 +102,8 @@ recovered parent uid, and reconstitutes the streamed fragments.
 ## 4. Config
 
 Section `k8s` (registered `BackendConfigAdapter`): `enabled`, `tracer`,
-`runtime_install_requirement`, `cluster_glaas_url`, `wait_for_completion`,
-`wait_timeout_seconds`, `poll_interval_seconds`,
+`runtime_install_requirement`, `cluster_glaas_url`, `bundle_dir`,
+`wait_for_completion`, `wait_timeout_seconds`, `poll_interval_seconds`,
 `fragment_session_ttl_seconds`. Env overrides beat config:
 `ROAR_CLUSTER_PIP_REQ`, `ROAR_CLUSTER_GLAAS_URL`.
 

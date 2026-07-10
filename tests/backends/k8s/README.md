@@ -15,6 +15,11 @@ Three test layers share this harness:
   edge over a shared volume; `roar k8s attach` from a fresh project via the
   cluster Secret; and a JobSet run through the real controller (skipped
   unless bootstrapped with `--with-jobset`).
+- `e2e/test_k8s_fallback_s3.py` — bundle-mode fallback (black-hole cluster
+  GLaaS URL, bundle written to a shared volume, pulled off the node and
+  merged with `roar k8s ingest-bundles`) and in-pod S3 capture (MinIO via
+  `--with-minio`: boto3 get/put recorded as `s3://` lineage refs with etag
+  hashes).
 - `e2e/test_k8s_smoke.py` — the Phase-0 runtime diagnostic: fixtures
   hand-wrap the manifest (no backend involved) to isolate the runtime pieces
   (in-pod tracing, fragment streaming, identity contract) when the product
@@ -38,7 +43,7 @@ bash scripts/build_wheel_with_bins.sh
 
 # create cluster + wire glaas + preflight
 # (--with-minio for S3 scenarios, --with-jobset for the JobSet operator e2e)
-bash tests/backends/k8s/scripts/bootstrap_k8s.sh --with-jobset
+bash tests/backends/k8s/scripts/bootstrap_k8s.sh --with-jobset --with-minio
 
 # run the smoke tests (addopts override needed: e2e dirs are ignored by default)
 pytest tests/backends/k8s/e2e -o addopts='' -m k8s_e2e -v

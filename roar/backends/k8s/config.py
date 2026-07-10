@@ -22,6 +22,7 @@ class K8sBackendConfig(BaseModel):
     tracer: str = "preload"
     runtime_install_requirement: str = ""
     cluster_glaas_url: str = ""
+    bundle_dir: str = ""
     wait_for_completion: bool = True
     wait_timeout_seconds: int = Field(default=30 * 60, ge=1)
     poll_interval_seconds: float = Field(default=5.0, gt=0.0)
@@ -54,6 +55,15 @@ K8S_CONFIGURABLE_KEYS = {
         description=(
             "Cluster-visible GLaaS URL injected into pods when it differs from the "
             "host-visible glaas.url (ROAR_CLUSTER_GLAAS_URL env always wins)"
+        ),
+    ),
+    "k8s.bundle_dir": ConfigurableKeySpec(
+        value_type=str,
+        default="",
+        description=(
+            "In-pod directory (a mounted shared volume) where pods write "
+            "roar-fragments-<pod>.json bundles when GLaaS streaming is unavailable; "
+            "ingest later with `roar k8s ingest-bundles`"
         ),
     ),
     "k8s.wait_for_completion": ConfigurableKeySpec(

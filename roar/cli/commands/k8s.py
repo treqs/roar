@@ -6,6 +6,7 @@ from pathlib import Path
 import click
 
 from ...backends.k8s.attach import K8sAttachError, attach_k8s_workload
+from ...backends.k8s.bundles import K8sBundleError, ingest_fragment_bundles
 from ...backends.k8s.config import load_k8s_backend_config
 from ...backends.k8s.manifest import (
     K8sManifestError,
@@ -89,6 +90,30 @@ def k8s_attach(
     )
     if result.exit_code != 0:
         raise SystemExit(result.exit_code)
+
+
+@k8s.command("ingest-bundles")
+@click.argument(
+    "directory",
+    type=click.Path(path_type=Path, file_okay=False, exists=True),
+)
+@click.pass_obj
+@require_init
+def k8s_ingest_bundles(ctx: RoarContext, directory: Path) -> None:
+    """Merge roar-fragments-*.json bundles written by GLaaS-less pods.
+
+    DIRECTORY is a host-visible copy of the shared volume pods wrote to
+    (declared via k8s.bundle_dir at submit time).
+    """
+    try:
+        result = ingest_fragment_bundles(roar_dir=ctx.roar_dir, directory=directory)
+    except K8sBundleError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(
+        f"[roar] ingested {result.bundles_ingested} bundle(s): "
+        f"{result.fragments_merged} fragment(s) merged"
+    )
 
 
 @k8s.command("prepare")

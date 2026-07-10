@@ -185,6 +185,7 @@ def rewrite_manifest_for_lineage(
     cluster_glaas_url: str,
     tracer: str,
     parent_job_uid: str,
+    bundle_dir: str = "",
     namespace_override: str | None = None,
 ) -> K8sManifestRewrite:
     """Return a rewritten copy of ``documents`` with lineage instrumentation.
@@ -231,6 +232,7 @@ def rewrite_manifest_for_lineage(
         tracer=tracer,
         parent_job_uid=parent_job_uid,
         workload_name=workload_name,
+        bundle_dir=bundle_dir,
     )
 
     if workload.locate_pod_specs is None:
@@ -292,6 +294,7 @@ class _EnvContract:
     tracer: str
     parent_job_uid: str
     workload_name: str
+    bundle_dir: str = ""
 
 
 def _rewrite_pod_specs(
@@ -421,6 +424,8 @@ def _inject_env_contract(
     add_value("ROAR_EXECUTION_BACKEND", "k8s")
     add_value("ROAR_NO_TELEMETRY", "1")
     add_value("ROAR_K8S_TRACER", contract.tracer)
+    if contract.bundle_dir:
+        add_value("ROAR_K8S_BUNDLE_DIR", contract.bundle_dir)
     add_value("GLAAS_URL", contract.cluster_glaas_url)
     add_value("ROAR_K8S_PARENT_JOB_UID", contract.parent_job_uid)
     add_value("ROAR_K8S_JOB_NAME", contract.workload_name)

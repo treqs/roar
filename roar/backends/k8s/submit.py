@@ -119,6 +119,7 @@ def plan_kubectl_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
         cluster_glaas_url=_resolve_cluster_glaas_url(config, glaas_url),
         tracer=str(config.get("tracer") or "preload"),
         parent_job_uid=parent_job_uid,
+        bundle_dir=str(config.get("bundle_dir") or ""),
         namespace_override=_find_namespace_argument(command),
     )
     if rewrite.skipped_containers:

@@ -6,6 +6,7 @@ from typing import Any
 from roar.backends.k8s.config import K8S_BACKEND_CONFIG
 from roar.backends.k8s.fragment_reconstituter import create_k8s_fragment_reconstituter
 from roar.backends.k8s.host_execution import execute_k8s_job_submit
+from roar.backends.k8s.object_io import patch_imported_module
 from roar.backends.k8s.submit import (
     matches_kubectl_job_submit_command,
     plan_kubectl_job_submit_command,
@@ -17,6 +18,7 @@ from roar.execution.framework.contract import (
     ExecutionPolicyAdapter,
     FragmentReconstitutionAdapter,
     HostExecutionAdapter,
+    RuntimeImportAdapter,
     WorkerBootstrapAdapter,
 )
 from roar.execution.framework.registry import register_execution_backend
@@ -82,6 +84,14 @@ K8S_EXECUTION_BACKEND = ExecutionBackend(
         ),
         fragment_reconstitution=FragmentReconstitutionAdapter(
             create_reconstituter=create_k8s_fragment_reconstituter,
+        ),
+        # Sitecustomize import dispatch: installs the object-store I/O
+        # hooks inside ROAR_WRAP-instrumented processes when botocore or
+        # aiobotocore is imported. The hooks no-op unless
+        # ROAR_K8S_OBJECT_IO_FILE is set (i.e. outside k8s pods).
+        runtime_import=RuntimeImportAdapter(
+            module_prefixes=("botocore", "aiobotocore"),
+            patch_module=patch_imported_module,
         ),
     ),
     policy=ExecutionPolicyAdapter(

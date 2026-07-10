@@ -58,11 +58,22 @@ def _run_traced(command: list[str]) -> int:
             return _run_uninstrumented(command)
 
     tracer = str(os.environ.get("ROAR_K8S_TRACER") or "preload").strip() or "preload"
+    child_env = dict(os.environ)
+    # Activate the roar_inject.pth sitecustomize in every Python child so
+    # the k8s backend's runtime-import hooks (botocore/aiobotocore object
+    # I/O capture) install themselves; events land next to the local db.
+    child_env.setdefault("ROAR_WRAP", "1")
+    child_env.setdefault("ROAR_K8S_OBJECT_IO_FILE", str(_object_io_events_path()))
     run = subprocess.run(
         [sys.executable, "-m", "roar", "run", "--tracer", tracer, *command],
+        env=child_env,
         check=False,
     )
     return run.returncode
+
+
+def _object_io_events_path() -> Path:
+    return Path.cwd() / ".roar" / "k8s-object-io.jsonl"
 
 
 def _run_uninstrumented(command: list[str]) -> int:
@@ -107,7 +118,6 @@ def task_identity_from_environment(environ: dict[str, str] | None = None) -> tup
 def _emit_lineage_best_effort() -> None:
     try:
         from roar.execution.fragments.export import export_local_job_fragment_bundle
-        from roar.execution.fragments.transport import emit_fragment_dicts
 
         task_id, task_name = task_identity_from_environment()
         parent_job_uid = str(os.environ.get("ROAR_K8S_PARENT_JOB_UID") or "").strip()
@@ -126,6 +136,7 @@ def _emit_lineage_best_effort() -> None:
             payload = json.loads(bundle_path.read_text(encoding="utf-8"))
 
         fragments = [item for item in payload.get("fragments", []) if isinstance(item, dict)]
+        _augment_with_object_io(fragments)
         completion_index = task_id.split(":")[2] if task_id.count(":") >= 3 else "0"
         restart_attempt = task_id.split(":")[3] if task_id.count(":") >= 3 else "0"
         for fragment in fragments:
@@ -143,10 +154,66 @@ def _emit_lineage_best_effort() -> None:
                 }
             )
 
-        result = emit_fragment_dicts(fragments)
+        result = _emit_or_bundle(fragments)
         print(f"[roar-k8s] lineage emit: {result} ({len(fragments)} fragment(s))")
     except Exception as exc:
         print(f"[roar-k8s] warning: lineage emit failed: {exc}", file=sys.stderr)
+
+
+def _augment_with_object_io(fragments: list[dict]) -> None:
+    """Fold captured S3 events into the fragment's read/write refs."""
+    from roar.backends.k8s.object_io import load_object_io_refs
+
+    events_path = Path(os.environ.get("ROAR_K8S_OBJECT_IO_FILE") or _object_io_events_path())
+    reads, writes = load_object_io_refs(events_path)
+    if not reads and not writes:
+        return
+    for fragment in fragments:
+        fragment.setdefault("reads", []).extend(reads)
+        fragment.setdefault("writes", []).extend(writes)
+
+
+def _emit_or_bundle(fragments: list[dict]) -> str:
+    """Stream fragments; fall back to a bundle file when GLaaS is unreachable.
+
+    The streamer itself swallows per-batch POST failures, so a quick
+    reachability probe decides upfront; a non-"streamed" emit result also
+    falls back when a bundle directory is declared.
+    """
+    from roar.execution.fragments.transport import emit_fragment_dicts
+
+    bundle_dir = str(os.environ.get("ROAR_K8S_BUNDLE_DIR") or "").strip()
+
+    if bundle_dir and not _glaas_reachable():
+        return _write_bundle(bundle_dir, fragments)
+
+    result = emit_fragment_dicts(fragments)
+    if result != "streamed" and bundle_dir:
+        return _write_bundle(bundle_dir, fragments)
+    return result
+
+
+def _glaas_reachable() -> bool:
+    import urllib.request
+
+    glaas_url = str(os.environ.get("GLAAS_URL") or "").strip()
+    if not glaas_url:
+        return False
+    try:
+        request = urllib.request.Request(f"{glaas_url.rstrip('/')}/api/v1/health")
+        with urllib.request.urlopen(request, timeout=3) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def _write_bundle(bundle_dir: str, fragments: list[dict]) -> str:
+    from roar.backends.k8s.bundles import write_fragment_bundle
+
+    pod_name = str(os.environ.get("ROAR_K8S_POD_NAME") or "pod").strip() or "pod"
+    target = write_fragment_bundle(Path(bundle_dir), pod_name, fragments)
+    print(f"[roar-k8s] GLaaS unavailable; wrote fragment bundle to {target}")
+    return "bundled"
 
 
 if __name__ == "__main__":
