@@ -250,6 +250,9 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
         "GLaaS / TReqs Account",
     ),
     CommandSpec("osmo", "roar.cli.commands.osmo", "osmo", "Manage OSMO workflow attachment"),
+    CommandSpec(
+        "k8s", "roar.cli.commands.k8s", "k8s", "Prepare Kubernetes Jobs for lineage capture"
+    ),
 )
 
 
