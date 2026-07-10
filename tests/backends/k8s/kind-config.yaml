@@ -1,0 +1,26 @@
+# KIND cluster template for the roar k8s lineage e2e harness.
+#
+# __ROAR_DIST_DIR__ is replaced by scripts/bootstrap_k8s.sh with the absolute
+# path of the repo's dist/ directory so pods can install the locally built
+# roar_cli wheel from a hostPath volume (no network fetch, no stale URLs).
+#
+# The control-plane node maps the MinIO NodePort (30900) to host port 39000 so
+# S3 scenarios can model host-visible vs cluster-visible endpoints explicitly.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30900
+        hostPort: 39000
+        protocol: TCP
+  - role: worker
+    extraMounts:
+      - hostPath: __ROAR_DIST_DIR__
+        containerPath: /roar-dist
+        readOnly: true
+  - role: worker
+    extraMounts:
+      - hostPath: __ROAR_DIST_DIR__
+        containerPath: /roar-dist
+        readOnly: true
