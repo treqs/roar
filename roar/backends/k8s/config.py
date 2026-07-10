@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from roar.execution.framework.contract import BackendConfigAdapter, ConfigurableKeySpec
+
+
+class K8sBackendConfig(BaseModel):
+    """Kubernetes backend configuration."""
+
+    model_config = ConfigDict(
+        strict=False,
+        validate_assignment=True,
+        extra="ignore",
+        revalidate_instances="never",
+    )
+
+    enabled: bool = False
+    tracer: str = "preload"
+    runtime_install_requirement: str = ""
+    cluster_glaas_url: str = ""
+    wait_for_completion: bool = True
+    wait_timeout_seconds: int = Field(default=30 * 60, ge=1)
+    poll_interval_seconds: float = Field(default=5.0, gt=0.0)
+    fragment_session_ttl_seconds: int = Field(default=86400, ge=60)
+
+
+K8S_CONFIGURABLE_KEYS = {
+    "k8s.enabled": ConfigurableKeySpec(
+        value_type=bool,
+        default=False,
+        description="Enable automatic kubectl Job submit handling in roar run",
+    ),
+    "k8s.tracer": ConfigurableKeySpec(
+        value_type=str,
+        default="preload",
+        description="Tracer backend used inside instrumented pods (preload|ptrace|auto)",
+    ),
+    "k8s.runtime_install_requirement": ConfigurableKeySpec(
+        value_type=str,
+        default="",
+        description=(
+            "Pinned requirement or wheel URL installed inside pods to bootstrap the roar "
+            "runtime; defaults to the submitter's pinned roar-cli version. Wheels must "
+            "include packaged tracer binaries"
+        ),
+    ),
+    "k8s.cluster_glaas_url": ConfigurableKeySpec(
+        value_type=str,
+        default="",
+        description=(
+            "Cluster-visible GLaaS URL injected into pods when it differs from the "
+            "host-visible glaas.url (ROAR_CLUSTER_GLAAS_URL env always wins)"
+        ),
+    ),
+    "k8s.wait_for_completion": ConfigurableKeySpec(
+        value_type=bool,
+        default=True,
+        description="Wait for submitted Jobs to reach a terminal state before completing roar run",
+    ),
+    "k8s.wait_timeout_seconds": ConfigurableKeySpec(
+        value_type=int,
+        default=30 * 60,
+        description="Maximum time to wait for a submitted Job to reach a terminal state",
+    ),
+    "k8s.poll_interval_seconds": ConfigurableKeySpec(
+        value_type=float,
+        default=5.0,
+        description="Polling interval in seconds when waiting for Job completion",
+    ),
+    "k8s.fragment_session_ttl_seconds": ConfigurableKeySpec(
+        value_type=int,
+        default=86400,
+        description="TTL requested when pre-registering the GLaaS fragment session for a Job",
+    ),
+}
+
+K8S_INIT_TEMPLATE = """\
+[k8s]
+# Enable kubectl Job submit recognition in roar run
+enabled = false
+# Tracer backend used inside instrumented pods
+tracer = "preload"
+# Optional pinned requirement or wheel URL installed inside pods
+# For roar-cli, use a packaged wheel or index source that includes bundled tracer binaries
+runtime_install_requirement = ""
+# Cluster-visible GLaaS URL when pods cannot reach the host-visible glaas.url
+cluster_glaas_url = ""
+# Wait for submitted Jobs to finish so lineage can be reconstituted immediately
+wait_for_completion = true
+"""
+
+
+def normalize_k8s_backend_config(section: Mapping[str, Any] | None) -> dict[str, Any]:
+    return K8sBackendConfig.model_validate(dict(section or {})).model_dump()
+
+
+def load_k8s_backend_config(start_dir: str | None = None) -> dict[str, Any]:
+    try:
+        from roar.integrations.config import load_config
+
+        config = load_config(start_dir=start_dir)
+    except Exception:
+        return dict(K8S_BACKEND_CONFIG.default_values)
+
+    section = config.get("k8s", {})
+    if not isinstance(section, Mapping):
+        return dict(K8S_BACKEND_CONFIG.default_values)
+    return normalize_k8s_backend_config(section)
+
+
+K8S_BACKEND_CONFIG = BackendConfigAdapter(
+    section_name="k8s",
+    default_values=K8sBackendConfig().model_dump(),
+    configurable_keys=K8S_CONFIGURABLE_KEYS,
+    init_template=K8S_INIT_TEMPLATE,
+    normalize_section=normalize_k8s_backend_config,
+)
+
+
+__all__ = [
+    "K8S_BACKEND_CONFIG",
+    "K8S_CONFIGURABLE_KEYS",
+    "K8S_INIT_TEMPLATE",
+    "K8sBackendConfig",
+    "load_k8s_backend_config",
+    "normalize_k8s_backend_config",
+]

@@ -1,11 +1,22 @@
 # k8s Lineage E2E Harness (Tier 1)
 
 KIND-based harness for pressure-testing roar lineage capture in Kubernetes
-training pods. This is the Phase-0/Tier-1 slice from
-`design-docs/k8s-training-lineage-integration.md`: no `roar.backends.k8s`
-exists yet — the fixtures hand-wrap a Job manifest the way the future
-`roar k8s prepare` will, so the runtime assumptions (in-pod tracing, wheel
-staging, fragment streaming, identity contract) are proven first.
+training pods (`design-docs/k8s-training-lineage-integration.md`).
+
+Two test layers share this harness:
+
+- `e2e/test_k8s_product_path.py` — the Phase-1 product path through the real
+  `roar.backends.k8s` backend: `roar run kubectl apply -f job.yaml` with a
+  roar-unaware manifest, plan-time rewriting, Secret-delivered credentials,
+  wheel served to pods over HTTP, and shared-finalizer reconstitution into
+  the submitting project's `.roar/roar.db`. This is the confidence test.
+- `e2e/test_k8s_smoke.py` — the Phase-0 runtime diagnostic: fixtures
+  hand-wrap the manifest (no backend involved) to isolate the runtime pieces
+  (in-pod tracing, fragment streaming, identity contract) when the product
+  path breaks.
+
+Unit tests for the backend (manifest rewriting, command matching, planning)
+live in `unit/` and run in the default gate — no cluster needed.
 
 ## Prerequisites
 

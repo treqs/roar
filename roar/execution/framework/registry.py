@@ -14,6 +14,7 @@ from roar.execution.framework.contract import BackendConfigAdapter, ExecutionBac
 _ENTRYPOINT_GROUP = "roar.execution_backends"
 _BUILTIN_EXECUTION_BACKEND_MODULES = (
     "roar.backends.ray.plugin",
+    "roar.backends.k8s.plugin",
     "roar.backends.osmo.plugin",
     "roar.backends.local.plugin",
 )
@@ -31,7 +32,9 @@ _skipped_builtin_backend_imports: dict[str, str] = {}
 # and triggering discovery would import every backend plugin module —
 # ~300ms of cost in exchange for checking a handful of stable env-var
 # names.
-_BUILTIN_JOB_ENVIRONMENT_MARKERS: frozenset[str] = frozenset({"RAY_JOB_ID"})
+_BUILTIN_JOB_ENVIRONMENT_MARKERS: frozenset[str] = frozenset(
+    {"RAY_JOB_ID", "ROAR_K8S_PARENT_JOB_UID"}
+)
 
 # Top-level TOML section names owned by built-in backends. The config
 # loader checks against this to decide whether a `config_get("X.Y")`
@@ -41,7 +44,7 @@ _BUILTIN_JOB_ENVIRONMENT_MARKERS: frozenset[str] = frozenset({"RAY_JOB_ID"})
 # would pay ~300ms loading every backend plugin just to confirm "hints"
 # isn't a backend-namespaced key. Kept in sync with each builtin
 # backend's ``BackendConfigAdapter.section_name`` by a consistency test.
-_BUILTIN_BACKEND_CONFIG_SECTIONS: frozenset[str] = frozenset({"ray", "osmo"})
+_BUILTIN_BACKEND_CONFIG_SECTIONS: frozenset[str] = frozenset({"ray", "osmo", "k8s"})
 _registered_execution_backends: list[ExecutionBackend] = []
 _execution_backends_discovered = False
 _execution_backends_discovering = False
