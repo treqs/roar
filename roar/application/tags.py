@@ -35,7 +35,7 @@ protects the generic ``roar label`` path — see ``system_labels.py``.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -279,14 +279,19 @@ def propagate_tags(
     resolve_job_session_id: Callable[[str], int | None],
     job_uid: str | None = None,
     blocked_kinds: frozenset[str] = frozenset(),
+    blocked_values: Mapping[str, frozenset[str]] | None = None,
 ) -> None:
     """Union ``tag.*`` values from a job's input artifacts onto its outputs.
 
     Every kind present on any input is merged (set semantics — no duplicate
     values) into every output's current tag namespace, except kinds listed in
-    *blocked_kinds*. Writes are stamped with a system write-origin since the
-    inheriting document is machine-derived, not user-asserted on that target.
-    A no-op output write (nothing new to add) does not create a label version.
+    *blocked_kinds* (whole-kind barriers, ``--block-tag KIND``) and individual
+    ``(kind, value)`` pairs in *blocked_values* (value barriers,
+    ``--block-tag KIND=VALUE`` — e.g. filtering ``license=GPL-3.0`` off a
+    relicensing step's outputs while keeping the rest of the set). Writes are
+    stamped with a system write-origin since the inheriting document is
+    machine-derived, not user-asserted on that target. A no-op output write
+    (nothing new to add) does not create a label version.
 
     **Scope-gated**: a candidate value only joins the union if it's in scope
     for *this* session — either it was produced by a job in the current
@@ -314,11 +319,14 @@ def propagate_tags(
         for kind, kind_data in subtree.items():
             if kind == BIND_KIND or kind in blocked_kinds:
                 continue
+            blocked_vals = blocked_values.get(kind) if blocked_values else None
             bucket = inherited.setdefault(kind, [])
             for record in _as_value_records(kind_data):
                 value = record["value"]
                 if value in bucket:
                     continue
+                if blocked_vals and value in blocked_vals:
+                    continue  # value barrier: --block-tag KIND=VALUE filters this one value
                 if _value_in_scope(record, current_session_id, _job_session) or _is_covered_by_bind(
                     bind_events, kind, value
                 ):
@@ -373,6 +381,34 @@ def parse_tag_kv(kv: str) -> tuple[str, str]:
     if not value:
         raise ValueError(f"Value cannot be empty in: {kv!r}")
     return kind, value
+
+
+def parse_block_tags(pairs: Iterable[str]) -> tuple[frozenset[str], dict[str, frozenset[str]]]:
+    """Split ``--block-tag`` items into whole-kind and per-value barriers.
+
+    ``KIND`` blocks the whole kind; ``KIND=VALUE`` filters a single value from
+    the inherited set. Returns ``(blocked_kinds, blocked_values)``. A whole-kind
+    block wins over a value-level one for the same kind (the kind is dropped
+    entirely, so its value-level entries are irrelevant and omitted). ``KIND=``
+    with an empty value is treated as a whole-kind block.
+    """
+    whole: set[str] = set()
+    values: dict[str, set[str]] = {}
+    for pair in pairs:
+        item = pair.strip()
+        if not item:
+            continue
+        if "=" in item:
+            kind, _, value = item.partition("=")
+            kind, value = kind.strip(), value.strip()
+            if kind and value:
+                values.setdefault(kind, set()).add(value)
+            elif kind:
+                whole.add(kind)
+        else:
+            whole.add(item)
+    blocked_values = {k: frozenset(v) for k, v in values.items() if k not in whole}
+    return frozenset(whole), blocked_values
 
 
 def parse_add_tags(pairs: Iterable[str]) -> dict[str, list[str]]:

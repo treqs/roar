@@ -74,8 +74,12 @@ def _validate_add_tags(
     "--block-tag",
     "block_tags",
     multiple=True,
-    metavar="KIND",
-    help="Exempt a compliance tag kind from automatic inheritance for this run (repeatable).",
+    metavar="KIND[=VALUE]",
+    help=(
+        "Stop a compliance tag from being inherited for this run (repeatable). "
+        "KIND blocks the whole kind; KIND=VALUE filters just that value "
+        "(e.g. license=GPL-3.0 for a relicensing step)."
+    ),
 )
 @click.option(
     "--add-tag",
@@ -177,7 +181,7 @@ Options:
   --no-tracer-fallback    Disable runtime tracer fallback
   --hash <algo>           Add hash algorithm (can be repeated)
   -n, --name <name>       Set the name label for this step
-  --block-tag <kind>      Exempt a tag kind from automatic inheritance (repeatable)
+  --block-tag <kind[=value]>  Stop a tag kind (or one value) from being inherited (repeatable)
   --add-tag <kind=value>  Stamp a tag onto this run's outputs (repeatable)
 
 Hash algorithms: blake3 (default), sha256, sha512, md5

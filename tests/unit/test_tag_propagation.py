@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from roar.application.tags import propagate_tags
+from roar.application.tags import parse_block_tags, propagate_tags
 from roar.core.label_origins import LABEL_ORIGIN_SYSTEM, LABEL_ORIGIN_USER
 
 SESSION = 1
@@ -100,6 +100,7 @@ def _propagate(
     resolve_job_session_id: Any = _resolve_same_session,
     job_uid: str | None = JOB,
     blocked_kinds: frozenset[str] = frozenset(),
+    blocked_values: dict[str, frozenset[str]] | None = None,
 ) -> None:
     propagate_tags(
         repo,
@@ -109,6 +110,7 @@ def _propagate(
         resolve_job_session_id=resolve_job_session_id,
         job_uid=job_uid,
         blocked_kinds=blocked_kinds,
+        blocked_values=blocked_values,
     )
 
 
@@ -372,3 +374,81 @@ class TestScopeGating:
             resolve_job_session_id=_tracking_resolver,
         )
         assert calls == [JOB]  # both inputs share the same job -> resolved once
+
+
+class TestValueBarriers:
+    """`--block-tag KIND=VALUE` filters a single value; whole-kind still drops all."""
+
+    def test_value_barrier_filters_one_value_keeps_others(self) -> None:
+        repo = FakeLabelRepo()
+        repo.seed("in1", _tag(license=["MIT", "GPL-3.0"]))
+        _propagate(
+            repo,
+            input_artifact_ids=["in1"],
+            output_artifact_ids=["out1"],
+            blocked_values={"license": frozenset({"GPL-3.0"})},
+        )
+        assert _values(repo.docs["out1"], "license") == ["MIT"]
+
+    def test_value_barrier_dropping_all_values_writes_nothing(self) -> None:
+        repo = FakeLabelRepo()
+        repo.seed("in1", _tag(license=["GPL-3.0"]))
+        _propagate(
+            repo,
+            input_artifact_ids=["in1"],
+            output_artifact_ids=["out1"],
+            blocked_values={"license": frozenset({"GPL-3.0"})},
+        )
+        assert "out1" not in repo.docs  # nothing inherited -> no version created
+
+    def test_value_barrier_leaves_other_kinds_untouched(self) -> None:
+        repo = FakeLabelRepo()
+        repo.seed("in1", _tag(license=["GPL-3.0"], contains_pii=["present"]))
+        _propagate(
+            repo,
+            input_artifact_ids=["in1"],
+            output_artifact_ids=["out1"],
+            blocked_values={"license": frozenset({"GPL-3.0"})},
+        )
+        assert "license" not in repo.docs["out1"].get("tag", {})
+        assert _values(repo.docs["out1"], "contains_pii") == ["present"]
+
+    def test_whole_kind_block_still_drops_every_value(self) -> None:
+        repo = FakeLabelRepo()
+        repo.seed("in1", _tag(license=["MIT", "GPL-3.0"]))
+        _propagate(
+            repo,
+            input_artifact_ids=["in1"],
+            output_artifact_ids=["out1"],
+            blocked_kinds=frozenset({"license"}),
+        )
+        assert "out1" not in repo.docs
+
+
+class TestParseBlockTags:
+    def test_whole_kind(self) -> None:
+        kinds, values = parse_block_tags(["contains_pii"])
+        assert kinds == frozenset({"contains_pii"})
+        assert values == {}
+
+    def test_value_level(self) -> None:
+        kinds, values = parse_block_tags(["license=GPL-3.0"])
+        assert kinds == frozenset()
+        assert values == {"license": frozenset({"GPL-3.0"})}
+
+    def test_multiple_values_same_kind_accumulate(self) -> None:
+        _kinds, values = parse_block_tags(["license=GPL-3.0", "license=AGPL-3.0"])
+        assert values == {"license": frozenset({"GPL-3.0", "AGPL-3.0"})}
+
+    def test_whole_kind_wins_over_value_level(self) -> None:
+        kinds, values = parse_block_tags(["license", "license=GPL-3.0"])
+        assert kinds == frozenset({"license"})
+        assert values == {}  # value entry dropped — the whole kind is blocked
+
+    def test_empty_value_is_treated_as_whole_kind(self) -> None:
+        kinds, values = parse_block_tags(["license="])
+        assert kinds == frozenset({"license"})
+        assert values == {}
+
+    def test_blanks_are_ignored(self) -> None:
+        assert parse_block_tags(["", "  "]) == (frozenset(), {})
