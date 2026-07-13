@@ -527,6 +527,50 @@ def parse_add_tags(pairs: Iterable[str]) -> dict[str, list[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Run modifiers — roar-side ``roar run`` flags that shaped the recorded lineage
+# (currently the tag flags). Persisted on the job so ``roar reproduce`` can
+# replay them; without this the reproduced tag/barrier layer diverges from the
+# original (a bare ``roar run`` re-inherits blocked tags and drops --add-tags).
+# ---------------------------------------------------------------------------
+
+
+def build_run_modifiers(
+    block_tags: Iterable[str], add_tags: Iterable[str]
+) -> dict[str, list[str]] | None:
+    """Build the ``run_modifiers`` metadata block, or None if there's nothing to record.
+
+    Stores the raw flag strings verbatim (e.g. ``"license=GPL-3.0"``) so reproduce
+    replays exactly what was passed.
+    """
+    blocks = [b.strip() for b in block_tags if b.strip()]
+    adds = [a.strip() for a in add_tags if a.strip()]
+    modifiers: dict[str, list[str]] = {}
+    if blocks:
+        modifiers["block_tags"] = blocks
+    if adds:
+        modifiers["add_tags"] = adds
+    return modifiers or None
+
+
+def run_modifier_flags(run_modifiers: Any) -> str:
+    """Render a ``run_modifiers`` block back to shell-safe ``roar run`` flags.
+
+    Returns e.g. ``--block-tag contains_pii --add-tag license=Apache-2.0``.
+    Empty/absent modifiers yield an empty string.
+    """
+    import shlex
+
+    if not isinstance(run_modifiers, dict):
+        return ""
+    parts: list[str] = []
+    for item in run_modifiers.get("block_tags") or []:
+        parts.append(f"--block-tag {shlex.quote(str(item))}")
+    for item in run_modifiers.get("add_tags") or []:
+        parts.append(f"--add-tag {shlex.quote(str(item))}")
+    return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Shared value/ledger primitives
 # ---------------------------------------------------------------------------
 
