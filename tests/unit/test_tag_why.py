@@ -190,7 +190,15 @@ class TestWhy:
         # terminates (no infinite recursion); the self-edge is marked a cycle
         assert "(cycle)" in roots[0].children[0].label
 
-    def test_why_rejects_non_artifact_target(self) -> None:
+    def test_why_rejects_job_target_with_actionable_message(self) -> None:
+        svc = _make_service(labels={})
+        # A job is a valid target elsewhere, so the error must name the job case
+        # and point at output artifacts / `tag show` rather than implying the
+        # reference was untracked.
+        with pytest.raises(ValueError, match="not a job's"):
+            svc.why(LabelTargetRef(entity_type="job", job_id=1), "contains_pii")
+
+    def test_why_rejects_untracked_target(self) -> None:
         svc = _make_service(labels={})
         with pytest.raises(ValueError, match="tracked artifact"):
-            svc.why(LabelTargetRef(entity_type="job", job_id=1), "contains_pii")
+            svc.why(LabelTargetRef(entity_type="artifact", artifact_id=None), "contains_pii")
