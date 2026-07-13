@@ -281,12 +281,27 @@ def test_render_show_job_step_without_active_session_raises_query_error(tmp_path
             show_module.render_show(_request(tmp_path, "@1"))
 
 
+def _mock_glaas_client(mock_db) -> MagicMock:
+    """Patch `show_module.GlaasClient` and return the instance it produces.
+
+    Enrichment calls (lineage, composite components) default to a clean
+    "nothing to add" response so tests that don't care about them stay
+    deterministic without depending on the environment's GLaaS config.
+    """
+    client_instance = MagicMock()
+    client_instance.get_artifact_lineage.return_value = (None, None)
+    client_instance.get_composite_components.return_value = (None, None)
+    mock_db.return_value = client_instance
+    return client_instance
+
+
 def test_build_show_summary_falls_back_to_remote_artifact_when_enabled(tmp_path: Path) -> None:
     full_hash = "a1b2c3d4e5f67890" * 4
 
     with (
         patch.object(show_module, "create_query_database_context") as mock_db,
         patch.object(show_module, "remote_artifact_fallback_enabled", return_value=True),
+        patch.object(show_module, "GlaasClient") as mock_glaas_client,
         patch.object(
             show_module,
             "lookup_remote_artifact",
@@ -302,6 +317,7 @@ def test_build_show_summary_falls_back_to_remote_artifact_when_enabled(tmp_path:
             ),
         ) as lookup_remote,
     ):
+        client_instance = _mock_glaas_client(mock_glaas_client)
         db_ctx = MagicMock()
         mock_db.return_value.__enter__.return_value = db_ctx
         db_ctx.jobs.get_by_uid.return_value = None
@@ -314,7 +330,154 @@ def test_build_show_summary_falls_back_to_remote_artifact_when_enabled(tmp_path:
     assert summary.source == "remote"
     assert summary.metadata == {"dataset": {"dataset_id": "remote-ds"}}
     assert [hash_summary.digest for hash_summary in summary.hashes] == [full_hash]
-    lookup_remote.assert_called_once_with(hash_prefix=full_hash)
+    lookup_remote.assert_called_once_with(hash_prefix=full_hash, artifact_reader=client_instance)
+
+
+def test_build_show_summary_remote_artifact_merges_labels_owner_and_producer(
+    tmp_path: Path,
+) -> None:
+    full_hash = "b" * 64
+
+    with (
+        patch.object(show_module, "create_query_database_context") as mock_db,
+        patch.object(show_module, "remote_artifact_fallback_enabled", return_value=True),
+        patch.object(show_module, "GlaasClient") as mock_glaas_client,
+        patch.object(
+            show_module,
+            "lookup_remote_artifact",
+            return_value=(
+                {
+                    "hash": full_hash,
+                    "size": "512",
+                    "registeredAt": "2026-04-16T12:34:56+00:00",
+                    "metadata": None,
+                    "isComposite": False,
+                    "scope": {
+                        "owner_id": "org-1",
+                        "owner_name": "acme",
+                        "owner_type": "organization",
+                        "project_id": "proj-1",
+                        "project_name": "ml-project",
+                        "visibility": "public",
+                    },
+                    "labels": [
+                        {
+                            "id": "lbl-1",
+                            "entityType": "artifact",
+                            "version": 1,
+                            "metadata": {"env": "prod", "eval_accuracy": "0.94"},
+                            "createdAt": "2026-04-16T12:00:00Z",
+                            "sessionHash": None,
+                        }
+                    ],
+                },
+                None,
+            ),
+        ),
+    ):
+        client_instance = _mock_glaas_client(mock_glaas_client)
+        client_instance.get_artifact_lineage.return_value = (
+            {
+                "producedBy": {
+                    "jobUid": "job12345",
+                    "command": "python train.py",
+                    "sessionHash": "sess1234",
+                }
+            },
+            None,
+        )
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        db_ctx.jobs.get_by_uid.return_value = None
+        db_ctx.artifacts.get_by_hash.return_value = None
+
+        summary = show_module.build_show_summary(_request(tmp_path, full_hash))
+
+    assert isinstance(summary, ShowArtifactSummary)
+    assert summary.labels == {"env": "prod", "eval_accuracy": "0.94"}
+    assert summary.remote_owner == "acme/ml-project"
+    assert summary.remote_visibility == "public"
+    assert len(summary.produced_by) == 1
+    assert summary.produced_by[0].job_uid == "job12345"
+    assert summary.produced_by[0].command == "python train.py"
+    assert summary.produced_by[0].session_hash == "sess1234"
+    client_instance.get_artifact_lineage.assert_called_once_with(full_hash, depth=1)
+    client_instance.get_composite_components.assert_not_called()
+
+
+def test_build_show_summary_remote_composite_fetches_components(tmp_path: Path) -> None:
+    full_hash = "c" * 64
+
+    with (
+        patch.object(show_module, "create_query_database_context") as mock_db,
+        patch.object(show_module, "remote_artifact_fallback_enabled", return_value=True),
+        patch.object(show_module, "GlaasClient") as mock_glaas_client,
+        patch.object(
+            show_module,
+            "lookup_remote_artifact",
+            return_value=(
+                {"hash": full_hash, "size": "4096", "isComposite": True},
+                None,
+            ),
+        ),
+    ):
+        client_instance = _mock_glaas_client(mock_glaas_client)
+        client_instance.get_composite_components.return_value = (
+            {
+                "components": [
+                    {
+                        "relativePath": "part-0.parquet",
+                        "leafKind": "file",
+                        "componentDigest": "d" * 16,
+                    }
+                ]
+            },
+            None,
+        )
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        db_ctx.jobs.get_by_uid.return_value = None
+        db_ctx.artifacts.get_by_hash.return_value = None
+
+        summary = show_module.build_show_summary(_request(tmp_path, full_hash))
+
+    assert summary.kind == "composite"
+    assert len(summary.components) == 1
+    assert summary.components[0].relative_path == "part-0.parquet"
+    assert summary.components[0].leaf_kind == "file"
+    client_instance.get_composite_components.assert_called_once_with(full_hash)
+
+
+def test_build_show_summary_remote_artifact_swallows_enrichment_errors(tmp_path: Path) -> None:
+    """A caller without visibility into the producing job (401/403, or any
+    other enrichment error) still gets the base artifact info — enrichment
+    is best-effort, not required for the lookup to succeed."""
+    full_hash = "e" * 64
+
+    with (
+        patch.object(show_module, "create_query_database_context") as mock_db,
+        patch.object(show_module, "remote_artifact_fallback_enabled", return_value=True),
+        patch.object(show_module, "GlaasClient") as mock_glaas_client,
+        patch.object(
+            show_module,
+            "lookup_remote_artifact",
+            return_value=({"hash": full_hash, "size": "1", "isComposite": True}, None),
+        ),
+    ):
+        client_instance = _mock_glaas_client(mock_glaas_client)
+        client_instance.get_artifact_lineage.return_value = (None, "HTTP 403: forbidden")
+        client_instance.get_composite_components.return_value = (None, "HTTP 403: forbidden")
+        db_ctx = MagicMock()
+        mock_db.return_value.__enter__.return_value = db_ctx
+        db_ctx.jobs.get_by_uid.return_value = None
+        db_ctx.artifacts.get_by_hash.return_value = None
+
+        summary = show_module.build_show_summary(_request(tmp_path, full_hash))
+
+    assert isinstance(summary, ShowArtifactSummary)
+    assert summary.id == full_hash
+    assert summary.produced_by == []
+    assert summary.components == []
 
 
 def test_render_show_remote_artifact_includes_source_marker(tmp_path: Path) -> None:
@@ -323,12 +486,14 @@ def test_render_show_remote_artifact_includes_source_marker(tmp_path: Path) -> N
     with (
         patch.object(show_module, "create_query_database_context") as mock_db,
         patch.object(show_module, "remote_artifact_fallback_enabled", return_value=True),
+        patch.object(show_module, "GlaasClient") as mock_glaas_client,
         patch.object(
             show_module,
             "lookup_remote_artifact",
             return_value=({"hash": full_hash, "size": "128", "registeredAt": 1}, None),
         ),
     ):
+        _mock_glaas_client(mock_glaas_client)
         db_ctx = MagicMock()
         mock_db.return_value.__enter__.return_value = db_ctx
         db_ctx.jobs.get_by_uid.return_value = None

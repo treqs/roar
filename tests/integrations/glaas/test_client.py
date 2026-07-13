@@ -169,6 +169,32 @@ class TestGlaasClientExceptions:
             result = client.get_artifact("abc123")
             assert result == expected
 
+    def test_get_public_artifact_hits_public_endpoint(self):
+        """get_public_artifact should call the /public/artifacts route, not
+        the protected one — that's the whole point (anonymous access)."""
+        client = _optional_auth_client()
+
+        expected = {"hash": "abc123", "size": 100}
+        with patch.object(client, "_request") as mock_request:
+            mock_request.return_value = (expected, None)
+
+            result = client.get_public_artifact("abc123")
+
+        assert result == expected
+        mock_request.assert_called_once_with("GET", "/api/v1/public/artifacts/abc123")
+
+    def test_get_public_artifact_raises_on_not_found(self):
+        """get_public_artifact should raise GlaasApiError on 404, same as get_artifact."""
+        client = _optional_auth_client()
+
+        with patch.object(client, "_request") as mock_request:
+            mock_request.side_effect = GlaasApiError("Not found", status_code=404)
+
+            with pytest.raises(GlaasApiError) as exc_info:
+                client.get_public_artifact("abc123")
+
+            assert exc_info.value.status_code == 404
+
 
 class TestExceptionHierarchy:
     """Test that exception classes have correct hierarchy."""

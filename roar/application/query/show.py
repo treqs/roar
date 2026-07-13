@@ -12,6 +12,7 @@ from ...core.logging import get_logger
 from ...core.step_name import resolve_step_name
 from ...db.context import optional_repo
 from ...db.query_context import create_query_database_context
+from ...integrations.glaas import GlaasClient
 from ...presenters.show_renderer import ShowRenderer
 from ..lookup import (
     ArtifactRemoteLookupOperation,
@@ -247,14 +248,20 @@ def _build_artifact_summary_for_hash(
     parsed_ref,
     missing_prefix: str = "Artifact not found",
 ) -> ShowArtifactSummary:
+    allow_remote = request.force_remote or remote_artifact_fallback_enabled(
+        ArtifactRemoteLookupOperation.SHOW,
+        parsed_ref,
+        start_dir=request.cwd,
+    )
+    # Only stand up a GlaasClient (auth/config resolution) when remote
+    # fallback can actually fire — the common local-hit path shouldn't pay
+    # for it. The lambda below is only invoked by the runner when
+    # allow_remote is True, so `client` is never None where it's used.
+    client = GlaasClient(start_dir=str(request.cwd)) if allow_remote else None
     lookup = run_local_then_remote_lookup(
         lookup_local=lambda: db_ctx.artifacts.get_by_hash(ref),
-        lookup_remote=lambda: lookup_remote_artifact(hash_prefix=ref),
-        allow_remote=remote_artifact_fallback_enabled(
-            ArtifactRemoteLookupOperation.SHOW,
-            parsed_ref,
-            start_dir=request.cwd,
-        ),
+        lookup_remote=lambda: lookup_remote_artifact(hash_prefix=ref, artifact_reader=client),
+        allow_remote=allow_remote,
     )
     if lookup.error:
         raise ShowQueryError(lookup.error)
@@ -262,7 +269,8 @@ def _build_artifact_summary_for_hash(
         raise ShowQueryError(f"{missing_prefix}: {ref}")
     if lookup.source == LookupSource.LOCAL:
         return _build_artifact_summary(db_ctx, lookup.value)
-    return _build_remote_artifact_summary(lookup.value)
+    assert client is not None  # allow_remote was True to reach LookupSource.REMOTE
+    return _build_remote_artifact_summary(lookup.value, client=client)
 
 
 def _resolve_job_ref(db_ctx, session_id: int, job_ref: str) -> dict | None:
@@ -432,7 +440,83 @@ def _build_artifact_summary(db_ctx, artifact: dict[str, Any]) -> ShowArtifactSum
     )
 
 
-def _build_remote_artifact_summary(artifact: dict[str, Any]) -> ShowArtifactSummary:
+def _merge_remote_labels(raw_labels: Any) -> dict[str, Any] | None:
+    """Flatten the array of scoped label-version records GLaaS returns
+    into one key=value dict — the same shape `_current_label_metadata`
+    produces locally. Each entry's `metadata` is merged in response order;
+    a key visible in more than one scope is overwritten by the later entry
+    (rare — most artifacts have labels in a single visible scope)."""
+    if not isinstance(raw_labels, list):
+        return None
+    merged: dict[str, Any] = {}
+    for entry in raw_labels:
+        if not isinstance(entry, dict):
+            continue
+        metadata = entry.get("metadata")
+        if isinstance(metadata, dict):
+            merged.update(metadata)
+    if not merged:
+        return None
+    return cast(dict[str, Any] | None, omit_display_system_labels(merged))
+
+
+def _remote_owner_and_visibility(artifact: dict[str, Any]) -> tuple[str | None, str | None]:
+    scope = artifact.get("scope")
+    if not isinstance(scope, dict):
+        return None, None
+    owner = scope.get("owner_name") or scope.get("owner_id")
+    project = scope.get("project_name") or scope.get("project_id")
+    owner_str = "/".join(str(part) for part in (owner, project) if part) or None
+    visibility = cast("str | None", scope.get("visibility"))
+    return owner_str, visibility
+
+
+def _remote_produced_by(client: GlaasClient, hash_prefix: str) -> list[ShowArtifactJobSummary]:
+    """Best-effort: the producing job, via the lineage endpoint at depth 1.
+
+    Errors (including 401/403 for a caller who can't see the producing job)
+    are swallowed — the renderer already treats an empty produced_by as
+    nothing-to-show, same as a local artifact with no recorded producer.
+    """
+    lineage, error = client.get_artifact_lineage(hash_prefix, depth=1)
+    if error or not isinstance(lineage, dict):
+        return []
+    producer = lineage.get("producedBy")
+    if not isinstance(producer, dict):
+        return []
+    return [
+        ShowArtifactJobSummary(
+            job_uid=cast("str | None", producer.get("jobUid")),
+            command=cast("str | None", producer.get("command")),
+            session_hash=cast("str | None", producer.get("sessionHash")),
+        )
+    ]
+
+
+def _remote_components(client: GlaasClient, hash_prefix: str) -> list[ShowArtifactComponentSummary]:
+    """Best-effort composite component listing; same error-swallowing as
+    `_remote_produced_by` (the components endpoint requires auth, so an
+    anonymous caller cleanly gets an empty list instead of an error)."""
+    result, error = client.get_composite_components(hash_prefix)
+    if error or not isinstance(result, dict):
+        return []
+    raw_components = result.get("components")
+    if not isinstance(raw_components, list):
+        return []
+    return [
+        ShowArtifactComponentSummary(
+            relative_path=cast("str | None", component.get("relativePath")),
+            component_digest=cast("str | None", component.get("componentDigest")),
+            leaf_kind=cast("str | None", component.get("leafKind")),
+        )
+        for component in raw_components[:10]
+        if isinstance(component, dict)
+    ]
+
+
+def _build_remote_artifact_summary(
+    artifact: dict[str, Any], *, client: GlaasClient
+) -> ShowArtifactSummary:
     metadata = cast(dict[str, Any] | None, artifact.get("metadata"))
     if isinstance(metadata, str):
         metadata = _safe_json_loads(metadata, "remote artifact metadata")
@@ -442,9 +526,19 @@ def _build_remote_artifact_summary(artifact: dict[str, Any]) -> ShowArtifactSumm
     if not hashes and artifact_hash:
         hashes = [{"algorithm": "blake3", "digest": artifact_hash}]
 
+    is_composite = artifact.get("isComposite") is True
     kind = cast(str | None, artifact.get("kind"))
-    if kind is None and artifact.get("isComposite") is True:
+    if kind is None and is_composite:
         kind = "composite"
+
+    remote_owner, remote_visibility = _remote_owner_and_visibility(artifact)
+
+    produced_by: list[ShowArtifactJobSummary] = []
+    components: list[ShowArtifactComponentSummary] = []
+    if artifact_hash:
+        produced_by = _remote_produced_by(client, artifact_hash)
+        if is_composite or kind == "composite":
+            components = _remote_components(client, artifact_hash)
 
     return ShowArtifactSummary(
         id=artifact_hash or "remote-artifact",
@@ -454,6 +548,9 @@ def _build_remote_artifact_summary(artifact: dict[str, Any]) -> ShowArtifactSumm
         first_seen_at=_parse_remote_timestamp(
             artifact.get("registeredAt") or artifact.get("registered_at")
         ),
+        labels=_merge_remote_labels(artifact.get("labels")),
+        remote_owner=remote_owner,
+        remote_visibility=remote_visibility,
         metadata=metadata,
         hashes=[
             ShowHashSummary(
@@ -465,6 +562,8 @@ def _build_remote_artifact_summary(artifact: dict[str, Any]) -> ShowArtifactSumm
             and isinstance(hash_entry.get("algorithm"), str)
             and isinstance(hash_entry.get("digest"), str)
         ],
+        produced_by=produced_by,
+        components=components,
     )
 
 

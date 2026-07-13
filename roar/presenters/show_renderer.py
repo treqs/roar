@@ -441,6 +441,13 @@ class ShowRenderer:
 
         if artifact.get("source") == "remote":
             lines.append("Source:     GLaaS")
+            owner = artifact.get("remote_owner")
+            visibility = artifact.get("remote_visibility")
+            if owner or visibility:
+                owner_line = owner or "?"
+                if visibility:
+                    owner_line += f" ({visibility})"
+                lines.append(f"Owner:      {owner_line}")
         kind = artifact.get("kind")
         component_count = artifact.get("component_count")
         if isinstance(kind, str) and kind != "primitive":
