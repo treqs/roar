@@ -90,17 +90,43 @@ def _record_s3_event(
             return
 
         mode = "read" if operation_name in _S3_READ_OPS else "write"
-        event = {
+        event: dict[str, Any] = {
             "mode": mode,
             "path": f"s3://{bucket}/{key}",
             "operation": operation_name,
             "etag": _normalize_etag(response),
             "size": _event_size(mode, api_params, response),
         }
+        byte_ranges = _parse_range_header(api_params.get("Range"))
+        if byte_ranges:
+            event["byte_ranges"] = byte_ranges
         with open(events_file, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, separators=(",", ":")) + "\n")
     except Exception:
         return
+
+
+def _parse_range_header(value: Any) -> list[list[int]]:
+    """Parse an HTTP Range header into [[start, end], ...] pairs.
+
+    Only fully-specified ``bytes=start-end`` ranges are recorded;
+    open-ended and suffix forms are skipped (the whole-object size is
+    already captured separately).
+    """
+    if not isinstance(value, str):
+        return []
+    header = value.strip()
+    if not header.lower().startswith("bytes="):
+        return []
+    ranges: list[list[int]] = []
+    for part in header[len("bytes=") :].split(","):
+        start_text, separator, end_text = part.strip().partition("-")
+        if not separator or not start_text.isdigit() or not end_text.isdigit():
+            continue
+        start, end = int(start_text), int(end_text)
+        if end >= start:
+            ranges.append([start, end])
+    return ranges
 
 
 def _normalize_etag(response: Any) -> str | None:
@@ -142,13 +168,15 @@ def _stream_size(body: Any) -> int:
 def load_object_io_refs(events_path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Read and deduplicate recorded events into fragment artifact refs.
 
-    Last event per (mode, path) wins so re-reads/re-writes carry the most
-    recent etag/size.
+    Last event per (mode, path) wins for etag/size, while byte ranges
+    accumulate across all events so repeated ranged reads of one object
+    keep every range touched.
     """
     if not events_path.is_file():
         return [], []
 
     winners: dict[tuple[str, str], dict[str, Any]] = {}
+    ranges_by_key: dict[tuple[str, str], list[list[int]]] = {}
     for line in events_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
@@ -162,18 +190,25 @@ def load_object_io_refs(events_path: Path) -> tuple[list[dict[str, Any]], list[d
         if mode not in ("read", "write") or not path.startswith("s3://"):
             continue
         winners[(mode, path)] = event
+        for byte_range in event.get("byte_ranges") or []:
+            accumulated = ranges_by_key.setdefault((mode, path), [])
+            if byte_range not in accumulated:
+                accumulated.append(byte_range)
 
     reads: list[dict[str, Any]] = []
     writes: list[dict[str, Any]] = []
     for (mode, path), event in sorted(winners.items()):
         etag = event.get("etag")
-        ref = {
+        ref: dict[str, Any] = {
             "path": path,
             "hash": etag if isinstance(etag, str) and etag else None,
             "hash_algorithm": "etag" if etag else "",
             "size": int(event.get("size") or 0),
             "capture_method": "python",
         }
+        byte_ranges = ranges_by_key.get((mode, path))
+        if byte_ranges:
+            ref["byte_ranges"] = byte_ranges
         (reads if mode == "read" else writes).append(ref)
     return reads, writes
 

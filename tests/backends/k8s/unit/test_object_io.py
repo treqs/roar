@@ -125,3 +125,36 @@ def test_load_object_io_refs_dedupes_last_wins(tmp_path: Path) -> None:
 def test_load_object_io_refs_missing_file(tmp_path: Path) -> None:
     reads, writes = load_object_io_refs(tmp_path / "absent.jsonl")
     assert reads == [] and writes == []
+
+
+def test_ranged_reads_record_and_accumulate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events_file = tmp_path / "events.jsonl"
+    monkeypatch.setenv(OBJECT_IO_FILE_ENV, str(events_file))
+
+    module = _patched_client_module()
+    client = module.BaseClient()
+    client._make_api_call("GetObject", {"Bucket": "d", "Key": "shard.bin", "Range": "bytes=0-1023"})
+    client._make_api_call(
+        "GetObject", {"Bucket": "d", "Key": "shard.bin", "Range": "bytes=2048-4095"}
+    )
+    client._make_api_call("GetObject", {"Bucket": "d", "Key": "shard.bin", "Range": "bytes=0-1023"})
+
+    reads, _writes = load_object_io_refs(events_file)
+    assert len(reads) == 1
+    assert reads[0]["path"] == "s3://d/shard.bin"
+    # Ranges accumulate (deduped); etag/size come from the last event.
+    assert reads[0]["byte_ranges"] == [[0, 1023], [2048, 4095]]
+
+
+def test_range_header_parsing_edge_cases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from roar.backends.k8s.object_io import _parse_range_header
+
+    assert _parse_range_header("bytes=0-99") == [[0, 99]]
+    assert _parse_range_header("bytes=0-99,200-299") == [[0, 99], [200, 299]]
+    assert _parse_range_header("bytes=500-") == []  # open-ended skipped
+    assert _parse_range_header("bytes=-500") == []  # suffix skipped
+    assert _parse_range_header("items=0-9") == []
+    assert _parse_range_header(None) == []
+    assert _parse_range_header("bytes=99-0") == []  # inverted skipped

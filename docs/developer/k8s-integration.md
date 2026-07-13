@@ -30,8 +30,17 @@ Two capture channels feed each pod's fragment:
   `botocore.client.BaseClient._make_api_call` (and aiobotocore's async
   variant, covering s3fs/fsspec) to append S3 data-op events to
   `ROAR_K8S_OBJECT_IO_FILE`; `pod_entry` folds them into the fragment as
-  `s3://` refs with etag hashes. Hooks no-op outside pods (env unset) and
-  never raise into user code.
+  `s3://` refs with etag hashes. Ranged ``GetObject`` calls record their
+  ``Range`` header as ``byte_ranges`` (ranges accumulate per object across
+  events and flow through `ArtifactRef.byte_ranges` into
+  `job_inputs/job_outputs.byte_ranges`). Hooks no-op outside pods (env
+  unset) and never raise into user code.
+
+  The `roar-proxy` S3 sidecar is deliberately not part of the CLI-side
+  backend: the hooks win on attribution and avoid `AWS_ENDPOINT_URL`
+  rewiring (which explicit-`endpoint_url` clients bypass). The proxy joins
+  in the Phase-3 webhook injector as an opt-in sidecar for non-Python S3
+  clients (see the design doc's Phase 3).
 
 Transport is streaming-first with a bundle fallback: when `k8s.bundle_dir`
 names a mounted shared volume and GLaaS is unreachable from the pod (probe

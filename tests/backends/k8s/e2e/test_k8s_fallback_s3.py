@@ -94,6 +94,8 @@ s3 = boto3.client(
     config=Config(s3={"addressing_style": "path"}),
 )
 
+header = s3.get_object(Bucket=bucket, Key="datasets/train.csv", Range="bytes=0-9")
+header["Body"].read()
 obj = s3.get_object(Bucket=bucket, Key="datasets/train.csv")
 data = obj["Body"].read()
 model = data * 3
@@ -343,5 +345,14 @@ def test_s3_object_io_captured_in_lineage(
             "SELECT COUNT(*) AS count FROM artifact_hashes WHERE algorithm = 'etag'",
         )
         assert int(etag_rows[0]["count"]) >= 2, "expected etag hashes for the S3 artifacts"
+
+        ranged = _query(
+            project_dir,
+            "SELECT byte_ranges FROM job_inputs WHERE path = ? AND job_id = ?",
+            (f"s3://{bucket}/datasets/train.csv", task_id),
+        )
+        assert ranged and ranged[0]["byte_ranges"] == "[[0,9]]", (
+            f"ranged read not captured: {[dict(row) for row in ranged]}\n{_describe(run)}"
+        )
     finally:
         _cleanup(job_name)

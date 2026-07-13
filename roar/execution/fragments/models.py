@@ -16,6 +16,9 @@ class ArtifactRef:
     hash_algorithm: str
     size: int
     capture_method: str
+    # Optional [[start, end], ...] byte ranges for ranged object-store I/O;
+    # carried through to job_inputs/job_outputs.byte_ranges on merge.
+    byte_ranges: list[list[int]] | None = None
 
 
 @dataclass
@@ -291,4 +294,19 @@ def _artifact_ref_from_mapping(item: Mapping[str, Any]) -> ArtifactRef:
         hash_algorithm=str(item.get("hash_algorithm") or ""),
         size=_normalize_size(item.get("size")),
         capture_method=str(item.get("capture_method") or ""),
+        byte_ranges=_normalize_byte_ranges(item.get("byte_ranges")),
     )
+
+
+def _normalize_byte_ranges(value: Any) -> list[list[int]] | None:
+    if not isinstance(value, list):
+        return None
+    ranges: list[list[int]] = []
+    for item in value:
+        if (
+            isinstance(item, (list, tuple))
+            and len(item) == 2
+            and all(isinstance(bound, int) and bound >= 0 for bound in item)
+        ):
+            ranges.append([int(item[0]), int(item[1])])
+    return ranges or None

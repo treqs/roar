@@ -62,7 +62,18 @@ def test_ingest_merges_bundles_into_db(tmp_path: Path) -> None:
         pass  # initialize schema
 
     bundle_dir = tmp_path / "bundles"
-    write_fragment_bundle(bundle_dir, "pod-0", [_fragment("pod-0", "0")])
+    ranged_fragment = _fragment("pod-0", "0")
+    ranged_fragment["reads"] = [
+        {
+            "path": "s3://data/shard.bin",
+            "hash": "etag-1",
+            "hash_algorithm": "etag",
+            "size": 4096,
+            "capture_method": "python",
+            "byte_ranges": [[0, 1023], [2048, 4095]],
+        }
+    ]
+    write_fragment_bundle(bundle_dir, "pod-0", [ranged_fragment])
     write_fragment_bundle(bundle_dir, "pod-1", [_fragment("pod-1", "1")])
 
     result = ingest_fragment_bundles(roar_dir=roar_dir, directory=bundle_dir)
@@ -70,9 +81,16 @@ def test_ingest_merges_bundles_into_db(tmp_path: Path) -> None:
     assert result.fragments_merged == 2
 
     conn = sqlite3.connect(roar_dir / "roar.db")
+    conn.row_factory = sqlite3.Row
     try:
         count = conn.execute("SELECT COUNT(*) FROM jobs WHERE job_type = 'k8s_task'").fetchone()
         assert count[0] == 2
+
+        ranged = conn.execute(
+            "SELECT byte_ranges FROM job_inputs WHERE path = 's3://data/shard.bin'"
+        ).fetchone()
+        assert ranged is not None
+        assert ranged["byte_ranges"] == "[[0,1023],[2048,4095]]"
     finally:
         conn.close()
 

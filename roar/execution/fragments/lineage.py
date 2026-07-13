@@ -116,10 +116,10 @@ def merge_execution_fragments(
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO job_outputs
-                        (job_id, artifact_id, path)
-                    VALUES (?, ?, ?)
+                        (job_id, artifact_id, path, byte_ranges)
+                    VALUES (?, ?, ?, ?)
                     """,
-                    (job_id, artifact_id, ref.path),
+                    (job_id, artifact_id, ref.path, _byte_ranges_json(ref)),
                 )
 
             for ref in fragment.reads:
@@ -134,10 +134,10 @@ def merge_execution_fragments(
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO job_inputs
-                        (job_id, artifact_id, path)
-                    VALUES (?, ?, ?)
+                        (job_id, artifact_id, path, byte_ranges)
+                    VALUES (?, ?, ?, ?)
                     """,
-                    (job_id, artifact_id, ref.path),
+                    (job_id, artifact_id, ref.path, _byte_ranges_json(ref)),
                 )
 
         conn.commit()
@@ -147,6 +147,12 @@ def merge_execution_fragments(
 
     if committed:
         _refresh_fragment_job_system_labels(project_dir=project_dir, job_ids=touched_job_ids)
+
+
+def _byte_ranges_json(ref: ArtifactRef) -> str | None:
+    if not ref.byte_ranges:
+        return None
+    return json.dumps(ref.byte_ranges, separators=(",", ":"))
 
 
 def _refresh_fragment_job_system_labels(*, project_dir: str, job_ids: set[int]) -> None:
