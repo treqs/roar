@@ -5,12 +5,19 @@ Encapsulates the business logic for recording jobs with their inputs,
 outputs, and session associations.
 """
 
+import json
 import os
+from typing import Any
 
 from sqlalchemy.orm import Session as SASession
 
 from ...application.system_labels import refresh_job_system_labels
-from ...application.tags import parse_add_tags, propagate_tags, stamp_tags
+from ...application.tags import (
+    build_run_modifiers,
+    parse_add_tags,
+    propagate_tags,
+    stamp_tags,
+)
 from ...core.label_origins import LABEL_ORIGIN_USER
 from ...core.step_name import STEP_NAME_LABEL_KEY, get_step_name_label
 from ..repositories import (
@@ -162,6 +169,11 @@ class JobRecordingService:
             assign_to_session, step_identity, git_commit, git_repo
         )
 
+        # Persist the roar-side run modifiers (--block-tag / --add-tag) on the job
+        # metadata so `roar reproduce` can replay them; a bare re-run would
+        # otherwise re-inherit blocked tags and drop stamped ones.
+        metadata = self._with_run_modifiers(metadata, block_tags, add_tags)
+
         # Create the job record
         job_id, job_uid = self._job_repo.create(
             command=command,
@@ -234,6 +246,25 @@ class JobRecordingService:
             self._session_repo.update_hash(session_id, self._job_repo)
 
         return job_id, job_uid
+
+    @staticmethod
+    def _with_run_modifiers(
+        metadata: str | None, block_tags: tuple[str, ...], add_tags: tuple[str, ...]
+    ) -> str | None:
+        """Add a ``run_modifiers`` block to the job metadata JSON when flags were used."""
+        modifiers = build_run_modifiers(block_tags, add_tags)
+        if modifiers is None:
+            return metadata
+        data: dict[str, Any] = {}
+        if metadata:
+            try:
+                parsed = json.loads(metadata)
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                data = parsed
+        data["run_modifiers"] = modifiers
+        return json.dumps(data)
 
     def _resolve_job_session_id(self, job_uid: str) -> int | None:
         """Look up which local session produced *job_uid* (for tag scope checks)."""
