@@ -14,6 +14,7 @@ from .requests import (
     TagRmRequest,
     TagShowRequest,
     TagUnbindRequest,
+    TagWhyRequest,
 )
 from .results import (
     LabelCurrentSummary,
@@ -22,6 +23,7 @@ from .results import (
     LabelHistoryVersionSummary,
     TagBindArtifactSummary,
     TagBindSummary,
+    TagWhySummary,
 )
 
 
@@ -124,6 +126,23 @@ def build_tag_history_summary(request: TagHistoryRequest) -> LabelHistorySummary
             if isinstance(row.get("metadata"), dict)
         ]
     )
+
+
+def tag_why(request: TagWhyRequest) -> str:
+    """Explain how a target acquired a tag and return a rendered summary."""
+    return build_tag_why_summary(request).render()
+
+
+def build_tag_why_summary(request: TagWhyRequest) -> TagWhySummary:
+    """Build the typed summary for a tag why provenance walk."""
+    kind, value = _parse_kind_or_kv(request.key)
+    with create_database_context(request.roar_dir) as db_ctx:
+        svc = TagService(db_ctx, request.cwd)
+        resolved = svc.resolve_target(request.target)
+        roots = svc.why(resolved, kind, value)
+
+    label = f"{kind}={value}" if value is not None else kind
+    return TagWhySummary(heading=f"Why does {request.target} have {label}?", roots=roots)
 
 
 def tag_bind(request: TagBindRequest) -> str:
