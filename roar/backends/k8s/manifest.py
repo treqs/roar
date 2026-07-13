@@ -22,6 +22,8 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from roar.backends.k8s.mount_map import build_container_mount_map, dump_mount_map
+
 # sh -c script: "$0" is the synthetic argv0, "$@" is the original
 # command+args. Lineage is best-effort by design: any failure to stage
 # the roar runtime falls back to running the original command
@@ -186,6 +188,7 @@ def rewrite_manifest_for_lineage(
     tracer: str,
     parent_job_uid: str,
     bundle_dir: str = "",
+    mount_map: dict[str, str] | None = None,
     namespace_override: str | None = None,
 ) -> K8sManifestRewrite:
     """Return a rewritten copy of ``documents`` with lineage instrumentation.
@@ -233,6 +236,7 @@ def rewrite_manifest_for_lineage(
         parent_job_uid=parent_job_uid,
         workload_name=workload_name,
         bundle_dir=bundle_dir,
+        config_mount_map=dict(mount_map or {}),
     )
 
     if workload.locate_pod_specs is None:
@@ -295,6 +299,7 @@ class _EnvContract:
     parent_job_uid: str
     workload_name: str
     bundle_dir: str = ""
+    config_mount_map: dict[str, str] = field(default_factory=dict)
 
 
 def _rewrite_pod_specs(
@@ -336,6 +341,9 @@ def _rewrite_pod_specs(
                 contract=contract,
                 container_name=container_name,
                 role=ref.role,
+                mount_map_entries=build_container_mount_map(
+                    ref.spec, container, contract.config_mount_map
+                ),
             )
             wrapped.append(label)
     return wrapped, skipped
@@ -377,7 +385,14 @@ def _rewrite_trainjob(
     env = trainer.setdefault("env", [])
     if not isinstance(env, list):
         raise K8sManifestError(f"TrainJob {workload_name} has a non-list spec.trainer.env")
-    _inject_env_contract(env, contract=contract, container_name="node", role="")
+    _inject_env_contract(
+        env,
+        contract=contract,
+        container_name="node",
+        role="",
+        # TrainJob has no visible pod spec; only explicit config entries apply.
+        mount_map_entries=build_container_mount_map({}, {}, contract.config_mount_map),
+    )
     return ["node"], []
 
 
@@ -392,6 +407,7 @@ def _inject_env_contract(
     contract: _EnvContract,
     container_name: str,
     role: str,
+    mount_map_entries: list[dict[str, str]] | None = None,
 ) -> None:
     if not isinstance(env, list):
         raise K8sManifestError(f"container {container_name} has a non-list env block")
@@ -426,6 +442,8 @@ def _inject_env_contract(
     add_value("ROAR_K8S_TRACER", contract.tracer)
     if contract.bundle_dir:
         add_value("ROAR_K8S_BUNDLE_DIR", contract.bundle_dir)
+    if mount_map_entries:
+        add_value("ROAR_K8S_MOUNT_MAP", dump_mount_map(mount_map_entries))
     add_value("GLAAS_URL", contract.cluster_glaas_url)
     add_value("ROAR_K8S_PARENT_JOB_UID", contract.parent_job_uid)
     add_value("ROAR_K8S_JOB_NAME", contract.workload_name)

@@ -15,11 +15,27 @@ identity comes from the downward API plus the completion-index/node-rank
 env chain (`JOB_COMPLETION_INDEX` → `PET_NODE_RANK` → pod-level `RANK`).
 
 Current phase status (see `design-docs/k8s-training-lineage-integration.md`
-in the dev meta-repo): Phases 1–2 implemented (submit wrapping, operator
-adapters, multi-pod capture, `roar k8s attach`, bundle-mode fallback,
-object-store I/O hooks). Remaining: mount-map path rewriting, RayJob
-delegation, kill-pod retry chaos coverage, and the admission-webhook
-injector.
+in the dev meta-repo): Phases 1–2 fully implemented (submit wrapping,
+operator adapters, multi-pod capture, `roar k8s attach`, bundle-mode
+fallback, object-store I/O hooks, mount-map rewriting, retry-chaos
+coverage). Remaining: RayJob delegation and the Phase-3 admission-webhook
+injector (incl. the opt-in proxy sidecar).
+
+**Mounted storage** (`mount_map.py`): FUSE CSI mounts surface object I/O as
+local file syscalls under a mount path. The rewriter derives a per-container
+mount map (inline CSI volumes it can see — GCS FUSE, Mountpoint-for-S3 —
+plus explicit `[k8s.mount_map]` config for PVC-backed drivers whose bucket
+lives in the cluster-side PV) and injects it as `ROAR_K8S_MOUNT_MAP`;
+`pod_entry` stamps it into fragment metadata, and reconstitution rewrites
+ref paths (`/data/foo` → `gs://bucket/foo`, longest prefix wins). Capture
+stays raw in the fragment; the mapping used is auditable in metadata. PVC
+mounts get a `pvc://claim` identity tag with no rewrite — their cross-pod
+edges connect through content hashes.
+
+**Retry semantics**: Job retries produce attempt-distinct lineage — each
+attempt's fragment is keyed by pod UID inside the task identity, so a
+failed first attempt and its successful retry land as separate `k8s_task`
+jobs with their own outputs (covered by the chaos e2e).
 
 Two capture channels feed each pod's fragment:
 
@@ -113,8 +129,9 @@ recovered parent uid, and reconstitutes the streamed fragments.
 Section `k8s` (registered `BackendConfigAdapter`): `enabled`, `tracer`,
 `runtime_install_requirement`, `cluster_glaas_url`, `bundle_dir`,
 `wait_for_completion`, `wait_timeout_seconds`, `poll_interval_seconds`,
-`fragment_session_ttl_seconds`. Env overrides beat config:
-`ROAR_CLUSTER_PIP_REQ`, `ROAR_CLUSTER_GLAAS_URL`.
+`fragment_session_ttl_seconds`, plus the `[k8s.mount_map]` table
+(config-file-only; maps mount paths to object-store URIs). Env overrides
+beat config: `ROAR_CLUSTER_PIP_REQ`, `ROAR_CLUSTER_GLAAS_URL`.
 
 ## 5. Tests
 

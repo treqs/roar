@@ -20,6 +20,11 @@ Three test layers share this harness:
   merged with `roar k8s ingest-bundles`) and in-pod S3 capture (MinIO via
   `--with-minio`: boto3 get/put recorded as `s3://` lineage refs with etag
   hashes).
+- `e2e/test_k8s_chaos_mounts.py` — retry chaos (backoffLimit-1 Job whose
+  first pod fails mid-run: both attempts land as distinct, non-conflated
+  `k8s_task` jobs keyed by pod UID) and mount-map rewriting (a hostPath
+  volume standing in for a FUSE mount, declared via `[k8s.mount_map]`,
+  rewrites to `s3://` URIs at reconstitution).
 - `e2e/test_k8s_smoke.py` — the Phase-0 runtime diagnostic: fixtures
   hand-wrap the manifest (no backend involved) to isolate the runtime pieces
   (in-pod tracing, fragment streaming, identity contract) when the product

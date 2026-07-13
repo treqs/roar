@@ -135,12 +135,19 @@ def _emit_lineage_best_effort() -> None:
             )
             payload = json.loads(bundle_path.read_text(encoding="utf-8"))
 
+        from roar.backends.k8s.mount_map import MOUNT_MAP_ENV, parse_mount_map
+
         fragments = [item for item in payload.get("fragments", []) if isinstance(item, dict)]
         _augment_with_object_io(fragments)
+        mount_map = parse_mount_map(os.environ.get(MOUNT_MAP_ENV))
         completion_index = task_id.split(":")[2] if task_id.count(":") >= 3 else "0"
         restart_attempt = task_id.split(":")[3] if task_id.count(":") >= 3 else "0"
         for fragment in fragments:
             metadata = fragment.setdefault("backend_metadata", {})
+            if mount_map:
+                # Recorded raw; reconstitution applies the rewrite so the
+                # mapping used stays auditable next to the captured paths.
+                metadata["k8s_mount_map"] = mount_map
             metadata.update(
                 {
                     "k8s_namespace": os.environ.get("ROAR_K8S_NAMESPACE"),

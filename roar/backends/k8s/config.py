@@ -23,6 +23,10 @@ class K8sBackendConfig(BaseModel):
     runtime_install_requirement: str = ""
     cluster_glaas_url: str = ""
     bundle_dir: str = ""
+    # Explicit mount-path -> object-store URI mapping for mounted storage
+    # whose remote identity isn't visible in the pod spec (PVC-backed FUSE
+    # CSI). TOML table, e.g. [k8s.mount_map] "/data" = "gs://bucket/prefix".
+    mount_map: dict[str, str] = Field(default_factory=dict)
     wait_for_completion: bool = True
     wait_timeout_seconds: int = Field(default=30 * 60, ge=1)
     poll_interval_seconds: float = Field(default=5.0, gt=0.0)
@@ -101,6 +105,12 @@ runtime_install_requirement = ""
 cluster_glaas_url = ""
 # Wait for submitted Jobs to finish so lineage can be reconstituted immediately
 wait_for_completion = true
+
+# Optional: map mounted storage paths to their object-store URIs when the
+# pod spec can't reveal them (PVC-backed FUSE CSI drivers). Inline CSI
+# volumes (GCS FUSE, Mountpoint-for-S3) are detected automatically.
+# [k8s.mount_map]
+# "/data" = "gs://my-bucket/datasets"
 """
 
 

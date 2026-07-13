@@ -61,11 +61,14 @@ def collect_k8s_fragments(
     step_number: int = 1,
 ) -> int:
     """Merge k8s fragment dicts into the local DB; returns fragments merged."""
+    from roar.backends.k8s.mount_map import rewrite_fragment_paths
+
     parsed: list[ExecutionFragment] = []
     for payload in fragments:
         if not isinstance(payload, dict):
             continue
         try:
+            rewrite_fragment_paths(payload)
             parsed.append(ExecutionFragment.from_dict(payload))
         except Exception:
             continue

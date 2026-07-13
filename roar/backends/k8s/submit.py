@@ -120,6 +120,7 @@ def plan_kubectl_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
         tracer=str(config.get("tracer") or "preload"),
         parent_job_uid=parent_job_uid,
         bundle_dir=str(config.get("bundle_dir") or ""),
+        mount_map=_config_mount_map(config),
         namespace_override=_find_namespace_argument(command),
     )
     if rewrite.skipped_containers:
@@ -257,6 +258,13 @@ def _find_namespace_argument(command: list[str]) -> str | None:
         if arg.startswith("--namespace="):
             return arg.split("=", 1)[1]
     return None
+
+
+def _config_mount_map(config: dict) -> dict[str, str]:
+    raw = config.get("mount_map")
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): str(value) for key, value in raw.items() if key and value}
 
 
 def _resolve_glaas_url() -> str | None:
