@@ -227,6 +227,12 @@ class TagService:
         act (a bare ``tag add`` or a ``run --add-tag``), annotating any
         cross-session hop with the explicit ``bind`` that authorized it.
         """
+        if resolved.entity_type == "job":
+            raise ValueError(
+                "`roar tag why` explains an artifact's tag, not a job's. `@N` targets "
+                "job step N — trace one of its output artifacts instead (by hash or "
+                "path), or use `roar tag show @N` to list the job's tags."
+            )
         if resolved.entity_type != "artifact" or not resolved.artifact_id:
             raise ValueError(
                 "`roar tag why` explains an artifact's tag — target a tracked artifact "
