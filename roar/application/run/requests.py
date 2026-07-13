@@ -17,6 +17,8 @@ class RunRequest:
     tracer_mode: str | None = None
     tracer_fallback: bool | None = None
     hash_algorithms: tuple[str, ...] = field(default_factory=tuple)
+    block_tags: tuple[str, ...] = field(default_factory=tuple)
+    add_tags: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)

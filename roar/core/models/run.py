@@ -94,6 +94,8 @@ class RunContext(RoarBaseModel):
     git_commit: str | None = None
     git_branch: str | None = None
     git_repo: str | None = None
+    block_tags: list[str] = Field(default_factory=list)
+    add_tags: list[str] = Field(default_factory=list)
 
     @field_validator("roar_dir", mode="before")
     @classmethod

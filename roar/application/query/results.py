@@ -147,6 +147,49 @@ class LabelHistorySummary:
 
 
 @dataclass(frozen=True)
+class TagBindArtifactSummary:
+    """One target's outcome from `roar tag bind`/`unbind` — what the CLI echoes."""
+
+    display_target: str
+    action: str  # "bind" | "unbind"
+    changed: bool
+    promoted: dict[str, list[str]] = field(default_factory=dict)
+    size: int | None = None
+
+    def render(self) -> str:
+        verb = "Bound" if self.action == "bind" else "Unbound"
+        header = self.display_target
+        if self.size is not None:
+            header += f" ({self.size} bytes)"
+        lines = [f"{verb}: {header}"]
+        if self.size == 0:
+            lines.append(
+                "  warning: this is the empty-content hash — shared by every empty "
+                "file in every session. Binding it promotes its tags everywhere."
+            )
+        if not self.changed:
+            if self.promoted:
+                lines.append("  no change: already up to date")
+            else:
+                noun = "currently bound" if self.action == "unbind" else "to bind"
+                lines.append(f"  no change: nothing {noun}")
+            return "\n".join(lines)
+        for kind in sorted(self.promoted):
+            lines.append(f"  {kind}={', '.join(self.promoted[kind])}")
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class TagBindSummary:
+    artifacts: list[TagBindArtifactSummary] = field(default_factory=list)
+
+    def render(self) -> str:
+        if not self.artifacts:
+            return "No targets."
+        return "\n".join(artifact.render() for artifact in self.artifacts)
+
+
+@dataclass(frozen=True)
 class ShowHashSummary:
     algorithm: str
     digest: str

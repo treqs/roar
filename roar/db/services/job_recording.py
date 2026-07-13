@@ -10,6 +10,7 @@ import os
 from sqlalchemy.orm import Session as SASession
 
 from ...application.system_labels import refresh_job_system_labels
+from ...application.tags import parse_add_tags, propagate_tags, stamp_tags
 from ...core.label_origins import LABEL_ORIGIN_USER
 from ...core.step_name import STEP_NAME_LABEL_KEY, get_step_name_label
 from ..repositories import (
@@ -95,6 +96,8 @@ class JobRecordingService:
         repo_root: str | None = None,
         telemetry: str | None = None,
         hash_algorithms: list[str] | None = None,
+        block_tags: tuple[str, ...] = (),
+        add_tags: tuple[str, ...] = (),
     ) -> tuple[int, str]:
         """
         Record a job with its inputs and outputs.
@@ -118,6 +121,8 @@ class JobRecordingService:
             job_type: Job type ('run', 'build', etc.)
             repo_root: Repository root path for path normalization
             telemetry: JSON telemetry data (external service links)
+            block_tags: Tag kinds exempted from automatic inheritance from inputs
+            add_tags: Extra "KIND=VALUE" tags to stamp onto this job's outputs
             hash_algorithms: Hash algorithms to use (default: ['blake3'])
 
         Returns:
@@ -187,7 +192,7 @@ class JobRecordingService:
             self._record_step_name_label(job_id, step_name)
 
         # Register and link input artifacts
-        self._register_artifacts(
+        input_artifact_ids = self._register_artifacts(
             job_id,
             hashable_inputs,
             hashes_by_path,
@@ -196,13 +201,30 @@ class JobRecordingService:
         )
 
         # Register and link output artifacts
-        self._register_artifacts(
+        output_artifact_ids = self._register_artifacts(
             job_id,
             hashable_outputs,
             hashes_by_path,
             hash_algorithms,
             is_input=False,
         )
+
+        propagate_tags(
+            self._label_repo,
+            input_artifact_ids=input_artifact_ids,
+            output_artifact_ids=output_artifact_ids,
+            current_session_id=session_id,
+            resolve_job_session_id=self._resolve_job_session_id,
+            job_uid=job_uid,
+            blocked_kinds=frozenset(kind.strip() for kind in block_tags if kind.strip()),
+        )
+        if add_tags:
+            stamp_tags(
+                self._label_repo,
+                output_artifact_ids=output_artifact_ids,
+                tags=parse_add_tags(add_tags),
+                job_uid=job_uid,
+            )
 
         # Commit transaction
         self._session.commit()
@@ -212,6 +234,12 @@ class JobRecordingService:
             self._session_repo.update_hash(session_id, self._job_repo)
 
         return job_id, job_uid
+
+    def _resolve_job_session_id(self, job_uid: str) -> int | None:
+        """Look up which local session produced *job_uid* (for tag scope checks)."""
+        job = self._job_repo.get_by_uid(job_uid)
+        session_id = job.get("session_id") if job else None
+        return int(session_id) if isinstance(session_id, int) else None
 
     def _record_step_name_label(self, job_id: int, step_name: str) -> None:
         """Store the canonical step name as current job label metadata."""
@@ -270,8 +298,14 @@ class JobRecordingService:
         hashes_by_path: dict[str, dict[str, str]],
         hash_algorithms: list[str],
         is_input: bool,
-    ) -> None:
-        """Register artifacts and link them to the job."""
+    ) -> list[str]:
+        """Register artifacts and link them to the job.
+
+        Returns the artifact ids just linked (empty if none were new/hashable).
+        Note: within a single ``record_job()`` call, ``job_id`` was just
+        created, so there can be no pre-existing edges — the dedup check below
+        only matters if this is ever called again for an existing job.
+        """
         # Batch-check which paths already have edges for this job
         if is_input:
             already_linked = self._job_repo.existing_input_paths(job_id, file_paths)
@@ -299,7 +333,7 @@ class JobRecordingService:
             valid_paths.append(path)
 
         if not batch_items:
-            return
+            return []
 
         # Batch register artifacts
         artifact_ids = self._artifact_repo.register_batch(batch_items)
@@ -310,6 +344,8 @@ class JobRecordingService:
             self._job_repo.add_inputs_batch(job_id, edges)
         else:
             self._job_repo.add_outputs_batch(job_id, edges)
+
+        return list(artifact_ids)
 
     @staticmethod
     def _unique_paths(paths: list[str]) -> list[str]:

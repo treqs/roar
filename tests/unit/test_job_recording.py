@@ -50,6 +50,8 @@ def test_record_registers_proxy_outputs_before_get_outputs(tmp_path: Path) -> No
         step_name="train",
         job_type="run",
         hash_algorithms=["blake3"],
+        block_tags=[],
+        add_tags=[],
     )
     prov = {
         "data": {"read_files": [], "written_files": []},

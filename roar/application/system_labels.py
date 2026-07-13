@@ -11,7 +11,13 @@ from ..core.label_origins import LABEL_ORIGIN_SYSTEM
 from ..db.context import optional_repo
 
 JOB_SYSTEM_LABEL_ROOT = "roar"
-SYSTEM_LABEL_ROOT_PREFIXES = frozenset({JOB_SYSTEM_LABEL_ROOT})
+# tag.*/attach.* are reserved for `roar tag`/`roar attach` — the namespace
+# itself is the hereditary-propagation contract, so the generic `roar label`
+# path must not be able to write there (see design-docs/20260519 roar
+# audit.md, "Storage: no schema changes"). This also protects the tag.bind
+# ledger's append-only integrity: TagService bypasses this check via its own
+# direct label_repo writes (see application/tags.py).
+SYSTEM_LABEL_ROOT_PREFIXES = frozenset({JOB_SYSTEM_LABEL_ROOT, "tag", "attach"})
 SYSTEM_LABEL_EXACT_PATHS = frozenset(AUTO_DATASET_LABEL_KEYS)
 DISPLAY_FILTER_ROOT_PREFIXES = frozenset({JOB_SYSTEM_LABEL_ROOT})
 

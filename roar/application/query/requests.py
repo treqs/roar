@@ -176,3 +176,47 @@ class InputsQueryRequest:
     output_json: bool = False
     unsourced: bool = False  # show only unsourced inputs (no producer)
     sourced: bool = False  # show only sourced inputs (produced/ingested by roar)
+
+
+@dataclass(frozen=True)
+class TagAddRequest:
+    roar_dir: Path
+    cwd: Path
+    kv: str  # "kind=value"
+    target: str
+
+
+@dataclass(frozen=True)
+class TagRmRequest:
+    roar_dir: Path
+    cwd: Path
+    key_or_kv: str  # "kind" or "kind=value"
+    target: str
+
+
+@dataclass(frozen=True)
+class TagShowRequest:
+    roar_dir: Path
+    cwd: Path
+    target: str
+
+
+@dataclass(frozen=True)
+class TagHistoryRequest:
+    roar_dir: Path
+    cwd: Path
+    target: str
+
+
+@dataclass(frozen=True)
+class TagBindRequest:
+    roar_dir: Path
+    cwd: Path
+    targets: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TagUnbindRequest:
+    roar_dir: Path
+    cwd: Path
+    targets: tuple[str, ...]
