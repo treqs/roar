@@ -220,3 +220,11 @@ class TagUnbindRequest:
     roar_dir: Path
     cwd: Path
     targets: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TagWhyRequest:
+    roar_dir: Path
+    cwd: Path
+    target: str
+    key: str  # "kind" or "kind=value" — value narrows the explanation to one value

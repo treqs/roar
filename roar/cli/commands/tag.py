@@ -6,6 +6,7 @@ Usage:
     roar tag rm   <kind>[=<value>] <target>
     roar tag show   <target>
     roar tag history  <target>
+    roar tag why    <kind>[=<value>] <target>
     roar tag bind    <artifact>...
     roar tag unbind  <artifact>...
 
@@ -34,8 +35,17 @@ from ...application.query.requests import (
     TagRmRequest,
     TagShowRequest,
     TagUnbindRequest,
+    TagWhyRequest,
 )
-from ...application.query.tag import tag_add, tag_bind, tag_history, tag_rm, tag_show, tag_unbind
+from ...application.query.tag import (
+    tag_add,
+    tag_bind,
+    tag_history,
+    tag_rm,
+    tag_show,
+    tag_unbind,
+    tag_why,
+)
 from .._tag_kinds import enforce_tag_kind
 from ..context import RoarContext
 from ..decorators import require_init
@@ -67,6 +77,7 @@ def tag(ctx: click.Context) -> None:
         roar tag rm  license               @1
         roar tag show                      @1
         roar tag history                   @1
+        roar tag why  contains_pii         model.pt
         roar tag bind                      model.pt
         roar tag unbind                    model.pt
     """
@@ -201,6 +212,30 @@ def tag_unbind_cmd(ctx: RoarContext, targets: tuple[str, ...]) -> None:
     """
     try:
         rendered = tag_unbind(TagUnbindRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, targets=targets))
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(rendered)
+
+
+@tag.command("why")
+@click.argument("key")
+@click.argument("target")
+@click.pass_obj
+@require_init
+def tag_why_cmd(ctx: RoarContext, key: str, target: str) -> None:
+    """Explain how TARGET acquired a tag — walk the inheritance path to the human act.
+
+    KEY is KIND or KIND=VALUE (a value narrows the explanation to one value).
+
+    \b
+    Examples:
+        roar tag why contains_pii       model.pkl
+        roar tag why license=GPL-3.0    @2
+    """
+    try:
+        rendered = tag_why(
+            TagWhyRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, key=key, target=target)
+        )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(rendered)
