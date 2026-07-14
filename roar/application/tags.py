@@ -57,12 +57,27 @@ class BindResult:
     promoted: dict[str, list[str]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class WhyNode:
+    """One hop in a ``roar tag why`` provenance walk (a render-agnostic tree).
+
+    Each node's ``label`` describes one step back toward a human act; leaves are
+    a user ``tag add`` / ``run --add-tag`` (or an unresolved origin).
+    """
+
+    label: str
+    children: list[WhyNode] = field(default_factory=list)
+
+
 class TagService:
     """Set-accumulation semantics over the tag.* label namespace."""
 
     def __init__(self, db_ctx: DatabaseContext, cwd: Any) -> None:
         self._svc = LabelService(db_ctx, cwd)
         self._label_repo = db_ctx.labels
+        # Read-only handles used by `why` to walk job -> inputs and name artifacts.
+        self._jobs = db_ctx.jobs
+        self._artifacts = db_ctx.artifacts
 
     # ------------------------------------------------------------------
     # Target resolution
@@ -203,6 +218,101 @@ class TagService:
     def history(self, resolved: LabelTargetRef) -> list[dict[str, Any]]:
         """Return full label-version history for the target."""
         return self._svc.history(resolved)
+
+    def why(self, resolved: LabelTargetRef, kind: str, value: str | None = None) -> list[WhyNode]:
+        """Explain how *resolved* acquired ``tag.{kind}`` — one tree per value.
+
+        Read-only traversal over the stored ``{value, origin, job}`` records and
+        the bind ledger (no writes, no schema). Each tree bottoms out at a human
+        act (a bare ``tag add`` or a ``run --add-tag``), annotating any
+        cross-session hop with the explicit ``bind`` that authorized it.
+        """
+        if resolved.entity_type == "job":
+            raise ValueError(
+                "`roar tag why` explains an artifact's tag, not a job's. `@N` targets "
+                "job step N — trace one of its output artifacts instead (by hash or "
+                "path), or use `roar tag show @N` to list the job's tags."
+            )
+        if resolved.entity_type != "artifact" or not resolved.artifact_id:
+            raise ValueError(
+                "`roar tag why` explains an artifact's tag — target a tracked artifact "
+                "by hash or path."
+            )
+        subtree = self._current_tag_subtree(resolved)
+        stored = [record["value"] for record in _as_value_records(subtree.get(kind))]
+        wanted = [v for v in stored if value is None or v == value]
+        return [self._explain(resolved.artifact_id, kind, v, frozenset()) for v in wanted]
+
+    def _explain(self, artifact_id: str, kind: str, value: str, visited: frozenset[str]) -> WhyNode:
+        name = self._artifact_display(artifact_id)
+        subtree = _current_tag_subtree(self._label_repo, artifact_id)
+        record = next(
+            (r for r in _as_value_records(subtree.get(kind)) if r["value"] == value), None
+        )
+        if record is None:
+            return WhyNode(f"{name}: no {kind}={value} recorded")
+
+        origin = record.get("origin")
+        job_uid = record.get("job")
+        if origin == LABEL_ORIGIN_USER and not job_uid:
+            return WhyNode(f"{name}: {kind}={value} — user `roar tag add` (born bound)")
+        if origin == LABEL_ORIGIN_USER and job_uid:
+            return WhyNode(
+                f"{name}: {kind}={value} — user `roar run --add-tag` "
+                f"in job {job_uid[:8]} (session-scoped)"
+            )
+
+        header = f"{name}: {kind}={value} — inherited"
+        header += f" via job {job_uid[:8]}" if job_uid else ""
+        if artifact_id in visited:
+            return WhyNode(header + " (cycle)")
+        if not job_uid:
+            return WhyNode(header + " (no producing job recorded — origin unknown)")
+        job = self._jobs.get_by_uid(job_uid)
+        if not job:
+            return WhyNode(header + " (producing job not found)")
+
+        visited = visited | {artifact_id}
+        children: list[WhyNode] = []
+        for inp in self._jobs.get_inputs(job["id"]):
+            input_id = inp.get("artifact_id")
+            if not input_id:
+                continue
+            input_subtree = _current_tag_subtree(self._label_repo, input_id)
+            input_record = next(
+                (r for r in _as_value_records(input_subtree.get(kind)) if r["value"] == value),
+                None,
+            )
+            if input_record is None:
+                continue  # this input doesn't carry the value — not on the path
+            node = self._explain(input_id, kind, value, visited)
+            # A *derived* (system) value made cross-session by an explicit bind is a
+            # human act worth naming; a born-bound user tag already reads as one.
+            covered = _is_covered_by_bind(
+                _as_bind_events(input_subtree.get(BIND_KIND)), kind, value
+            )
+            if covered and input_record.get("origin") == LABEL_ORIGIN_SYSTEM:
+                node = WhyNode(
+                    f"`roar tag bind` on {self._artifact_display(input_id)} "
+                    f"authorized this across sessions",
+                    [node],
+                )
+            children.append(node)
+
+        if not children:
+            return WhyNode(header + " (no input carries this value — origin unclear)")
+        return WhyNode(header, children)
+
+    def _artifact_display(self, artifact_id: str) -> str:
+        artifact = self._artifacts.get(artifact_id)
+        if not artifact:
+            return artifact_id[:12]
+        path = artifact.get("path") or artifact.get("first_seen_path")
+        if path:
+            return str(path).rsplit("/", 1)[-1]
+        hashes = artifact.get("hashes") or []
+        digest = hashes[0]["digest"] if hashes else artifact_id
+        return str(digest)[:12]
 
     # ------------------------------------------------------------------
     # Internal read/write — bypasses LabelService.set_metadata so writes

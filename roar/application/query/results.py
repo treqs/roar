@@ -7,6 +7,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from ..tags import WhyNode
     from .diff_graph import JobMatch, JobNode
     from .git_readiness import GitReadinessSummary
 
@@ -187,6 +188,36 @@ class TagBindSummary:
         if not self.artifacts:
             return "No targets."
         return "\n".join(artifact.render() for artifact in self.artifacts)
+
+
+@dataclass(frozen=True)
+class TagWhySummary:
+    """Renders the provenance walk produced by ``roar tag why``.
+
+    ``roots`` is a forest of ``WhyNode`` (one tree per explained value); each
+    node's ``label`` describes one hop back toward a human act (``tag add`` /
+    ``run --add-tag`` / a cross-session ``bind``).
+    """
+
+    heading: str
+    roots: list[WhyNode] = field(default_factory=list)
+    empty_message: str = "(no such tag on target — nothing to explain)"
+
+    def render(self) -> str:
+        lines = [self.heading]
+        if not self.roots:
+            lines.append(f"  {self.empty_message}")
+            return "\n".join(lines)
+        for root in self.roots:
+            lines.extend(self._render_node(root, depth=0))
+        return "\n".join(lines)
+
+    def _render_node(self, node: WhyNode, *, depth: int) -> list[str]:
+        indent = "  " + "    " * depth
+        lines = [f"{indent}{'└─ ' if depth else ''}{node.label}"]
+        for child in node.children:
+            lines.extend(self._render_node(child, depth=depth + 1))
+        return lines
 
 
 @dataclass(frozen=True)
