@@ -37,14 +37,21 @@ HOST_GLAAS_URL="${HOST_GLAAS_URL:-http://localhost:3001}"
 CLUSTER_GLAAS_PORT=3001
 
 JOBSET_VERSION="v0.12.0"
+TRAINING_OPERATOR_V1_REF="v1.9.2"
+TRAINER_V2_REF="v2.2.1"
+KUBERAY_VERSION="v1.4.0"
 
 WITH_MINIO=0
 WITH_JOBSET=0
+WITH_KUBEFLOW=0
+WITH_KUBERAY=0
 SKIP_GLAAS=0
 for arg in "$@"; do
   case "$arg" in
     --with-minio) WITH_MINIO=1 ;;
     --with-jobset) WITH_JOBSET=1 ;;
+    --with-kubeflow) WITH_KUBEFLOW=1 ;;
+    --with-kuberay) WITH_KUBERAY=1 ;;
     --skip-glaas) SKIP_GLAAS=1 ;;
     *)
       echo "error: unknown flag: $arg" >&2
@@ -183,6 +190,30 @@ if ((WITH_JOBSET == 1)); then
   kubectl_ctx apply --server-side \
     -f "https://github.com/kubernetes-sigs/jobset/releases/download/${JOBSET_VERSION}/manifests.yaml"
   kubectl_ctx -n jobset-system rollout status deployment/jobset-controller-manager --timeout=300s
+fi
+
+if ((WITH_KUBEFLOW == 1)); then
+  echo "▶ Installing Kubeflow training-operator v1 (${TRAINING_OPERATOR_V1_REF})"
+  kubectl_ctx apply --server-side \
+    -k "github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=${TRAINING_OPERATOR_V1_REF}"
+  kubectl_ctx -n kubeflow rollout status deployment/training-operator --timeout=300s
+
+  echo "▶ Installing Kubeflow trainer v2 (${TRAINER_V2_REF})"
+  kubectl_ctx apply --server-side \
+    -k "github.com/kubeflow/trainer.git/manifests/overlays/manager?ref=${TRAINER_V2_REF}"
+  kubectl_ctx -n kubeflow-system rollout status deployment/kubeflow-trainer-controller-manager --timeout=300s
+  echo "▶ Installing Kubeflow trainer v2 runtimes"
+  kubectl_ctx apply --server-side \
+    -k "github.com/kubeflow/trainer.git/manifests/overlays/runtimes?ref=${TRAINER_V2_REF}" || \
+    echo "warning: trainer runtimes overlay failed; TrainJob e2e will create its own runtime" >&2
+fi
+
+if ((WITH_KUBERAY == 1)); then
+  echo "▶ Installing KubeRay operator ${KUBERAY_VERSION}"
+  kubectl_ctx create -k "github.com/ray-project/kuberay/ray-operator/config/default?ref=${KUBERAY_VERSION}" 2>/dev/null || \
+    kubectl_ctx apply --server-side -k "github.com/ray-project/kuberay/ray-operator/config/default?ref=${KUBERAY_VERSION}"
+  kubectl_ctx -n ray-system rollout status deployment/kuberay-operator --timeout=300s || \
+    kubectl_ctx -n default rollout status deployment/kuberay-operator --timeout=300s
 fi
 
 echo

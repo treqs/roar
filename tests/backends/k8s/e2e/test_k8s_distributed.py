@@ -252,7 +252,7 @@ def _roar_env() -> dict[str, str]:
     return env
 
 
-def _roar(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+def _roar(args: list[str], *, cwd: Path, timeout: int = 700) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "roar", *args],
         cwd=cwd,
@@ -260,14 +260,17 @@ def _roar(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
-        timeout=700,
+        timeout=timeout,
     )
 
 
-def _submit(manifest_name: str, *, cwd: Path) -> subprocess.CompletedProcess[str]:
+def _submit(
+    manifest_name: str, *, cwd: Path, timeout: int = 700
+) -> subprocess.CompletedProcess[str]:
     return _roar(
         ["run", "kubectl", "apply", "--context", KUBE_CONTEXT, "-f", manifest_name],
         cwd=cwd,
+        timeout=timeout,
     )
 
 

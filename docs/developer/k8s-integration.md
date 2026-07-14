@@ -15,11 +15,26 @@ identity comes from the downward API plus the completion-index/node-rank
 env chain (`JOB_COMPLETION_INDEX` → `PET_NODE_RANK` → pod-level `RANK`).
 
 Current phase status (see `design-docs/k8s-training-lineage-integration.md`
-in the dev meta-repo): Phases 1–2 fully implemented (submit wrapping,
-operator adapters, multi-pod capture, `roar k8s attach`, bundle-mode
+in the dev meta-repo): Phases 1–2 fully implemented and live-validated
+(submit wrapping, operator adapters incl. real training-operator v1 and
+trainer v2 controllers, multi-pod capture, `roar k8s attach`, bundle-mode
 fallback, object-store I/O hooks, mount-map rewriting, retry-chaos
-coverage). Remaining: RayJob delegation and the Phase-3 admission-webhook
+coverage, RayJob delegation). Remaining: the Phase-3 admission-webhook
 injector (incl. the opt-in proxy sidecar).
+
+**RayJob delegation** (`rayjob.py`): KubeRay overwrites container commands
+with `ray start --block`, so command-wrapping can't see user code. Instead
+the RayJob rewrite reuses the Ray backend's runtime surface: the
+entrypoint is wrapped through the Ray driver entrypoint, `runtimeEnvYAML`
+gains the roar pip requirement + worker setup hook + Ray env contract
+(`ROAR_EXECUTION_BACKEND=ray`, `ROAR_JOB_ID` = the k8s parent uid so Ray
+fragments link to the recorded submit job; node agents/proxy stay off per
+the proxy decision), and fragment-session credentials go into the
+RayCluster pod templates as Secret refs — never inline in the CR. RayJob
+signals completion via `status.jobStatus` (not conditions), and
+reconstitution/attach delegate to the **Ray** backend's reconstituter,
+since the streamed fragments are Ray `TaskFragment` payloads that merge
+as `ray_task` jobs.
 
 **Mounted storage** (`mount_map.py`): FUSE CSI mounts surface object I/O as
 local file syscalls under a mount path. The rewriter derives a per-container

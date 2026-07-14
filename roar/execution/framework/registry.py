@@ -74,7 +74,41 @@ def get_execution_backend(name: str) -> ExecutionBackend:
     for backend in _registered_execution_backends:
         if backend.name == normalized_name:
             return backend
+
+    # A miss with skipped builtin imports may be a transient early-import
+    # failure, not a permanent one: sitecustomize (ROAR_WRAP=1) can trigger
+    # discovery at interpreter startup before the runtime environment's
+    # site-packages are fully importable (observed in Ray pip virtualenvs,
+    # where roar's deps resolve fine moments later in the worker setup
+    # hook). Retry the skipped imports once per lookup before giving up.
+    if _skipped_builtin_backend_imports:
+        _retry_skipped_builtin_backend_imports()
+        for backend in _registered_execution_backends:
+            if backend.name == normalized_name:
+                return backend
+
     raise LookupError(f"unknown execution backend: {normalized_name or '<empty>'}")
+
+
+def _retry_skipped_builtin_backend_imports() -> None:
+    for module_name in list(_skipped_builtin_backend_imports):
+        if module_name not in _BUILTIN_EXECUTION_BACKEND_MODULES:
+            continue
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as exc:
+            _skipped_builtin_backend_imports[module_name] = str(exc)
+            continue
+        register = getattr(module, "register", None)
+        if not callable(register):
+            continue
+        try:
+            _register_entrypoint_payload(register)
+        except Exception as exc:
+            _skipped_builtin_backend_imports[f"{module_name}:register"] = str(exc)
+            continue
+        _skipped_builtin_backend_imports.pop(module_name, None)
+        _skipped_builtin_backend_imports.pop(f"{module_name}:register", None)
 
 
 def match_execution_backend_for_module(module_name: str) -> ExecutionBackend | None:

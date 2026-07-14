@@ -154,11 +154,21 @@ def plan_kubectl_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
     _write_submit_context(prepared_path, submit_context)
 
     rewritten_command = _replace_filename_argument(command, str(prepared_path))
+
+    # RayJob pods stream Ray TaskFragments, so reconstitution is delegated
+    # to the Ray backend's reconstituter rather than the k8s one.
+    finalize_run = None
+    if rewrite.workload_kind == "RayJob":
+        from roar.execution.fragments.reconstitution import build_submit_finalizer
+
+        finalize_run = build_submit_finalizer("ray", session["session_id"])
+
     return ExecutionCommandPlan(
         backend_name="k8s",
         command=rewritten_command,
         execution_role="submit",
         session_id=session["session_id"],
+        finalize_run=finalize_run,
     )
 
 

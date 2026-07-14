@@ -25,6 +25,13 @@ Three test layers share this harness:
   `k8s_task` jobs keyed by pod UID) and mount-map rewriting (a hostPath
   volume standing in for a FUSE mount, declared via `[k8s.mount_map]`,
   rewrites to `s3://` URIs at reconstitution).
+- `e2e/test_k8s_operators.py` — live Kubeflow operator validation:
+  PyTorchJob v1 (Master+Worker through the real training-operator) and
+  TrainJob v2 (real TrainJob→JobSet pipeline via a slim-image clone of the
+  shipped torch-distributed runtime). Skips without `--with-kubeflow`.
+- `e2e/test_k8s_rayjob.py` — live RayJob delegation smoke on KubeRay (the
+  heaviest test: multi-GB Ray image + per-job pip env). Skips without
+  `--with-kuberay`.
 - `e2e/test_k8s_smoke.py` — the Phase-0 runtime diagnostic: fixtures
   hand-wrap the manifest (no backend involved) to isolate the runtime pieces
   (in-pod tracing, fragment streaming, identity contract) when the product
@@ -47,8 +54,9 @@ live in `unit/` and run in the default gate — no cluster needed.
 bash scripts/build_wheel_with_bins.sh
 
 # create cluster + wire glaas + preflight
-# (--with-minio for S3 scenarios, --with-jobset for the JobSet operator e2e)
-bash tests/backends/k8s/scripts/bootstrap_k8s.sh --with-jobset --with-minio
+# (--with-minio: S3 scenarios; --with-jobset: JobSet e2e; --with-kubeflow:
+#  PyTorchJob/TrainJob e2e; --with-kuberay: RayJob delegation e2e)
+bash tests/backends/k8s/scripts/bootstrap_k8s.sh --with-jobset --with-minio --with-kubeflow --with-kuberay
 
 # run the smoke tests (addopts override needed: e2e dirs are ignored by default)
 pytest tests/backends/k8s/e2e -o addopts='' -m k8s_e2e -v

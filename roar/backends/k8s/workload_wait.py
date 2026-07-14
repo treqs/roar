@@ -58,8 +58,14 @@ def terminal_condition(document: dict[str, Any]) -> tuple[bool | None, str]:
     """Return (succeeded, message) from workload status conditions.
 
     ``succeeded`` is None while the workload is still running. Condition
-    type names are unioned across Job/JobSet/PyTorchJob/TrainJob.
+    type names are unioned across Job/JobSet/PyTorchJob/TrainJob; RayJob
+    signals through ``status.jobStatus`` instead of conditions.
     """
+    if str(document.get("kind") or "") == "RayJob":
+        from roar.backends.k8s.rayjob import rayjob_terminal_status
+
+        return rayjob_terminal_status(document)
+
     status = document.get("status")
     conditions = status.get("conditions") if isinstance(status, dict) else None
     for condition in conditions or []:

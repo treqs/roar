@@ -87,9 +87,7 @@ def attach_k8s_workload(
     )
     kubectl_resource = workload_kind.kubectl_resource
 
-    env_entries = _instrumented_env_entries(document, workload_kind)
-    parent_job_uid = _env_value(env_entries, "ROAR_K8S_PARENT_JOB_UID")
-    secret_name = _session_secret_name(env_entries)
+    parent_job_uid, secret_name = _recover_identity(document, workload_kind)
     if not parent_job_uid or not secret_name:
         raise K8sAttachError(
             f"{kubectl_resource}/{name} was not instrumented by roar "
@@ -149,7 +147,7 @@ def attach_k8s_workload(
     if not glaas_url:
         raise K8sAttachError("GLaaS is not configured; set glaas.url to fetch fragments")
 
-    result = create_k8s_fragment_reconstituter(
+    result = _reconstituter_factory(workload_kind)(
         session_id,
         token,
         str(glaas_url),
@@ -210,6 +208,44 @@ def _fetch_workload(
     raise K8sAttachError(f"cannot fetch workload {workload!r} in namespace {namespace}: {detail}")
 
 
+def _recover_identity(
+    document: dict[str, Any],
+    workload_kind: WorkloadKind,
+) -> tuple[str, str]:
+    """Return (parent_job_uid, secret_name) from the cluster object."""
+    env_entries = _instrumented_env_entries(document, workload_kind)
+    secret_name = _session_secret_name(env_entries)
+
+    if workload_kind.kind == "RayJob":
+        # RayJob carries the parent uid in the Ray env contract
+        # (runtimeEnvYAML env_vars.ROAR_JOB_ID), not pod env.
+        import yaml  # type: ignore[import-untyped]
+
+        raw = document.get("spec", {}).get("runtimeEnvYAML")
+        try:
+            runtime_env = yaml.safe_load(raw) if isinstance(raw, str) else None
+        except yaml.YAMLError:
+            runtime_env = None
+        env_vars = runtime_env.get("env_vars") if isinstance(runtime_env, dict) else None
+        parent = str((env_vars or {}).get("ROAR_JOB_ID") or "").strip()
+        return parent, secret_name
+
+    return _env_value(env_entries, "ROAR_K8S_PARENT_JOB_UID"), secret_name
+
+
+def _reconstituter_factory(workload_kind: WorkloadKind):
+    if workload_kind.kind == "RayJob":
+        # RayJob fragments are Ray TaskFragments; use the Ray reconstituter.
+        from roar.execution.framework.registry import get_execution_backend
+
+        backend = get_execution_backend("ray")
+        distributed = backend.distributed
+        if distributed is None or distributed.fragment_reconstitution is None:
+            raise K8sAttachError("ray backend has no fragment reconstitution adapter")
+        return distributed.fragment_reconstitution.create_reconstituter
+    return create_k8s_fragment_reconstituter
+
+
 def _instrumented_env_entries(
     document: dict[str, Any],
     workload_kind: WorkloadKind,
@@ -219,6 +255,13 @@ def _instrumented_env_entries(
         env = trainer.get("env") if isinstance(trainer, dict) else None
         return [entry for entry in env or [] if isinstance(entry, dict)]
 
+    def _is_instrumented(entry: dict[str, Any]) -> bool:
+        if entry.get("name") == "ROAR_K8S_PARENT_JOB_UID":
+            return True
+        return entry.get("name") == "ROAR_SESSION_ID" and bool(
+            (entry.get("valueFrom") or {}).get("secretKeyRef")
+        )
+
     for ref in workload_kind.locate_pod_specs(document):
         containers = ref.spec.get("containers")
         if not isinstance(containers, list):
@@ -227,7 +270,7 @@ def _instrumented_env_entries(
             if not isinstance(container, dict):
                 continue
             env = [entry for entry in container.get("env") or [] if isinstance(entry, dict)]
-            if any(entry.get("name") == "ROAR_K8S_PARENT_JOB_UID" for entry in env):
+            if any(_is_instrumented(entry) for entry in env):
                 return env
     return []
 

@@ -61,9 +61,12 @@ class WorkloadKind:
     api_group: str
     kubectl_resource: str
     # Returns mutable pod-spec references inside the (copied) document.
-    # None marks trainer-override style workloads (TrainJob), which have
-    # no inline pod template.
+    # None marks workloads with no inline pod template (TrainJob).
     locate_pod_specs: Callable[[dict[str, Any]], list[PodSpecRef]] | None
+    # How instrumentation is applied: command-wrapping of pod-spec
+    # containers (default), the TrainJob trainer override, or delegation
+    # to the Ray backend's runtime surface for RayJob.
+    rewrite_style: str = "pod_specs"
 
 
 def _job_pod_specs(doc: dict[str, Any]) -> list[PodSpecRef]:
@@ -84,6 +87,12 @@ def _jobset_pod_specs(doc: dict[str, Any]) -> list[PodSpecRef]:
         if spec is not None:
             refs.append(PodSpecRef(role=role, spec=spec))
     return refs
+
+
+def _rayjob_pod_specs(doc: dict[str, Any]) -> list[PodSpecRef]:
+    from roar.backends.k8s.rayjob import rayjob_pod_specs
+
+    return rayjob_pod_specs(doc)
 
 
 def _pytorchjob_pod_specs(doc: dict[str, Any]) -> list[PodSpecRef]:
@@ -124,6 +133,14 @@ WORKLOAD_KINDS: tuple[WorkloadKind, ...] = (
         api_group="trainer.kubeflow.org",
         kubectl_resource="trainjobs.trainer.kubeflow.org",
         locate_pod_specs=None,
+        rewrite_style="trainer_override",
+    ),
+    WorkloadKind(
+        kind="RayJob",
+        api_group="ray.io",
+        kubectl_resource="rayjobs.ray.io",
+        locate_pod_specs=_rayjob_pod_specs,
+        rewrite_style="rayjob",
     ),
 )
 
@@ -239,9 +256,16 @@ def rewrite_manifest_for_lineage(
         config_mount_map=dict(mount_map or {}),
     )
 
-    if workload.locate_pod_specs is None:
+    if workload.rewrite_style == "trainer_override":
         wrapped, skipped = _rewrite_trainjob(doc, workload_name=workload_name, contract=contract)
+    elif workload.rewrite_style == "rayjob":
+        from roar.backends.k8s.rayjob import rewrite_rayjob_for_lineage
+
+        wrapped, skipped = rewrite_rayjob_for_lineage(
+            doc, workload_name=workload_name, contract=contract
+        )
     else:
+        assert workload.locate_pod_specs is not None
         wrapped, skipped = _rewrite_pod_specs(
             workload.locate_pod_specs(doc),
             workload=workload,
