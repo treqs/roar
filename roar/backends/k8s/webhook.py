@@ -57,6 +57,8 @@ class WebhookSettings:
     fragment_session_ttl_seconds: int = 86400
     bundle_dir: str = ""
     mount_map: dict[str, str] = field(default_factory=dict)
+    proxy_sidecar: bool = False
+    proxy_upstream: str = ""
 
     @classmethod
     def from_environ(cls, environ: dict[str, str] | None = None) -> WebhookSettings:
@@ -83,6 +85,9 @@ class WebhookSettings:
             fragment_session_ttl_seconds=int(env.get("ROAR_WEBHOOK_SESSION_TTL", "86400") or 86400),
             bundle_dir=env.get("ROAR_WEBHOOK_BUNDLE_DIR", "").strip(),
             mount_map=mount_map,
+            proxy_sidecar=env.get("ROAR_WEBHOOK_PROXY_SIDECAR", "").strip().lower()
+            in ("1", "true", "yes"),
+            proxy_upstream=env.get("ROAR_WEBHOOK_PROXY_UPSTREAM", "").strip(),
         )
 
 
@@ -154,6 +159,8 @@ def mutate_admission_review(
             mount_map=settings.mount_map,
             runtime_source=settings.runtime_source,
             runtime_image=settings.runtime_image,
+            proxy_sidecar=settings.proxy_sidecar,
+            proxy_upstream=settings.proxy_upstream,
             namespace_override=namespace,
         )
         rewritten = rewrite.documents[0]

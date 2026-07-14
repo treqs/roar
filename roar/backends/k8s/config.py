@@ -27,6 +27,11 @@ class K8sBackendConfig(BaseModel):
     runtime_source: str = "install"
     runtime_image: str = ""
     runtime_install_requirement: str = ""
+    # Opt-in roar-proxy S3 sidecar for clients the in-process hooks can't
+    # see (aws CLI, s5cmd, Go/Java SDKs). Requires runtime_source="image"
+    # (the sidecar runs the proxy binary from runtime_image).
+    proxy_sidecar: bool = False
+    proxy_upstream: str = ""
     cluster_glaas_url: str = ""
     bundle_dir: str = ""
     # Explicit mount-path -> object-store URI mapping for mounted storage
@@ -78,6 +83,24 @@ K8S_CONFIGURABLE_KEYS = {
         description=(
             "Cluster-visible GLaaS URL injected into pods when it differs from the "
             "host-visible glaas.url (ROAR_CLUSTER_GLAAS_URL env always wins)"
+        ),
+    ),
+    "k8s.proxy_sidecar": ConfigurableKeySpec(
+        value_type=bool,
+        default=False,
+        description=(
+            "Inject the roar-proxy S3 sidecar (native init container) to capture "
+            "S3 traffic from non-Python clients; requires k8s.runtime_source='image'. "
+            "In-process hooks remain the primary capture; user-set AWS_ENDPOINT_URL "
+            "always wins over the injected proxy redirect"
+        ),
+    ),
+    "k8s.proxy_upstream": ConfigurableKeySpec(
+        value_type=str,
+        default="",
+        description=(
+            "Upstream S3 endpoint the proxy sidecar forwards to (empty = real AWS S3); "
+            "set for MinIO/LocalStack-style deployments"
         ),
     ),
     "k8s.bundle_dir": ConfigurableKeySpec(

@@ -123,8 +123,18 @@ def plan_kubectl_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
         mount_map=_config_mount_map(config),
         runtime_source=str(config.get("runtime_source") or "install"),
         runtime_image=str(config.get("runtime_image") or ""),
+        proxy_sidecar=bool(config.get("proxy_sidecar", False)),
+        proxy_upstream=str(config.get("proxy_upstream") or ""),
         namespace_override=_find_namespace_argument(command),
     )
+    if bool(config.get("proxy_sidecar", False)) and (
+        str(config.get("runtime_source") or "install") != "image"
+        or not str(config.get("runtime_image") or "")
+    ):
+        _warn(
+            "k8s.proxy_sidecar requires k8s.runtime_source='image' with "
+            "k8s.runtime_image set; sidecar not injected"
+        )
     if rewrite.skipped_containers:
         _warn(
             "containers without an explicit command were left uninstrumented: "

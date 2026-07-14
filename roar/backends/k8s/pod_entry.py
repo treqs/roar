@@ -173,11 +173,76 @@ def _augment_with_object_io(fragments: list[dict]) -> None:
 
     events_path = Path(os.environ.get("ROAR_K8S_OBJECT_IO_FILE") or _object_io_events_path())
     reads, writes = load_object_io_refs(events_path)
+
+    proxy_reads, proxy_writes = _load_proxy_log_refs(
+        os.environ.get("ROAR_K8S_PROXY_LOG"),
+        seen_reads={ref["path"] for ref in reads},
+        seen_writes={ref["path"] for ref in writes},
+    )
+    reads.extend(proxy_reads)
+    writes.extend(proxy_writes)
+
     if not reads and not writes:
         return
     for fragment in fragments:
         fragment.setdefault("reads", []).extend(reads)
         fragment.setdefault("writes", []).extend(writes)
+
+
+def _load_proxy_log_refs(
+    log_path: str | None,
+    *,
+    seen_reads: set[str],
+    seen_writes: set[str],
+) -> tuple[list[dict], list[dict]]:
+    """Parse the proxy sidecar's log into refs for hook-invisible clients.
+
+    The in-process hooks are the primary S3 capture — proxy entries are
+    only added for paths the hooks did not already record.
+    """
+    if not log_path:
+        return [], []
+    path = Path(log_path)
+    if not path.is_file():
+        return [], []
+
+    try:
+        from roar.execution.cluster.proxy import parse_log_line
+    except Exception:
+        return [], []
+
+    write_ops = {"PutObject", "CompleteMultipartUpload", "CopyObject"}
+    read_ops = {"GetObject"}
+    reads: dict[str, dict] = {}
+    writes: dict[str, dict] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return [], []
+    for line in lines:
+        entry = parse_log_line(line)
+        if entry is None:
+            continue
+        if entry.operation in write_ops:
+            mode_seen, bucket_refs = seen_writes, writes
+        elif entry.operation in read_ops:
+            mode_seen, bucket_refs = seen_reads, reads
+        else:
+            continue
+        s3_path = f"s3://{entry.bucket}/{entry.key}"
+        if s3_path in mode_seen:
+            continue
+        ref: dict = {
+            "path": s3_path,
+            "hash": entry.etag or None,
+            "hash_algorithm": "etag" if entry.etag else "",
+            "size": int(entry.size_bytes or 0),
+            "capture_method": "proxy",
+        }
+        if entry.byte_ranges:
+            ref["byte_ranges"] = entry.byte_ranges
+        bucket_refs[s3_path] = ref
+    return list(reads.values()), list(writes.values())
 
 
 def _emit_or_bundle(fragments: list[dict]) -> str:

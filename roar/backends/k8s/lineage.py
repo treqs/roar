@@ -69,6 +69,7 @@ def collect_k8s_fragments(
             continue
         try:
             rewrite_fragment_paths(payload)
+            _drop_runtime_staging_noise(payload)
             parsed.append(ExecutionFragment.from_dict(payload))
         except Exception:
             continue
@@ -85,6 +86,27 @@ def collect_k8s_fragments(
         step_number=step_number,
     )
     return len(parsed)
+
+
+def _drop_runtime_staging_noise(fragment: dict[str, Any]) -> None:
+    """Filter roar's own staged runtime out of the captured signal.
+
+    Image-staged pods import roar from the /roar-runtime emptyDir, and the
+    tracer faithfully records those reads. Like ignore_package_reads for
+    site-packages, they are runtime noise, not workload lineage — dropped
+    here at reconstitution (capture stays raw in the fragment stream).
+    """
+    for list_key in ("reads", "writes"):
+        refs = fragment.get(list_key)
+        if not isinstance(refs, list):
+            continue
+        fragment[list_key] = [
+            ref
+            for ref in refs
+            if not (
+                isinstance(ref, dict) and str(ref.get("path") or "").startswith("/roar-runtime/")
+            )
+        ]
 
 
 def resolve_active_session_context(db_path: str) -> tuple[int | None, int]:

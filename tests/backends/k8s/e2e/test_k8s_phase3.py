@@ -148,6 +148,129 @@ def test_image_staged_runtime_captures_without_network_install(
         _cleanup(job_name)
 
 
+PROXY_JOB_TEMPLATE = """\
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {name}
+  namespace: {namespace}
+  labels:
+    app.kubernetes.io/part-of: roar-k8s-e2e
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 1800
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: work
+          emptyDir: {{}}
+      containers:
+        - name: trainer
+          image: python:3.12-slim
+          workingDir: /work
+          volumeMounts:
+            - name: work
+              mountPath: /work
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              value: minioadmin
+            - name: AWS_SECRET_ACCESS_KEY
+              value: minioadmin
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+          command:
+            - python
+            - -c
+            - >-
+              import urllib.request;
+              data = urllib.request.urlopen('http://127.0.0.1:19191/{bucket}/datasets/train.csv', timeout=30).read();
+              open('model.bin', 'wb').write(data * 2)
+"""
+
+
+def test_proxy_sidecar_captures_hook_invisible_s3_client(
+    k8s_cluster: None,
+    glaas_health: str,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """A raw-HTTP S3 client (no boto3 — the hooks are blind to it) reads
+    through the injected proxy sidecar, which re-signs the request with the
+    workload's inherited AWS credentials; the proxy log lands in lineage."""
+    if not _runtime_image_loaded():
+        pytest.skip("roar-runtime:dev not loaded")
+    if kubectl(["get", "deployment/minio", "-n", NAMESPACE], check=False).returncode != 0:
+        pytest.skip("MinIO not deployed; run bootstrap_k8s.sh --with-minio")
+
+    import boto3
+    from botocore.client import Config
+
+    suffix = uuid.uuid4().hex[:6]
+    bucket = f"roar-proxy-{suffix}"
+    host_s3 = boto3.client(
+        "s3",
+        endpoint_url="http://localhost:39000",
+        aws_access_key_id="minioadmin",
+        aws_secret_access_key="minioadmin",
+        region_name="us-east-1",
+        config=Config(s3={"addressing_style": "path"}),
+    )
+    host_s3.create_bucket(Bucket=bucket)
+    host_s3.put_object(Bucket=bucket, Key="datasets/train.csv", Body=b"x,y\n1.0,2.0\n2.0,3.9\n")
+    project_dir = tmp_path_factory.mktemp("k8s-proxy-mode")
+    _write_image_mode_project(project_dir)
+    config_path = project_dir / ".roar" / "config.toml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + 'proxy_sidecar = true\nproxy_upstream = "http://minio:9000"\n',
+        encoding="utf-8",
+    )
+
+    job_name = f"roar-proxy-{suffix}"
+    (project_dir / "job.yaml").write_text(
+        PROXY_JOB_TEMPLATE.format(name=job_name, namespace=NAMESPACE, bucket=bucket),
+        encoding="utf-8",
+    )
+
+    try:
+        completed = _submit("job.yaml", cwd=project_dir)
+        logs = _pod_logs(f"job-name={job_name}")
+        run = {
+            "exit_code": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+            "pod_logs": logs,
+        }
+        assert completed.returncode == 0, _describe(run)
+
+        tasks = _query(project_dir, "SELECT id FROM jobs WHERE job_type = 'k8s_task'")
+        assert len(tasks) == 1, _describe(run)
+        task_id = tasks[0]["id"]
+
+        input_paths = {
+            str(row["path"])
+            for row in _query(
+                project_dir,
+                "SELECT path FROM job_inputs WHERE job_id = ?",
+                (task_id,),
+            )
+        }
+        assert f"s3://{bucket}/datasets/train.csv" in input_paths, (
+            f"proxy-captured read missing: {input_paths}\n{_describe(run)}"
+        )
+        output_paths = {
+            str(row["path"])
+            for row in _query(
+                project_dir,
+                "SELECT path FROM job_outputs WHERE job_id = ?",
+                (task_id,),
+            )
+        }
+        assert any(path.endswith("model.bin") for path in output_paths), output_paths
+    finally:
+        _cleanup(job_name)
+
+
 def _webhook_deployed() -> bool:
     result = kubectl(["get", "mutatingwebhookconfiguration", "roar-lineage-injector"], check=False)
     return result.returncode == 0

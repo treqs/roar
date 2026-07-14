@@ -51,6 +51,14 @@ _RUNTIME_STAGING_VOLUME = "roar-runtime"
 _RUNTIME_STAGING_MOUNT = "/roar-runtime"
 _RUNTIME_STAGING_INIT_CONTAINER = "roar-runtime-staging"
 
+_PROXY_SIDECAR_NAME = "roar-s3-proxy"
+_PROXY_LOG_VOLUME = "roar-proxy-log"
+_PROXY_LOG_MOUNT = "/roar-proxy-log"
+_PROXY_LOG_FILE = f"{_PROXY_LOG_MOUNT}/proxy.log"
+_PROXY_PORT = 19191
+# Any ABI tree's copy works: the proxy is a standalone Rust binary.
+_PROXY_BINARY = "/opt/roar-runtime/cp312/roar/bin/roar-proxy"
+
 # Terminal workload conditions, unioned across kinds: Job uses
 # Complete/SuccessCriteriaMet + Failed/FailureTarget, JobSet uses
 # Completed/Failed, PyTorchJob v1 uses Succeeded/Failed, TrainJob uses
@@ -224,6 +232,8 @@ def rewrite_manifest_for_lineage(
     mount_map: dict[str, str] | None = None,
     runtime_source: str = "install",
     runtime_image: str = "",
+    proxy_sidecar: bool = False,
+    proxy_upstream: str = "",
     namespace_override: str | None = None,
 ) -> K8sManifestRewrite:
     """Return a rewritten copy of ``documents`` with lineage instrumentation.
@@ -274,6 +284,8 @@ def rewrite_manifest_for_lineage(
         config_mount_map=dict(mount_map or {}),
         runtime_source=runtime_source,
         runtime_image=runtime_image,
+        proxy_sidecar=proxy_sidecar,
+        proxy_upstream=proxy_upstream,
     )
 
     if workload.rewrite_style == "trainer_override":
@@ -346,10 +358,18 @@ class _EnvContract:
     config_mount_map: dict[str, str] = field(default_factory=dict)
     runtime_source: str = "install"
     runtime_image: str = ""
+    proxy_sidecar: bool = False
+    proxy_upstream: str = ""
 
     @property
     def image_staging(self) -> bool:
         return self.runtime_source == "image" and bool(self.runtime_image)
+
+    @property
+    def proxy_enabled(self) -> bool:
+        # The sidecar runs the proxy binary from the runtime image, so it
+        # is only available in image-staging mode.
+        return self.proxy_sidecar and self.image_staging
 
 
 def _rewrite_pod_specs(
@@ -389,6 +409,9 @@ def _rewrite_pod_specs(
             container.pop("args", None)
             if contract.image_staging:
                 _add_staging_volume_mount(container)
+            if contract.proxy_enabled:
+                _add_proxy_log_mount(container)
+                _add_proxy_env(container)
             _inject_env_contract(
                 container.setdefault("env", []),
                 contract=contract,
@@ -402,7 +425,129 @@ def _rewrite_pod_specs(
             pod_wrapped = True
         if pod_wrapped and contract.image_staging:
             _add_runtime_staging(ref.spec, runtime_image=contract.runtime_image)
+        if pod_wrapped and contract.proxy_enabled:
+            _add_proxy_sidecar(
+                ref.spec,
+                runtime_image=contract.runtime_image,
+                upstream=contract.proxy_upstream,
+                credential_env=_collect_aws_credential_env(containers),
+            )
     return wrapped, skipped
+
+
+# The proxy re-signs forwarded requests with its own credentials (clients
+# hit localhost unauthenticated); it inherits the workload's AWS auth.
+_AWS_CREDENTIAL_ENV_NAMES = (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_ROLE_ARN",
+)
+
+
+def _collect_aws_credential_env(containers: list[Any]) -> list[dict[str, Any]]:
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        entries = [
+            entry
+            for entry in container.get("env") or []
+            if isinstance(entry, dict) and entry.get("name") in _AWS_CREDENTIAL_ENV_NAMES
+        ]
+        if entries:
+            return [dict(entry) for entry in entries]
+    return []
+
+
+def _add_proxy_sidecar(
+    pod_spec: dict[str, Any],
+    *,
+    runtime_image: str,
+    upstream: str,
+    credential_env: list[dict[str, Any]] | None = None,
+) -> None:
+    """Add the S3 proxy as a native sidecar (idempotent by name).
+
+    A native sidecar (init container with restartPolicy Always, GA in
+    k8s 1.33) keeps serving while app containers run but never blocks
+    Job completion. The startupProbe orders it before the app containers
+    so early S3 calls don't race the listener.
+    """
+    volumes = pod_spec.setdefault("volumes", [])
+    if isinstance(volumes, list) and not any(
+        isinstance(volume, dict) and volume.get("name") == _PROXY_LOG_VOLUME for volume in volumes
+    ):
+        volumes.append({"name": _PROXY_LOG_VOLUME, "emptyDir": {}})
+
+    init_containers = pod_spec.setdefault("initContainers", [])
+    if not isinstance(init_containers, list) or any(
+        isinstance(container, dict) and container.get("name") == _PROXY_SIDECAR_NAME
+        for container in init_containers
+    ):
+        return
+
+    proxy_command = f"exec {_PROXY_BINARY} --port {_PROXY_PORT}"
+    if upstream:
+        proxy_command += f" --upstream {shlex.quote(upstream)}"
+    proxy_command += f" > {_PROXY_LOG_FILE} 2>&1"
+
+    sidecar: dict[str, Any] = {
+        "name": _PROXY_SIDECAR_NAME,
+        "image": runtime_image,
+        "restartPolicy": "Always",
+        "command": ["/bin/sh", "-c", proxy_command],
+        "volumeMounts": [{"name": _PROXY_LOG_VOLUME, "mountPath": _PROXY_LOG_MOUNT}],
+        # The proxy binds loopback only, which the pod's shared network
+        # namespace makes reachable from app containers — but kubelet
+        # tcpSocket probes target the pod IP, so the probe must exec
+        # inside the netns instead.
+        "startupProbe": {
+            "exec": {
+                "command": [
+                    "python",
+                    "-c",
+                    f"import socket; socket.create_connection(('127.0.0.1', {_PROXY_PORT}), 1)",
+                ]
+            },
+            "periodSeconds": 1,
+            "failureThreshold": 30,
+        },
+    }
+    if credential_env:
+        sidecar["env"] = credential_env
+    init_containers.append(sidecar)
+
+
+def _add_proxy_log_mount(container: dict[str, Any]) -> None:
+    mounts = container.setdefault("volumeMounts", [])
+    if isinstance(mounts, list) and not any(
+        isinstance(mount, dict) and mount.get("name") == _PROXY_LOG_VOLUME for mount in mounts
+    ):
+        mounts.append(
+            {
+                "name": _PROXY_LOG_VOLUME,
+                "mountPath": _PROXY_LOG_MOUNT,
+                "readOnly": True,
+            }
+        )
+
+
+def _add_proxy_env(container: dict[str, Any]) -> None:
+    env = container.setdefault("env", [])
+    if not isinstance(env, list):
+        return
+    existing = {
+        str(entry.get("name")) for entry in env if isinstance(entry, dict) and entry.get("name")
+    }
+    # User-set AWS_ENDPOINT_URL always wins (explicit endpoints bypass
+    # the proxy by design — the hooks still capture those clients).
+    if "AWS_ENDPOINT_URL" not in existing:
+        env.append({"name": "AWS_ENDPOINT_URL", "value": f"http://127.0.0.1:{_PROXY_PORT}"})
+    if "ROAR_K8S_PROXY_LOG" not in existing:
+        env.append({"name": "ROAR_K8S_PROXY_LOG", "value": _PROXY_LOG_FILE})
 
 
 def _add_runtime_staging(pod_spec: dict[str, Any], *, runtime_image: str) -> None:

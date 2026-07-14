@@ -19,8 +19,8 @@ in the dev meta-repo): Phases 1–3 implemented and live-validated
 (submit wrapping, operator adapters incl. real training-operator v1 and
 trainer v2 controllers, multi-pod capture, `roar k8s attach`, bundle-mode
 fallback, object-store I/O hooks, mount-map rewriting, retry-chaos
-coverage, RayJob delegation, the roar-runtime image, and the mutating
-webhook injector). Remaining from Phase 3: the opt-in proxy sidecar and
+coverage, RayJob delegation, the roar-runtime image, the mutating
+webhook injector, and the opt-in proxy sidecar). Remaining from Phase 3:
 a packaged Helm chart (the harness deploys via
 `tests/backends/k8s/scripts/deploy_webhook.sh`).
 
@@ -46,6 +46,9 @@ the parent-uid annotation; dry-run admissions are side-effect-free
 (`sideEffects: NoneOnDryRun`); every internal failure returns allowed
 with a warning and pairs with `failurePolicy: Ignore` — lineage never
 blocks admission. Reconstitution is client-driven via `roar k8s attach`.
+`ROAR_WEBHOOK_PROXY_SIDECAR=true` (+ optional
+`ROAR_WEBHOOK_PROXY_UPSTREAM`) makes the injector add the proxy sidecar
+to every workload it instruments.
 
 **RayJob delegation** (`rayjob.py`): KubeRay overwrites container commands
 with `ray start --block`, so command-wrapping can't see user code. Instead
@@ -106,11 +109,26 @@ Two capture channels feed each pod's fragment:
   `job_inputs/job_outputs.byte_ranges`). Hooks no-op outside pods (env
   unset) and never raise into user code.
 
-  The `roar-proxy` S3 sidecar is deliberately not part of the CLI-side
-  backend: the hooks win on attribution and avoid `AWS_ENDPOINT_URL`
-  rewiring (which explicit-`endpoint_url` clients bypass). The proxy joins
-  in the Phase-3 webhook injector as an opt-in sidecar for non-Python S3
-  clients (see the design doc's Phase 3).
+- **Proxy sidecar** (opt-in, `k8s.proxy_sidecar = true`): for S3 clients
+  the botocore hooks can't see (Go/Rust/Java binaries, plain HTTP). The
+  rewriter appends a `roar-s3-proxy` **native sidecar** (an init container
+  with `restartPolicy: Always`, k8s ≥ 1.29/GA 1.33) running the
+  `roar-proxy` binary from the staged runtime tree — it therefore
+  **requires image staging** (`k8s.runtime_source = "image"`); with
+  install mode it warns and skips. Wrapped containers get
+  `AWS_ENDPOINT_URL=http://127.0.0.1:19191` (only when the user hasn't
+  set their own — explicit user endpoints win, and such clients simply
+  bypass the proxy). The proxy logs each request to a shared emptyDir
+  (`ROAR_K8S_PROXY_LOG`); `pod_entry` parses it via
+  `roar.execution.cluster.proxy.parse_log_line` and folds refs into the
+  fragment with `capture_method="proxy"`, skipping objects the hooks
+  already captured (hooks win on attribution). Two gotchas verified live:
+  `roar-proxy` is a **re-signing** reverse proxy, so the sidecar needs
+  AWS credentials — the rewriter copies the workload container's
+  `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/session/role env entries
+  onto the sidecar (without them every forward 502s); and it binds
+  loopback only, so its startup probe must be an `exec` probe (kubelet
+  `tcpSocket` probes dial the pod IP, which never succeeds).
 
 Transport is streaming-first with a bundle fallback: when `k8s.bundle_dir`
 names a mounted shared volume and GLaaS is unreachable from the pod (probe
@@ -181,11 +199,14 @@ recovered parent uid, and reconstitutes the streamed fragments.
 ## 4. Config
 
 Section `k8s` (registered `BackendConfigAdapter`): `enabled`, `tracer`,
+`runtime_source` (`install`|`image`), `runtime_image`,
 `runtime_install_requirement`, `cluster_glaas_url`, `bundle_dir`,
-`wait_for_completion`, `wait_timeout_seconds`, `poll_interval_seconds`,
-`fragment_session_ttl_seconds`, plus the `[k8s.mount_map]` table
-(config-file-only; maps mount paths to object-store URIs). Env overrides
-beat config: `ROAR_CLUSTER_PIP_REQ`, `ROAR_CLUSTER_GLAAS_URL`.
+`proxy_sidecar`, `proxy_upstream` (upstream S3 endpoint the proxy
+forwards to; empty = AWS), `wait_for_completion`, `wait_timeout_seconds`,
+`poll_interval_seconds`, `fragment_session_ttl_seconds`, plus the
+`[k8s.mount_map]` table (config-file-only; maps mount paths to
+object-store URIs). Env overrides beat config: `ROAR_CLUSTER_PIP_REQ`,
+`ROAR_CLUSTER_GLAAS_URL`.
 
 ## 5. Tests
 
