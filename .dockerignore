@@ -6,6 +6,8 @@
 .roar
 .ralph
 dist
+# roar-runtime image build needs the packaged wheel
+!dist/roar_cli-*.whl
 __pycache__
 **/__pycache__
 *.pyc

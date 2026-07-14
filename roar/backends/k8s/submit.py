@@ -121,6 +121,8 @@ def plan_kubectl_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
         parent_job_uid=parent_job_uid,
         bundle_dir=str(config.get("bundle_dir") or ""),
         mount_map=_config_mount_map(config),
+        runtime_source=str(config.get("runtime_source") or "install"),
+        runtime_image=str(config.get("runtime_image") or ""),
         namespace_override=_find_namespace_argument(command),
     )
     if rewrite.skipped_containers:

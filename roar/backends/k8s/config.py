@@ -20,6 +20,12 @@ class K8sBackendConfig(BaseModel):
 
     enabled: bool = False
     tracer: str = "preload"
+    # How pods obtain the roar runtime: "install" pip-installs
+    # runtime_install_requirement at container start; "image" stages
+    # per-ABI trees from runtime_image via an init container (hermetic,
+    # no network at pod start).
+    runtime_source: str = "install"
+    runtime_image: str = ""
     runtime_install_requirement: str = ""
     cluster_glaas_url: str = ""
     bundle_dir: str = ""
@@ -43,6 +49,19 @@ K8S_CONFIGURABLE_KEYS = {
         value_type=str,
         default="preload",
         description="Tracer backend used inside instrumented pods (preload|ptrace|auto)",
+    ),
+    "k8s.runtime_source": ConfigurableKeySpec(
+        value_type=str,
+        default="install",
+        description=(
+            "Runtime staging mode for pods: 'install' (pip at container start) or "
+            "'image' (init container copies per-ABI trees from k8s.runtime_image)"
+        ),
+    ),
+    "k8s.runtime_image": ConfigurableKeySpec(
+        value_type=str,
+        default="",
+        description="roar-runtime OCI image used when k8s.runtime_source = 'image'",
     ),
     "k8s.runtime_install_requirement": ConfigurableKeySpec(
         value_type=str,

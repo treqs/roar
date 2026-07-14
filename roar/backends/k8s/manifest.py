@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,7 @@ import yaml  # type: ignore[import-untyped]
 
 from roar.backends.k8s.mount_map import build_container_mount_map, dump_mount_map
 
-# sh -c script: "$0" is the synthetic argv0, "$@" is the original
+# sh -c scripts: "$0" is the synthetic argv0, "$@" is the original
 # command+args. Lineage is best-effort by design: any failure to stage
 # the roar runtime falls back to running the original command
 # uninstrumented rather than failing the training job.
@@ -34,6 +34,22 @@ command -v python3 >/dev/null 2>&1 || run_fallback "$@"
 python3 -m pip install --quiet {requirement} || run_fallback "$@"
 exec python3 -m roar.backends.k8s.pod_entry "$@"
 """
+
+# Image-staged variant: the runtime tree was copied into the shared mount
+# by the roar-runtime init container; pick the tree matching this
+# container's Python ABI and activate it via PYTHONPATH.
+_POD_WRAPPER_IMAGE_TEMPLATE = """\
+run_fallback() {{ echo "[roar-k8s] lineage runtime unavailable; running uninstrumented" >&2; exec "$@"; }}
+command -v python3 >/dev/null 2>&1 || run_fallback "$@"
+RT="{staging_mount}/cp$(python3 -c 'import sys; print("%d%d" % sys.version_info[:2])')"
+[ -d "$RT" ] || run_fallback "$@"
+export PYTHONPATH="$RT${{PYTHONPATH:+:$PYTHONPATH}}"
+exec python3 -m roar.backends.k8s.pod_entry "$@"
+"""
+
+_RUNTIME_STAGING_VOLUME = "roar-runtime"
+_RUNTIME_STAGING_MOUNT = "/roar-runtime"
+_RUNTIME_STAGING_INIT_CONTAINER = "roar-runtime-staging"
 
 # Terminal workload conditions, unioned across kinds: Job uses
 # Complete/SuccessCriteriaMet + Failed/FailureTarget, JobSet uses
@@ -206,6 +222,8 @@ def rewrite_manifest_for_lineage(
     parent_job_uid: str,
     bundle_dir: str = "",
     mount_map: dict[str, str] | None = None,
+    runtime_source: str = "install",
+    runtime_image: str = "",
     namespace_override: str | None = None,
 ) -> K8sManifestRewrite:
     """Return a rewritten copy of ``documents`` with lineage instrumentation.
@@ -254,6 +272,8 @@ def rewrite_manifest_for_lineage(
         workload_name=workload_name,
         bundle_dir=bundle_dir,
         config_mount_map=dict(mount_map or {}),
+        runtime_source=runtime_source,
+        runtime_image=runtime_image,
     )
 
     if workload.rewrite_style == "trainer_override":
@@ -324,6 +344,12 @@ class _EnvContract:
     workload_name: str
     bundle_dir: str = ""
     config_mount_map: dict[str, str] = field(default_factory=dict)
+    runtime_source: str = "install"
+    runtime_image: str = ""
+
+    @property
+    def image_staging(self) -> bool:
+        return self.runtime_source == "image" and bool(self.runtime_image)
 
 
 def _rewrite_pod_specs(
@@ -347,6 +373,7 @@ def _rewrite_pod_specs(
                 f"{workload.kind} {workload_name} pod template "
                 f"{ref.role or '<default>'} has no containers"
             )
+        pod_wrapped = False
         for container in containers:
             if not isinstance(container, dict):
                 continue
@@ -358,8 +385,10 @@ def _rewrite_pod_specs(
                 continue
             original = [str(part) for part in command]
             original.extend(str(part) for part in container.get("args", []) or [])
-            container["command"] = _wrapped_command(original, requirement=contract.requirement)
+            container["command"] = _wrapped_command(original, contract=contract)
             container.pop("args", None)
+            if contract.image_staging:
+                _add_staging_volume_mount(container)
             _inject_env_contract(
                 container.setdefault("env", []),
                 contract=contract,
@@ -370,7 +399,63 @@ def _rewrite_pod_specs(
                 ),
             )
             wrapped.append(label)
+            pod_wrapped = True
+        if pod_wrapped and contract.image_staging:
+            _add_runtime_staging(ref.spec, runtime_image=contract.runtime_image)
     return wrapped, skipped
+
+
+def _add_runtime_staging(pod_spec: dict[str, Any], *, runtime_image: str) -> None:
+    """Add the shared volume + init container that stage the roar runtime.
+
+    Idempotent by name so webhook reinvocation and repeated rewrites are
+    safe.
+    """
+    volumes = pod_spec.setdefault("volumes", [])
+    if isinstance(volumes, list) and not any(
+        isinstance(volume, dict) and volume.get("name") == _RUNTIME_STAGING_VOLUME
+        for volume in volumes
+    ):
+        volumes.append({"name": _RUNTIME_STAGING_VOLUME, "emptyDir": {}})
+
+    init_containers = pod_spec.setdefault("initContainers", [])
+    if isinstance(init_containers, list) and not any(
+        isinstance(container, dict)
+        and container.get("name") == _RUNTIME_STAGING_INIT_CONTAINER
+        for container in init_containers
+    ):
+        init_containers.append(
+            {
+                "name": _RUNTIME_STAGING_INIT_CONTAINER,
+                "image": runtime_image,
+                "command": [
+                    "/bin/sh",
+                    "-c",
+                    f"cp -a /opt/roar-runtime/. {_RUNTIME_STAGING_MOUNT}/",
+                ],
+                "volumeMounts": [
+                    {
+                        "name": _RUNTIME_STAGING_VOLUME,
+                        "mountPath": _RUNTIME_STAGING_MOUNT,
+                    }
+                ],
+            }
+        )
+
+
+def _add_staging_volume_mount(container: dict[str, Any]) -> None:
+    mounts = container.setdefault("volumeMounts", [])
+    if isinstance(mounts, list) and not any(
+        isinstance(mount, dict) and mount.get("name") == _RUNTIME_STAGING_VOLUME
+        for mount in mounts
+    ):
+        mounts.append(
+            {
+                "name": _RUNTIME_STAGING_VOLUME,
+                "mountPath": _RUNTIME_STAGING_MOUNT,
+                "readOnly": True,
+            }
+        )
 
 
 def _rewrite_trainjob(
@@ -403,7 +488,12 @@ def _rewrite_trainjob(
 
     original = [str(part) for part in command]
     original.extend(str(part) for part in trainer.get("args", []) or [])
-    trainer["command"] = _wrapped_command(original, requirement=contract.requirement)
+    # TrainJob has no inline pod template to attach an init container to,
+    # so runtime staging always uses the install path here.
+    install_contract = (
+        replace(contract, runtime_source="install") if contract.image_staging else contract
+    )
+    trainer["command"] = _wrapped_command(original, contract=install_contract)
     trainer.pop("args", None)
 
     env = trainer.setdefault("env", [])
@@ -420,8 +510,11 @@ def _rewrite_trainjob(
     return ["node"], []
 
 
-def _wrapped_command(original: list[str], *, requirement: str) -> list[str]:
-    script = _POD_WRAPPER_TEMPLATE.format(requirement=shlex.quote(requirement))
+def _wrapped_command(original: list[str], *, contract: _EnvContract) -> list[str]:
+    if contract.image_staging:
+        script = _POD_WRAPPER_IMAGE_TEMPLATE.format(staging_mount=_RUNTIME_STAGING_MOUNT)
+    else:
+        script = _POD_WRAPPER_TEMPLATE.format(requirement=shlex.quote(contract.requirement))
     return ["/bin/sh", "-c", script, "roar-k8s", *original]
 
 
