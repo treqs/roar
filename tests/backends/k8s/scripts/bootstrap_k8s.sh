@@ -217,8 +217,10 @@ if ((WITH_WEBHOOK == 1)); then
   bash "$REPO_ROOT/scripts/build_runtime_image.sh"
   kind load docker-image roar-runtime:dev --name "$CLUSTER_NAME"
   bash "$HARNESS_DIR/scripts/deploy_webhook.sh"
-  kubectl_ctx -n roar-system rollout restart deployment/roar-webhook
-  kubectl_ctx -n roar-system rollout status deployment/roar-webhook --timeout=180s
+  # Restart so a freshly rebuilt roar-runtime:dev image is picked up even
+  # when the helm release itself is unchanged.
+  kubectl_ctx -n roar-system rollout restart deployment/roar-roar-lineage-webhook
+  kubectl_ctx -n roar-system rollout status deployment/roar-roar-lineage-webhook --timeout=180s
 fi
 
 if ((WITH_KUBERAY == 1)); then

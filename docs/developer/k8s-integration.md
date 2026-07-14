@@ -20,9 +20,10 @@ in the dev meta-repo): Phases 1–3 implemented and live-validated
 trainer v2 controllers, multi-pod capture, `roar k8s attach`, bundle-mode
 fallback, object-store I/O hooks, mount-map rewriting, retry-chaos
 coverage, RayJob delegation, the roar-runtime image, the mutating
-webhook injector, and the opt-in proxy sidecar). Remaining from Phase 3:
-a packaged Helm chart (the harness deploys via
-`tests/backends/k8s/scripts/deploy_webhook.sh`).
+webhook injector, the opt-in proxy sidecar, and the
+`deploy/charts/roar-lineage-webhook` Helm chart — the harness's
+`tests/backends/k8s/scripts/deploy_webhook.sh` installs the chart, so
+the webhook e2e exercises the packaged artifact).
 
 **Runtime staging modes**: `k8s.runtime_source = "install"` pip-installs
 `k8s.runtime_install_requirement` at container start; `"image"` stages
@@ -49,6 +50,17 @@ blocks admission. Reconstitution is client-driven via `roar k8s attach`.
 `ROAR_WEBHOOK_PROXY_SIDECAR=true` (+ optional
 `ROAR_WEBHOOK_PROXY_UPSTREAM`) makes the injector add the proxy sidecar
 to every workload it instruments.
+
+**Helm chart** (`deploy/charts/roar-lineage-webhook`): packages the
+webhook Deployment/Service, RBAC (Secret-create ClusterRole), and the
+`MutatingWebhookConfiguration`. Required values: `glaas.url`,
+`glaas.clusterUrl`, and TLS — either `tls.caBundle` + a pre-created
+`tls.secretName` (the harness path: openssl self-signed), or
+`certManager.enabled=true` for a self-signed Issuer/Certificate with
+CA injection. `injection.*` values map 1:1 onto the `ROAR_WEBHOOK_*`
+env contract (tracer, runtimeSource/runtimeImage, runtimeRequirement,
+sessionTtlSeconds, proxySidecar/proxyUpstream). The webhook service name
+is `<release>-roar-lineage-webhook`; certificate SANs must match it.
 
 **RayJob delegation** (`rayjob.py`): KubeRay overwrites container commands
 with `ray start --block`, so command-wrapping can't see user code. Instead

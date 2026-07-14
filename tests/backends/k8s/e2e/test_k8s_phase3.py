@@ -272,8 +272,18 @@ def test_proxy_sidecar_captures_hook_invisible_s3_client(
 
 
 def _webhook_deployed() -> bool:
-    result = kubectl(["get", "mutatingwebhookconfiguration", "roar-lineage-injector"], check=False)
-    return result.returncode == 0
+    result = kubectl(
+        [
+            "get",
+            "mutatingwebhookconfiguration",
+            "-l",
+            "app.kubernetes.io/name=roar-lineage-webhook",
+            "-o",
+            "name",
+        ],
+        check=False,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 def _wait_job_terminal(job_name: str, namespace: str, timeout: int = 300) -> bool:

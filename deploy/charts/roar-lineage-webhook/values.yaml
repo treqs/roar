@@ -1,0 +1,60 @@
+# roar-lineage-webhook chart values.
+
+replicas: 1
+
+image:
+  # The roar-runtime image (scripts/build_runtime_image.sh): serves the
+  # webhook and stages the runtime into instrumented pods.
+  repository: roar-runtime
+  tag: dev
+  pullPolicy: IfNotPresent
+
+glaas:
+  # GLaaS URL reachable from the webhook pod (fragment-session registration).
+  url: ""
+  # GLaaS URL reachable from instrumented workload pods (fragment streaming).
+  # Use a fully-qualified in-cluster or external URL — instrumented pods can
+  # live in any opted-in namespace.
+  clusterUrl: ""
+
+injection:
+  tracer: preload
+  # "image" stages the hermetic runtime via an init container (recommended);
+  # "install" pip-installs runtimeRequirement at container start.
+  runtimeSource: image
+  # Defaults to image.repository:image.tag when empty.
+  runtimeImage: ""
+  runtimeRequirement: roar-cli
+  sessionTtlSeconds: 86400
+  # Opt-in roar-proxy S3 sidecar for clients the in-process hooks can't
+  # see; requires runtimeSource=image.
+  proxySidecar: false
+  proxyUpstream: ""
+
+namespaceSelector:
+  # Namespaces opt in by carrying this label.
+  key: roar.glaas.ai/lineage
+  value: enabled
+
+webhook:
+  failurePolicy: Ignore
+  timeoutSeconds: 10
+  reinvocationPolicy: IfNeeded
+
+tls:
+  # Existing kubernetes.io/tls Secret with the serving cert for
+  # <release>-roar-lineage-webhook.<namespace>.svc. Required unless
+  # certManager.enabled.
+  secretName: ""
+  # Base64 PEM CA bundle matching the serving cert. Required unless
+  # certManager.enabled (cert-manager then injects it).
+  caBundle: ""
+
+certManager:
+  # Manage the serving cert with cert-manager (self-signed Issuer +
+  # Certificate; the CA bundle is injected via cert-manager annotations).
+  enabled: false
+
+resources: {}
+nodeSelector: {}
+tolerations: []

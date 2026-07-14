@@ -33,10 +33,15 @@ Three test layers share this harness:
   heaviest test: multi-GB Ray image + per-job pip env). Skips without
   `--with-kuberay`.
 - `e2e/test_k8s_phase3.py` — image-staged runtime (hermetic pod start via
-  the roar-runtime init container, no pip) and the zero-touch webhook
+  the roar-runtime init container, no pip), the opt-in `roar-s3-proxy`
+  sidecar (a hook-invisible raw-HTTP S3 client's reads still land as
+  `s3://` lineage refs via proxy-log capture), and the zero-touch webhook
   story: plain `kubectl apply` in a labeled namespace gets injected, and
   `roar k8s attach` recovers the lineage; unlabeled namespaces stay
-  untouched. Skips without the image / `--with-webhook`.
+  untouched. The webhook is deployed through the
+  `deploy/charts/roar-lineage-webhook` Helm chart
+  (`scripts/deploy_webhook.sh`), so these tests exercise the packaged
+  chart. Skips without the image / `--with-webhook`.
 - `e2e/test_k8s_smoke.py` — the Phase-0 runtime diagnostic: fixtures
   hand-wrap the manifest (no backend involved) to isolate the runtime pieces
   (in-pod tracing, fragment streaming, identity contract) when the product
@@ -50,7 +55,8 @@ live in `unit/` and run in the default gate — no cluster needed.
 - Docker
 - A packaged wheel: `bash scripts/build_wheel_with_bins.sh` (repo root)
 - Local glaas-api on `http://localhost:3001` (e.g. via pm2)
-- `kind`/`kubectl` are downloaded automatically into `.tools/bin` if missing
+- `kind`/`kubectl`/`helm` are downloaded automatically into `.tools/bin` if
+  missing
 
 ## Usage
 
