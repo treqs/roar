@@ -363,6 +363,35 @@ def tag_display_values(kind_data: Any) -> list[str]:
     return [record["value"] for record in _as_value_records(kind_data)]
 
 
+def tag_display_pairs(tag_subtree: Any) -> list[tuple[str, str]]:
+    """``(kind, "v1, v2")`` display pairs for a ``tag.*`` subtree.
+
+    Sorted by kind, skips the internal ``bind`` ledger and empty kinds. The one
+    shared source of truth for how tags render in both ``roar tag show`` and
+    ``roar show`` — so the two can't drift.
+    """
+    pairs: list[tuple[str, str]] = []
+    if not isinstance(tag_subtree, dict):
+        return pairs
+    for kind in sorted(tag_subtree):
+        if kind == BIND_KIND:
+            continue
+        values = tag_display_values(tag_subtree[kind])
+        if values:
+            pairs.append((kind, ", ".join(values)))
+    return pairs
+
+
+def barrier_items(run_modifiers: Any) -> list[str]:
+    """The ``--block-tag`` items (barriers) recorded on a job, for display.
+
+    Reads the ``run_modifiers.block_tags`` metadata; empty/absent yields ``[]``.
+    """
+    if not isinstance(run_modifiers, dict):
+        return []
+    return [str(item) for item in (run_modifiers.get("block_tags") or []) if str(item).strip()]
+
+
 class _TagLabelRepo(Protocol):
     """Minimal label repo surface needed to propagate tags between artifacts."""
 
