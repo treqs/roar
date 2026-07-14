@@ -150,6 +150,16 @@ Note the fragment streamer swallows per-batch POST failures (reports
 "streamed" regardless), which is why the fallback needs its own probe —
 surfacing streamer failure counts is an open follow-up.
 
+**Session TTL renewal**: fragment sessions are registered with
+`k8s.fragment_session_ttl_seconds` (default 86400, server-capped at 7
+days) — training that outlives the TTL used to lose lineage because both
+append and read 403 after expiry. The streamer now renews on 403
+(`POST /api/v1/fragments/sessions/{id}/renew`, token-authenticated,
+allowed even after expiry) and retries the batch once; the k8s and ray
+fragment reconstituters do the same on fetch, so a late `roar k8s attach`
+can still recover an expired session. No clock tracking client-side —
+renewal is purely reactive to the 403.
+
 ## 2. Flow
 
 1. **Match** (`roar/backends/k8s/submit.py`): binary `kubectl`, verb

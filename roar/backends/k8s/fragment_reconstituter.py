@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from roar.backends.k8s.lineage import collect_k8s_fragments, resolve_active_session_context
+from roar.integrations.glaas import renew_fragment_session
 
 
 def _get_logger():
@@ -104,6 +106,23 @@ class K8sFragmentReconstituter:
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # An expired session 403s on read; renewal is token-authenticated
+            # and allowed after expiry, so attach can still recover lineage.
+            payload = None
+            if exc.code == 403 and renew_fragment_session(
+                self._glaas_url, self._session_id, self._token
+            ):
+                try:
+                    with urllib.request.urlopen(request, timeout=10) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                except Exception as retry_exc:
+                    exc = retry_exc  # type: ignore[assignment]
+            if payload is None:
+                _get_logger().warning(
+                    "Failed to fetch fragments for session %s: %s", self._session_id, exc
+                )
+                return []
         except Exception as exc:
             _get_logger().warning(
                 "Failed to fetch fragments for session %s: %s", self._session_id, exc

@@ -595,6 +595,20 @@ class GlaasClient:
         }
         return self._request("POST", "/api/v1/fragments/sessions", body)
 
+    def renew_fragment_session(
+        self,
+        session_id: str,
+        token: str,
+        ttl_seconds: int = 86400,
+    ) -> tuple[dict | None, str | None]:
+        """Extend a fragment session's expiry (allowed even after expiry)."""
+        encoded_token = urllib.parse.quote(token, safe="")
+        return self._request(
+            "POST",
+            f"/api/v1/fragments/sessions/{session_id}/renew?token={encoded_token}",
+            {"ttl_seconds": ttl_seconds},
+        )
+
     def register_session(
         self,
         session_hash: str,

@@ -42,6 +42,10 @@ Three test layers share this harness:
   `deploy/charts/roar-lineage-webhook` Helm chart
   (`scripts/deploy_webhook.sh`), so these tests exercise the packaged
   chart. Skips without the image / `--with-webhook`.
+- `e2e/test_k8s_ttl_renewal.py` — fragment-session TTL renewal: the
+  session is registered with the minimum 60s TTL and the Job outlives it;
+  the in-pod streamer renews on 403 and the finalizer still reconstitutes.
+  Skips when the local glaas-api lacks `POST .../sessions/:id/renew`.
 - `e2e/test_k8s_smoke.py` — the Phase-0 runtime diagnostic: fixtures
   hand-wrap the manifest (no backend involved) to isolate the runtime pieces
   (in-pod tracing, fragment streaming, identity contract) when the product
