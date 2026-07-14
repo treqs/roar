@@ -248,9 +248,10 @@ def _load_proxy_log_refs(
 def _emit_or_bundle(fragments: list[dict]) -> str:
     """Stream fragments; fall back to a bundle file when GLaaS is unreachable.
 
-    The streamer itself swallows per-batch POST failures, so a quick
-    reachability probe decides upfront; a non-"streamed" emit result also
-    falls back when a bundle directory is declared.
+    The reachability probe short-circuits the obviously-dark case without
+    paying per-batch POST timeouts; emit_fragment_dicts reports "streamed"
+    only when every batch was delivered, so mid-run streaming failures
+    (partial or total) also land in the bundle fallback.
     """
     from roar.execution.fragments.transport import emit_fragment_dicts
 

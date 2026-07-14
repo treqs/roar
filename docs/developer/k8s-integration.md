@@ -146,9 +146,11 @@ Transport is streaming-first with a bundle fallback: when `k8s.bundle_dir`
 names a mounted shared volume and GLaaS is unreachable from the pod (probe
 or non-streamed emit), `pod_entry` writes `roar-fragments-<pod>.json` there
 instead; `roar k8s ingest-bundles <dir>` merges a host-visible copy later.
-Note the fragment streamer swallows per-batch POST failures (reports
-"streamed" regardless), which is why the fallback needs its own probe —
-surfacing streamer failure counts is an open follow-up.
+`emit_fragment_dicts` reports "streamed" only when every batch was
+delivered (the streamer exposes delivered/failed/pending counts and logs
+an undelivered summary), so mid-run streaming failures also reach the
+fallback; the upfront reachability probe remains as a fast path that
+skips per-batch POST timeouts when GLaaS is dark.
 
 **Session TTL renewal**: fragment sessions are registered with
 `k8s.fragment_session_ttl_seconds` (default 86400, server-capped at 7
