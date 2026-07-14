@@ -99,7 +99,9 @@ def test_bind_flag_binds_an_artifact_unrelated_to_the_registered_target(tmp_path
     (a session-wide register) — --bind is independent of the implicit target rule."""
     artifact_hash = _seed_tagged_artifact(tmp_path / ".roar", tmp_path / "model.pt")
     response = _response("", jobs_registered=2, artifacts_registered=2, links_created=1)
-    result = _invoke(tmp_path, ["--bind", artifact_hash], response)
+    # -y: a session-wide register (no target) prompts for confirmation since
+    # register learned to confirm a defaulted active-session publish (#224).
+    result = _invoke(tmp_path, ["--bind", artifact_hash, "-y"], response)
     assert result.exit_code == 0, result.output
     assert "Bound:" in result.output
     assert "license=MIT" in result.output
