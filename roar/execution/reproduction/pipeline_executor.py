@@ -5,12 +5,14 @@ Extracted from reproduce.py to follow Single Responsibility Principle.
 This service handles executing pipeline steps during reproduction.
 """
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 from typing import TYPE_CHECKING
 
+from ...application.tags import run_modifier_flags
 from ...presenters import NullPresenter
 
 if TYPE_CHECKING:
@@ -125,25 +127,28 @@ class PipelineExecutor:
             self._print("  No command found for step, skipping.")
             return True
 
-        # Wrap with roar for provenance tracking
-        roar_cmd = "build" if is_build else "run"
-        wrapped_command = self._wrap_with_roar(command, roar_cmd, environment)
-
-        self._print(f"  Command: roar {roar_cmd} {command}")
-
-        # Extract env vars from step metadata
-        step_env_vars: dict[str, str] = {}
+        # Parse step metadata once: env vars + the recorded `roar run` modifiers
+        # (--block-tag / --add-tag) that shaped the original tag/barrier layer.
         metadata = step.get("metadata")
-        if metadata:
-            import json as _json
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except (ValueError, TypeError):
+                metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        step_env_vars: dict[str, str] = metadata.get("env_vars", {})
+        modifier_flags = run_modifier_flags(metadata.get("run_modifiers"))
 
-            if isinstance(metadata, str):
-                try:
-                    metadata = _json.loads(metadata)
-                except (ValueError, TypeError):
-                    metadata = {}
-            if isinstance(metadata, dict):
-                step_env_vars = metadata.get("env_vars", {})
+        # Wrap with roar for provenance tracking, replaying recorded modifiers so
+        # the reproduced run reproduces the same tags/barriers, not just bytes.
+        roar_cmd = "build" if is_build else "run"
+        wrapped_command = self._wrap_with_roar(
+            command, roar_cmd, environment, modifiers=modifier_flags
+        )
+
+        shown = f"{modifier_flags} {command}".strip()
+        self._print(f"  Command: roar {roar_cmd} {shown}")
 
         # Set up environment
         env = self._prepare_environment(environment, env_vars=step_env_vars)
@@ -178,14 +183,19 @@ class PipelineExecutor:
         command: str,
         roar_cmd: str,
         environment: "EnvironmentInfo",
+        modifiers: str = "",
     ) -> str:
         """Wrap a command with roar build/run.
 
         Uses the external roar executable (from the parent process) instead of
         installing roar in the reproduce venv. This prevents roar from being
-        deleted if a build step runs 'uv sync'.
+        deleted if a build step runs 'uv sync'. *modifiers* are recorded
+        ``roar run`` flags (e.g. ``--block-tag …``) replayed for fidelity.
         """
-        return f"{self._roar_executable} {roar_cmd} {command}"
+        prefix = f"{self._roar_executable} {roar_cmd}"
+        if modifiers:
+            prefix = f"{prefix} {modifiers}"
+        return f"{prefix} {command}"
 
     def _detect_roar_executable(self) -> str:
         """Get path to the currently running roar executable.
