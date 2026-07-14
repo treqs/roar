@@ -32,6 +32,11 @@ Three test layers share this harness:
 - `e2e/test_k8s_rayjob.py` — live RayJob delegation smoke on KubeRay (the
   heaviest test: multi-GB Ray image + per-job pip env). Skips without
   `--with-kuberay`.
+- `e2e/test_k8s_phase3.py` — image-staged runtime (hermetic pod start via
+  the roar-runtime init container, no pip) and the zero-touch webhook
+  story: plain `kubectl apply` in a labeled namespace gets injected, and
+  `roar k8s attach` recovers the lineage; unlabeled namespaces stay
+  untouched. Skips without the image / `--with-webhook`.
 - `e2e/test_k8s_smoke.py` — the Phase-0 runtime diagnostic: fixtures
   hand-wrap the manifest (no backend involved) to isolate the runtime pieces
   (in-pod tracing, fragment streaming, identity contract) when the product
@@ -55,8 +60,9 @@ bash scripts/build_wheel_with_bins.sh
 
 # create cluster + wire glaas + preflight
 # (--with-minio: S3 scenarios; --with-jobset: JobSet e2e; --with-kubeflow:
-#  PyTorchJob/TrainJob e2e; --with-kuberay: RayJob delegation e2e)
-bash tests/backends/k8s/scripts/bootstrap_k8s.sh --with-jobset --with-minio --with-kubeflow --with-kuberay
+#  PyTorchJob/TrainJob e2e; --with-kuberay: RayJob delegation e2e;
+#  --with-webhook: builds/loads roar-runtime:dev + deploys the injector)
+bash tests/backends/k8s/scripts/bootstrap_k8s.sh --with-jobset --with-minio --with-kubeflow --with-kuberay --with-webhook
 
 # run the smoke tests (addopts override needed: e2e dirs are ignored by default)
 pytest tests/backends/k8s/e2e -o addopts='' -m k8s_e2e -v

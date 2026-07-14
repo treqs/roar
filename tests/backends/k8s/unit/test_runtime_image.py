@@ -69,9 +69,7 @@ def test_image_mode_is_idempotent_for_webhook_reinvocation() -> None:
         for container in pod_spec["initContainers"]
         if container["name"] == "roar-runtime-staging"
     ]
-    staging_volumes = [
-        volume for volume in pod_spec["volumes"] if volume["name"] == "roar-runtime"
-    ]
+    staging_volumes = [volume for volume in pod_spec["volumes"] if volume["name"] == "roar-runtime"]
     assert len(staging_inits) == 1
     assert len(staging_volumes) == 1
 

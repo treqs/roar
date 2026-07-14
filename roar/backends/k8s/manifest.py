@@ -420,8 +420,7 @@ def _add_runtime_staging(pod_spec: dict[str, Any], *, runtime_image: str) -> Non
 
     init_containers = pod_spec.setdefault("initContainers", [])
     if isinstance(init_containers, list) and not any(
-        isinstance(container, dict)
-        and container.get("name") == _RUNTIME_STAGING_INIT_CONTAINER
+        isinstance(container, dict) and container.get("name") == _RUNTIME_STAGING_INIT_CONTAINER
         for container in init_containers
     ):
         init_containers.append(
@@ -446,8 +445,7 @@ def _add_runtime_staging(pod_spec: dict[str, Any], *, runtime_image: str) -> Non
 def _add_staging_volume_mount(container: dict[str, Any]) -> None:
     mounts = container.setdefault("volumeMounts", [])
     if isinstance(mounts, list) and not any(
-        isinstance(mount, dict) and mount.get("name") == _RUNTIME_STAGING_VOLUME
-        for mount in mounts
+        isinstance(mount, dict) and mount.get("name") == _RUNTIME_STAGING_VOLUME for mount in mounts
     ):
         mounts.append(
             {

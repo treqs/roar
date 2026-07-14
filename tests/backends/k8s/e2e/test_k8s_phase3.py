@@ -47,8 +47,15 @@ def _runtime_image_loaded() -> bool:
     import subprocess
 
     result = subprocess.run(
-        ["docker", "exec", "roar-k8s-e2e-worker", "crictl", "inspecti", "-q",
-         f"docker.io/library/{RUNTIME_IMAGE}"],
+        [
+            "docker",
+            "exec",
+            "roar-k8s-e2e-worker",
+            "crictl",
+            "inspecti",
+            "-q",
+            f"docker.io/library/{RUNTIME_IMAGE}",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -113,9 +120,7 @@ def test_image_staged_runtime_captures_without_network_install(
 
         # The submitted Job carries the staging init container.
         job_doc = json.loads(
-            kubectl(
-                ["get", f"job/{job_name}", "-n", NAMESPACE, "-o", "json"]
-            ).stdout
+            kubectl(["get", f"job/{job_name}", "-n", NAMESPACE, "-o", "json"]).stdout
         )
         pod_spec = job_doc["spec"]["template"]["spec"]
         init_names = [c["name"] for c in pod_spec.get("initContainers", [])]
@@ -141,3 +146,112 @@ def test_image_staged_runtime_captures_without_network_install(
         )
     finally:
         _cleanup(job_name)
+
+
+def _webhook_deployed() -> bool:
+    result = kubectl(["get", "mutatingwebhookconfiguration", "roar-lineage-injector"], check=False)
+    return result.returncode == 0
+
+
+def _wait_job_terminal(job_name: str, namespace: str, timeout: int = 300) -> bool:
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        status = kubectl(["get", f"job/{job_name}", "-n", namespace, "-o", "json"], check=False)
+        if status.returncode == 0:
+            conditions = json.loads(status.stdout).get("status", {}).get("conditions") or []
+            if any(
+                c.get("status") == "True" and c.get("type") in ("Complete", "Failed")
+                for c in conditions
+            ):
+                return any(
+                    c.get("status") == "True" and c.get("type") == "Complete" for c in conditions
+                )
+        import time as _time
+
+        _time.sleep(3)
+    return False
+
+
+def test_webhook_injects_lineage_zero_touch(
+    k8s_cluster: None,
+    glaas_health: str,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """The full zero-touch story: plain kubectl apply, no roar on the client.
+
+    A labeled namespace gets automatic injection; lineage is recovered
+    afterwards with `roar k8s attach` using the webhook-created Secret.
+    """
+    if not _webhook_deployed():
+        pytest.skip("webhook not deployed; run bootstrap_k8s.sh --with-webhook")
+    if not _runtime_image_loaded():
+        pytest.skip("roar-runtime:dev not loaded")
+
+    from .test_k8s_distributed import _roar
+
+    suffix = uuid.uuid4().hex[:6]
+    auto_ns = f"roar-e2e-auto-{suffix}"
+    job_name = f"roar-auto-{suffix}"
+
+    kubectl(["create", "namespace", auto_ns])
+    kubectl(["label", "namespace", auto_ns, "roar.glaas.ai/lineage=enabled"])
+    try:
+        # Plain kubectl apply — the client knows nothing about roar.
+        manifest = SINGLE_JOB_TEMPLATE.format(name=job_name, namespace=auto_ns)
+        kubectl(["apply", "-f", "-"], input_text=manifest)
+
+        job_doc = json.loads(
+            kubectl(["get", f"job/{job_name}", "-n", auto_ns, "-o", "json"]).stdout
+        )
+        annotations = job_doc["metadata"].get("annotations") or {}
+        parent_uid = annotations.get("roar.glaas.ai/parent-uid")
+        assert parent_uid, f"webhook did not annotate the Job: {annotations}"
+        pod_spec = job_doc["spec"]["template"]["spec"]
+        assert "roar-runtime-staging" in [c["name"] for c in pod_spec.get("initContainers", [])]
+        assert "roar.backends.k8s.pod_entry" in pod_spec["containers"][0]["command"][2]
+
+        assert _wait_job_terminal(job_name, auto_ns), (
+            f"job did not complete:\n{_pod_logs(f'job-name={job_name}')}"
+        )
+
+        attach_dir = tmp_path_factory.mktemp("k8s-webhook-attach")
+        _write_image_mode_project(attach_dir)
+        attached = _roar(
+            ["k8s", "attach", f"job/{job_name}", "-n", auto_ns, "--context", KUBE_CONTEXT],
+            cwd=attach_dir,
+        )
+        assert attached.returncode == 0, attached.stdout + attached.stderr
+        assert "lineage reconstituted" in attached.stdout, attached.stdout
+
+        tasks = _query(attach_dir, "SELECT id FROM jobs WHERE job_type = 'k8s_task'")
+        assert len(tasks) == 1
+        attach_rows = _query(
+            attach_dir,
+            "SELECT job_uid FROM jobs WHERE execution_role = 'attach'",
+        )
+        assert attach_rows and attach_rows[0]["job_uid"] == parent_uid
+    finally:
+        kubectl(["delete", "namespace", auto_ns, "--ignore-not-found"], check=False)
+
+
+def test_webhook_leaves_unlabeled_namespaces_untouched(
+    k8s_cluster: None,
+) -> None:
+    if not _webhook_deployed():
+        pytest.skip("webhook not deployed; run bootstrap_k8s.sh --with-webhook")
+
+    job_name = f"roar-plain-{uuid.uuid4().hex[:6]}"
+    try:
+        manifest = SINGLE_JOB_TEMPLATE.format(name=job_name, namespace=NAMESPACE)
+        kubectl(["apply", "-f", "-"], input_text=manifest)
+        job_doc = json.loads(
+            kubectl(["get", f"job/{job_name}", "-n", NAMESPACE, "-o", "json"]).stdout
+        )
+        annotations = job_doc["metadata"].get("annotations") or {}
+        assert "roar.glaas.ai/parent-uid" not in annotations
+        command = job_doc["spec"]["template"]["spec"]["containers"][0]["command"]
+        assert "roar.backends.k8s.pod_entry" not in " ".join(command)
+    finally:
+        kubectl(["delete", f"job/{job_name}", "-n", NAMESPACE, "--ignore-not-found"], check=False)

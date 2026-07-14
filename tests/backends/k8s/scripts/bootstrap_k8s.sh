@@ -45,6 +45,7 @@ WITH_MINIO=0
 WITH_JOBSET=0
 WITH_KUBEFLOW=0
 WITH_KUBERAY=0
+WITH_WEBHOOK=0
 SKIP_GLAAS=0
 for arg in "$@"; do
   case "$arg" in
@@ -52,6 +53,7 @@ for arg in "$@"; do
     --with-jobset) WITH_JOBSET=1 ;;
     --with-kubeflow) WITH_KUBEFLOW=1 ;;
     --with-kuberay) WITH_KUBERAY=1 ;;
+    --with-webhook) WITH_WEBHOOK=1 ;;
     --skip-glaas) SKIP_GLAAS=1 ;;
     *)
       echo "error: unknown flag: $arg" >&2
@@ -206,6 +208,17 @@ if ((WITH_KUBEFLOW == 1)); then
   kubectl_ctx apply --server-side \
     -k "github.com/kubeflow/trainer.git/manifests/overlays/runtimes?ref=${TRAINER_V2_REF}" || \
     echo "warning: trainer runtimes overlay failed; TrainJob e2e will create its own runtime" >&2
+fi
+
+if ((WITH_WEBHOOK == 1)); then
+  echo "▶ Building and loading roar-runtime image"
+  # Always build: the docker layer cache makes this a no-op unless the
+  # wheel changed, and a stale image silently breaks the webhook.
+  bash "$REPO_ROOT/scripts/build_runtime_image.sh"
+  kind load docker-image roar-runtime:dev --name "$CLUSTER_NAME"
+  bash "$HARNESS_DIR/scripts/deploy_webhook.sh"
+  kubectl_ctx -n roar-system rollout restart deployment/roar-webhook
+  kubectl_ctx -n roar-system rollout status deployment/roar-webhook --timeout=180s
 fi
 
 if ((WITH_KUBERAY == 1)); then

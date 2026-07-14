@@ -15,12 +15,37 @@ identity comes from the downward API plus the completion-index/node-rank
 env chain (`JOB_COMPLETION_INDEX` → `PET_NODE_RANK` → pod-level `RANK`).
 
 Current phase status (see `design-docs/k8s-training-lineage-integration.md`
-in the dev meta-repo): Phases 1–2 fully implemented and live-validated
+in the dev meta-repo): Phases 1–3 implemented and live-validated
 (submit wrapping, operator adapters incl. real training-operator v1 and
 trainer v2 controllers, multi-pod capture, `roar k8s attach`, bundle-mode
 fallback, object-store I/O hooks, mount-map rewriting, retry-chaos
-coverage, RayJob delegation). Remaining: the Phase-3 admission-webhook
-injector (incl. the opt-in proxy sidecar).
+coverage, RayJob delegation, the roar-runtime image, and the mutating
+webhook injector). Remaining from Phase 3: the opt-in proxy sidecar and
+a packaged Helm chart (the harness deploys via
+`tests/backends/k8s/scripts/deploy_webhook.sh`).
+
+**Runtime staging modes**: `k8s.runtime_source = "install"` pip-installs
+`k8s.runtime_install_requirement` at container start; `"image"` stages
+hermetic per-ABI trees (cp310–cp313) from `k8s.runtime_image` via a
+`roar-runtime-staging` init container + emptyDir — no network at pod
+start. The image (`deploy/roar-runtime/Dockerfile`,
+`scripts/build_runtime_image.sh`) ships a generated top-level
+`sitecustomize.py` per tree because PYTHONPATH staging does not process
+`.pth` files. TrainJob keeps the install path (no inline pod template);
+RayJob keeps its runtime-env pip mechanism.
+
+**Webhook injector** (`webhook.py`): a stdlib HTTPS AdmissionReview
+server (served by the roar-runtime image) intercepting CREATE of all
+five workload kinds in namespaces labeled `roar.glaas.ai/lineage=enabled`.
+It reuses the same manifest rewriter as the CLI path, mints the fragment
+session against GLaaS, creates the credentials Secret through the k8s
+API (never embedded in the object), annotates the workload
+(`roar.glaas.ai/parent-uid`, `session-id`, `fragment-secret`), and
+returns a JSONPatch. Idempotent under `reinvocationPolicy: IfNeeded` via
+the parent-uid annotation; dry-run admissions are side-effect-free
+(`sideEffects: NoneOnDryRun`); every internal failure returns allowed
+with a warning and pairs with `failurePolicy: Ignore` — lineage never
+blocks admission. Reconstitution is client-driven via `roar k8s attach`.
 
 **RayJob delegation** (`rayjob.py`): KubeRay overwrites container commands
 with `ray start --block`, so command-wrapping can't see user code. Instead
