@@ -96,6 +96,15 @@ class RunCoordinator:
         Returns:
             RunResult with execution details
         """
+        from .active_runs import active_run_marker
+
+        with active_run_marker(
+            ctx.roar_dir, pid=os.getpid(), command=list(ctx.command), job_type=ctx.job_type
+        ):
+            return self._execute_traced(ctx)
+
+    def _execute_traced(self, ctx: RunContext) -> RunResult:
+        """Body of `execute()`, run inside the active-run marker's lifetime."""
         from .signal_handler import ProcessSignalHandler
 
         self.logger.debug(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
@@ -41,6 +42,35 @@ def test_status_cli_exits_non_zero_without_active_session(tmp_path) -> None:
 
     assert result.exit_code != 0
     assert "No active session." in result.output
+
+
+def test_status_cli_has_no_in_flight_warning_by_default(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    with patch("roar.cli.commands.status.render_status", return_value="STATUS BODY"):
+        result = CliRunner().invoke(status, obj=ctx)
+
+    assert result.exit_code == 0, result.output
+    assert "still be in progress" not in result.output
+
+
+def test_status_cli_warns_on_in_flight_run(tmp_path) -> None:
+    """A live `roar run`/`roar build` marker must surface a warning in `roar
+    status` too — the same gap register's defaulted-active-session prompt
+    warns about: job rows (and this summary) don't reflect a run until it
+    completes, so a concurrent run in another terminal is otherwise invisible
+    here."""
+    from roar.execution.runtime.active_runs import write_marker
+
+    ctx = _ctx(tmp_path)
+    other_pid = os.getppid()  # guaranteed alive for the duration of the test
+    write_marker(ctx.roar_dir, pid=other_pid, command=["python", "train.py"], job_type="run")
+
+    with patch("roar.cli.commands.status.render_status", return_value="STATUS BODY"):
+        result = CliRunner().invoke(status, obj=ctx)
+
+    assert result.exit_code == 0, result.output
+    assert f"pid {other_pid}" in result.output
+    assert "still be in progress" in result.output
 
 
 def test_show_cli_exits_non_zero_for_missing_path_lookup(tmp_path) -> None:

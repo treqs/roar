@@ -1,7 +1,10 @@
 """Tests for RunCoordinator runtime-resource integration."""
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from roar.core.exceptions import TracerPreflightError
 from roar.execution.runtime.coordinator import RunCoordinator
@@ -160,3 +163,66 @@ class TestRuntimeResourceLifecycle:
 
         assert result.exit_code == 1
         assert resource.stop_calls == [1]
+
+
+class TestActiveRunMarkerLifecycle:
+    """`execute()` must mark itself in-flight for `roar register` to discover,
+    and clean up on every exit path (success, tracer error, exception)."""
+
+    def _markers_dir(self, roar_dir: Path) -> Path:
+        return roar_dir / "active_runs"
+
+    def test_marker_exists_during_tracer_execution_and_is_removed_after(self, tmp_path):
+        from roar.execution.runtime.active_runs import list_active_runs
+
+        roar_dir = tmp_path / ".roar"
+        ctx = _make_ctx()
+        ctx.roar_dir = roar_dir
+
+        mock_tracer = _make_mock_tracer()
+        observed_active = {}
+
+        def _execute_side_effect(*args, **kwargs):
+            # Called mid-`execute()`, before the marker is cleaned up.
+            observed_active["runs"] = list_active_runs(roar_dir)
+            return _make_tracer_result()
+
+        mock_tracer.execute.side_effect = _execute_side_effect
+        coord = RunCoordinator(tracer_service=mock_tracer)
+
+        mock_prov = MagicMock()
+        mock_prov.collect.return_value = {"data": {"read_files": [], "written_files": []}}
+        with (
+            patch("os.path.exists", return_value=True),
+            patch("roar.integrations.config.load_config", return_value={}),
+            patch("roar.execution.provenance.ProvenanceService", return_value=mock_prov),
+            patch.object(coord, "_record_job", return_value=(1, "abc123", [], [], [], [], {})),
+            patch.object(coord, "_backup_previous_outputs"),
+            patch.object(coord, "_cleanup_logs"),
+        ):
+            coord.execute(ctx)
+
+        assert len(observed_active["runs"]) == 1
+        assert observed_active["runs"][0]["pid"] == os.getpid()
+        assert observed_active["runs"][0]["command"] == ctx.command
+        assert list_active_runs(roar_dir) == []
+        assert list(self._markers_dir(roar_dir).glob("*.json")) == []
+
+    def test_marker_is_removed_when_tracer_raises(self, tmp_path):
+        from roar.execution.runtime.active_runs import list_active_runs
+
+        roar_dir = tmp_path / ".roar"
+        ctx = _make_ctx()
+        ctx.roar_dir = roar_dir
+
+        mock_tracer = _make_mock_tracer()
+        mock_tracer.execute.side_effect = RuntimeError("tracer blew up")
+        coord = RunCoordinator(tracer_service=mock_tracer)
+
+        with (
+            patch.object(coord, "_backup_previous_outputs"),
+            pytest.raises(RuntimeError, match="tracer blew up"),
+        ):
+            coord.execute(ctx)
+
+        assert list_active_runs(roar_dir) == []

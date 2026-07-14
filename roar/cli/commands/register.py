@@ -367,7 +367,10 @@ def register(
         and not yes
         and not dry_run
         and not confirm_defaulted_active_session_publish(
-            session_hash=target, command_name="roar register", start_dir=str(ctx.cwd)
+            session_hash=target,
+            command_name="roar register",
+            start_dir=str(ctx.cwd),
+            roar_dir=ctx.roar_dir,
         )
     ):
         click.echo("Registration aborted.")
