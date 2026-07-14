@@ -6,7 +6,7 @@ from pathlib import Path
 
 from ...core.label_constants import TAG_NAMESPACE
 from ...db.context import create_database_context
-from ..tags import BIND_KIND, BindResult, TagService, parse_tag_kv, tag_display_values
+from ..tags import BindResult, TagService, parse_tag_kv, tag_display_pairs
 from .requests import (
     TagAddRequest,
     TagBindRequest,
@@ -14,6 +14,7 @@ from .requests import (
     TagRmRequest,
     TagShowRequest,
     TagUnbindRequest,
+    TagWhyRequest,
 )
 from .results import (
     LabelCurrentSummary,
@@ -22,6 +23,7 @@ from .results import (
     LabelHistoryVersionSummary,
     TagBindArtifactSummary,
     TagBindSummary,
+    TagWhySummary,
 )
 
 
@@ -126,6 +128,23 @@ def build_tag_history_summary(request: TagHistoryRequest) -> LabelHistorySummary
     )
 
 
+def tag_why(request: TagWhyRequest) -> str:
+    """Explain how a target acquired a tag and return a rendered summary."""
+    return build_tag_why_summary(request).render()
+
+
+def build_tag_why_summary(request: TagWhyRequest) -> TagWhySummary:
+    """Build the typed summary for a tag why provenance walk."""
+    kind, value = _parse_kind_or_kv(request.key)
+    with create_database_context(request.roar_dir) as db_ctx:
+        svc = TagService(db_ctx, request.cwd)
+        resolved = svc.resolve_target(request.target)
+        roots = svc.why(resolved, kind, value)
+
+    label = f"{kind}={value}" if value is not None else kind
+    return TagWhySummary(heading=f"Why does {request.target} have {label}?", roots=roots)
+
+
 def tag_bind(request: TagBindRequest) -> str:
     """Promote each target's current tags to cross-session scope and return a rendered summary."""
     return build_tag_bind_summary(request).render()
@@ -195,9 +214,11 @@ def _parse_kind_or_kv(key_or_kv: str) -> tuple[str, str | None]:
 
 
 def _tag_entries(tags: dict) -> list[LabelEntrySummary]:
-    """Convert a tag.* subtree to display entries (values only — skips the bind ledger)."""
+    """Convert a tag.* subtree to display entries via the shared renderer.
+
+    Uses ``tag_display_pairs`` so ``roar tag show`` and ``roar show`` render tags
+    identically (values only; skips the bind ledger).
+    """
     return [
-        LabelEntrySummary(key=kind, display_value=", ".join(tag_display_values(tags[kind])))
-        for kind in sorted(tags)
-        if kind != BIND_KIND and tag_display_values(tags[kind])
+        LabelEntrySummary(key=kind, display_value=value) for kind, value in tag_display_pairs(tags)
     ]

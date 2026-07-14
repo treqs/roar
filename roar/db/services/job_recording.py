@@ -15,6 +15,7 @@ from ...application.system_labels import refresh_job_system_labels
 from ...application.tags import (
     build_run_modifiers,
     parse_add_tags,
+    parse_block_tags,
     propagate_tags,
     stamp_tags,
 )
@@ -221,6 +222,7 @@ class JobRecordingService:
             is_input=False,
         )
 
+        blocked_kinds, blocked_values = parse_block_tags(block_tags)
         propagate_tags(
             self._label_repo,
             input_artifact_ids=input_artifact_ids,
@@ -228,7 +230,8 @@ class JobRecordingService:
             current_session_id=session_id,
             resolve_job_session_id=self._resolve_job_session_id,
             job_uid=job_uid,
-            blocked_kinds=frozenset(kind.strip() for kind in block_tags if kind.strip()),
+            blocked_kinds=blocked_kinds,
+            blocked_values=blocked_values,
         )
         if add_tags:
             stamp_tags(

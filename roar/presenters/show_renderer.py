@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 
 from ..application.label_rendering import render_label_lines
+from ..application.tags import barrier_items, tag_display_pairs
+from ..core.label_constants import TAG_NAMESPACE
 from ..core.step_name import omit_step_name_label
 from .formatting import format_duration, format_size, format_timestamp
 
@@ -67,10 +69,32 @@ class ShowRenderer:
 
     @staticmethod
     def _render_labels(lines: list[str], metadata: dict | None) -> None:
-        if not metadata:
+        # Tags render in their own clean section (see _render_tags); keep the
+        # tag.* subtree — including the internal bind ledger — out of the raw
+        # key=value Labels dump.
+        other = {k: v for k, v in metadata.items() if k != TAG_NAMESPACE} if metadata else None
+        if not other:
             return
         lines.append("\nLabels:")
-        lines.extend(render_label_lines(metadata, indent="  "))
+        lines.extend(render_label_lines(other, indent="  "))
+
+    @staticmethod
+    def _render_tags(lines: list[str], metadata: dict | None) -> None:
+        """Render the ``tag.*`` subtree as a clean Tags section (shared with `roar tag show`)."""
+        pairs = tag_display_pairs((metadata or {}).get(TAG_NAMESPACE))
+        if not pairs:
+            return
+        lines.append("\nTags:")
+        lines.extend(f"  {kind}={value}" for kind, value in pairs)
+
+    @staticmethod
+    def _render_barriers(lines: list[str], metadata: dict | None) -> None:
+        """Render a job's declared barriers (recorded `--block-tag` run modifiers)."""
+        items = barrier_items((metadata or {}).get("run_modifiers"))
+        if not items:
+            return
+        lines.append("\nBarriers:")
+        lines.extend(f"  {item}   (--block-tag)" for item in items)
 
     def render_session(self, session: dict, jobs: list[dict], labels: dict | None = None) -> str:
         """Render session overview with job listing.
@@ -91,6 +115,7 @@ class ShowRenderer:
         if session.get("git_commit_start"):
             lines.append(f"Commit: {session['git_commit_start']}")
 
+        self._render_tags(lines, labels)
         self._render_labels(lines, labels)
 
         if not jobs:
@@ -185,6 +210,8 @@ class ShowRenderer:
         if source_parts:
             lines.append("Source:    " + " ".join(source_parts))
 
+        self._render_barriers(lines, job.get("metadata"))
+        self._render_tags(lines, labels)
         self._render_labels(lines, omit_step_name_label(labels, step_name=job.get("step_name")))
 
         if job.get("command"):
@@ -467,6 +494,7 @@ class ShowRenderer:
             lines.append(f"Path:       {first_seen_path}{missing}")
         lines.append(f"First seen: {format_timestamp(artifact['first_seen_at'])}")
 
+        self._render_tags(lines, labels)
         self._render_labels(lines, labels)
 
         # ---- locations -------------------------------------------------------

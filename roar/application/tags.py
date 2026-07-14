@@ -35,7 +35,7 @@ protects the generic ``roar label`` path — see ``system_labels.py``.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -57,12 +57,27 @@ class BindResult:
     promoted: dict[str, list[str]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class WhyNode:
+    """One hop in a ``roar tag why`` provenance walk (a render-agnostic tree).
+
+    Each node's ``label`` describes one step back toward a human act; leaves are
+    a user ``tag add`` / ``run --add-tag`` (or an unresolved origin).
+    """
+
+    label: str
+    children: list[WhyNode] = field(default_factory=list)
+
+
 class TagService:
     """Set-accumulation semantics over the tag.* label namespace."""
 
     def __init__(self, db_ctx: DatabaseContext, cwd: Any) -> None:
         self._svc = LabelService(db_ctx, cwd)
         self._label_repo = db_ctx.labels
+        # Read-only handles used by `why` to walk job -> inputs and name artifacts.
+        self._jobs = db_ctx.jobs
+        self._artifacts = db_ctx.artifacts
 
     # ------------------------------------------------------------------
     # Target resolution
@@ -204,6 +219,101 @@ class TagService:
         """Return full label-version history for the target."""
         return self._svc.history(resolved)
 
+    def why(self, resolved: LabelTargetRef, kind: str, value: str | None = None) -> list[WhyNode]:
+        """Explain how *resolved* acquired ``tag.{kind}`` — one tree per value.
+
+        Read-only traversal over the stored ``{value, origin, job}`` records and
+        the bind ledger (no writes, no schema). Each tree bottoms out at a human
+        act (a bare ``tag add`` or a ``run --add-tag``), annotating any
+        cross-session hop with the explicit ``bind`` that authorized it.
+        """
+        if resolved.entity_type == "job":
+            raise ValueError(
+                "`roar tag why` explains an artifact's tag, not a job's. `@N` targets "
+                "job step N — trace one of its output artifacts instead (by hash or "
+                "path), or use `roar tag show @N` to list the job's tags."
+            )
+        if resolved.entity_type != "artifact" or not resolved.artifact_id:
+            raise ValueError(
+                "`roar tag why` explains an artifact's tag — target a tracked artifact "
+                "by hash or path."
+            )
+        subtree = self._current_tag_subtree(resolved)
+        stored = [record["value"] for record in _as_value_records(subtree.get(kind))]
+        wanted = [v for v in stored if value is None or v == value]
+        return [self._explain(resolved.artifact_id, kind, v, frozenset()) for v in wanted]
+
+    def _explain(self, artifact_id: str, kind: str, value: str, visited: frozenset[str]) -> WhyNode:
+        name = self._artifact_display(artifact_id)
+        subtree = _current_tag_subtree(self._label_repo, artifact_id)
+        record = next(
+            (r for r in _as_value_records(subtree.get(kind)) if r["value"] == value), None
+        )
+        if record is None:
+            return WhyNode(f"{name}: no {kind}={value} recorded")
+
+        origin = record.get("origin")
+        job_uid = record.get("job")
+        if origin == LABEL_ORIGIN_USER and not job_uid:
+            return WhyNode(f"{name}: {kind}={value} — user `roar tag add` (born bound)")
+        if origin == LABEL_ORIGIN_USER and job_uid:
+            return WhyNode(
+                f"{name}: {kind}={value} — user `roar run --add-tag` "
+                f"in job {job_uid[:8]} (session-scoped)"
+            )
+
+        header = f"{name}: {kind}={value} — inherited"
+        header += f" via job {job_uid[:8]}" if job_uid else ""
+        if artifact_id in visited:
+            return WhyNode(header + " (cycle)")
+        if not job_uid:
+            return WhyNode(header + " (no producing job recorded — origin unknown)")
+        job = self._jobs.get_by_uid(job_uid)
+        if not job:
+            return WhyNode(header + " (producing job not found)")
+
+        visited = visited | {artifact_id}
+        children: list[WhyNode] = []
+        for inp in self._jobs.get_inputs(job["id"]):
+            input_id = inp.get("artifact_id")
+            if not input_id:
+                continue
+            input_subtree = _current_tag_subtree(self._label_repo, input_id)
+            input_record = next(
+                (r for r in _as_value_records(input_subtree.get(kind)) if r["value"] == value),
+                None,
+            )
+            if input_record is None:
+                continue  # this input doesn't carry the value — not on the path
+            node = self._explain(input_id, kind, value, visited)
+            # A *derived* (system) value made cross-session by an explicit bind is a
+            # human act worth naming; a born-bound user tag already reads as one.
+            covered = _is_covered_by_bind(
+                _as_bind_events(input_subtree.get(BIND_KIND)), kind, value
+            )
+            if covered and input_record.get("origin") == LABEL_ORIGIN_SYSTEM:
+                node = WhyNode(
+                    f"`roar tag bind` on {self._artifact_display(input_id)} "
+                    f"authorized this across sessions",
+                    [node],
+                )
+            children.append(node)
+
+        if not children:
+            return WhyNode(header + " (no input carries this value — origin unclear)")
+        return WhyNode(header, children)
+
+    def _artifact_display(self, artifact_id: str) -> str:
+        artifact = self._artifacts.get(artifact_id)
+        if not artifact:
+            return artifact_id[:12]
+        path = artifact.get("path") or artifact.get("first_seen_path")
+        if path:
+            return str(path).rsplit("/", 1)[-1]
+        hashes = artifact.get("hashes") or []
+        digest = hashes[0]["digest"] if hashes else artifact_id
+        return str(digest)[:12]
+
     # ------------------------------------------------------------------
     # Internal read/write — bypasses LabelService.set_metadata so writes
     # aren't rejected by the tag.*/attach.* reservation (system_labels.py)
@@ -253,6 +363,35 @@ def tag_display_values(kind_data: Any) -> list[str]:
     return [record["value"] for record in _as_value_records(kind_data)]
 
 
+def tag_display_pairs(tag_subtree: Any) -> list[tuple[str, str]]:
+    """``(kind, "v1, v2")`` display pairs for a ``tag.*`` subtree.
+
+    Sorted by kind, skips the internal ``bind`` ledger and empty kinds. The one
+    shared source of truth for how tags render in both ``roar tag show`` and
+    ``roar show`` — so the two can't drift.
+    """
+    pairs: list[tuple[str, str]] = []
+    if not isinstance(tag_subtree, dict):
+        return pairs
+    for kind in sorted(tag_subtree):
+        if kind == BIND_KIND:
+            continue
+        values = tag_display_values(tag_subtree[kind])
+        if values:
+            pairs.append((kind, ", ".join(values)))
+    return pairs
+
+
+def barrier_items(run_modifiers: Any) -> list[str]:
+    """The ``--block-tag`` items (barriers) recorded on a job, for display.
+
+    Reads the ``run_modifiers.block_tags`` metadata; empty/absent yields ``[]``.
+    """
+    if not isinstance(run_modifiers, dict):
+        return []
+    return [str(item) for item in (run_modifiers.get("block_tags") or []) if str(item).strip()]
+
+
 class _TagLabelRepo(Protocol):
     """Minimal label repo surface needed to propagate tags between artifacts."""
 
@@ -279,14 +418,19 @@ def propagate_tags(
     resolve_job_session_id: Callable[[str], int | None],
     job_uid: str | None = None,
     blocked_kinds: frozenset[str] = frozenset(),
+    blocked_values: Mapping[str, frozenset[str]] | None = None,
 ) -> None:
     """Union ``tag.*`` values from a job's input artifacts onto its outputs.
 
     Every kind present on any input is merged (set semantics — no duplicate
     values) into every output's current tag namespace, except kinds listed in
-    *blocked_kinds*. Writes are stamped with a system write-origin since the
-    inheriting document is machine-derived, not user-asserted on that target.
-    A no-op output write (nothing new to add) does not create a label version.
+    *blocked_kinds* (whole-kind barriers, ``--block-tag KIND``) and individual
+    ``(kind, value)`` pairs in *blocked_values* (value barriers,
+    ``--block-tag KIND=VALUE`` — e.g. filtering ``license=GPL-3.0`` off a
+    relicensing step's outputs while keeping the rest of the set). Writes are
+    stamped with a system write-origin since the inheriting document is
+    machine-derived, not user-asserted on that target. A no-op output write
+    (nothing new to add) does not create a label version.
 
     **Scope-gated**: a candidate value only joins the union if it's in scope
     for *this* session — either it was produced by a job in the current
@@ -314,11 +458,14 @@ def propagate_tags(
         for kind, kind_data in subtree.items():
             if kind == BIND_KIND or kind in blocked_kinds:
                 continue
+            blocked_vals = blocked_values.get(kind) if blocked_values else None
             bucket = inherited.setdefault(kind, [])
             for record in _as_value_records(kind_data):
                 value = record["value"]
                 if value in bucket:
                     continue
+                if blocked_vals and value in blocked_vals:
+                    continue  # value barrier: --block-tag KIND=VALUE filters this one value
                 if _value_in_scope(record, current_session_id, _job_session) or _is_covered_by_bind(
                     bind_events, kind, value
                 ):
@@ -373,6 +520,34 @@ def parse_tag_kv(kv: str) -> tuple[str, str]:
     if not value:
         raise ValueError(f"Value cannot be empty in: {kv!r}")
     return kind, value
+
+
+def parse_block_tags(pairs: Iterable[str]) -> tuple[frozenset[str], dict[str, frozenset[str]]]:
+    """Split ``--block-tag`` items into whole-kind and per-value barriers.
+
+    ``KIND`` blocks the whole kind; ``KIND=VALUE`` filters a single value from
+    the inherited set. Returns ``(blocked_kinds, blocked_values)``. A whole-kind
+    block wins over a value-level one for the same kind (the kind is dropped
+    entirely, so its value-level entries are irrelevant and omitted). ``KIND=``
+    with an empty value is treated as a whole-kind block.
+    """
+    whole: set[str] = set()
+    values: dict[str, set[str]] = {}
+    for pair in pairs:
+        item = pair.strip()
+        if not item:
+            continue
+        if "=" in item:
+            kind, _, value = item.partition("=")
+            kind, value = kind.strip(), value.strip()
+            if kind and value:
+                values.setdefault(kind, set()).add(value)
+            elif kind:
+                whole.add(kind)
+        else:
+            whole.add(item)
+    blocked_values = {k: frozenset(v) for k, v in values.items() if k not in whole}
+    return frozenset(whole), blocked_values
 
 
 def parse_add_tags(pairs: Iterable[str]) -> dict[str, list[str]]:
