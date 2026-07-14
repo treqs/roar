@@ -13,6 +13,7 @@ per-job pip env); everything pins to one node so the image pulls once.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import subprocess
 import uuid
@@ -38,11 +39,10 @@ pytestmark = [
     pytest.mark.timeout(1500),
 ]
 
-# Pinned to the same Ray version as the native compose harness
-# (tests/backends/ray/e2e/Dockerfile): the roar_worker per-task capture
-# targets this version's internals, and 2.46 was observed not to route
-# task execution through the patched FunctionActorManager path.
-RAY_IMAGE = "rayproject/ray:2.54.0-py312-cpu"
+# Defaults to the native compose harness's pin
+# (tests/backends/ray/e2e/Dockerfile); override with ROAR_E2E_RAY_IMAGE to
+# smoke other Ray versions (verified: 2.46.0 and 2.54.0).
+RAY_IMAGE = os.environ.get("ROAR_E2E_RAY_IMAGE", "rayproject/ray:2.54.0-py312-cpu")
 
 RAY_TRAIN_SCRIPT = """\
 from pathlib import Path
@@ -93,7 +93,7 @@ spec:
         - name: ray-job-submitter
           image: {ray_image}
   rayClusterSpec:
-    rayVersion: "2.54.0"
+    rayVersion: "{ray_version}"
     headGroupSpec:
       rayStartParams:
         num-cpus: "1"
@@ -190,6 +190,7 @@ def test_rayjob_live_delegates_to_ray_backend(
             pinned_node=PINNED_NODE,
             ray_image=RAY_IMAGE,
             worker_script=_indent_script(RAY_TRAIN_SCRIPT),
+            ray_version=RAY_IMAGE.split(":")[1].split("-")[0],
         ),
         encoding="utf-8",
     )

@@ -602,6 +602,20 @@ def _deactivate_threading_patch_for_native_task_attribution() -> None:
             threading.Thread.start = _real_thread_start  # type: ignore[method-assign]
 
 
+def _warn_task_capture_unavailable(reason: str) -> None:
+    try:
+        import ray
+
+        version = getattr(ray, "__version__", "unknown")
+    except Exception:
+        version = "unknown"
+    print(
+        f"[roar] warning: per-task lineage capture is unavailable on ray {version} "
+        f"({reason}); task fragments may lack identity and file refs",
+        file=sys.stderr,
+    )
+
+
 def _wrap_task_executor_for_native_flush(
     function: Callable[..., Any],
     *,
@@ -654,7 +668,20 @@ def _wrap_task_executor_for_native_flush(
 def _patch_ray_task_execution_for_native_flush() -> None:
     try:
         from ray._private.function_manager import FunctionActorManager, FunctionExecutionInfo
-    except Exception:
+    except Exception as exc:
+        _warn_task_capture_unavailable(f"cannot import ray function manager: {exc}")
+        return
+
+    if not callable(getattr(FunctionActorManager, "get_execution_info", None)) and not callable(
+        getattr(FunctionActorManager, "_make_actor_method_executor", None)
+    ):
+        # A future Ray moved the executor internals: task-boundary capture
+        # cannot engage, and task fragments would silently arrive without
+        # per-task identity or file refs. Fail loudly instead
+        # (verified engaging on 2.46 and 2.54).
+        _warn_task_capture_unavailable(
+            "FunctionActorManager has neither get_execution_info nor _make_actor_method_executor"
+        )
         return
 
     current_get_execution_info = getattr(FunctionActorManager, "get_execution_info", None)
