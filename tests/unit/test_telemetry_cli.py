@@ -16,6 +16,12 @@ def _env(tmp_path: Path) -> dict[str, str]:
         "HOME": str(tmp_path / "home"),
         "XDG_CONFIG_HOME": str(state_root / "config"),
         "XDG_CACHE_HOME": str(state_root / "cache"),
+        # Neutralize telemetry opt-outs that may be set in the ambient env
+        # (e.g. DO_NOT_TRACK=1 on a dev box) so these tests control the
+        # enabled/disabled state themselves rather than short-circuiting on
+        # an inherited opt-out reason.
+        "DO_NOT_TRACK": "",
+        "ROAR_NO_TELEMETRY": "",
         "CI": "",
         "GITHUB_ACTIONS": "",
         "GITLAB_CI": "",
