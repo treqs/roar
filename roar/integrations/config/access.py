@@ -144,6 +144,14 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
         "default": True,
         "description": "Create git tag on successful registration",
     },
+    "tags.custom_kinds": {
+        "type": list,
+        "default": [],
+        "description": (
+            "Extra hereditary `roar tag` kinds to allow beyond the built-in "
+            "canonical kinds (comma-separated). Commit in .roarconfig to share."
+        ),
+    },
     "reversible.enabled": {
         "type": bool,
         "default": False,

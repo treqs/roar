@@ -46,7 +46,7 @@ from ...application.query.tag import (
     tag_unbind,
     tag_why,
 )
-from ...core.label_constants import CANONICAL_TAG_KINDS
+from .._tag_kinds import enforce_tag_kind
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -99,7 +99,10 @@ def tag_add_cmd(ctx: RoarContext, kv: str, target: str) -> None:
         roar tag add contains_pii=present   @2
         roar tag add jurisdiction=EU        a1b2c3d4
     """
-    _warn_if_noncanonical(kv)
+    if "=" in kv:
+        kind = kv.split("=", 1)[0].strip()
+        if kind:
+            enforce_tag_kind(kind, start_dir=str(ctx.cwd))
     try:
         rendered = tag_add(TagAddRequest(roar_dir=ctx.roar_dir, cwd=ctx.cwd, kv=kv, target=target))
     except ValueError as exc:
@@ -236,13 +239,3 @@ def tag_why_cmd(ctx: RoarContext, key: str, target: str) -> None:
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(rendered)
-
-
-def _warn_if_noncanonical(kv: str) -> None:
-    kind = kv.split("=", 1)[0].strip()
-    if kind and kind not in CANONICAL_TAG_KINDS:
-        click.echo(
-            f"Warning: '{kind}' is not a canonical tag kind. "
-            f"Canonical kinds: {', '.join(sorted(CANONICAL_TAG_KINDS))}.",
-            err=True,
-        )

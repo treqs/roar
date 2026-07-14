@@ -9,8 +9,8 @@ import click
 
 from ...application.run import RunRequest, run_command
 from ...application.tags import parse_tag_kv
-from ...core.label_constants import CANONICAL_TAG_KINDS
 from ...core.tracer_modes import TRACER_MODE_VALUES
+from .._tag_kinds import enforce_tag_kind
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -23,12 +23,7 @@ def _validate_add_tags(
             kind, _value = parse_tag_kv(item)
         except ValueError as exc:
             raise click.BadParameter(str(exc)) from exc
-        if kind not in CANONICAL_TAG_KINDS:
-            click.echo(
-                f"Warning: '{kind}' is not a canonical tag kind. "
-                f"Canonical kinds: {', '.join(sorted(CANONICAL_TAG_KINDS))}.",
-                err=True,
-            )
+        enforce_tag_kind(kind)
     return value
 
 

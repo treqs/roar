@@ -143,6 +143,17 @@ class TaggingConfig(ConfigBaseModel):
     enabled: bool = True
 
 
+class TagsConfig(ConfigBaseModel):
+    """Hereditary compliance-tag (``roar tag``) configuration.
+
+    ``custom_kinds`` extends the built-in canonical kinds with project-specific
+    hereditary kinds. Committed in ``.roarconfig`` so a team shares the same
+    allowed set. Distinct from ``registration.tagging`` (git tags at register).
+    """
+
+    custom_kinds: list[str] = Field(default_factory=list)
+
+
 class RegisterConfig(ConfigBaseModel):
     """Register/publish defaults and filtering configuration."""
 
@@ -252,6 +263,7 @@ class RoarConfig(ConfigBaseModel):
     cleanup: CleanupConfig = Field(default_factory=CleanupConfig)
     glaas: GlaasConfig = Field(default_factory=GlaasConfig)
     registration: RegisterConfig = Field(default_factory=RegisterConfig)
+    tags: TagsConfig = Field(default_factory=TagsConfig)
     hash: HashConfig = Field(default_factory=HashConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     tracer: TracerConfig = Field(default_factory=TracerConfig)
