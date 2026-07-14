@@ -36,6 +36,17 @@ reconstitution/attach delegate to the **Ray** backend's reconstituter,
 since the streamed fragments are Ray `TaskFragment` payloads that merge
 as `ray_task` jobs.
 
+Per-task capture fidelity in KubeRay workers requires the Ray version the
+roar_worker internals target (the native harness's pin, currently 2.54):
+on 2.46, task execution was observed not to route through the patched
+`FunctionActorManager.get_execution_info`, so task fragments arrived as
+empty shells. Additionally, `roar_worker._startup` now patches `io.open`
+alongside `builtins.open` — pathlib (`Path.read_bytes`/`write_bytes`)
+resolves `io.open` by module attribute, and without the preload tracer
+(KubeRay pods) those opens were invisible; on preload-equipped native
+workers the duplicate python-level captures are absorbed by the existing
+`native > python` dedup.
+
 **Mounted storage** (`mount_map.py`): FUSE CSI mounts surface object I/O as
 local file syscalls under a mount path. The rewriter derives a per-container
 mount map (inline CSI volumes it can see — GCS FUSE, Mountpoint-for-S3 —

@@ -6,6 +6,7 @@ import collections
 import contextlib
 import functools
 import hashlib
+import io
 import os
 import queue
 import re
@@ -1630,6 +1631,10 @@ def _startup() -> None:
     if "libroar_tracer_preload" in os.environ.get("LD_PRELOAD", ""):
         _start_native_tracer_socket()
     builtins.open = _tracking_open
+    # pathlib (Path.open/read_bytes/write_bytes) and other stdlib callers
+    # resolve `io.open` by module attribute, not the builtin — without the
+    # preload tracer (e.g. KubeRay pods) those opens were invisible.
+    io.open = _tracking_open  # type: ignore[assignment]
     _patch_subprocess_for_native_task_attribution()
     _patch_boto3()
     _patch_pandas_parquet()

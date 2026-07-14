@@ -38,7 +38,11 @@ pytestmark = [
     pytest.mark.timeout(1500),
 ]
 
-RAY_IMAGE = "rayproject/ray:2.46.0-py312-cpu"
+# Pinned to the same Ray version as the native compose harness
+# (tests/backends/ray/e2e/Dockerfile): the roar_worker per-task capture
+# targets this version's internals, and 2.46 was observed not to route
+# task execution through the patched FunctionActorManager path.
+RAY_IMAGE = "rayproject/ray:2.54.0-py312-cpu"
 
 RAY_TRAIN_SCRIPT = """\
 from pathlib import Path
@@ -89,7 +93,7 @@ spec:
         - name: ray-job-submitter
           image: {ray_image}
   rayClusterSpec:
-    rayVersion: "2.46.0"
+    rayVersion: "2.54.0"
     headGroupSpec:
       rayStartParams:
         num-cpus: "1"
@@ -214,16 +218,16 @@ def test_rayjob_live_delegates_to_ray_backend(
         )
         assert ray_tasks, f"expected ray_task jobs from delegated reconstitution\n{_describe(run)}"
 
-        # Delegation scope proven here: rewrite, Secret hygiene, in-pod pip
-        # bootstrap, fragment streaming from KubeRay pods, jobStatus wait,
-        # and Ray-reconstituter merge under the submit node.
-        #
-        # KNOWN GAP (Ray-backend follow-up, not k8s plumbing): per-task I/O
-        # fidelity inside KubeRay workers. Under setup-hook-only bootstrap
-        # (ROAR_WRAP intentionally off — see rayjob.py), fragments arrive as
-        # ray_task shells without file refs; the roar_worker task-boundary
-        # capture expects the py_executable/packaged-working_dir machinery
-        # of the native `roar run ray job submit` path. Once that lands,
-        # tighten this to assert task-out.bin in the ray_task outputs.
+        output_paths = {
+            str(row["path"])
+            for row in _query(
+                project_dir,
+                "SELECT o.path FROM job_outputs o JOIN jobs j ON j.id = o.job_id "
+                "WHERE j.job_type = 'ray_task'",
+            )
+        }
+        assert any(path.endswith("task-out.bin") for path in output_paths), (
+            f"ray task file write missing from lineage: {output_paths}\n{_describe(run)}"
+        )
     finally:
         _cleanup(name, resource="rayjob")
