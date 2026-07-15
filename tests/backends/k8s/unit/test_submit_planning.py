@@ -203,3 +203,28 @@ def test_resolve_runtime_requirement_precedence(monkeypatch: pytest.MonkeyPatch)
         == "roar-cli==1.0"
     )
     assert resolve_runtime_requirement({}).startswith("roar-cli")
+
+
+def test_declines_multiple_manifest_arguments_with_warning(
+    job_manifest_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    second = job_manifest_path.parent / "job-b.yaml"
+    manifest = yaml.safe_load(job_manifest_path.read_text(encoding="utf-8"))
+    manifest["metadata"]["name"] = "train-demo-b"
+    second.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    # Rewriting only the first manifest would instrument one workload and
+    # silently pass the other through unwaited — decline the whole submit
+    # instead so kubectl behavior is untouched.
+    assert not matches_kubectl_job_submit_command(
+        ["kubectl", "apply", "-f", str(job_manifest_path), "-f", str(second)]
+    )
+    assert "multiple -f/--filename" in capsys.readouterr().err
+
+    assert not matches_kubectl_job_submit_command(
+        ["kubectl", "apply", "-f", str(job_manifest_path), f"--filename={second}"]
+    )
+
+
+def test_single_manifest_still_matches_after_multi_f_guard(job_manifest_path: Path) -> None:
+    assert matches_kubectl_job_submit_command(["kubectl", "apply", "-f", str(job_manifest_path)])

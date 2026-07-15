@@ -151,7 +151,7 @@ Two capture channels feed each pod's fragment:
 
 Transport is streaming-first with a bundle fallback: when `k8s.bundle_dir`
 names a mounted shared volume and GLaaS is unreachable from the pod (probe
-or non-streamed emit), `pod_entry` writes `roar-fragments-<pod>.json` there
+or non-streamed emit), `pod_entry` writes `roar-fragments-<pod>-<container>-<attempt>.json` there
 instead; `roar k8s ingest-bundles <dir>` merges a host-visible copy later.
 `emit_fragment_dicts` reports "streamed" only when every batch was
 delivered (the streamer exposes delivered/failed/pending counts and logs

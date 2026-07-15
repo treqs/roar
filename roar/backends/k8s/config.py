@@ -108,7 +108,8 @@ K8S_CONFIGURABLE_KEYS = {
         default="",
         description=(
             "In-pod directory (a mounted shared volume) where pods write "
-            "roar-fragments-<pod>.json bundles when GLaaS streaming is unavailable; "
+            "roar-fragments-<pod>-<container>-<attempt>.json bundles when GLaaS "
+            "streaming is unavailable; "
             "ingest later with `roar k8s ingest-bundles`"
         ),
     ),

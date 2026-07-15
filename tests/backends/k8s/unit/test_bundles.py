@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -7,7 +8,7 @@ import pytest
 
 from roar.backends.k8s.bundles import (
     K8sBundleError,
-    bundle_filename_for_pod,
+    bundle_filename,
     discover_fragment_bundles,
     ingest_fragment_bundles,
     write_fragment_bundle,
@@ -42,8 +43,8 @@ def _fragment(pod: str, index: str) -> dict:
 
 
 def test_bundle_filename_sanitizes_pod_names() -> None:
-    assert bundle_filename_for_pod("train-0/pod x") == "roar-fragments-train-0-pod-x.json"
-    assert bundle_filename_for_pod("") == "roar-fragments-pod.json"
+    assert bundle_filename("train-0/pod x") == "roar-fragments-train-0-pod-x-main-0.json"
+    assert bundle_filename("") == "roar-fragments-pod-main-0.json"
 
 
 def test_write_and_discover_bundles(tmp_path: Path) -> None:
@@ -100,3 +101,37 @@ def test_ingest_empty_directory_fails_actionably(tmp_path: Path) -> None:
     empty.mkdir()
     with pytest.raises(K8sBundleError, match="no roar-fragments-"):
         ingest_fragment_bundles(roar_dir=tmp_path / ".roar", directory=empty)
+
+
+def test_bundle_filenames_are_distinct_per_container_and_attempt() -> None:
+    from roar.backends.k8s.bundles import bundle_filename
+
+    trainer = bundle_filename("pod-0", container="trainer", attempt="0")
+    sidecar = bundle_filename("pod-0", container="sidecar", attempt="0")
+    retry = bundle_filename("pod-0", container="trainer", attempt="1")
+
+    assert len({trainer, sidecar, retry}) == 3
+    assert trainer == "roar-fragments-pod-0-trainer-0.json"
+
+
+def test_multi_container_bundles_do_not_overwrite(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundles"
+    first = write_fragment_bundle(
+        bundle_dir, "pod-0", [_fragment("pod-0", "0")], container="trainer"
+    )
+    second = write_fragment_bundle(
+        bundle_dir, "pod-0", [_fragment("pod-0", "1")], container="sidecar"
+    )
+
+    assert first != second
+    assert sorted(discover_fragment_bundles(bundle_dir)) == sorted([first, second])
+    # Both containers' fragments survive: last-writer-wins is the bug.
+    assert json.loads(first.read_text(encoding="utf-8"))["fragments"][0]["task_id"].endswith(":0:0")
+
+
+def test_write_fragment_bundle_leaves_no_temp_files(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundles"
+    write_fragment_bundle(bundle_dir, "pod-0", [_fragment("pod-0", "0")])
+
+    leftovers = [path.name for path in bundle_dir.iterdir()]
+    assert leftovers == ["roar-fragments-pod-0-main-0.json"]

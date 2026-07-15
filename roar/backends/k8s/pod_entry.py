@@ -318,7 +318,17 @@ def _write_bundle(bundle_dir: str, fragments: list[dict]) -> str:
     from roar.backends.k8s.bundles import write_fragment_bundle
 
     pod_name = str(os.environ.get("ROAR_K8S_POD_NAME") or "pod").strip() or "pod"
-    target = write_fragment_bundle(Path(bundle_dir), pod_name, fragments)
+    container = str(os.environ.get("ROAR_K8S_CONTAINER") or "main").strip() or "main"
+    # Attempt resolution mirrors task_identity_from_environment so the
+    # bundle name and the fragment task_id agree on which attempt this is.
+    attempt = (
+        str(os.environ.get("ROAR_K8S_RESTART_ATTEMPT") or "").strip()
+        or str(os.environ.get("TORCHELASTIC_RESTART_COUNT") or "").strip()
+        or "0"
+    )
+    target = write_fragment_bundle(
+        Path(bundle_dir), pod_name, fragments, container=container, attempt=attempt
+    )
     print(f"[roar-k8s] GLaaS unavailable; wrote fragment bundle to {target}")
     return "bundled"
 

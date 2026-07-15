@@ -59,10 +59,20 @@ def matches_kubectl_job_submit_command(command: list[str]) -> bool:
     if not _k8s_backend_enabled():
         return False
 
-    filename = _find_filename_argument(command)
-    if filename is None:
+    manifests = _find_filename_arguments(command)
+    if not manifests:
         return False
-    manifest_path = Path(filename[1])
+    if len(manifests) > 1:
+        # Rewriting only the first manifest would instrument one workload
+        # and silently pass the rest through unwaited; decline the whole
+        # submit so kubectl behaves exactly as the user wrote it.
+        _warn(
+            "multiple -f/--filename arguments are not supported by the k8s "
+            "lineage backend; running without k8s instrumentation (apply "
+            "each manifest in its own command to capture lineage)"
+        )
+        return False
+    manifest_path = Path(manifests[0][1])
     if not manifest_path.is_file():
         return False
 
@@ -252,17 +262,26 @@ def _k8s_backend_enabled() -> bool:
     return bool(load_k8s_backend_config(start_dir=start_dir).get("enabled", False))
 
 
-def _find_filename_argument(command: list[str]) -> tuple[int, str] | None:
-    for index, arg in enumerate(command[2:], start=2):
+def _find_filename_arguments(command: list[str]) -> list[tuple[int, str]]:
+    """All (value_index, value) pairs for -f/--filename in the command."""
+    found: list[tuple[int, str]] = []
+    index = 2
+    while index < len(command):
+        arg = command[index]
         if arg in ("-f", "--filename"):
             if index + 1 < len(command):
-                return index + 1, command[index + 1]
-            return None
-        if arg.startswith("--filename="):
-            return index, arg.split("=", 1)[1]
-        if arg.startswith("-f="):
-            return index, arg.split("=", 1)[1]
-    return None
+                found.append((index + 1, command[index + 1]))
+                index += 2
+                continue
+        elif arg.startswith(("--filename=", "-f=")):
+            found.append((index, arg.split("=", 1)[1]))
+        index += 1
+    return found
+
+
+def _find_filename_argument(command: list[str]) -> tuple[int, str] | None:
+    found = _find_filename_arguments(command)
+    return found[0] if found else None
 
 
 def _replace_filename_argument(command: list[str], prepared_path: str) -> list[str]:

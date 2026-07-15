@@ -1,16 +1,17 @@
 """Bundle-mode fragment fallback for GLaaS-less pods.
 
 When pods cannot reach GLaaS, the pod entrypoint writes its execution
-fragment as ``roar-fragments-<pod>.json`` into ``ROAR_K8S_BUNDLE_DIR``
-(a mounted shared volume declared via ``k8s.bundle_dir``). Someone with
-access to that volume later runs ``roar k8s ingest-bundles <dir>`` to
-merge the bundles into the local lineage DB — the OSMO bundle pattern,
-k8s-shaped.
+fragment as ``roar-fragments-<pod>-<container>-<attempt>.json`` into
+``ROAR_K8S_BUNDLE_DIR`` (a mounted shared volume declared via
+``k8s.bundle_dir``). Someone with access to that volume later runs
+``roar k8s ingest-bundles <dir>`` to merge the bundles into the local
+lineage DB — the OSMO bundle pattern, k8s-shaped.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,18 +33,40 @@ class K8sBundleIngestResult:
     bundle_paths: list[str]
 
 
-def bundle_filename_for_pod(pod_name: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "-", pod_name.strip() or "pod")
+def bundle_filename(pod_name: str, *, container: str = "main", attempt: str = "0") -> str:
+    """Bundle name carrying pod + container + attempt identity.
+
+    Every wrapped container in a pod writes its own bundle; pod name alone
+    made co-located containers (and in-place restarts) overwrite each other.
+    """
+    parts = (
+        pod_name.strip() or "pod",
+        container.strip() or "main",
+        str(attempt).strip() or "0",
+    )
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "-", "-".join(parts))
     return f"{BUNDLE_FILENAME_PREFIX}{safe}.json"
 
 
-def write_fragment_bundle(bundle_dir: Path, pod_name: str, fragments: list[dict[str, Any]]) -> Path:
+def write_fragment_bundle(
+    bundle_dir: Path,
+    pod_name: str,
+    fragments: list[dict[str, Any]],
+    *,
+    container: str = "main",
+    attempt: str = "0",
+) -> Path:
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    target = bundle_dir / bundle_filename_for_pod(pod_name)
-    target.write_text(
+    target = bundle_dir / bundle_filename(pod_name, container=container, attempt=attempt)
+    # Atomic replace: a reader (or a concurrent ingest) must never see a
+    # torn bundle, and the .tmp suffix keeps partial writes out of the
+    # discovery glob.
+    temp = target.with_name(f"{target.name}.tmp-{os.getpid()}")
+    temp.write_text(
         json.dumps({"fragments": fragments}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    os.replace(temp, target)
     return target
 
 
@@ -105,7 +128,7 @@ __all__ = [
     "BUNDLE_FILENAME_PREFIX",
     "K8sBundleError",
     "K8sBundleIngestResult",
-    "bundle_filename_for_pod",
+    "bundle_filename",
     "discover_fragment_bundles",
     "ingest_fragment_bundles",
     "write_fragment_bundle",
