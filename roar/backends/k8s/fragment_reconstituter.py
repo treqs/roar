@@ -167,17 +167,47 @@ class K8sFragmentReconstituter:
 
     @staticmethod
     def _deduplicate_by_task_identity(fragments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Keep the last emission per task identity (batches are sequence-sorted).
+        """Coalesce fragments per task identity (batches are sequence-sorted).
 
-        Re-emissions and retries replace earlier snapshots of the same task
-        rather than duplicating them; the merge engine additionally
-        reconciles job UIDs for anything that slips through.
+        Retries are already attempt-distinct in the identity contract
+        (pod uid + restart attempt), so same-identity fragments are either
+        duplicate deliveries (stream + bundle) or parts of an oversized
+        fragment the streamer split after an HTTP 413. The last fragment's
+        scalar fields win; reads/writes are unioned across parts (per-path,
+        last ref wins) so splitting never discards lineage references.
         """
         winners: dict[str, dict[str, Any]] = {}
         for index, fragment in enumerate(fragments):
             identity = str(fragment.get("task_identity") or "").strip() or f"fragment:{index}"
-            winners[identity] = fragment
+            previous = winners.get(identity)
+            if previous is None:
+                winners[identity] = dict(fragment)
+                continue
+            merged = dict(fragment)
+            for list_key in ("reads", "writes"):
+                merged[list_key] = K8sFragmentReconstituter._merge_refs_by_path(
+                    previous.get(list_key), fragment.get(list_key)
+                )
+            winners[identity] = merged
         return list(winners.values())
+
+    @staticmethod
+    def _merge_refs_by_path(earlier: Any, later: Any) -> list[dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        ordered: list[str] = []
+        for refs in (earlier, later):
+            if not isinstance(refs, list):
+                continue
+            for ref in refs:
+                if not isinstance(ref, dict):
+                    continue
+                path = str(ref.get("path") or "")
+                if not path:
+                    continue
+                if path not in merged:
+                    ordered.append(path)
+                merged[path] = ref
+        return [merged[path] for path in ordered]
 
     @staticmethod
     def _sequence_key(batch: dict[str, Any]) -> int:
