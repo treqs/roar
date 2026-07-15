@@ -117,6 +117,16 @@ This is the generalization seam for future local and distributed integrations.
 
 These two modules are the main backend-neutral extraction from the older inline Ray rewrite.
 
+**Job/driver runtime-env merge safety**: Ray (≥ 2.4) refuses to merge the
+submitted Job's runtime env with a driver's `ray.init` runtime env when any
+field or env-var *key* appears in both — even with identical values
+("Failed to merge the Job's runtime env"). Since the submit rewrite already
+delivers the roar env contract at the Job level, the patched driver-side
+`ray.init` reads the injected job config (`RAY_JOB_CONFIG_JSON_ENV_VAR`)
+and only adds what the Job env lacks; roar-added duplicates are dropped
+(`_drop_roar_env_keys_already_in_job_env`) while user-supplied keys are
+left alone so genuine conflicts still surface through Ray's own error.
+
 ### d. Driver bootstrap
 
 - `roar/execution/runtime/driver_entrypoint.py`

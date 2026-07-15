@@ -149,6 +149,9 @@ def patch_ray_init(ray_module: ModuleType) -> None:
         )
         runtime_env = prepare_worker_runtime_env(runtime_env, job_id)
         runtime_env = sanitize_worker_runtime_env_for_ray(ray_module, runtime_env)
+        runtime_env = _drop_roar_env_keys_already_in_job_env(
+            runtime_env, user_env_keys=set(env_vars)
+        )
         kwargs["runtime_env"] = runtime_env
         result = real_ray_init(*args, **kwargs)
         register_pre_shutdown_ray_collection()
@@ -609,16 +612,77 @@ def patch_driver_phase_s3_clients() -> None:
         boto3.client = _client
 
 
+# Ray's job manager exports the submitted Job's config to the driver under
+# this literal name (the constant's value equals the constant's name).
+_RAY_JOB_CONFIG_JSON_ENV_VAR = "RAY_JOB_CONFIG_JSON_ENV_VAR"
+
+
+def _injected_job_runtime_env() -> dict[str, Any]:
+    """Runtime env the Job manager injected for this driver ({} outside a job)."""
+    raw = os.environ.get(_RAY_JOB_CONFIG_JSON_ENV_VAR, "")
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    runtime_env = payload.get("runtime_env")
+    return runtime_env if isinstance(runtime_env, dict) else {}
+
+
+def _drop_roar_env_keys_already_in_job_env(
+    runtime_env: Mapping[str, Any],
+    *,
+    user_env_keys: set[str],
+) -> dict[str, Any]:
+    """Keep the driver's ray.init runtime env mergeable inside a submitted Job.
+
+    Roar-added env keys the Job's runtime env already carries are removed —
+    their values reach the driver and workers through the Job env anyway.
+    User-supplied keys stay untouched so a genuine conflict still surfaces
+    through Ray's own error.
+    """
+    injected_env_keys = set((_injected_job_runtime_env().get("env_vars") or {}).keys())
+    if not injected_env_keys:
+        return dict(runtime_env)
+    runtime_env_out = dict(runtime_env)
+    env_vars = dict(runtime_env_out.get("env_vars", {}) or {})
+    for key in list(env_vars):
+        if key not in user_env_keys and key in injected_env_keys:
+            env_vars.pop(key)
+    if env_vars:
+        runtime_env_out["env_vars"] = env_vars
+    else:
+        runtime_env_out.pop("env_vars", None)
+    return runtime_env_out
+
+
 def _prepare_instrumented_job_worker_runtime_env(
     runtime_env: Mapping[str, Any] | None,
     job_id: str,
 ) -> dict[str, Any]:
     del job_id
+    # Ray refuses to merge the Job's runtime env with the driver's ray.init
+    # runtime env when any field or env-var key appears in both — even with
+    # identical values. The submit rewrite already delivers the roar env
+    # contract at the Job level, so only add what the Job env lacks.
+    injected = _injected_job_runtime_env()
+    injected_env_keys = set((injected.get("env_vars") or {}).keys())
     runtime_env_out = dict(runtime_env or {})
     env_vars = dict(runtime_env_out.get("env_vars", {}) or {})
-    env_vars[ROAR_NO_TELEMETRY_ENV] = "1"
-    runtime_env_out["env_vars"] = env_vars
-    runtime_env_out["py_executable"] = WORKER_PY_EXECUTABLE
+    if ROAR_NO_TELEMETRY_ENV not in injected_env_keys:
+        env_vars[ROAR_NO_TELEMETRY_ENV] = "1"
+    if env_vars:
+        runtime_env_out["env_vars"] = env_vars
+    if "py_executable" in injected:
+        print(
+            "[roar] WARNING: the Job's runtime env already sets py_executable; "
+            "leaving it in place (per-task worker capture may be degraded)"
+        )
+    else:
+        runtime_env_out["py_executable"] = WORKER_PY_EXECUTABLE
     return runtime_env_out
 
 
