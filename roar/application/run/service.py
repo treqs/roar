@@ -17,6 +17,7 @@ from .execution import (
     execute_and_report,
     get_hash_algorithms,
     validate_git_clean,
+    write_run_report_file,
 )
 from .requests import BuildRequest, RunRequest
 from .verbosity import resolve_verbosity
@@ -149,6 +150,10 @@ def _execute_tracked_command(
             repo_root=repo_root,
         )
         raise
+
+    # Written before finalizers so a late finalizer crash cannot leave a
+    # wrapper believing the workload never launched.
+    write_run_report_file(report)
 
     try:
         if planned.finalize_run:

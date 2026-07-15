@@ -64,16 +64,50 @@ def _run_traced(command: list[str]) -> int:
     # I/O capture) install themselves; events land next to the local db.
     child_env.setdefault("ROAR_WRAP", "1")
     child_env.setdefault("ROAR_K8S_OBJECT_IO_FILE", str(_object_io_events_path()))
+    report_path = _run_report_path()
+    _remove_stale_report(report_path)
+    child_env["ROAR_RUN_REPORT_FILE"] = str(report_path)
     run = subprocess.run(
         [sys.executable, "-m", "roar", "run", "--tracer", tracer, *command],
         env=child_env,
         check=False,
     )
+    if run.returncode != 0 and _reported_setup_error(report_path):
+        print(
+            "[roar-k8s] roar run failed before launching the workload; running uninstrumented",
+            file=sys.stderr,
+        )
+        return _run_uninstrumented(command)
     return run.returncode
 
 
 def _object_io_events_path() -> Path:
     return Path.cwd() / ".roar" / "k8s-object-io.jsonl"
+
+
+def _run_report_path() -> Path:
+    return Path.cwd() / ".roar" / "k8s-run-report.json"
+
+
+def _remove_stale_report(report_path: Path) -> None:
+    import contextlib
+
+    with contextlib.suppress(OSError):
+        report_path.unlink()
+
+
+def _reported_setup_error(report_path: Path) -> bool:
+    """True only when roar positively reported a pre-launch setup failure.
+
+    A missing or unreadable report is ambiguous — roar may have crashed
+    after the workload ran — so it must NOT trigger a rerun: double-running
+    non-idempotent training is worse than a lost-lineage failure.
+    """
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(payload, dict) and bool(payload.get("setup_error"))
 
 
 def _run_uninstrumented(command: list[str]) -> int:
