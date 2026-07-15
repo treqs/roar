@@ -56,7 +56,15 @@ def fragment_session_path(roar_dir: Path, session_id: str) -> Path:
 def save_fragment_session(roar_dir: Path, payload: dict[str, Any]) -> Path:
     path = fragment_session_path(roar_dir, str(payload["session_id"]))
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    # The key file carries the raw fragment token: owner-only from the
+    # first byte (write_text would inherit the umask, leaving group/other
+    # read), and swapped in atomically so a crash never leaves a partial
+    # or over-permissive key behind.
+    temp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, separators=(",", ":")))
+    os.replace(temp, path)
     return path
 
 
