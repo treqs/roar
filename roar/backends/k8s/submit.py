@@ -17,7 +17,11 @@ from roar.backends.k8s.manifest import (
     load_manifest_documents,
     rewrite_manifest_for_lineage,
 )
-from roar.execution.fragments.sessions import generate_fragment_session, save_fragment_session
+from roar.execution.fragments.sessions import (
+    generate_fragment_session,
+    resolve_project_roar_dir,
+    save_fragment_session,
+)
 from roar.execution.framework.contract import ExecutionCommandPlan
 
 _KUBECTL_VERBS = ("apply", "create")
@@ -47,7 +51,10 @@ def matches_kubectl_job_submit_command(command: list[str]) -> bool:
         return False
     if Path(command[0]).name.lower() != "kubectl":
         return False
-    if command[1].lower() not in _KUBECTL_VERBS:
+    # Global flags may precede the verb (kubectl --context X apply -f ...),
+    # so accept the verb anywhere. The -f-points-at-a-manifest and
+    # single-supported-workload guards below keep false positives out.
+    if not any(arg.lower() in _KUBECTL_VERBS for arg in command[1:]):
         return False
     if not _k8s_backend_enabled():
         return False
@@ -77,7 +84,7 @@ def plan_kubectl_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
 
     start_dir = os.environ.get("ROAR_PROJECT_DIR") or os.getcwd()
     config = load_k8s_backend_config(start_dir=start_dir)
-    roar_dir = Path(os.getcwd()) / ".roar"
+    roar_dir = resolve_project_roar_dir()
 
     glaas_url = _resolve_glaas_url()
     if glaas_url is None:

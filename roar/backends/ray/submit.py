@@ -16,6 +16,7 @@ from roar.backends.ray.submit_context import (
 from roar.execution.fragments.sessions import (
     generate_fragment_session as generate_fragment_key,
 )
+from roar.execution.fragments.sessions import resolve_project_roar_dir
 from roar.execution.fragments.sessions import save_fragment_session as save_key
 from roar.execution.framework.contract import ROAR_EXECUTION_BACKEND_ENV, ExecutionCommandPlan
 from roar.integrations.glaas import GlaasClient
@@ -86,7 +87,7 @@ def plan_ray_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
         except Exception:
             pass
         else:
-            save_key(Path(os.getcwd()) / ".roar", key)
+            save_key(resolve_project_roar_dir(), key)
             env_vars["ROAR_SESSION_ID"] = key["session_id"]
             env_vars["ROAR_FRAGMENT_TOKEN"] = key["token"]
             fragment_session_id = str(key["session_id"])

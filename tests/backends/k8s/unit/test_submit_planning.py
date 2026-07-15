@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,35 @@ def test_matches_kubectl_apply_with_job_manifest(job_manifest_path: Path) -> Non
     assert matches_kubectl_job_submit_command(
         ["kubectl", "create", f"--filename={job_manifest_path}", "-n", "ml"]
     )
+
+
+def test_matches_kubectl_with_global_flags_before_verb(job_manifest_path: Path) -> None:
+    """Global flags routinely precede the verb; they must not bypass lineage."""
+    assert matches_kubectl_job_submit_command(
+        ["kubectl", "--context", "prod-cluster", "apply", "-f", str(job_manifest_path)]
+    )
+    assert matches_kubectl_job_submit_command(
+        ["kubectl", "-n", "ml", "create", "-f", str(job_manifest_path)]
+    )
+    assert matches_kubectl_job_submit_command(
+        [
+            "kubectl",
+            "--kubeconfig",
+            "/tmp/kc",
+            "--context",
+            "c",
+            "apply",
+            "-f",
+            str(job_manifest_path),
+        ]
+    )
+
+
+def test_does_not_match_non_submit_verbs_with_manifest(job_manifest_path: Path) -> None:
+    assert not matches_kubectl_job_submit_command(
+        ["kubectl", "delete", "-f", str(job_manifest_path)]
+    )
+    assert not matches_kubectl_job_submit_command(["kubectl", "diff", "-f", str(job_manifest_path)])
 
 
 def test_does_not_match_when_disabled(job_manifest_path: Path) -> None:
@@ -113,6 +143,33 @@ def test_plan_rewrites_manifest_and_persists_context(
     assert key_path.is_file()
     key_payload = json.loads(key_path.read_text(encoding="utf-8"))
     assert key_payload["session_id"] == plan.session_id
+
+
+def test_plan_from_subdirectory_saves_state_in_project_root(
+    job_manifest_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan-time state must land in the .roar the finalizer will read."""
+    project_root = job_manifest_path.parent
+    # Real projects are git repos; config discovery bounds its upward walk
+    # by the repo root, so the fixture needs one to search past the subdir.
+    subprocess.run(["git", "init", "-q"], cwd=project_root, check=True)
+    nested = project_root / "jobs" / "nested"
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+    monkeypatch.delenv("ROAR_PROJECT_DIR", raising=False)
+    monkeypatch.setattr(
+        "roar.backends.k8s.submit._register_fragment_session",
+        lambda *args, **kwargs: None,
+    )
+
+    plan = plan_kubectl_job_submit_command(["kubectl", "apply", "-f", str(job_manifest_path)])
+
+    assert plan.session_id
+    key_path = project_root / ".roar" / "fragment-sessions" / f"{plan.session_id}.key"
+    assert key_path.is_file()
+    prepared_path = Path(plan.command[plan.command.index("-f") + 1])
+    assert prepared_path.parent == project_root / ".roar" / "k8s" / "prepared"
+    assert not (nested / ".roar").exists()
 
 
 def test_plan_degrades_to_uninstrumented_when_registration_fails(

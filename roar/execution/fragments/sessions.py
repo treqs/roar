@@ -2,11 +2,41 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+def resolve_project_roar_dir(
+    environ: Mapping[str, str] | None = None,
+    cwd: Path | None = None,
+) -> Path:
+    """Locate the project's .roar directory the way the CLI context does.
+
+    Honors ROAR_PROJECT_DIR, then walks upward from cwd looking for an
+    existing .roar directory (bounded by the enclosing git repository when
+    present); falls back to cwd/.roar. Submit planners must save plan-time
+    state (session keys, prepared manifests) here — the run finalizer loads
+    the session key from the context-resolved .roar, so saving under a bare
+    cwd/.roar strands the key when invoked from a project subdirectory.
+    """
+    resolved_env = os.environ if environ is None else environ
+    override = str(resolved_env.get("ROAR_PROJECT_DIR") or "").strip()
+    if override:
+        return Path(override) / ".roar"
+
+    base = Path.cwd() if cwd is None else Path(cwd)
+    for parent in [base, *base.parents]:
+        candidate = parent / ".roar"
+        if candidate.is_dir():
+            return candidate
+        if (parent / ".git").exists():
+            break
+    return base / ".roar"
 
 
 def generate_fragment_session() -> dict[str, str]:
