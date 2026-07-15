@@ -141,6 +141,30 @@ def test_dry_run_has_no_side_effects() -> None:
     assert spy.calls == []
 
 
+def test_rewrite_failure_creates_no_session_or_secret() -> None:
+    """The rewrite runs before any external resource is created, so a
+    workload the rewriter rejects must not leave an orphaned GLaaS session
+    or credentials Secret behind (regression: side effects used to come
+    first)."""
+    spy = _Spy()
+    no_command = copy.deepcopy(SINGLE_JOB_MANIFEST)
+    for container in no_command["spec"]["template"]["spec"]["containers"]:
+        container.pop("command", None)
+
+    result = mutate_admission_review(
+        _review(no_command),
+        settings=SETTINGS,
+        create_secret=spy.create_secret,
+        register_session=spy.register_session,
+    )
+
+    response = result["response"]
+    assert response["allowed"] is True
+    assert "patch" not in response
+    assert response.get("warnings")
+    assert spy.calls == []
+
+
 def test_failures_never_block_admission() -> None:
     spy = _Spy(fail=True)
     result = mutate_admission_review(

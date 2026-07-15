@@ -55,6 +55,19 @@ certManager:
   # Certificate; the CA bundle is injected via cert-manager annotations).
   enabled: false
 
+secretCleanup:
+  # Credential Secrets cannot carry an ownerReference (the workload has no
+  # UID at CREATE admission), so a CronJob deletes roar-managed fragment
+  # Secrets older than maxAgeSeconds. Runs under its own ServiceAccount;
+  # the webhook's stays create-only.
+  enabled: true
+  schedule: "0 3 * * *"
+  # Default matches the maximum fragment-session TTL (7 days): a Secret
+  # older than this belongs to a session the server no longer honors.
+  # Running pods are unaffected (env is resolved at pod start); only
+  # late `roar k8s attach` credential recovery ages out with it.
+  maxAgeSeconds: 604800
+
 resources: {}
 nodeSelector: {}
 tolerations: []

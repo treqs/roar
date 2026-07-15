@@ -136,16 +136,14 @@ def mutate_admission_review(
         namespace = str(request.get("namespace") or metadata.get("namespace") or "default")
 
         session = generate_fragment_session()
-        register_session(session["session_id"], session["token_hash"])
-
         parent_job_uid = secrets_module.token_hex(4)
         secret_name = f"roar-fragment-{session['session_id'][:8]}"
-        create_secret(
-            namespace,
-            secret_name,
-            {"session_id": session["session_id"], "token": session["token"]},
-        )
 
+        # Rewrite first: it is a pure function of the admitted object, and
+        # it is the step most likely to fail (unsupported shape, no
+        # wrappable containers). Only create external resources — the GLaaS
+        # session and the credentials Secret — once the rewrite succeeded,
+        # so a failed admission leaves nothing behind.
         rewrite = rewrite_manifest_for_lineage(
             [obj],
             secret_name=secret_name,
@@ -164,6 +162,13 @@ def mutate_admission_review(
             namespace_override=namespace,
         )
         rewritten = rewrite.documents[0]
+
+        register_session(session["session_id"], session["token_hash"])
+        create_secret(
+            namespace,
+            secret_name,
+            {"session_id": session["session_id"], "token": session["token"]},
+        )
 
         merged_annotations = dict(annotations)
         merged_annotations[ANNOTATION_PARENT_UID] = parent_job_uid
