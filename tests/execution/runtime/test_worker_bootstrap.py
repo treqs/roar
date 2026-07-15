@@ -109,3 +109,51 @@ def test_build_packaged_worker_runtime_env_preserves_non_local_working_dir(
     )
 
     assert prepared["working_dir"] == "s3://bucket/cloud-demo"
+
+
+def test_run_user_setup_hook_invokes_displaced_hook(monkeypatch) -> None:
+    import sys
+    import types
+
+    from roar.execution.runtime.worker_bootstrap import _run_user_setup_hook
+
+    calls: list[str] = []
+    module = types.ModuleType("fake_user_hooks")
+    module.setup = lambda: calls.append("ran")  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fake_user_hooks", module)
+
+    _run_user_setup_hook({"ROAR_USER_SETUP_HOOK": "fake_user_hooks.setup"})
+
+    assert calls == ["ran"]
+
+
+def test_run_user_setup_hook_noop_without_env() -> None:
+    from roar.execution.runtime.worker_bootstrap import _run_user_setup_hook
+
+    _run_user_setup_hook({})
+    _run_user_setup_hook({"ROAR_USER_SETUP_HOOK": "  "})
+    # roar's own hook must never chain to itself.
+    _run_user_setup_hook(
+        {"ROAR_USER_SETUP_HOOK": "roar.execution.runtime.worker_bootstrap.startup"}
+    )
+
+
+def test_run_user_setup_hook_propagates_user_failure(monkeypatch) -> None:
+    import sys
+    import types
+
+    from roar.execution.runtime.worker_bootstrap import _run_user_setup_hook
+
+    def boom() -> None:
+        raise RuntimeError("user hook failed")
+
+    module = types.ModuleType("fake_failing_hooks")
+    module.setup = boom  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fake_failing_hooks", module)
+
+    # Without roar the user's hook failure would have failed the worker;
+    # instrumentation must not swallow it.
+    import pytest
+
+    with pytest.raises(RuntimeError, match="user hook failed"):
+        _run_user_setup_hook({"ROAR_USER_SETUP_HOOK": "fake_failing_hooks.setup"})

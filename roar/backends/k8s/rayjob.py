@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
 _DRIVER_ENTRYPOINT_PREFIX = "python -m roar.execution.runtime.driver_entrypoint -- "
 _WORKER_SETUP_HOOK = "roar.execution.runtime.worker_bootstrap.startup"
+_USER_SETUP_HOOK_ENV = "ROAR_USER_SETUP_HOOK"
 
 RAYJOB_SUCCESS_STATUSES = frozenset({"SUCCEEDED"})
 RAYJOB_FAILURE_STATUSES = frozenset({"FAILED", "STOPPED"})
@@ -118,15 +119,28 @@ def _merged_runtime_env_yaml(
             runtime_env = loaded
 
     pip = runtime_env.get("pip")
-    packages: list[str] = []
-    if isinstance(pip, dict):
-        packages = [str(item) for item in pip.get("packages") or []]
-    elif isinstance(pip, list):
-        packages = [str(item) for item in pip]
+    if isinstance(pip, str):
+        raise K8sManifestError(
+            f"RayJob {workload_name} references a pip requirements file "
+            f"({pip!r}) in runtimeEnvYAML; roar cannot append its runtime "
+            "requirement to a file reference. Use the list or dict form of pip."
+        )
+    pip_options = dict(pip) if isinstance(pip, dict) else None
+    if pip_options is not None:
+        packages = [str(item) for item in pip_options.get("packages") or []]
+    else:
+        packages = [str(item) for item in pip] if isinstance(pip, list) else []
     if contract.requirement and contract.requirement not in packages:
         packages.append(contract.requirement)
-    runtime_env["pip"] = packages
+    if pip_options is not None:
+        # Preserve the dict form: pip_check/pip_version and any future
+        # options must survive instrumentation.
+        pip_options["packages"] = packages
+        runtime_env["pip"] = pip_options
+    else:
+        runtime_env["pip"] = packages
 
+    user_setup_hook = str(runtime_env.get("worker_process_setup_hook") or "").strip()
     runtime_env["worker_process_setup_hook"] = _WORKER_SETUP_HOOK
 
     # The Ray env contract, keyed to the k8s parent uid so Ray fragments
@@ -137,9 +151,16 @@ def _merged_runtime_env_yaml(
         host_glaas_url=None,
         job_id=contract.parent_job_uid,
     )
+    source_environ = build_submit_source_environ(context)
+    # No proxy runs in the pods, so the Ray submit contract's local-proxy
+    # redirect would point S3 traffic at a dead localhost port. Dropping it
+    # from the merge source (rather than popping the merged result)
+    # preserves a user-supplied AWS_ENDPOINT_URL such as MinIO.
+    source_environ.pop("AWS_ENDPOINT_URL", None)
+    source_environ.pop("ROAR_PROXY_PORT", None)
     env_vars = merge_worker_bootstrap_env(
         dict(runtime_env.get("env_vars") or {}),
-        build_submit_source_environ(context),
+        source_environ,
         job_id=context.job_id,
         # Ray workers stamp ROAR_DRIVER_JOB_UID into each fragment's
         # parent_job_uid; without it the ray_task rows merge with no DAG
@@ -152,10 +173,10 @@ def _merged_runtime_env_yaml(
     # Per the proxy decision, node agents/proxy sidecars stay off for
     # RayJob delegation v1; in-process hooks are the capture surface.
     env_vars["ROAR_RAY_NODE_AGENTS"] = "0"
-    # No proxy runs in the pods, so the merged local-proxy redirect would
-    # point user S3 traffic at a dead localhost port — strip it.
-    env_vars.pop("AWS_ENDPOINT_URL", None)
-    env_vars.pop("ROAR_PROXY_PORT", None)
+    if user_setup_hook and user_setup_hook != _WORKER_SETUP_HOOK:
+        # roar's startup hook runs the displaced user hook after capture is
+        # installed (worker_bootstrap._run_user_setup_hook).
+        env_vars[_USER_SETUP_HOOK_ENV] = user_setup_hook
     # ROAR_WRAP is deliberately NOT set: in Ray pip virtualenvs the
     # roar_inject.pth fires at worker interpreter startup before the
     # virtualenv's site-packages are importable, and the sitecustomize

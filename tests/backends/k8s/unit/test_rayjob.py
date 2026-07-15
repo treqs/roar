@@ -127,6 +127,81 @@ def test_rayjob_pods_get_secret_refs_and_secret_doc() -> None:
     assert secret["metadata"]["namespace"] == "ml"
 
 
+def test_rayjob_preserves_pip_dict_options() -> None:
+    manifest = copy.deepcopy(RAYJOB_MANIFEST)
+    manifest["spec"]["runtimeEnvYAML"] = yaml.safe_dump(
+        {
+            "pip": {"packages": ["pandas"], "pip_check": False, "pip_version": "==23.3.1"},
+            "env_vars": {"USER_VAR": "keep"},
+        },
+        sort_keys=False,
+    )
+    rewrite = _rewrite([manifest])
+    doc = next(d for d in rewrite.documents if d.get("kind") == "RayJob")
+    runtime_env = yaml.safe_load(doc["spec"]["runtimeEnvYAML"])
+
+    pip = runtime_env["pip"]
+    assert pip["pip_check"] is False
+    assert pip["pip_version"] == "==23.3.1"
+    assert pip["packages"] == ["pandas", "roar-cli==0.3.7"]
+
+
+def test_rayjob_rejects_pip_requirements_file_reference() -> None:
+    manifest = copy.deepcopy(RAYJOB_MANIFEST)
+    manifest["spec"]["runtimeEnvYAML"] = "pip: requirements.txt\n"
+
+    with pytest.raises(K8sManifestError, match="requirements"):
+        _rewrite([manifest])
+
+
+def test_rayjob_chains_user_worker_setup_hook() -> None:
+    manifest = copy.deepcopy(RAYJOB_MANIFEST)
+    manifest["spec"]["runtimeEnvYAML"] = yaml.safe_dump(
+        {"worker_process_setup_hook": "my_pkg.hooks.setup"},
+        sort_keys=False,
+    )
+    rewrite = _rewrite([manifest])
+    doc = next(d for d in rewrite.documents if d.get("kind") == "RayJob")
+    runtime_env = yaml.safe_load(doc["spec"]["runtimeEnvYAML"])
+
+    assert (
+        runtime_env["worker_process_setup_hook"]
+        == "roar.execution.runtime.worker_bootstrap.startup"
+    )
+    # roar's startup hook invokes the displaced user hook after capture is
+    # installed (worker_bootstrap.startup reads ROAR_USER_SETUP_HOOK).
+    assert runtime_env["env_vars"]["ROAR_USER_SETUP_HOOK"] == "my_pkg.hooks.setup"
+
+
+def test_rayjob_does_not_chain_roar_hook_to_itself() -> None:
+    manifest = copy.deepcopy(RAYJOB_MANIFEST)
+    manifest["spec"]["runtimeEnvYAML"] = yaml.safe_dump(
+        {"worker_process_setup_hook": "roar.execution.runtime.worker_bootstrap.startup"},
+        sort_keys=False,
+    )
+    rewrite = _rewrite([manifest])
+    doc = next(d for d in rewrite.documents if d.get("kind") == "RayJob")
+    runtime_env = yaml.safe_load(doc["spec"]["runtimeEnvYAML"])
+
+    assert "ROAR_USER_SETUP_HOOK" not in runtime_env["env_vars"]
+
+
+def test_rayjob_preserves_user_aws_endpoint_url() -> None:
+    manifest = copy.deepcopy(RAYJOB_MANIFEST)
+    manifest["spec"]["runtimeEnvYAML"] = yaml.safe_dump(
+        {"env_vars": {"AWS_ENDPOINT_URL": "http://minio:9000"}},
+        sort_keys=False,
+    )
+    rewrite = _rewrite([manifest])
+    doc = next(d for d in rewrite.documents if d.get("kind") == "RayJob")
+    env_vars = yaml.safe_load(doc["spec"]["runtimeEnvYAML"])["env_vars"]
+
+    # Only roar's own local-proxy redirect is dropped (no proxy runs in the
+    # pods); a user-supplied object-store endpoint must survive the rewrite.
+    assert env_vars["AWS_ENDPOINT_URL"] == "http://minio:9000"
+    assert "ROAR_PROXY_PORT" not in env_vars
+
+
 def test_rayjob_without_entrypoint_fails_actionably() -> None:
     manifest = copy.deepcopy(RAYJOB_MANIFEST)
     del manifest["spec"]["entrypoint"]

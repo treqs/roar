@@ -17,6 +17,7 @@ from roar.execution.runtime.inject.support import (
 
 WORKER_SETUP_HOOK = "roar.execution.runtime.worker_bootstrap.startup"
 WORKER_PY_EXECUTABLE = "roar-worker"
+USER_SETUP_HOOK_ENV = "ROAR_USER_SETUP_HOOK"
 
 
 def _resolve_execution_backend_name(environ: Mapping[str, str]) -> str:
@@ -120,6 +121,27 @@ def startup() -> None:
     if distributed is None:
         raise RuntimeError(f"execution backend {backend.name!r} does not support worker bootstrap")
     distributed.worker_bootstrap.startup()
+    _run_user_setup_hook(os.environ)
+
+
+def _run_user_setup_hook(environ: Mapping[str, str]) -> None:
+    """Chain a user worker_process_setup_hook displaced by roar's.
+
+    Instrumented submits (RayJob rewrite) replace the user's setup hook
+    with roar's and carry the original as ROAR_USER_SETUP_HOOK. User-hook
+    failures propagate: without roar that failure would have failed the
+    worker, and instrumentation must not change that contract.
+    """
+    hook_path = str(environ.get(USER_SETUP_HOOK_ENV) or "").strip()
+    if not hook_path or hook_path == WORKER_SETUP_HOOK:
+        return
+    module_name, separator, attribute = hook_path.rpartition(".")
+    if not separator:
+        raise RuntimeError(f"{USER_SETUP_HOOK_ENV}={hook_path!r} is not a module.attribute path")
+    import importlib
+
+    hook = getattr(importlib.import_module(module_name), attribute)
+    hook()
 
 
 def run_worker_entrypoint(argv: list[str] | None = None) -> None:
