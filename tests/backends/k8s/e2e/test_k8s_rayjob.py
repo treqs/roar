@@ -215,9 +215,20 @@ def test_rayjob_live_delegates_to_ray_backend(
 
         ray_tasks = _query(
             project_dir,
-            "SELECT id FROM jobs WHERE job_type = 'ray_task'",
+            "SELECT id, parent_job_uid FROM jobs WHERE job_type = 'ray_task'",
         )
         assert ray_tasks, f"expected ray_task jobs from delegated reconstitution\n{_describe(run)}"
+
+        # Every ray task must carry the DAG edge back to the recorded k8s
+        # submit job (regression: driver_job_uid was not threaded into the
+        # worker env, so tasks merged parentless and no test noticed).
+        submit_uid = str(submit_rows[0]["job_uid"])
+        orphaned = [
+            row["id"] for row in ray_tasks if str(row["parent_job_uid"] or "") != submit_uid
+        ]
+        assert not orphaned, (
+            f"ray_task jobs not parented to submit job {submit_uid}: {orphaned}\n{_describe(run)}"
+        )
 
         output_paths = {
             str(row["path"])

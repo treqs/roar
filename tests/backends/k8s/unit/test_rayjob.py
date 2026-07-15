@@ -92,6 +92,9 @@ def test_rayjob_runtime_env_carries_ray_contract_without_secrets() -> None:
     assert env_vars["USER_VAR"] == "keep"
     assert env_vars["ROAR_EXECUTION_BACKEND"] == "ray"
     assert env_vars["ROAR_JOB_ID"] == "cafe0123"
+    # Workers stamp this into each fragment's parent_job_uid; it is the DAG
+    # edge from ray_task rows back to the recorded k8s submit job.
+    assert env_vars["ROAR_DRIVER_JOB_UID"] == "cafe0123"
     assert env_vars["GLAAS_URL"] == "http://glaas:3001"
     assert env_vars["ROAR_RAY_NODE_AGENTS"] == "0"
     # Credentials must never appear inline in the CR.

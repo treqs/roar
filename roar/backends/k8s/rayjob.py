@@ -141,6 +141,10 @@ def _merged_runtime_env_yaml(
         dict(runtime_env.get("env_vars") or {}),
         build_submit_source_environ(context),
         job_id=context.job_id,
+        # Ray workers stamp ROAR_DRIVER_JOB_UID into each fragment's
+        # parent_job_uid; without it the ray_task rows merge with no DAG
+        # edge back to the recorded k8s submit job.
+        driver_job_uid=contract.parent_job_uid,
         overwrite_existing=True,
     )
     env_vars[ROAR_EXECUTION_BACKEND_ENV] = "ray"
