@@ -54,9 +54,16 @@ to every workload it instruments.
 The webhook rewrites the manifest *before* creating the GLaaS session or
 the credentials Secret, so a rejected/unrewritable workload leaves
 nothing behind. Secrets cannot carry an ownerReference (no workload UID
-exists at CREATE admission); the chart ships a `secretCleanup` CronJob
-(own ServiceAccount, list/delete only, name-prefix guarded) that removes
-roar fragment Secrets older than the maximum session TTL.
+exists at CREATE admission); the chart ships an **opt-in** `secretCleanup`
+CronJob (own ServiceAccount, name-prefix guarded) that removes roar
+fragment Secrets older than `maxAgeSeconds`. It is disabled by default
+for two reasons documented in `values.yaml`: its ServiceAccount needs
+cluster-wide list/delete on Secrets (list responses carry Secret data,
+so this is cluster-wide Secret read), and age-based deletion conflicts
+with session renewal — a renewed long-running workload whose Secret ages
+out cannot start retry/scale-up pods and loses `roar k8s attach`
+recovery. Enable it only after accepting both, with `maxAgeSeconds`
+comfortably past the longest expected training run.
 
 **Helm chart** (`deploy/charts/roar-lineage-webhook`): packages the
 webhook Deployment/Service, RBAC (Secret-create ClusterRole), and the

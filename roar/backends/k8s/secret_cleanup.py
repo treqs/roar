@@ -3,13 +3,16 @@
 Credential Secrets cannot carry an ownerReference: at CREATE admission the
 workload has no UID yet, so Kubernetes garbage collection can never adopt
 them. This module lists roar-managed Secrets cluster-wide and deletes those
-older than ROAR_SECRET_MAX_AGE_SECONDS (default: the 7-day maximum
-fragment-session TTL — a Secret older than that belongs to a session the
-server no longer honors). Running pods are unaffected (env is resolved at
-pod start); only late `roar k8s attach` credential recovery ages out.
+older than ROAR_SECRET_MAX_AGE_SECONDS (default 7 days).
 
-Runs in-cluster under a dedicated ServiceAccount with list/delete on
-Secrets (see the chart's secret-cleanup template).
+Age is a heuristic, not a session-liveness signal: sessions renew on 403
+and can outlive any fixed TTL. Running containers are unaffected (env
+resolves at pod start), but retry/scale-up pods referencing a deleted
+Secret cannot start, and cluster-based `roar k8s attach` recovery is
+lost. The chart therefore ships this CronJob disabled by default; its
+ServiceAccount needs cluster-wide list/delete on Secrets (list responses
+include Secret data), so treat it as a privileged component. See the
+chart values for the full trade-off.
 """
 
 from __future__ import annotations

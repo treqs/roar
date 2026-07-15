@@ -57,15 +57,27 @@ certManager:
 
 secretCleanup:
   # Credential Secrets cannot carry an ownerReference (the workload has no
-  # UID at CREATE admission), so a CronJob deletes roar-managed fragment
-  # Secrets older than maxAgeSeconds. Runs under its own ServiceAccount;
-  # the webhook's stays create-only.
-  enabled: true
+  # UID at CREATE admission), so an optional CronJob deletes roar-managed
+  # fragment Secrets older than maxAgeSeconds. Runs under its own
+  # ServiceAccount; the webhook's stays create-only.
+  #
+  # Off by default — enabling it is a real privilege and reliability
+  # trade-off; read before flipping:
+  # - RBAC: the CronJob's ServiceAccount gets cluster-wide list/delete on
+  #   Secrets. Kubernetes list responses include Secret data, so this is
+  #   equivalent to cluster-wide Secret READ; the roar label selector does
+  #   not narrow what the account is authorized to request. Treat the
+  #   cleanup image and ServiceAccount as privileged security components.
+  # - Renewal conflict: fragment sessions are renewed on 403 and can
+  #   outlive any fixed maxAgeSeconds. Deleting an aged Secret does not
+  #   affect running containers (env resolves at pod start), but a retry
+  #   pod, scale-up, or new Ray worker that references the deleted Secret
+  #   cannot start, and cluster-based `roar k8s attach` recovery is lost.
+  # Keep it disabled unless orphaned credential Secrets are a bigger
+  # problem in your cluster than the above; prefer a maxAgeSeconds well
+  # past your longest training run when you do enable it.
+  enabled: false
   schedule: "0 3 * * *"
-  # Default matches the maximum fragment-session TTL (7 days): a Secret
-  # older than this belongs to a session the server no longer honors.
-  # Running pods are unaffected (env is resolved at pod start); only
-  # late `roar k8s attach` credential recovery ages out with it.
   maxAgeSeconds: 604800
 
 resources: {}
