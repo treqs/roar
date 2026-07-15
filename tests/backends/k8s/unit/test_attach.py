@@ -51,6 +51,19 @@ def test_attach_recovers_identity_from_jobset_and_trainjob() -> None:
         assert _session_secret_name(env) == "roar-fragment-deadbeef"
 
 
+def test_kind_aliases_cover_every_supported_workload() -> None:
+    """Every WORKLOAD_KINDS entry must be reachable via KIND/NAME attach."""
+    from roar.backends.k8s.attach import _KIND_ALIASES
+    from roar.backends.k8s.manifest import WORKLOAD_KINDS
+
+    aliased_resources = set(_KIND_ALIASES.values())
+    for kind in WORKLOAD_KINDS:
+        assert kind.kubectl_resource in aliased_resources, (
+            f"{kind.kind} ({kind.kubectl_resource}) has no attach alias"
+        )
+        assert kind.kind.lower() in _KIND_ALIASES
+
+
 def test_attach_reports_uninstrumented_workload() -> None:
     doc = copy.deepcopy(SINGLE_JOB_MANIFEST)
     workload_kind = workload_kind_for_document(doc)

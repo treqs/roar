@@ -60,6 +60,8 @@ _KIND_ALIASES = {
     "pytorchjobs": "pytorchjobs.kubeflow.org",
     "trainjob": "trainjobs.trainer.kubeflow.org",
     "trainjobs": "trainjobs.trainer.kubeflow.org",
+    "rayjob": "rayjobs.ray.io",
+    "rayjobs": "rayjobs.ray.io",
 }
 
 

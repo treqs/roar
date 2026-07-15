@@ -51,6 +51,13 @@ blocks admission. Reconstitution is client-driven via `roar k8s attach`.
 `ROAR_WEBHOOK_PROXY_UPSTREAM`) makes the injector add the proxy sidecar
 to every workload it instruments.
 
+The webhook rewrites the manifest *before* creating the GLaaS session or
+the credentials Secret, so a rejected/unrewritable workload leaves
+nothing behind. Secrets cannot carry an ownerReference (no workload UID
+exists at CREATE admission); the chart ships a `secretCleanup` CronJob
+(own ServiceAccount, list/delete only, name-prefix guarded) that removes
+roar fragment Secrets older than the maximum session TTL.
+
 **Helm chart** (`deploy/charts/roar-lineage-webhook`): packages the
 webhook Deployment/Service, RBAC (Secret-create ClusterRole), and the
 `MutatingWebhookConfiguration`. Required values: `glaas.url`,
@@ -165,8 +172,11 @@ renewal is purely reactive to the 403.
 ## 2. Flow
 
 1. **Match** (`roar/backends/k8s/submit.py`): binary `kubectl`, verb
-   `apply|create`, `-f` pointing at a manifest containing exactly one
-   supported workload; gated by `k8s.enabled` (default off).
+   `apply|create` anywhere in the argument list (global flags like
+   `--context` may precede it), `-f` pointing at a manifest containing
+   exactly one supported workload; gated by `k8s.enabled` (default off).
+   Stdin (`-f -`), URLs, directories, and kustomize sources are outside
+   the matching contract and pass through uninstrumented.
 2. **Plan** (same module): pre-registers a GLaaS fragment session (saves the
    `.key` under `.roar/fragment-sessions/`), rewrites the manifest
    (`manifest.py`), writes it 0600 under `.roar/k8s/prepared/` with a
@@ -182,7 +192,13 @@ renewal is purely reactive to the 403.
    Each container with an explicit `command` gets a `/bin/sh -c` script that
    pip-installs the roar runtime (`k8s.runtime_install_requirement`, default
    pinned `roar-cli`) and execs `python3 -m roar.backends.k8s.pod_entry "$@"`;
-   on any bootstrap failure it falls back to exec'ing the original command
+   bootstrap failures — missing python3, failed install, absent staged
+   tree, and (via an import probe just before the exec) broken installs,
+   ABI mismatches, or unsupported interpreters — fall back to exec'ing
+   the original command uninstrumented. A crash *inside* `pod_entry`
+   after the probe passes is the remaining unisolated window; past that
+   point the training exit code always wins. The runtime image stages
+   x86-64 (glibc) trees only — other platforms fail the probe and run
    uninstrumented. Injects the env contract (`GLAAS_URL` = cluster-visible
    URL, Secret-backed `ROAR_SESSION_ID`/`ROAR_FRAGMENT_TOKEN`, downward-API
    identity fields) and appends the Secret document. Containers without an

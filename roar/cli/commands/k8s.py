@@ -65,9 +65,10 @@ def k8s_attach(
 ) -> None:
     """Reconstitute lineage from an already-submitted workload.
 
-    WORKLOAD is a name or KIND/NAME (job, jobset, pytorchjob, trainjob) that
-    was instrumented at submit time. Credentials come from a locally saved
-    fragment-session key, the cluster Secret, or --session-file.
+    WORKLOAD is a name or KIND/NAME (job, jobset, pytorchjob, trainjob,
+    rayjob) that was instrumented at submit time. Credentials come from a
+    locally saved fragment-session key, the cluster Secret, or
+    --session-file.
     """
     global_flags = ["--context", kube_context] if kube_context else []
     try:

@@ -27,11 +27,16 @@ from roar.backends.k8s.mount_map import build_container_mount_map, dump_mount_ma
 # sh -c scripts: "$0" is the synthetic argv0, "$@" is the original
 # command+args. Lineage is best-effort by design: any failure to stage
 # the roar runtime falls back to running the original command
-# uninstrumented rather than failing the training job.
+# uninstrumented rather than failing the training job. The import probe
+# is the last line of defense before exec — it catches broken installs,
+# ABI mismatches (e.g. an x86-64 staged tree on an arm64 node), and
+# unsupported interpreters, all of which would otherwise kill the
+# container after exec with no way back.
 _POD_WRAPPER_TEMPLATE = """\
 run_fallback() {{ echo "[roar-k8s] lineage runtime unavailable; running uninstrumented" >&2; exec "$@"; }}
 command -v python3 >/dev/null 2>&1 || run_fallback "$@"
 python3 -m pip install --quiet {requirement} || run_fallback "$@"
+python3 -c 'import roar.backends.k8s.pod_entry' || run_fallback "$@"
 exec python3 -m roar.backends.k8s.pod_entry "$@"
 """
 
@@ -44,6 +49,7 @@ command -v python3 >/dev/null 2>&1 || run_fallback "$@"
 RT="{staging_mount}/cp$(python3 -c 'import sys; print("%d%d" % sys.version_info[:2])')"
 [ -d "$RT" ] || run_fallback "$@"
 export PYTHONPATH="$RT${{PYTHONPATH:+:$PYTHONPATH}}"
+python3 -c 'import roar.backends.k8s.pod_entry' || run_fallback "$@"
 exec python3 -m roar.backends.k8s.pod_entry "$@"
 """
 
