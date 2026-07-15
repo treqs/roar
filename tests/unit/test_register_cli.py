@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -478,6 +479,63 @@ def test_register_cli_accepts_defaulted_active_session_publish_prompt(tmp_path: 
     assert result.exit_code == 0, result.output
     request = mock_register.call_args.args[0]
     assert request.target == session_hash
+
+
+def test_register_cli_defaulted_active_session_prompt_has_no_in_flight_warning_by_default(
+    tmp_path: Path,
+) -> None:
+    """No active-run marker present -> no in-flight warning line."""
+    runner = CliRunner()
+    session_hash = "3" * 64
+    with (
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
+        patch(
+            "roar.application.query.status.compute_active_session_hash",
+            return_value=session_hash,
+        ),
+        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
+    ):
+        mock_register.return_value = _fake_result()
+        result = runner.invoke(register, [], input="y\n", obj=_mock_context(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert "still be in progress" not in result.output
+
+
+def test_register_cli_defaulted_active_session_prompt_warns_on_in_flight_run(
+    tmp_path: Path,
+) -> None:
+    """A live `roar run`/`roar build` marker in this repo's `.roar` dir must
+    surface a warning in the defaulted-active-session prompt — this is the gap
+    a bare `roar register` in one terminal previously had no way to see a
+    still-running job in another terminal of the same session.
+    """
+    from roar.execution.runtime.active_runs import write_marker
+
+    runner = CliRunner()
+    session_hash = "4" * 64
+    ctx = _mock_context(tmp_path)
+    # Our own PID would be excluded as "self" — use the parent (pytest's own
+    # process), which is guaranteed alive for the duration of the test, to
+    # simulate a genuinely different in-flight process.
+    other_pid = os.getppid()
+    write_marker(ctx.roar_dir, pid=other_pid, command=["python", "train.py"], job_type="run")
+
+    with (
+        patch("roar.cli.publish_intent._is_logged_in", return_value=True),
+        patch(
+            "roar.application.query.status.compute_active_session_hash",
+            return_value=session_hash,
+        ),
+        patch("roar.cli.commands.register.register_lineage_target") as mock_register,
+    ):
+        mock_register.return_value = _fake_result()
+        result = runner.invoke(register, [], input="n\n", obj=ctx)
+
+    assert f"pid {other_pid}" in result.output
+    assert "train.py" in result.output
+    assert "still be in progress" in result.output
+    mock_register.assert_not_called()
 
 
 def test_register_cli_yes_skips_defaulted_active_session_prompt(tmp_path: Path) -> None:

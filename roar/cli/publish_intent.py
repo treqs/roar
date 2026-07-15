@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import click
 
@@ -127,7 +128,11 @@ def _confirm_or_explain_noninteractive(prompt: str, *, default: bool, command_na
 
 
 def confirm_defaulted_active_session_publish(
-    *, session_hash: str, command_name: str, start_dir: str | None = None
+    *,
+    session_hash: str,
+    command_name: str,
+    start_dir: str | None = None,
+    roar_dir: Path | None = None,
 ) -> bool:
     """Prompt before a target-less invocation publishes the whole active session.
 
@@ -137,13 +142,23 @@ def confirm_defaulted_active_session_publish(
     by-accident publish. This gate fires independent of ``publish_intent.anonymous``:
     an attributed, private publish of the wrong (too-broad) scope is still a real
     mistake, so it can't rely on the anonymous/public confirmation to catch it.
+
+    Job rows are only written when a job completes, so a concurrent `roar run`/
+    `roar build` in another terminal has nothing in the DB yet for this prompt
+    to see — it can silently publish a session that's still being added to.
+    `roar_dir`, when given, is checked for other live in-flight run markers so
+    that risk can be named here instead of passing silently.
     """
+    from ..execution.runtime.active_runs import in_flight_run_warnings
+
     click.echo("")
     click.echo(f"Will publish to: {_publish_url_preview(start_dir, session_hash)}")
     click.echo(
         f"No target given — the whole active session ({_preview_hash(session_hash)}) will be "
         "published, including every job and artifact recorded in it so far."
     )
+    for warning in in_flight_run_warnings(roar_dir):
+        click.echo(warning)
     click.echo(f"Use `{command_name} -y` to skip this confirmation in scripts.")
     click.echo("")
     return _confirm_or_explain_noninteractive(

@@ -40,6 +40,16 @@ def status(ctx: RoarContext, untracked_dirs: bool) -> None:
     except StatusQueryError as exc:
         raise click.ClickException(str(exc)) from exc
 
+    # A concurrent `roar run`/`roar build` has no row in the DB until it
+    # completes, so the session summary above can't reflect it — name that
+    # gap here instead of showing a job count that's about to change. Warn,
+    # never block; unconditional (not gated on hints) since this is a real
+    # data-freshness risk, not a UX tip.
+    from ...execution.runtime.active_runs import in_flight_run_warnings
+
+    for warning in in_flight_run_warnings(ctx.roar_dir):
+        click.echo(warning, err=True)
+
     # `reproduce` is the on-mission verb but is undiscoverable at the
     # surfaces a user actually visits. Status is one of those surfaces:
     # the user is staring at the active session and may want to know
