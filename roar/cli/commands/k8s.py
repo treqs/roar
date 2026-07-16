@@ -14,7 +14,11 @@ from ...backends.k8s.manifest import (
     load_manifest_documents,
     rewrite_manifest_for_lineage,
 )
-from ...backends.k8s.submit import resolve_runtime_requirement
+from ...backends.k8s.submit import (
+    manifest_rewrite_config_kwargs,
+    proxy_sidecar_config_warning,
+    resolve_runtime_requirement,
+)
 from ..context import RoarContext
 from ..decorators import require_init
 
@@ -150,18 +154,27 @@ def k8s_ingest_bundles(ctx: RoarContext, directory: Path) -> None:
     default=None,
     help="Cluster-visible GLaaS URL injected into pods (defaults to k8s.cluster_glaas_url)",
 )
+@click.option(
+    "-n",
+    "--namespace",
+    default=None,
+    help="Namespace override, mirroring `kubectl apply -n` on the managed path",
+)
 def k8s_prepare(
     manifest_path: Path,
     output_path: Path,
     secret_name: str,
     requirement: str | None,
     cluster_glaas_url: str | None,
+    namespace: str | None,
 ) -> None:
     """Rewrite a Job manifest with lineage instrumentation for inspection.
 
     Unlike the managed `roar run kubectl apply -f ...` path, no fragment
     session is registered and no Secret is embedded: create the Secret named
     by --secret-name (keys: session_id, token) before applying the output.
+    Everything else mirrors the managed rewrite: bundle, mount-map, runtime
+    staging, and proxy-sidecar settings are read from the same k8s config.
     """
     config = load_k8s_backend_config()
     resolved_requirement = requirement or resolve_runtime_requirement(config)
@@ -178,11 +191,16 @@ def k8s_prepare(
             fragment_token=None,
             requirement=resolved_requirement,
             cluster_glaas_url=resolved_cluster_glaas,
-            tracer=str(config.get("tracer") or "preload"),
             parent_job_uid=secrets.token_hex(4),
+            namespace_override=namespace,
+            **manifest_rewrite_config_kwargs(config),
         )
     except K8sManifestError as exc:
         raise click.ClickException(str(exc)) from exc
+
+    proxy_warning = proxy_sidecar_config_warning(config)
+    if proxy_warning:
+        click.echo(f"warning: {proxy_warning}", err=True)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(dump_manifest_documents(rewrite.documents), encoding="utf-8")

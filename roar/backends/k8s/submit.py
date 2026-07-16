@@ -8,6 +8,7 @@ import secrets
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from roar.backends.k8s.config import load_k8s_backend_config
 from roar.backends.k8s.manifest import (
@@ -164,24 +165,13 @@ def plan_kubectl_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
         fragment_token=session["token"],
         requirement=resolve_runtime_requirement(config),
         cluster_glaas_url=_resolve_cluster_glaas_url(config, glaas_url),
-        tracer=str(config.get("tracer") or "preload"),
         parent_job_uid=parent_job_uid,
-        bundle_dir=str(config.get("bundle_dir") or ""),
-        mount_map=_config_mount_map(config),
-        runtime_source=str(config.get("runtime_source") or "install"),
-        runtime_image=str(config.get("runtime_image") or ""),
-        proxy_sidecar=bool(config.get("proxy_sidecar", False)),
-        proxy_upstream=str(config.get("proxy_upstream") or ""),
         namespace_override=_find_namespace_argument(command),
+        **manifest_rewrite_config_kwargs(config),
     )
-    if bool(config.get("proxy_sidecar", False)) and (
-        str(config.get("runtime_source") or "install") != "image"
-        or not str(config.get("runtime_image") or "")
-    ):
-        _warn(
-            "k8s.proxy_sidecar requires k8s.runtime_source='image' with "
-            "k8s.runtime_image set; sidecar not injected"
-        )
+    proxy_warning = proxy_sidecar_config_warning(config)
+    if proxy_warning:
+        _warn(proxy_warning)
     if rewrite.skipped_containers:
         _warn(
             "containers without an explicit command were left uninstrumented: "
@@ -358,6 +348,36 @@ def _find_namespace_argument(command: list[str]) -> str | None:
     return None
 
 
+def manifest_rewrite_config_kwargs(config: dict) -> dict[str, Any]:
+    """Config-derived rewrite kwargs shared by managed submit and `roar k8s prepare`.
+
+    One source of truth: prepare must preview exactly the rewrite the
+    managed path would submit (bundle, mount map, runtime staging, proxy).
+    """
+    return {
+        "tracer": str(config.get("tracer") or "preload"),
+        "bundle_dir": str(config.get("bundle_dir") or ""),
+        "mount_map": _config_mount_map(config),
+        "runtime_source": str(config.get("runtime_source") or "install"),
+        "runtime_image": str(config.get("runtime_image") or ""),
+        "proxy_sidecar": bool(config.get("proxy_sidecar", False)),
+        "proxy_upstream": str(config.get("proxy_upstream") or ""),
+    }
+
+
+def proxy_sidecar_config_warning(config: dict) -> str | None:
+    """Warning when proxy_sidecar is configured but cannot be injected."""
+    if bool(config.get("proxy_sidecar", False)) and (
+        str(config.get("runtime_source") or "install") != "image"
+        or not str(config.get("runtime_image") or "")
+    ):
+        return (
+            "k8s.proxy_sidecar requires k8s.runtime_source='image' with "
+            "k8s.runtime_image set; sidecar not injected"
+        )
+    return None
+
+
 def _config_mount_map(config: dict) -> dict[str, str]:
     raw = config.get("mount_map")
     if not isinstance(raw, dict):
@@ -412,7 +432,9 @@ __all__ = [
     "K8sSubmitContext",
     "discard_submit_context",
     "load_submit_context",
+    "manifest_rewrite_config_kwargs",
     "matches_kubectl_job_submit_command",
     "plan_kubectl_job_submit_command",
+    "proxy_sidecar_config_warning",
     "resolve_runtime_requirement",
 ]
