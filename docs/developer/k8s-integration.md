@@ -166,6 +166,17 @@ an undelivered summary), so mid-run streaming failures also reach the
 fallback; the upfront reachability probe remains as a fast path that
 skips per-batch POST timeouts when GLaaS is dark.
 
+**Local-first boundary (current phase):** managed Kubernetes capture
+requires GLaaS to be reachable *from the submitting host* at submit
+time — the fragment session is registered before the manifest is
+rewritten, and a failed registration submits the workload
+uninstrumented (with a warning). `k8s.bundle_dir` therefore covers
+*pod-side* GLaaS outages only; it is not an offline mode. When no GLaaS
+is available anywhere, `roar k8s prepare` plus an out-of-band Secret is
+the manual path. A true bundle-only/local-first plan (instrument without
+pre-registering a shared session, register at ingest/publish time) is
+deliberately deferred to the local-first design phase.
+
 **Session TTL renewal**: fragment sessions are registered with
 `k8s.fragment_session_ttl_seconds` (default 86400, server-capped at 7
 days) — training that outlives the TTL used to lose lineage because both
@@ -178,10 +189,12 @@ renewal is purely reactive to the 403.
 
 ## 2. Flow
 
-1. **Match** (`roar/backends/k8s/submit.py`): binary `kubectl`, verb
-   `apply|create` anywhere in the argument list (global flags like
-   `--context` may precede it), `-f` pointing at a manifest containing
-   exactly one supported workload; gated by `k8s.enabled` (default off).
+1. **Match** (`roar/backends/k8s/submit.py`): binary `kubectl`, subcommand
+   `apply|create` found structurally (known value-taking global flags like
+   `--context X` are skipped with their values, so a flag value is never
+   mistaken for the verb), exactly one `-f` pointing at a manifest
+   containing exactly one supported workload; gated by `k8s.enabled`
+   (default off).
    Stdin (`-f -`), URLs, directories, and kustomize sources are outside
    the matching contract and pass through uninstrumented.
 2. **Plan** (same module): pre-registers a GLaaS fragment session (saves the
