@@ -228,3 +228,30 @@ def test_declines_multiple_manifest_arguments_with_warning(
 
 def test_single_manifest_still_matches_after_multi_f_guard(job_manifest_path: Path) -> None:
     assert matches_kubectl_job_submit_command(["kubectl", "apply", "-f", str(job_manifest_path)])
+
+
+def test_verb_as_global_flag_value_does_not_match(job_manifest_path: Path) -> None:
+    # "apply" here is the VALUE of --context; the real subcommand is delete.
+    # Matching would rewrite and wait on a workload that is being deleted.
+    assert not matches_kubectl_job_submit_command(
+        ["kubectl", "--context", "apply", "delete", "-f", str(job_manifest_path)]
+    )
+    # "create" is the value of --namespace, after the real delete verb.
+    assert not matches_kubectl_job_submit_command(
+        ["kubectl", "delete", "-f", str(job_manifest_path), "--namespace", "create"]
+    )
+
+
+def test_verb_after_boolean_global_flag_matches(job_manifest_path: Path) -> None:
+    assert matches_kubectl_job_submit_command(
+        ["kubectl", "--insecure-skip-tls-verify", "apply", "-f", str(job_manifest_path)]
+    )
+
+
+def test_equals_form_global_flag_values_are_skipped(job_manifest_path: Path) -> None:
+    assert matches_kubectl_job_submit_command(
+        ["kubectl", "--context=prod", "apply", "-f", str(job_manifest_path)]
+    )
+    assert not matches_kubectl_job_submit_command(
+        ["kubectl", "--context=prod", "delete", "-f", str(job_manifest_path)]
+    )

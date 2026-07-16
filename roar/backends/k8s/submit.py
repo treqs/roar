@@ -25,6 +25,39 @@ from roar.execution.fragments.sessions import (
 from roar.execution.framework.contract import ExecutionCommandPlan
 
 _KUBECTL_VERBS = ("apply", "create")
+# kubectl global flags that consume the next argument when written in the
+# space-separated form (kubectl options). Needed to find the real
+# subcommand: in `kubectl --context apply delete -f x`, "apply" is a flag
+# value, not the verb.
+_KUBECTL_GLOBAL_VALUE_FLAGS = frozenset(
+    {
+        "--as",
+        "--as-group",
+        "--as-uid",
+        "--cache-dir",
+        "--certificate-authority",
+        "--client-certificate",
+        "--client-key",
+        "--cluster",
+        "--context",
+        "--kubeconfig",
+        "-n",
+        "--namespace",
+        "--password",
+        "--profile",
+        "--profile-output",
+        "--request-timeout",
+        "-s",
+        "--server",
+        "--tls-server-name",
+        "--token",
+        "--user",
+        "--username",
+        "-v",
+        "--v",
+        "--vmodule",
+    }
+)
 SUBMIT_CONTEXT_SUFFIX = ".context.json"
 
 
@@ -51,10 +84,7 @@ def matches_kubectl_job_submit_command(command: list[str]) -> bool:
         return False
     if Path(command[0]).name.lower() != "kubectl":
         return False
-    # Global flags may precede the verb (kubectl --context X apply -f ...),
-    # so accept the verb anywhere. The -f-points-at-a-manifest and
-    # single-supported-workload guards below keep false positives out.
-    if not any(arg.lower() in _KUBECTL_VERBS for arg in command[1:]):
+    if _kubectl_subcommand(command) not in _KUBECTL_VERBS:
         return False
     if not _k8s_backend_enabled():
         return False
@@ -260,6 +290,26 @@ def _write_submit_context(prepared_path: Path, context: K8sSubmitContext) -> Non
 def _k8s_backend_enabled() -> bool:
     start_dir = os.environ.get("ROAR_PROJECT_DIR") or os.getcwd()
     return bool(load_k8s_backend_config(start_dir=start_dir).get("enabled", False))
+
+
+def _kubectl_subcommand(command: list[str]) -> str | None:
+    """The first non-flag token after skipping global flag/value pairs.
+
+    Unknown bare flags are treated as boolean, so a value-taking global
+    flag missing from _KUBECTL_GLOBAL_VALUE_FLAGS would have its value
+    misread as the subcommand. Keep the set in sync with `kubectl options`
+    when new globals appear.
+    """
+    index = 1
+    while index < len(command):
+        arg = command[index]
+        if not arg.startswith("-"):
+            return arg.lower()
+        if "=" not in arg and arg in _KUBECTL_GLOBAL_VALUE_FLAGS:
+            index += 2
+            continue
+        index += 1
+    return None
 
 
 def _find_filename_arguments(command: list[str]) -> list[tuple[int, str]]:
