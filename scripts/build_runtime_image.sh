@@ -20,6 +20,15 @@ if ((${#wheels[@]} == 0)); then
   echo "hint: build one first: bash scripts/build_wheel_with_bins.sh" >&2
   exit 1
 fi
+if ((${#wheels[@]} > 1)); then
+  # The Dockerfile globs dist/ too; with several wheels present the image
+  # would silently contain whichever sorts first — likely a stale build.
+  echo "error: ${#wheels[@]} roar_cli wheels in $ROOT_DIR/dist; exactly one is required:" >&2
+  printf '  %s\n' "${wheels[@]}" >&2
+  echo "hint: remove stale wheels, then rebuild: bash scripts/build_wheel_with_bins.sh" >&2
+  exit 1
+fi
 
+echo "▶ Building $TAG from ${wheels[0]##*/}"
 docker build -f "$ROOT_DIR/deploy/roar-runtime/Dockerfile" -t "$TAG" "$ROOT_DIR"
 echo "✓ Built $TAG"
