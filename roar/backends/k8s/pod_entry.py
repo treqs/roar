@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -43,9 +44,22 @@ def _run_traced(command: list[str]) -> int:
         print(f"[roar-k8s] cannot use workdir {workdir}: {exc}", file=sys.stderr)
         return _run_uninstrumented(command)
 
-    if not (workdir / ".roar").is_dir():
+    # roar state (db, object-io events, run report) is isolated per
+    # pod/container/attempt in pod-local storage — never in the workdir.
+    # A workdir on a shared or persistent volume would otherwise share
+    # .roar/roar.db across containers, pods, and retries, cross-attributing
+    # lineage (and racing sqlite).
+    state_dir = _state_root()
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f"[roar-k8s] cannot create state dir {state_dir}: {exc}", file=sys.stderr)
+        return _run_uninstrumented(command)
+
+    if not (state_dir / ".roar").is_dir():
         init = subprocess.run(
             [sys.executable, "-m", "roar", "init", "-n"],
+            cwd=state_dir,
             capture_output=True,
             text=True,
             check=False,
@@ -59,6 +73,9 @@ def _run_traced(command: list[str]) -> int:
 
     tracer = str(os.environ.get("ROAR_K8S_TRACER") or "preload").strip() or "preload"
     child_env = dict(os.environ)
+    # The CLI context honors ROAR_PROJECT_DIR, so roar run records into the
+    # isolated state dir while the workload keeps the user's workdir as cwd.
+    child_env["ROAR_PROJECT_DIR"] = str(state_dir)
     # Activate the roar_inject.pth sitecustomize in every Python child so
     # the k8s backend's runtime-import hooks (botocore/aiobotocore object
     # I/O capture) install themselves; events land next to the local db.
@@ -81,12 +98,24 @@ def _run_traced(command: list[str]) -> int:
     return run.returncode
 
 
+def _state_root() -> Path:
+    """Pod-local roar state directory keyed by the task identity contract."""
+    override = str(os.environ.get("ROAR_K8S_STATE_DIR") or "").strip()
+    base = Path(override) if override else Path(tempfile.gettempdir()) / "roar-k8s"
+    task_id, _task_name = task_identity_from_environment()
+    return base / re.sub(r"[^A-Za-z0-9_.-]", "-", task_id)
+
+
+def _state_roar_dir() -> Path:
+    return _state_root() / ".roar"
+
+
 def _object_io_events_path() -> Path:
-    return Path.cwd() / ".roar" / "k8s-object-io.jsonl"
+    return _state_roar_dir() / "k8s-object-io.jsonl"
 
 
 def _run_report_path() -> Path:
-    return Path.cwd() / ".roar" / "k8s-run-report.json"
+    return _state_roar_dir() / "k8s-run-report.json"
 
 
 def _remove_stale_report(report_path: Path) -> None:
@@ -159,7 +188,7 @@ def _emit_lineage_best_effort() -> None:
         with tempfile.TemporaryDirectory(prefix="roar-k8s-") as tmp:
             bundle_path = Path(tmp) / "roar-fragments.json"
             export_local_job_fragment_bundle(
-                roar_dir=Path.cwd() / ".roar",
+                roar_dir=_state_roar_dir(),
                 output_path=bundle_path,
                 backend_name="k8s",
                 task_id=task_id,
