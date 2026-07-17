@@ -7,6 +7,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from ..tags import WhyNode
     from .diff_graph import JobMatch, JobNode
     from .git_readiness import GitReadinessSummary
 
@@ -144,6 +145,79 @@ class LabelHistorySummary:
         if not self.versions:
             return "No labels."
         return "\n\n".join(version.render() for version in self.versions)
+
+
+@dataclass(frozen=True)
+class TagBindArtifactSummary:
+    """One target's outcome from `roar tag bind`/`unbind` — what the CLI echoes."""
+
+    display_target: str
+    action: str  # "bind" | "unbind"
+    changed: bool
+    promoted: dict[str, list[str]] = field(default_factory=dict)
+    size: int | None = None
+
+    def render(self) -> str:
+        verb = "Bound" if self.action == "bind" else "Unbound"
+        header = self.display_target
+        if self.size is not None:
+            header += f" ({self.size} bytes)"
+        lines = [f"{verb}: {header}"]
+        if self.size == 0:
+            lines.append(
+                "  warning: this is the empty-content hash — shared by every empty "
+                "file in every session. Binding it promotes its tags everywhere."
+            )
+        if not self.changed:
+            if self.promoted:
+                lines.append("  no change: already up to date")
+            else:
+                noun = "currently bound" if self.action == "unbind" else "to bind"
+                lines.append(f"  no change: nothing {noun}")
+            return "\n".join(lines)
+        for kind in sorted(self.promoted):
+            lines.append(f"  {kind}={', '.join(self.promoted[kind])}")
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class TagBindSummary:
+    artifacts: list[TagBindArtifactSummary] = field(default_factory=list)
+
+    def render(self) -> str:
+        if not self.artifacts:
+            return "No targets."
+        return "\n".join(artifact.render() for artifact in self.artifacts)
+
+
+@dataclass(frozen=True)
+class TagWhySummary:
+    """Renders the provenance walk produced by ``roar tag why``.
+
+    ``roots`` is a forest of ``WhyNode`` (one tree per explained value); each
+    node's ``label`` describes one hop back toward a human act (``tag add`` /
+    ``run --add-tag`` / a cross-session ``bind``).
+    """
+
+    heading: str
+    roots: list[WhyNode] = field(default_factory=list)
+    empty_message: str = "(no such tag on target — nothing to explain)"
+
+    def render(self) -> str:
+        lines = [self.heading]
+        if not self.roots:
+            lines.append(f"  {self.empty_message}")
+            return "\n".join(lines)
+        for root in self.roots:
+            lines.extend(self._render_node(root, depth=0))
+        return "\n".join(lines)
+
+    def _render_node(self, node: WhyNode, *, depth: int) -> list[str]:
+        indent = "  " + "    " * depth
+        lines = [f"{indent}{'└─ ' if depth else ''}{node.label}"]
+        for child in node.children:
+            lines.extend(self._render_node(child, depth=depth + 1))
+        return lines
 
 
 @dataclass(frozen=True)

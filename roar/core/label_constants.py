@@ -13,3 +13,15 @@ AUTO_DATASET_LABEL_KEYS = frozenset(
         "dataset.modality",
     }
 )
+
+TAG_NAMESPACE = "tag"
+
+CANONICAL_TAG_KINDS: frozenset[str] = frozenset(
+    {
+        "license",
+        "contains_pii",
+        "jurisdiction",
+        "classification",
+        "special_category",
+    }
+)

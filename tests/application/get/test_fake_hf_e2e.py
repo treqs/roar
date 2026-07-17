@@ -180,7 +180,9 @@ def test_view_edge_resolution_from_real_get_db(tmp_path: Path) -> None:
     with create_database_context(roar_dir) as ctx:
         art = ctx.artifacts.get_by_path(str(tmp_path / "data" / "shard_00000.parquet"))
         shard0_blake3 = next(h["digest"] for h in art["hashes"] if h["algorithm"] == "blake3")
-        edges, prune = resolve_view_edges_for_job(db_ctx=ctx, input_hashes=[shard0_blake3])
+        edges, prune, _leaf_hashes = resolve_view_edges_for_job(
+            db_ctx=ctx, input_hashes=[shard0_blake3]
+        )
 
     assert len(edges) == 1
     edge = edges[0]

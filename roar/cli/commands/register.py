@@ -12,7 +12,8 @@ import click
 
 from ...application.publish.requests import RegisterLineageRequest
 from ...application.publish.results import RegisterLineageResponse, RegisterTagSummary
-from ...application.publish.service import register_lineage_target
+from ...application.publish.service import register_lineage_target, resolve_register_lineage_target
+from ...application.tags import TagService
 from ..context import RoarContext
 from ..decorators import require_init
 from ..publish_intent import (
@@ -163,6 +164,65 @@ def _render_tag_summary(summary: RegisterTagSummary | None) -> None:
     click.echo("")
 
 
+def _apply_register_binds(
+    ctx: RoarContext,
+    *,
+    target: str,
+    response: RegisterLineageResponse,
+    bind_targets: tuple[str, ...],
+    no_bind: bool,
+) -> None:
+    """Bind tags after a successful register — the "register implies bind" rule.
+
+    Only a target that itself names a concrete artifact (a path or hash, not a
+    step/job/session reference) gets the implicit bind — the named-artifact
+    rule requires an act naming an artifact a human can inspect, and a
+    step/job may have several outputs with no single one "the" target.
+    `--bind ARTIFACT` binds specific outputs regardless of what TARGET was.
+    Best-effort: registration already succeeded, so a bind failure here warns
+    rather than failing the command.
+    """
+    refs: list[str] = []
+    if not no_bind and response.artifact_hash:
+        resolved_target = resolve_register_lineage_target(
+            target, cwd=ctx.cwd, roar_dir=ctx.roar_dir
+        )
+        if resolved_target.kind in ("artifact_hash", "artifact_path"):
+            refs.append(response.artifact_hash)
+    refs.extend(bind_targets)
+    if not refs:
+        return
+
+    from ...application.query.results import TagBindArtifactSummary
+    from ...db.context import create_database_context
+
+    with create_database_context(ctx.roar_dir) as db_ctx:
+        svc = TagService(db_ctx, ctx.cwd)
+        for ref in refs:
+            try:
+                resolved = svc.resolve_target(ref)
+                result = svc.bind(resolved)
+            except ValueError as exc:
+                click.echo(f"Warning: could not bind {ref!r}: {exc}", err=True)
+                continue
+
+            size = None
+            if resolved.entity_type == "artifact" and resolved.artifact_id:
+                artifact = db_ctx.artifacts.get(resolved.artifact_id)
+                if artifact:
+                    size = artifact.get("size")
+
+            click.echo(
+                TagBindArtifactSummary(
+                    display_target=resolved.display_target or ref,
+                    action="bind",
+                    changed=result.changed,
+                    promoted=result.promoted,
+                    size=size,
+                ).render()
+            )
+
+
 def _confirm_secrets(detected_secrets: list[str]) -> bool:
     """Prompt user to confirm registration with secrets."""
     click.echo("")
@@ -277,6 +337,25 @@ def _render_register_checklist(
     is_flag=True,
     help="Force public anonymous registration even when local GLaaS auth is configured.",
 )
+@click.option(
+    "--bind",
+    "bind_targets",
+    multiple=True,
+    metavar="ARTIFACT",
+    help=(
+        "Also bind this artifact's current tags to cross-session scope after "
+        "registering (repeatable). Use alongside a session-wide register to "
+        "promote specific outputs in one step."
+    ),
+)
+@click.option(
+    "--no-bind",
+    is_flag=True,
+    help=(
+        "When TARGET names an artifact, skip the implicit bind that "
+        "`roar register <artifact>` normally performs."
+    ),
+)
 @click.pass_obj
 @require_init
 def register(
@@ -287,6 +366,8 @@ def register(
     as_blake3: bool,
     public: bool | None,
     anonymous: bool,
+    bind_targets: tuple[str, ...],
+    no_bind: bool,
 ) -> None:
     """Register lineage with GLaaS.
 
@@ -317,12 +398,23 @@ def register(
     anonymous, you will also be prompted before publishing public anonymous
     lineage unless --yes is provided.
 
+    When TARGET names an artifact (a path or hash), registering it implies
+    binding its current tags to cross-session scope — the same effect as a
+    separate `roar tag bind`. Registering a session (no target, a step, or a
+    job) does not auto-bind anything; use `--bind ARTIFACT` (repeatable) to
+    bind specific outputs in the same command, or `--no-bind` to skip the
+    artifact-target implicit bind.
+
     \b
     Examples:
 
         roar register                       # Register the whole active session
 
-        roar register model.pt              # Register model lineage
+        roar register model.pt              # Register model lineage (implies bind)
+
+        roar register --no-bind model.pt    # Register without binding
+
+        roar register --bind model.pt       # Register the session, bind model.pt
 
         roar register --dry-run model.pt    # Preview without registering
 
@@ -479,6 +571,14 @@ def register(
             click.echo(f"  roar reproduce {response.artifact_hash}")
 
     if not dry_run:
+        _apply_register_binds(
+            ctx,
+            target=target,
+            response=response,
+            bind_targets=bind_targets,
+            no_bind=no_bind,
+        )
+
         from ...telemetry.hooks import record_action_trigger
 
         record_action_trigger("register", start_dir=ctx.cwd)

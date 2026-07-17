@@ -66,10 +66,13 @@ def test_tail_leaf_beyond_upload_cap_resolves_and_prunes(tmp_path: Path):
         # A run consumed a single tail chunk (recorded as a plain input artifact).
         ctx.artifacts.register(hashes={"blake3": tail_digest}, size=8, path="data/big.zarr/array/x")
 
-        edges, prune = resolve_view_edges_for_job(db_ctx=ctx, input_hashes=[tail_digest])
+        edges, prune, leaf_hashes = resolve_view_edges_for_job(
+            db_ctx=ctx, input_hashes=[tail_digest]
+        )
 
     assert len(edges) == 1
     assert edges[0]["relation"] == "consumes"
     assert edges[0]["target_hash"] == result.digest
     assert edges[0]["parent_total"] == _N
     assert prune == {tail_digest}
+    assert leaf_hashes == {tail_digest}

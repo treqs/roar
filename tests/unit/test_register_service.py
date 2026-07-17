@@ -294,6 +294,86 @@ class TestRegisterService:
             }
         ]
 
+    def test_register_prepared_lineage_excludes_composite_leaf_hashes_from_label_sync(
+        self, tmp_path: Path
+    ) -> None:
+        """A composite leaf/component has no session-scoped edge on GLaaS (see
+        ``view_edges.resolve_view_edges_for_job``), so syncing labels for it 404s
+        (``Artifact not found in session``). ``composite_leaf_hashes`` must be excluded
+        from the label sync payload while remaining in ordinary artifact registration.
+        """
+        plain_digest = "a" * 64
+        leaf_digest = "b" * 64
+
+        lineage = _lineage_data(
+            jobs=[{"id": 1, "job_uid": "job-1", "step_number": 1, "timestamp": 1.0}],
+            artifacts=[
+                {
+                    "id": "plain-1",
+                    "hash": plain_digest,
+                    "hashes": [{"algorithm": "blake3", "digest": plain_digest}],
+                    "size": 7,
+                    "source_type": "local",
+                },
+                {
+                    "id": "leaf-1",
+                    "hash": leaf_digest,
+                    "hashes": [{"algorithm": "blake3", "digest": leaf_digest}],
+                    "size": 3,
+                    "source_type": "local",
+                },
+            ],
+            artifact_hashes={plain_digest, leaf_digest},
+        )
+
+        with (
+            patch(
+                "roar.application.publish.register_execution.create_database_context"
+            ) as mock_ctx,
+            patch("roar.application.publish.register_execution.config_get", return_value=False),
+            patch(
+                "roar.application.publish.register_execution.register_publish_lineage"
+            ) as mock_register_publish_lineage,
+        ):
+            mock_db = MagicMock()
+            mock_db.__enter__ = MagicMock(return_value=mock_db)
+            mock_db.__exit__ = MagicMock(return_value=None)
+            mock_ctx.return_value = mock_db
+            mock_register_publish_lineage.return_value = BatchRegistrationResult(
+                session_registered=True,
+                jobs_created=1,
+                jobs_failed=0,
+                artifacts_registered=2,
+                artifacts_failed=0,
+                links_created=1,
+                links_failed=0,
+                errors=[],
+            )
+
+            result = self.service.register_prepared_lineage(
+                lineage=lineage,
+                roar_dir=tmp_path / ".roar",
+                artifact_hash=plain_digest,
+                dry_run=False,
+                as_blake3=False,
+                skip_confirmation=False,
+                confirm_callback=None,
+                prepared=_prepared_execution(tmp_path),
+                composite_leaf_hashes=frozenset({leaf_digest}),
+            )
+
+        assert result.success is True
+        mock_register_publish_lineage.assert_called_once()
+        call_kwargs = mock_register_publish_lineage.call_args.kwargs
+
+        label_hashes = {a["hash"] for a in call_kwargs["label_artifacts"]}
+        assert label_hashes == {plain_digest}
+
+        staged_digests = {
+            hash_row["digest"] for a in call_kwargs["artifacts"] for hash_row in a["hashes"]
+        }
+        assert staged_digests == {plain_digest, leaf_digest}
+
 
 class TestRegisterServiceGitUrlRedaction:
     """The session-level git URL must be redacted before it reaches GLaaS."""

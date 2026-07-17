@@ -222,8 +222,15 @@ class RegisterService:
         skip_confirmation: bool,
         confirm_callback: Callable[[list[str]], bool] | None,
         prepared: PreparedRegisterExecution,
+        composite_leaf_hashes: frozenset[str] = frozenset(),
     ) -> RegisterResult:
-        """Register already-collected local lineage with GLaaS."""
+        """Register already-collected local lineage with GLaaS.
+
+        ``composite_leaf_hashes`` are true composite-member hashes subsumed into a view
+        edge (see ``_prepare_view_edges_for_lineage``) — they have no session-scoped edge
+        on GLaaS, so they're excluded from label sync even though they still appear in
+        ``lineage.artifacts`` for ordinary artifact registration.
+        """
         self._logger.debug(
             "Collected lineage: %d jobs, %d artifacts",
             len(lineage.jobs),
@@ -275,6 +282,12 @@ class RegisterService:
                 git_context=git_context,
                 omit_filter=omit_filter,
             )
+
+        label_artifacts = (
+            [a for a in lineage.artifacts if a.get("hash") not in composite_leaf_hashes]
+            if composite_leaf_hashes
+            else lineage.artifacts
+        )
 
         registration_jobs = order_jobs_for_registration(
             normalize_jobs_for_registration(lineage.jobs)
@@ -344,7 +357,7 @@ class RegisterService:
                                 session_id=session_id,
                                 session_hash=finalized_session_hash,
                                 jobs=remote_registration_jobs,
-                                artifacts=lineage.artifacts,
+                                artifacts=label_artifacts,
                                 errors=registration_errors,
                             )
                 elif batch_result.jobs_failed == 0 and batch_result.links_failed == 0:
@@ -391,7 +404,7 @@ class RegisterService:
                                             session_id=session_id,
                                             session_hash=finalized_session_hash,
                                             jobs=remote_registration_jobs,
-                                            artifacts=lineage.artifacts,
+                                            artifacts=label_artifacts,
                                             errors=registration_errors,
                                         )
                             except Exception as e:
@@ -411,7 +424,7 @@ class RegisterService:
                                     session_id=session_id,
                                     session_hash=finalized_session_hash,
                                     jobs=remote_registration_jobs,
-                                    artifacts=lineage.artifacts,
+                                    artifacts=label_artifacts,
                                     errors=registration_errors,
                                 )
             else:
@@ -456,7 +469,7 @@ class RegisterService:
                             ),
                             db_ctx=db_ctx,
                             session_id=session_id,
-                            label_artifacts=lineage.artifacts,
+                            label_artifacts=label_artifacts,
                         )
                 else:
                     batch_result = register_publish_lineage(
@@ -473,7 +486,7 @@ class RegisterService:
                         ),
                         db_ctx=None,
                         session_id=None,
-                        label_artifacts=lineage.artifacts,
+                        label_artifacts=label_artifacts,
                     )
                 registration_errors.extend(batch_result.errors)
 

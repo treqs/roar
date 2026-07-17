@@ -62,6 +62,19 @@ def test_reject_reserved_keys_blocks_system_managed_roar_labels() -> None:
         )
 
 
+def test_reject_reserved_keys_blocks_generic_writes_to_the_tag_namespace() -> None:
+    """`tag.*` is reserved for `roar tag` — the namespace is the hereditary-propagation
+    contract, and the tag.bind ledger's append-only integrity depends on the generic
+    `roar label set` path never being able to clobber it wholesale."""
+    with pytest.raises(ValueError, match="Reserved label keys cannot be set manually"):
+        LabelService._reject_reserved_keys({"tag": {"license": {"values": [{"value": "MIT"}]}}})
+
+
+def test_reject_reserved_keys_blocks_generic_writes_to_the_attach_namespace() -> None:
+    with pytest.raises(ValueError, match="Reserved label keys cannot be set manually"):
+        LabelService._reject_reserved_keys({"attach": {"bias_study": "artifact:abc123"}})
+
+
 def test_build_current_key_origins_replays_user_and_system_versions() -> None:
     history = [
         {
