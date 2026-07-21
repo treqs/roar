@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -329,14 +330,33 @@ def prepare_batch_registration_artifacts(
         except (TypeError, ValueError):
             size = 0
 
-        prepared.append(
-            {
-                "hashes": hashes,
-                "size": size,
-                "source_type": normalize_registration_source_type(artifact.get("source_type")),
-                "session_hash": session_hash,
-            }
-        )
+        entry = {
+            "hashes": hashes,
+            "size": size,
+            "source_type": normalize_registration_source_type(artifact.get("source_type")),
+            "session_hash": session_hash,
+        }
+
+        # Carry the artifact's source URL into its registration metadata so GLaaS
+        # can emit the AI-BOM `downloadLocation` external reference. The batch
+        # payload previously dropped `source_url`, so source-tracked inputs
+        # (e.g. s3://…) reached GLaaS with a sourceType but no distribution URL.
+        source_url = artifact.get("source_url")
+        if source_url and entry["source_type"]:
+            existing = artifact.get("metadata")
+            if isinstance(existing, str):
+                try:
+                    meta = json.loads(existing)
+                except (ValueError, TypeError):
+                    meta = {}
+            elif isinstance(existing, dict):
+                meta = dict(existing)
+            else:
+                meta = {}
+            meta.setdefault("source_url", source_url)
+            entry["metadata"] = json.dumps(meta)
+
+        prepared.append(entry)
 
     return prepared
 
