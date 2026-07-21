@@ -17,9 +17,7 @@ def _resolve(
     logged_in=False,
     public_default=False,
 ):
-    scope_obj = (
-        SimpleNamespace(mode=scope, visibility=visibility) if scope is not None else None
-    )
+    scope_obj = SimpleNamespace(mode=scope, visibility=visibility) if scope is not None else None
     with (
         patch("roar.scope_config.load_repo_scope", return_value=scope_obj),
         patch("roar.cli.publish_intent._is_logged_in", return_value=logged_in),
