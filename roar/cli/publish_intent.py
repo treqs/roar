@@ -60,6 +60,11 @@ def resolve_publish_intent(
             return PublishIntent(public=True, anonymous=True)
         if scope.mode == "public":
             return PublishIntent(public=True, anonymous=False)
+        if scope.mode == "project" and getattr(scope, "visibility", None) == "public":
+            # A project scope follows the bound project's own visibility. Public
+            # projects default to public DAGs (with org attribution preserved via
+            # the project scope_request); private/unknown projects stay private.
+            return PublishIntent(public=True, anonymous=False)
         if scope.mode in {"private", "project"}:
             return PublishIntent(public=False, anonymous=False)
 

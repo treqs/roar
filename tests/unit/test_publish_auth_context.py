@@ -146,6 +146,33 @@ def test_project_bound_private_publish_keeps_project_scope_request(tmp_path: Pat
     }
 
 
+def test_project_bound_public_project_publishes_public_with_attribution(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".roar"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(
+        '[treqs]\nowner_id = "owner-123"\nowner_type = "organization"\n'
+        'project_id = "proj-456"\nvisibility = "public"\n',
+        encoding="utf-8",
+    )
+
+    with (
+        patch("roar.publish_auth.load_auth_state", return_value=_auth_state()),
+        patch("roar.publish_auth._has_ssh_auth_credentials", return_value=False),
+    ):
+        context = load_publish_auth_context(
+            start_dir=tmp_path,
+            allow_public_without_binding=False,
+        )
+
+    # Public project -> public visibility, org attribution (owner_id/project_id) preserved.
+    assert context.scope_request == {
+        "owner_id": "owner-123",
+        "owner_type": "organization",
+        "project_id": "proj-456",
+        "visibility": "public",
+    }
+
+
 def _expiring_auth_state() -> AuthState:
     return AuthState(
         version=1,

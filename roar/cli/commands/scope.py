@@ -105,7 +105,13 @@ def scope_use(name: str, glaas_api_url: str | None) -> None:
 
     resolved_api_url = resolve_auth_api_url(glaas_api_url)
     try:
-        owner_id, owner_type, project_id, display_name = _resolve_project_scope_from_access_context(
+        (
+            owner_id,
+            owner_type,
+            project_id,
+            display_name,
+            visibility,
+        ) = _resolve_project_scope_from_access_context(
             glaas_api_url=resolved_api_url,
             requested_scope=normalized,
         )
@@ -113,11 +119,14 @@ def scope_use(name: str, glaas_api_url: str | None) -> None:
         raise click.ClickException(str(exc)) from exc
 
     config = load_config()
-    config["treqs"] = {
+    binding = {
         "owner_id": owner_id,
         "owner_type": owner_type,
         "project_id": project_id,
     }
+    if visibility is not None:
+        binding["visibility"] = visibility
+    config["treqs"] = binding
     config["scope"] = {"mode": "project"}
     config_path = get_config_path_for_write()
     save_config(config, config_path, preserve_existing=config)
@@ -211,7 +220,7 @@ def _list_project_scope_options(glaas_api_url: str) -> list[dict[str, str]]:
 
 def _resolve_project_scope_from_access_context(
     *, glaas_api_url: str, requested_scope: str
-) -> tuple[str, str, str, str]:
+) -> tuple[str, str, str, str, str | None]:
     access_context = fetch_access_context(glaas_api_url)
     owners_by_id = _owners_by_id(access_context)
     projects_by_owner = _projects_by_owner(access_context)
@@ -227,7 +236,7 @@ def _resolve_project_scope_from_access_context(
     if not project_token:
         raise click.ClickException("Project scope requires a project name or ID.")
 
-    matches: list[tuple[str, str, str, str, bool]] = []
+    matches: list[tuple[str, str, str, str, bool, str | None]] = []
     for owner_id, owner_projects in projects_by_owner.items():
         owner = owners_by_id.get(owner_id)
         if owner is None:
@@ -255,6 +264,7 @@ def _resolve_project_scope_from_access_context(
                     project_id,
                     f"{owner_slug}/{project_slug}",
                     project.get("can_write") is not False,
+                    _string_value(project.get("visibility")),
                 )
             )
 
@@ -267,13 +277,13 @@ def _resolve_project_scope_from_access_context(
             f"Project scope {requested_scope} is ambiguous. Use <owner>/<project>."
         )
 
-    owner_id, owner_type, project_id, display_name, can_write = matches[0]
+    owner_id, owner_type, project_id, display_name, can_write, visibility = matches[0]
     if not can_write:
         raise click.ClickException(
             f"Project is visible but not writable in GLaaS auth access context: {display_name}"
         )
 
-    return owner_id, owner_type, project_id, display_name
+    return owner_id, owner_type, project_id, display_name, visibility
 
 
 def _owners_by_id(access_context: dict[str, object]) -> dict[str, dict[str, object]]:

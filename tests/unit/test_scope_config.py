@@ -106,6 +106,77 @@ def test_scope_use_owner_project_name_writes_project_binding(tmp_path: Path, mon
     assert resolved.project_id == "proj-789"
 
 
+def test_scope_config_reads_project_visibility_from_treqs_binding(tmp_path: Path) -> None:
+    roar_dir = tmp_path / ".roar"
+    roar_dir.mkdir()
+    (roar_dir / "config.toml").write_text(
+        '[treqs]\nowner_id = "owner-1"\nowner_type = "organization"\n'
+        'project_id = "proj-1"\nvisibility = "public"\n',
+        encoding="utf-8",
+    )
+
+    resolved = load_repo_scope(tmp_path)
+
+    assert resolved is not None
+    assert resolved.mode == "project"
+    assert resolved.visibility == "public"
+
+
+def test_scope_config_visibility_defaults_none_when_absent(tmp_path: Path) -> None:
+    roar_dir = tmp_path / ".roar"
+    roar_dir.mkdir()
+    (roar_dir / "config.toml").write_text(
+        '[treqs]\nowner_id = "owner-1"\nowner_type = "organization"\nproject_id = "proj-1"\n',
+        encoding="utf-8",
+    )
+
+    resolved = load_repo_scope(tmp_path)
+
+    assert resolved is not None
+    assert resolved.mode == "project"
+    assert resolved.visibility is None
+
+
+def test_scope_use_public_project_persists_visibility(tmp_path: Path, monkeypatch) -> None:
+    roar_dir = tmp_path / ".roar"
+    roar_dir.mkdir()
+    (roar_dir / "config.toml").write_text("[registration]\npublic_by_default = false\n")
+    monkeypatch.chdir(tmp_path)
+    _patch_logged_in_scope_context(monkeypatch)
+
+    result = CliRunner().invoke(
+        scope,
+        ["use", "acme/open-models", "--glaas-api-url", "http://glaas.test"],
+    )
+
+    assert result.exit_code == 0, result.output
+    config_text = (roar_dir / "config.toml").read_text(encoding="utf-8")
+    assert 'visibility = "public"' in config_text
+    resolved = load_repo_scope(tmp_path)
+    assert resolved is not None
+    assert resolved.mode == "project"
+    assert resolved.project_id == "proj-public"
+    assert resolved.visibility == "public"
+
+
+def test_scope_use_private_project_persists_visibility(tmp_path: Path, monkeypatch) -> None:
+    roar_dir = tmp_path / ".roar"
+    roar_dir.mkdir()
+    (roar_dir / "config.toml").write_text("[registration]\npublic_by_default = false\n")
+    monkeypatch.chdir(tmp_path)
+    _patch_logged_in_scope_context(monkeypatch)
+
+    result = CliRunner().invoke(
+        scope,
+        ["use", "acme/foundation-models", "--glaas-api-url", "http://glaas.test"],
+    )
+
+    assert result.exit_code == 0, result.output
+    resolved = load_repo_scope(tmp_path)
+    assert resolved is not None
+    assert resolved.visibility == "private"
+
+
 def test_scope_use_rejects_readonly_project_name(tmp_path: Path, monkeypatch) -> None:
     roar_dir = tmp_path / ".roar"
     roar_dir.mkdir()
@@ -159,6 +230,12 @@ def _patch_logged_in_scope_context(monkeypatch) -> None:
                         "name": "readonly-project",
                         "visibility": "private",
                         "can_write": False,
+                    },
+                    {
+                        "id": "proj-public",
+                        "name": "open-models",
+                        "visibility": "public",
+                        "can_write": True,
                     },
                 ],
                 "user-123": [],

@@ -8,8 +8,16 @@ from unittest.mock import patch
 from roar.cli.publish_intent import resolve_publish_intent
 
 
-def _resolve(public=None, anonymous=False, *, scope=None, logged_in=False, public_default=False):
-    scope_obj = SimpleNamespace(mode=scope) if scope is not None else None
+def _resolve(
+    public=None,
+    anonymous=False,
+    *,
+    scope=None,
+    visibility=None,
+    logged_in=False,
+    public_default=False,
+):
+    scope_obj = SimpleNamespace(mode=scope, visibility=visibility) if scope is not None else None
     with (
         patch("roar.scope_config.load_repo_scope", return_value=scope_obj),
         patch("roar.cli.publish_intent._is_logged_in", return_value=logged_in),
@@ -47,6 +55,28 @@ def test_unset_not_logged_in_defaults_anonymous_with_flag():
     out = _resolve(scope=None, logged_in=False)
     assert out.public and out.anonymous
     assert out.defaulted_anonymous  # drives the warning
+
+
+def test_project_scope_public_project_defaults_public():
+    # A project scope bound to a PUBLIC project defaults the DAG to public.
+    out = _resolve(scope="project", visibility="public", logged_in=True)
+    assert out.public and not out.anonymous
+
+
+def test_project_scope_private_project_defaults_private():
+    out = _resolve(scope="project", visibility="private", logged_in=True)
+    assert not out.public and not out.anonymous
+
+
+def test_project_scope_unknown_visibility_defaults_private():
+    # Backward compat: a project binding without visibility stays private.
+    out = _resolve(scope="project", visibility=None, logged_in=True)
+    assert not out.public and not out.anonymous
+
+
+def test_explicit_private_overrides_public_project_scope():
+    out = _resolve(public=False, scope="project", visibility="public", logged_in=True)
+    assert not out.public and not out.anonymous
 
 
 def test_unset_public_by_default_config_goes_public():

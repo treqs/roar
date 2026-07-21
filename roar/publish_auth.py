@@ -36,13 +36,17 @@ def _scope_visibility(repo_scope: Any) -> str | None:
 
     ``public`` -> ``"public"`` (attributed); ``anonymous`` -> ``None`` so the
     caller omits ``scope_request`` and the server uses the legacy anonymous
-    public scope; everything else (``private``/``project``/unset) -> ``"private"``.
+    public scope; a ``project`` scope follows the bound project's own
+    visibility (``"public"`` when the project is public, otherwise
+    ``"private"``); everything else (``private``/unset) -> ``"private"``.
     """
     if repo_scope is not None:
         if repo_scope.mode == "public":
             return "public"
         if repo_scope.mode == "anonymous":
             return None
+        if repo_scope.mode == "project" and getattr(repo_scope, "visibility", None) == "public":
+            return "public"
     return "private"
 
 
