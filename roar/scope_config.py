@@ -22,6 +22,7 @@ class RepoScope:
     owner_id: str | None = None
     owner_type: str | None = None
     project_id: str | None = None
+    visibility: str | None = None
 
 
 def load_repo_scope(start_dir: str | Path | None = None) -> RepoScope | None:
@@ -41,6 +42,7 @@ def load_repo_scope(start_dir: str | Path | None = None) -> RepoScope | None:
                         owner_id=binding.owner_id,
                         owner_type=binding.owner_type,
                         project_id=binding.project_id,
+                        visibility=binding.visibility,
                     )
             else:
                 return RepoScope(mode=mode, source="scope")  # type: ignore[arg-type]
@@ -80,6 +82,7 @@ def _repo_scope_from_treqs(value: Any) -> RepoScope | None:
     owner_id = _optional_string(value.get("owner_id"))
     owner_type = _optional_string(value.get("owner_type"))
     project_id = _optional_string(value.get("project_id"))
+    visibility = _optional_string(value.get("visibility"))
     if owner_id is None or owner_type not in {"user", "organization"}:
         return None
 
@@ -89,6 +92,7 @@ def _repo_scope_from_treqs(value: Any) -> RepoScope | None:
         owner_id=owner_id,
         owner_type=owner_type,
         project_id=project_id,
+        visibility=visibility,
     )
 
 
