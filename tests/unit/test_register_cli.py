@@ -178,6 +178,8 @@ def test_register_cli_dry_run_mentions_target(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "Dry run: would register lineage for: model.pt" in result.output
     assert "Session: 0123456789ab..." in result.output
+    # Positive confirmation the secret scan ran and found nothing.
+    assert "Secrets: none detected" in result.output
 
 
 def test_register_cli_uses_public_default_from_config(tmp_path: Path) -> None:

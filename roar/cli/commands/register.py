@@ -522,6 +522,10 @@ def register(
         click.echo(f"  Links: {response.links_created}")
         if response.secrets_detected:
             click.echo(f"  Secrets to redact: {len(response.secrets_detected)} types")
+        else:
+            # Positive confirmation the scan ran and found nothing — otherwise the
+            # operator can't tell "clean" from "not scanned" (absence of a warning).
+            click.echo("  Secrets: none detected")
         # Preview reproducibility BEFORE publishing (not yet on GLaaS).
         _render_register_checklist(ctx, target, response, on_glaas=False, dry_run=True)
         click.echo("")
