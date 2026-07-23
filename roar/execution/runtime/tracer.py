@@ -528,7 +528,7 @@ class TracerService:
         except Exception:
             pass  # Best-effort
 
-        # Merge extra env (e.g. AWS_ENDPOINT_URL from proxy)
+        # Merge extra env (e.g. AWS_ENDPOINT_URL_S3 / S3_ENDPOINT_URL from proxy)
         if extra_env:
             env.update(extra_env)
 
