@@ -248,6 +248,8 @@ def _register_notes(response: RegisterLineageResponse, *, on_glaas: bool) -> dic
         )
     if ts and ts.remote:
         notes["pushed"] = f"pushed to {ts.remote}"
+    detected = len(response.secrets_detected or [])
+    notes["secrets"] = f"{detected} redacted" if detected else "none detected"
     if on_glaas:
         recorded = (
             f"{_format_jobs_line(response)} jobs · {response.artifacts_registered} artifacts · "
@@ -291,6 +293,7 @@ def _render_register_checklist(
             unsourced_paths=unsourced_input_paths(ctx.roar_dir, ctx.cwd, target),
             untracked_paths=untracked_artifact_dirs(ctx.roar_dir, ctx.cwd),
             on_glaas=on_glaas,
+            secrets_detected=len(response.secrets_detected or []),
             # Extra job-commit tags mean the session spanned multiple commits.
             single_commit=not (response.tag_summary and response.tag_summary.job_tags),
             notes=_register_notes(response, on_glaas=on_glaas),
@@ -520,12 +523,8 @@ def register(
         click.echo(f"  Jobs: {response.jobs_registered}")
         click.echo(f"  Artifacts: {response.artifacts_registered}")
         click.echo(f"  Links: {response.links_created}")
-        if response.secrets_detected:
-            click.echo(f"  Secrets to redact: {len(response.secrets_detected)} types")
-        else:
-            # Positive confirmation the scan ran and found nothing — otherwise the
-            # operator can't tell "clean" from "not scanned" (absence of a warning).
-            click.echo("  Secrets: none detected")
+        # Secrets now ride as a line on the reproducibility punchlist below
+        # ("no secrets in published lineage", note: none detected / N redacted).
         # Preview reproducibility BEFORE publishing (not yet on GLaaS).
         _render_register_checklist(ctx, target, response, on_glaas=False, dry_run=True)
         click.echo("")
@@ -550,8 +549,7 @@ def register(
             click.echo(f"Warning: {warning}", err=True)
         click.echo(f"Registered lineage for: {target}")
         click.echo(f"  Session: {session_preview}")
-        if response.secrets_redacted:
-            click.echo(f"  Secrets redacted: {len(response.secrets_detected)} types")
+        # Secrets ride as a punchlist line (see the checklist below).
 
         if response.error:
             click.echo("")

@@ -178,8 +178,10 @@ def test_register_cli_dry_run_mentions_target(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "Dry run: would register lineage for: model.pt" in result.output
     assert "Session: 0123456789ab..." in result.output
-    # Positive confirmation the secret scan ran and found nothing.
-    assert "Secrets: none detected" in result.output
+    # Secrets ride as a reproducibility-punchlist line (not a separate summary
+    # line), always green, with a note confirming the scan ran and found nothing.
+    assert "no secrets in published lineage" in result.output
+    assert "none detected" in result.output
 
 
 def test_register_cli_uses_public_default_from_config(tmp_path: Path) -> None:
@@ -669,10 +671,14 @@ def _repro_response(*, reproducible=True, remote="origin"):
 
 def test_checklist_all_green_shows_full_punchlist(tmp_path: Path) -> None:
     out = _capture_checklist(_repro_response(), tmp_path, unsourced=[])
-    assert "Reproducibility — 7/7" in out
-    assert out.count("[✅]") == 7
+    # 8 items now: the register/put receipt carries a secrets line (always green).
+    assert "Reproducibility — 8/8" in out
+    assert out.count("[✅]") == 8
     # operational details fold in as notes
     assert "pushed to origin" in out
+    # secrets fold into the punchlist rather than a separate summary line
+    assert "no secrets in published lineage" in out
+    assert "none detected" in out
 
 
 def test_checklist_flags_no_commit_and_unsourced(tmp_path: Path) -> None:
