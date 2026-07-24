@@ -293,3 +293,88 @@ def test_get_artifacts_cache_records_canonical_not_mirror(tmp_path: Path) -> Non
     arts = recorder.record.call_args.kwargs["output_artifacts"]
     assert arts[0].source_type == "https"
     assert arts[0].source_url == "https://canonical.example/model.pt"
+
+
+def test_get_artifacts_cache_fetches_mirror_and_records_flag(tmp_path: Path) -> None:
+    """--cache resolves the download backend for the MIRROR (not the canonical
+    source) and records the flag so a reproduce replays cache-first."""
+    parsed_source = MagicMock(is_prefix=False, scheme="https")
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = _service_with_file(tmp_path, "s3://mirror/model.pt")
+    recorder = MagicMock()
+    recorder.record.return_value = (1, "u1")
+    resolve = MagicMock(return_value=MagicMock())
+
+    with (
+        patch("roar.application.get.service.bootstrap"),
+        patch("roar.application.get.service.parse_source", return_value=parsed_source),
+        patch("roar.application.get.service.resolve_download_backend", resolve),
+        patch("roar.application.get.service.resolve_git_state") as resolve_git_state,
+        patch("roar.application.get.service.create_database_context", return_value=db_ctx),
+        patch("roar.application.get.service.GetService", return_value=service),
+        patch("roar.application.get.service.LocalJobRecorder", return_value=recorder),
+    ):
+        resolve_git_state.return_value.commit = "deadbeef"
+        get_artifacts(
+            _request(
+                tmp_path,
+                source="https://canonical.example/model.pt",
+                cache="s3://mirror/model.pt",
+            )
+        )
+
+    # The download backend was resolved for the mirror URL.
+    resolve.assert_any_call("s3://mirror/model.pt")
+    # The recorded command carries --cache so reproduce replays it.
+    assert "--cache s3://mirror/model.pt" in recorder.record.call_args.kwargs["command"]
+
+
+def test_get_artifacts_cache_failure_falls_back_to_canonical(tmp_path: Path) -> None:
+    """A failed mirror fetch falls back to the canonical source; the recorded
+    artifact still carries the canonical source_url."""
+    from roar.integrations.download.base import DownloadError
+
+    parsed_source = MagicMock(is_prefix=False, scheme="https")
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    good = GetTransferResult(
+        success=True,
+        downloaded_files=[
+            GetDownloadedFile(
+                remote_url="https://canonical.example/model.pt",
+                local_path=str(tmp_path / "model.pt"),
+                hash="abc123",
+                size=5,
+            )
+        ],
+    )
+    service.get.side_effect = [DownloadError("mirror unreachable"), good]
+    recorder = MagicMock()
+    recorder.record.return_value = (2, "u2")
+
+    with (
+        patch("roar.application.get.service.bootstrap"),
+        patch("roar.application.get.service.parse_source", return_value=parsed_source),
+        patch("roar.application.get.service.resolve_download_backend", return_value=MagicMock()),
+        patch("roar.application.get.service.resolve_git_state") as resolve_git_state,
+        patch("roar.application.get.service.create_database_context", return_value=db_ctx),
+        patch("roar.application.get.service.GetService", return_value=service),
+        patch("roar.application.get.service.LocalJobRecorder", return_value=recorder),
+    ):
+        resolve_git_state.return_value.commit = "deadbeef"
+        response = get_artifacts(
+            _request(
+                tmp_path,
+                source="https://canonical.example/model.pt",
+                cache="s3://mirror/model.pt",
+            )
+        )
+
+    assert response.success is True
+    assert service.get.call_count == 2  # mirror failed, canonical retried
+    arts = recorder.record.call_args.kwargs["output_artifacts"]
+    assert arts[0].source_url == "https://canonical.example/model.pt"

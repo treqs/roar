@@ -78,6 +78,15 @@ from ..decorators import require_init
     "even past the 64 MB budget. Downloads them; without this they are excluded from "
     "the anchor's identity (LFS-only) when over budget.",
 )
+@click.option(
+    "--cache",
+    "cache",
+    default=None,
+    help="Fetch bytes from this mirror URL instead of SOURCE, while recording "
+    "SOURCE as the canonical origin (so the AI-BOM downloadLocation stays the public "
+    "URL, not the private mirror). The mirror is hash-verified against --hash when "
+    "given; roar falls back to SOURCE on miss/unreachable/mismatch.",
+)
 @click.pass_obj
 @require_init
 def get(
@@ -93,6 +102,7 @@ def get(
     step_name: str | None,
     limit: int | None,
     full_anchor: bool,
+    cache: str | None,
 ) -> None:
     """Download artifacts from cloud storage and record in the local DAG.
 
@@ -159,6 +169,7 @@ def get(
                 step_name=step_name,
                 limit=limit,
                 full_anchor=full_anchor,
+                cache=cache,
             )
         )
     except FileExistsError as e:
