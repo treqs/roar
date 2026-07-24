@@ -105,7 +105,9 @@ def proxy_start() -> None:
         click.echo(f"Proxy daemon started (pid={info['pid']}, port={info['port']}).")
         click.echo("")
         click.echo("To use it:")
-        click.echo(f"  export AWS_ENDPOINT_URL_S3=http://127.0.0.1:{info['port']}  # boto3, aws cli")
+        click.echo(
+            f"  export AWS_ENDPOINT_URL_S3=http://127.0.0.1:{info['port']}  # boto3, aws cli"
+        )
         click.echo(f"  export S3_ENDPOINT_URL=http://127.0.0.1:{info['port']}     # s5cmd")
     except RuntimeError as e:
         raise click.ClickException(str(e)) from e
