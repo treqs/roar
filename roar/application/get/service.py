@@ -252,9 +252,9 @@ def _materialize_get_result(
                 hashes={"blake3": str(file_info.hash)},
                 size=int(file_info.size or 0),
                 source_type=source_type,
-                source_url=canonical_source_url if request.cache else (
-                    file_info.remote_url or canonical_source_url
-                ),
+                source_url=canonical_source_url
+                if request.cache
+                else (file_info.remote_url or canonical_source_url),
             )
             for file_info in transfer_result.downloaded_files
         ]
