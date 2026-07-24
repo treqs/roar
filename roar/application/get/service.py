@@ -204,11 +204,23 @@ def _materialize_get_result(
         # downloaded files are the composite's components.
         output_artifacts: list[LocalRecordedArtifact] = []
     else:
+        # Record the canonical source on each downloaded artifact so it is a
+        # SOURCE node with a known origin (source_type/source_url), not a bare
+        # local file. This is what a downstream AI-BOM derives `downloadLocation`
+        # from. `remote_url` is each file's canonical fetch URL; fall back to the
+        # request source. `--cache` (below) overrides the fetch location but keeps
+        # the canonical source recorded here.
+        canonical_source_url = request.source
+        source_type = parsed_source.scheme or None
         output_artifacts = [
             LocalRecordedArtifact(
                 path=file_info.local_path,
                 hashes={"blake3": str(file_info.hash)},
                 size=int(file_info.size or 0),
+                source_type=source_type,
+                source_url=canonical_source_url if request.cache else (
+                    file_info.remote_url or canonical_source_url
+                ),
             )
             for file_info in transfer_result.downloaded_files
         ]
