@@ -52,6 +52,24 @@ def test_start_detects_s5cmd_endpoint_var_as_upstream(ctx):
     assert result.env["ROAR_UPSTREAM_S3_ENDPOINT"] == "http://localhost:4566"
 
 
+def test_start_detects_generic_aws_endpoint_url_as_upstream(ctx):
+    """The generic AWS_ENDPOINT_URL (the common MinIO/LocalStack setup) is
+    detected as the upstream to chain to, even though we inject the S3-scoped
+    vars. Regression guard for the case where a user only set AWS_ENDPOINT_URL."""
+    service = MagicMock()
+    service.find_proxy.return_value = "/tmp/roar-proxy"
+    service.start_for_run.return_value = ProxyHandle(process=MagicMock(), port=9090)
+
+    resource = ProxyRuntimeResource(service=service)
+    result = resource.start(ctx, {"AWS_ENDPOINT_URL": "http://localhost:4566"})
+
+    service.start_for_run.assert_called_once_with(upstream_url="http://localhost:4566")
+    assert result.env["ROAR_UPSTREAM_S3_ENDPOINT"] == "http://localhost:4566"
+    # still redirects S3 clients via the scoped vars, not the generic one
+    assert result.env["AWS_ENDPOINT_URL_S3"] == "http://127.0.0.1:9090"
+    assert "AWS_ENDPOINT_URL" not in result.env
+
+
 def test_start_without_existing_endpoint_only_sets_proxy_url(ctx):
     service = MagicMock()
     service.find_proxy.return_value = "/tmp/roar-proxy"

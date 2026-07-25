@@ -70,7 +70,7 @@ class TestProxyCapturesS3:
         script = proxy_repo / "s3_put.py"
         script.write_text(
             "import os, urllib.request\n"
-            'endpoint = os.environ["AWS_ENDPOINT_URL"]\n'
+            'endpoint = os.environ["AWS_ENDPOINT_URL_S3"]\n'
             "req = urllib.request.Request(\n"
             '    f"{endpoint}/test-bucket/output.csv",\n'
             '    data=b"result_data",\n'
@@ -130,7 +130,7 @@ class TestProxyCapturesS3:
         script = proxy_repo / "s3_get.py"
         script.write_text(
             "import os, urllib.request\n"
-            'endpoint = os.environ["AWS_ENDPOINT_URL"]\n'
+            'endpoint = os.environ["AWS_ENDPOINT_URL_S3"]\n'
             'urllib.request.urlopen(f"{endpoint}/test-bucket/input.csv")\n'
         )
         git_commit("add s3 get script")
@@ -184,7 +184,7 @@ class TestProxyCapturesS3:
         script = proxy_repo / "s3_mix.py"
         script.write_text(
             "import os, urllib.request\n"
-            'endpoint = os.environ["AWS_ENDPOINT_URL"]\n'
+            'endpoint = os.environ["AWS_ENDPOINT_URL_S3"]\n'
             "# Read input\n"
             'urllib.request.urlopen(f"{endpoint}/mix-bucket/src.csv")\n'
             "# Write output\n"
@@ -255,7 +255,7 @@ class TestProxyChaining:
         script = proxy_repo / "s3_chain.py"
         script.write_text(
             "import os, urllib.request\n"
-            'endpoint = os.environ["AWS_ENDPOINT_URL"]\n'
+            'endpoint = os.environ["AWS_ENDPOINT_URL_S3"]\n'
             "req = urllib.request.Request(\n"
             '    f"{endpoint}/chain-test/data.csv",\n'
             '    data=b"chain_payload",\n'
@@ -296,7 +296,7 @@ class TestProxyEtags:
         script = proxy_repo / "s3_etag.py"
         script.write_text(
             "import os, urllib.request\n"
-            'endpoint = os.environ["AWS_ENDPOINT_URL"]\n'
+            'endpoint = os.environ["AWS_ENDPOINT_URL_S3"]\n'
             'urllib.request.urlopen(f"{endpoint}/etag-bucket/verify.dat")\n'
         )
         git_commit("add etag verify script")
@@ -402,7 +402,7 @@ class TestProxyOnScriptFailure:
         script = proxy_repo / "s3_fail.py"
         script.write_text(
             "import os, sys, urllib.request\n"
-            'endpoint = os.environ["AWS_ENDPOINT_URL"]\n'
+            'endpoint = os.environ["AWS_ENDPOINT_URL_S3"]\n'
             "req = urllib.request.Request(\n"
             '    f"{endpoint}/fail-bucket/before_crash.csv",\n'
             '    data=b"partial_output",\n'

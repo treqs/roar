@@ -49,10 +49,18 @@ class ProxyRuntimeResource:
 
     def start(self, ctx: RunContext, environ: Mapping[str, str]) -> RuntimeResourceStart:
         del ctx
-        # Detect a pre-existing S3 endpoint (e.g. MinIO/LocalStack) to chain to,
-        # using the same vars we inject below.
+        # Detect a pre-existing S3 endpoint (e.g. MinIO/LocalStack) to chain to.
+        # Prefer the S3-scoped vars we also inject below, but fall back to the
+        # generic AWS_ENDPOINT_URL — that is what most MinIO/LocalStack users
+        # actually set, so ignoring it here would leave the proxy with no upstream
+        # and drop their S3 traffic on the floor.
         existing_endpoint = (
-            str(environ.get("AWS_ENDPOINT_URL_S3") or environ.get("S3_ENDPOINT_URL") or "").strip()
+            str(
+                environ.get("AWS_ENDPOINT_URL_S3")
+                or environ.get("S3_ENDPOINT_URL")
+                or environ.get("AWS_ENDPOINT_URL")
+                or ""
+            ).strip()
             or None
         )
         try:
