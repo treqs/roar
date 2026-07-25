@@ -34,6 +34,10 @@ Replace `python train.py` with `roar run python train.py`. Everything else (file
 | `roar dag` | Visualize the local execution DAG |
 | `roar lineage <hash>` | Inspect lineage for a tracked artifact |
 | `roar inputs <ref>` | Show root input artifacts for a target |
+| `roar scope use <org>/<project>` | Set where this repo publishes |
+| `roar register` | Publish the session's lineage to GLaaS (`--dry-run` to preview) |
+| `roar reproduce <hash> --run` | Re-execute a lineage and check it rebuilds |
+| `roar label set <target> <ref> k=v` | Name/annotate a dag, job, or artifact |
 
 ## Common workflows
 
@@ -79,6 +83,74 @@ To make an unsourced input sourced:
 
 `roar register` and `roar reproduce` print a reproducibility checklist whose "all inputs sourced" line reflects exactly this. When the user wants reproducibility, treat unsourced inputs as something to resolve, not ignore.
 
+## The reproducibility checklist
+
+`roar register` (and `roar put`) print this punchlist as their receipt; `roar reproduce` prints the subset that bears on whether a reproduction can run. It is the operational definition of "reproducible" — when a user asks for a reproducible pipeline, these are the checks to drive to green:
+
+| Check | Passes when |
+|---|---|
+| code committed to git | the run happened inside a git repo with the code versioned |
+| single git commit across all steps | the session didn't span multiple commits (see gotcha below) |
+| commit reachable on a remote | a shareable remote exists — `git remote add origin <url>` |
+| all inputs sourced | no unsourced inputs (see above) |
+| all artifact paths in tracked directories | output dirs are known to git; add a `.gitkeep` to empty ones. Diagnose with `roar status --untracked-dirs` |
+| runtime captured | interpreter + packages recorded — automatic under `roar run` |
+| lineage saved on glaas.ai | `roar register` has published it |
+
+The last two rows appear only on register/put receipts, not on `roar reproduce`.
+
+**Why "commit reachable on a remote" is load-bearing:** `roar reproduce … --run` **clones the recorded remote at the recorded commit** — it does not replay your local checkout (the point is to prove someone else can rebuild). A commit that exists only on your machine, or only on an upstream repo you can't push to, cannot be checked out, so `--run` fails even with an otherwise-clean lineage. If you don't own the repo, fork it, push your commit to the fork, and run from the fork.
+
+## Publishing to GLaaS
+
+Capture is local; publishing is a separate, deliberate step.
+
+```bash
+roar scope list                      # what scopes can I publish to?
+roar scope use <org>/<project>       # set this repo's default publication scope
+roar scope status                    # what's active now?
+roar register --dry-run              # preview: shows the checklist, publishes nothing
+roar register                        # publish the session's lineage
+roar reproduce <hash> --run          # re-execute and verify it rebuilds
+roar reproduce <hash> --lineage --run  # reproduce a whole lineage, not one artifact
+```
+
+- **Register the session, not just a file.** `roar register` with no target publishes the active session's lineage; passing an artifact narrows it.
+- **`--dry-run` first.** It renders the same checklist and runs secret detection without publishing, so it's the cheap way to see what you're about to expose. Registration prompts before proceeding if secrets are detected; `-y` skips prompts (including that one), so don't reach for `-y` until a dry run is clean.
+- **Attribution is decided at register time.** Effective visibility comes from `--public`/`--private` if given, otherwise from the repo's scope. Publishing under an org scope attributes the lineage to that org; a personal scope leaves supplier/author blank.
+- **`--anonymous` is not reversible.** It forces public+anonymous and discards attribution *even when auth is configured*. If the lineage is meant to be credited to an org, registering anonymously means re-running the pipeline to fix it — there's no re-attribute. Don't pass it unless anonymity is the actual goal.
+
+## Naming what you publish
+
+Published lineage is read by people. Unnamed, a DAG reads as raw commands and filenames — `python3 train.py` producing `model.pkl` — which is what a reader sees on a public lineage page.
+
+```bash
+roar run -n "train model" -- python train.py     # name a step at run time
+roar label set job @2 name="train model"         # or rename it afterwards
+roar label set dag <session-hash> name="nightly retrain"
+roar label set artifact model.pkl name="my-model" \
+    description="..." license.id=MIT documentation.url="https://..."
+```
+
+Artifact labels also populate the CycloneDX AI-BOM that GLaaS generates for a registered session (`description`, `license.id`, `documentation.url` map to component fields), so naming the model artifact improves both readability and BOM completeness. Label targets are `dag`, `job`, `composite`, and `artifact`.
+
+## Compliance tags
+
+`roar tag` manages *hereditary* tags — compliance facts that travel downstream through the lineage graph, so a model trained on PII-bearing data inherits that fact without anyone re-asserting it. Tags live in the `tag.*` label namespace and are append-only: `roar tag rm` records a removal, it doesn't erase history.
+
+Canonical kinds: `license`, `contains_pii`, `jurisdiction`, `classification`, `special_category`. Targets are `@N` (job step N in the active session) or an artifact hash prefix / path.
+
+```bash
+roar tag add license=GPL-3.0 @1     # assert a tag on a step
+roar tag show @1                    # current tags
+roar tag why contains_pii model.pkl # walk the inheritance path to the human act
+roar tag history @1                 # every version of the tag document
+```
+
+**Scope, and why `bind` exists.** Tags propagate automatically *within* a session. Crossing a session boundary requires an explicit **bind**: `roar tag bind <artifact>` promotes that artifact's current tags to cross-session scope, so other sessions consuming the same artifact inherit them. `roar tag add` on a named artifact is "born bound" (it writes an implicit bind), while `roar run --add-tag` stays session-scoped until bound. This is deliberate — automatic cross-session propagation on content hash alone would let an incidental collision (two empty files share a hash) contaminate unrelated lineage. `roar tag unbind` revokes. `roar register` takes `--bind`/`--no-bind` to control this at publish time.
+
+Use `roar tag why` when a tag appears somewhere unexpected — it explains the inheritance path rather than leaving you to guess.
+
 ## Detection: is a script running under roar?
 
 If a Python script needs to *require* it's being run under `roar run`, add at the top:
@@ -101,7 +173,10 @@ Workloads should NOT need to know which backend is active.
 ## Gotchas
 
 - **Clean git state is required.** `roar run` refuses to execute if the git working tree has uncommitted changes — including untracked files. There's no `--dirty` bypass; commit (or stash, or gitignore) first. Lineage ties to a commit, so this is by design.
+- **One commit for the whole pipeline — don't commit between steps.** This is the trap the rule above walks you into: if you edit a script between steps, the tree is dirty, so you commit again, and now the session spans multiple commits. `roar reproduce` checks out the *last* one, so the earlier steps replay against code they never ran with — results may differ from the original. The checklist reports this as `single git commit across all steps`, and it fails silently in the sense that every individual step succeeded. Iterate freely while developing; then, for the run you intend to publish, commit once and execute every step start-to-finish without touching a tracked file.
 - **Add `.roar/` to `.gitignore` before your first run.** Otherwise it becomes an untracked change that trips the clean-tree check above on the next run. `roar init` prompts to add it; say yes. If you run `roar init -n` (skip) you'll need to add it yourself.
+- **Outputs go in a *tracked* directory, but gitignore the files.** The clean-tree rule wants output files gitignored (so they don't dirty the tree), but the reproducibility checklist's `all artifact paths in tracked directories` wants the output *directory* known to git. Satisfy both: commit a `.gitkeep` in the output dir and gitignore its contents — e.g. commit `out/.gitkeep`, add `out/*` (not `out/`) to `.gitignore`. Gitignoring the whole dir fails the checklist; not gitignoring the files blocks the next run.
+- **Keep credentials out of lineage with `filters.ignore_paths`.** boto3/AWS SDKs read `~/.aws` on client init, so a run that touches S3 captures your credentials files as tracked inputs — which then land in published lineage. Add `ignore_paths = ["~/.aws"]` under `[filters]` in `.roar/config.toml`. It's **not** settable via `roar config set` — write the TOML directly (the tracer honors it). Do this before any S3/boto3 run.
 - **Default config filters `/tmp` intermediates.** `ignore_tmp_files = true` in the generated `config.toml` drops files the run *wrote* under `/tmp` (endogenous intermediates). A file the run only *read* from `/tmp` pre-existed it and is kept — but flagged unsourced (see above), since `/tmp` is ephemeral and won't survive. If a run shows missing outputs and you're working under `/tmp`, that's why — move the workdir out of `/tmp` (don't park intermediates there) or edit `.roar/config.toml` to flip the filter. Other default filters hide system reads (`/sys`, `/etc`, `/usr`) and installed-package reads.
 - **Ray workers**: `ROAR_WRAP=1` is set on the driver but NOT on Ray workers. `ROAR_SESSION_ID` and `ROAR_JOB_ID` are propagated. Use those if a worker needs to detect provenance context.
 - **Osmo workers**: no env var propagation today.
