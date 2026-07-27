@@ -169,8 +169,11 @@ def put(
 
     \b
     Destination formats:
-        s3://bucket/prefix     AWS S3
-        gs://bucket/prefix     Google Cloud Storage
+        s3://bucket/prefix          AWS S3
+        gs://bucket/prefix          Google Cloud Storage
+        hf://owner/repo[/path]      Hugging Face Hub (model repo; recorded as the
+                                    public downloadLocation)
+        hf://datasets/owner/repo    Hugging Face Hub dataset repo
 
     \b
     Examples:
