@@ -30,6 +30,11 @@ def resolve_publish_storage_backend(destination: str) -> StorageBackend:
             "GCSBackend",
             "GCS backend requires google-cloud-storage. Install with: pip install google-cloud-storage",
         )(bucket=parsed.bucket, prefix=parsed.prefix),
+        "hf": lambda: load_backend_class(
+            "roar.integrations.storage.hf",
+            "HFBackend",
+            "HF backend requires huggingface_hub. Install with: pip install huggingface_hub",
+        )(bucket=parsed.bucket, prefix=parsed.prefix),
         "memory": lambda: MemoryBackend(bucket=parsed.bucket, prefix=parsed.prefix),
     }
 

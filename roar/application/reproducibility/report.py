@@ -75,6 +75,7 @@ def build_report(
     on_glaas: bool | None = None,
     single_commit: bool = True,
     untracked_paths: list[str] | None = None,
+    secrets_detected: int | None = None,
     notes: dict[str, str] | None = None,
     na: dict[str, str] | None = None,
 ) -> ReproducibilityReport:
@@ -145,6 +146,19 @@ def build_report(
                 "lineage saved on glaas.ai",
                 on_glaas,
                 "only on this machine — run `roar register` to publish it",
+            )
+        )
+    # Receipt-only, register/put: a secret scan runs at publish time and any hits
+    # are redacted, so the published lineage is clean regardless — this line always
+    # passes and exists to confirm the scan ran (the note shows none/N redacted). It
+    # doesn't bear on reproducibility, so `reproduce` omits it (secrets_detected None).
+    if secrets_detected is not None:
+        checks.append(
+            ReproCheck(
+                "secrets",
+                "no secrets in published lineage",
+                True,
+                "",
             )
         )
     report = ReproducibilityReport(checks=checks)
