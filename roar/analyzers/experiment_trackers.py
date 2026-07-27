@@ -74,7 +74,12 @@ class ExperimentTrackerAnalyzer(Analyzer):
         for tracker in trackers_found:
             run_info = self._extract_run_info(tracker, written, env)
             if run_info:
-                results["runs"].append(run_info)
+                # trackio reports one run per project DB (a run may touch
+                # several); the other trackers return a single run dict.
+                if isinstance(run_info, list):
+                    results["runs"].extend(run_info)
+                else:
+                    results["runs"].append(run_info)
 
             # Add ignore patterns for this tracker
             for pattern in self.IGNORE_PATTERNS:
@@ -98,8 +103,12 @@ class ExperimentTrackerAnalyzer(Analyzer):
 
         return results if results["trackers_detected"] else None
 
-    def _extract_run_info(self, tracker: str, written_files: list, env: dict) -> dict | None:
-        """Extract run URL and metadata for a specific tracker."""
+    def _extract_run_info(self, tracker: str, written_files: list, env: dict) -> dict | list | None:
+        """Extract run URL and metadata for a specific tracker.
+
+        Most trackers return a single run dict; ``trackio`` returns a list of
+        per-project run dicts (or ``None`` when nothing usable was found).
+        """
         if tracker == "wandb":
             return self._extract_wandb_info(written_files, env)
         elif tracker == "mlflow":
@@ -204,7 +213,7 @@ class ExperimentTrackerAnalyzer(Analyzer):
 
         return info if len(info) > 1 else None
 
-    def _extract_trackio_info(self, written_files: list, env: dict) -> dict | None:
+    def _extract_trackio_info(self, written_files: list, env: dict) -> list | None:
         """Extract trackio run info + the hosted-dashboard URL — scrape only.
 
         trackio stores one SQLite DB per project at ``.../huggingface/trackio/
@@ -215,44 +224,79 @@ class ExperimentTrackerAnalyzer(Analyzer):
         customer data, so the DAG carries a link to the externally-hosted
         experiment, and the metrics live on the dashboard.
 
-        URL form: ``https://huggingface.co/spaces/<space_id>?project=<project>``.
+        Returns ONE record per project DB (never splicing one project's identity
+        onto another's Space), or ``None`` if no DB yielded anything usable. Each
+        record's URL is ``https://huggingface.co/spaces/<space_id>?project=<project>``.
         (``env`` is unused — the space comes from what trackio itself persisted.)
         """
         del env
-        info: dict[str, Any] = {"tracker": "trackio"}
         db_paths = sorted({p for p in written_files if "trackio/" in p and p.endswith(".db")})
 
+        runs: list[dict[str, Any]] = []
         for db_path in db_paths:
             path = Path(db_path)
-            info["project"] = path.stem  # <project>.db -> <project>
             if not path.exists():
                 continue
+            info: dict[str, Any] = {"tracker": "trackio", "project": path.stem}
             try:
                 con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-                try:
-                    run = con.execute(
-                        "SELECT run_id, run_name FROM metrics ORDER BY id DESC LIMIT 1"
-                    ).fetchone()
-                    # trackio writes the hosted Space here once a run syncs to it.
-                    space = con.execute(
-                        "SELECT value FROM project_metadata WHERE key = 'space_id' LIMIT 1"
-                    ).fetchone()
-                finally:
-                    con.close()
             except sqlite3.Error:
                 continue
+            try:
+                # Two INDEPENDENT lookups: an older/imported trackio schema may
+                # lack a ``run_id`` column or the ``project_metadata`` table, so
+                # a failure of one must not discard the other.
+                run = self._trackio_run_identity(con)
+                space = self._trackio_space_id(con)
+            finally:
+                con.close()
+
             if run:
-                info["run_id"] = run[0]
-                info["run_name"] = run[1]
-            if space and space[0]:
-                info["space_id"] = space[0]
+                info["run_id"], info["run_name"] = run
+            if space:
+                info["space_id"] = space
+                info["url"] = f"https://huggingface.co/spaces/{space}?project={info['project']}"
 
-        if info.get("space_id") and info.get("project"):
-            info["url"] = (
-                f"https://huggingface.co/spaces/{info['space_id']}?project={info['project']}"
-            )
+            # Keep only DBs that yielded a run identity and/or a hosted Space
+            # (more than the always-present tracker+project keys).
+            if len(info) > 2:
+                runs.append(info)
 
-        return info if len(info) > 1 else None
+        return runs or None
+
+    @staticmethod
+    def _trackio_run_identity(con: "sqlite3.Connection") -> tuple | None:
+        """``(run_id, run_name)`` of the most recent metric row, tolerating
+        older schemas whose ``metrics`` table lacks a ``run_id`` column (trackio
+        produces these when importing TensorBoard/older runs)."""
+        try:
+            cols = {row[1] for row in con.execute("PRAGMA table_info(metrics)").fetchall()}
+        except sqlite3.Error:
+            return None
+        if not cols or not ({"run_id", "run_name"} & cols):
+            return None
+        run_id_expr = "run_id" if "run_id" in cols else "NULL"
+        run_name_expr = "run_name" if "run_name" in cols else "NULL"
+        try:
+            row = con.execute(
+                f"SELECT {run_id_expr}, {run_name_expr} FROM metrics ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+        if not row or (row[0] is None and row[1] is None):
+            return None
+        return row[0], row[1]
+
+    @staticmethod
+    def _trackio_space_id(con: "sqlite3.Connection") -> str | None:
+        """The hosted HF Space id trackio persisted once a run synced, or None."""
+        try:
+            row = con.execute(
+                "SELECT value FROM project_metadata WHERE key = 'space_id' LIMIT 1"
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+        return row[0] if row and row[0] else None
 
     def _extract_mlflow_info(self, written_files: list, env: dict) -> dict | None:
         """Extract MLflow run info from local files."""
