@@ -61,6 +61,14 @@ patched_environ_get = _runtime_tracker.patched_environ_get
 _runtime_tracker.install()
 
 
+try:
+    from roar.execution.runtime.inject.trackio_shim import install_trackio_shim
+
+    install_trackio_shim(os.environ)
+except Exception:
+    pass  # best-effort: capture is opt-in and must never break a run
+
+
 def _repair_runtime_in_process(expected_soabi: str) -> bool:
     """Install + prepend an ABI-matched runtime tree for *this* interpreter.
 

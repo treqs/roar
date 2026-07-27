@@ -2,6 +2,7 @@
 
 import json
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -18,6 +19,7 @@ class ExperimentTrackerAnalyzer(Analyzer):
     TRACKER_PATTERNS: ClassVar[dict[str, list[str]]] = {
         "wandb": ["wandb/", ".wandb"],
         "mlflow": ["mlruns/", "mlartifacts/"],
+        "trackio": ["huggingface/trackio", "/trackio/"],
         "neptune": [".neptune/"],
         "tensorboard": ["/runs/", "events.out.tfevents"],
     }
@@ -88,6 +90,8 @@ class ExperimentTrackerAnalyzer(Analyzer):
             results["ignore_patterns"].extend(["mlruns/*", "mlartifacts/*"])
         if "neptune" in trackers_found:
             results["ignore_patterns"].append(".neptune/*")
+        if "trackio" in trackers_found:
+            results["ignore_patterns"].append("*/trackio/*")
 
         # Dedupe
         results["ignore_patterns"] = sorted(set(results["ignore_patterns"]))
@@ -100,6 +104,8 @@ class ExperimentTrackerAnalyzer(Analyzer):
             return self._extract_wandb_info(written_files, env)
         elif tracker == "mlflow":
             return self._extract_mlflow_info(written_files, env)
+        elif tracker == "trackio":
+            return self._extract_trackio_info(written_files, env)
         elif tracker == "neptune":
             return self._extract_neptune_info(written_files, env)
         return None
@@ -195,6 +201,51 @@ class ExperimentTrackerAnalyzer(Analyzer):
             info["url"] = (
                 f"https://wandb.ai/{info['entity']}/{info['project']}/runs/{info['run_id']}"
             )
+
+        return info if len(info) > 1 else None
+
+    def _extract_trackio_info(self, written_files: list, env: dict) -> dict | None:
+        """Extract trackio run info + the hosted-dashboard URL.
+
+        trackio stores one SQLite DB per project at ``.../huggingface/trackio/
+        <project>.db``. We read *only* the run identity + resolve the public HF
+        Space URL — never the metrics: TReqs stores no customer data, so the DAG
+        carries a link to the externally-hosted experiment (like a W&B URL), and
+        the metrics live on the dashboard, not in lineage.
+
+        The Space is resolved from ``ROAR_TRACKIO_SPACE_ID`` / ``TRACKIO_SPACE_ID``
+        (set when roar injects the trackio shim), falling back to the ``space_id``
+        recorded on the synced run. URL form:
+        ``https://huggingface.co/spaces/<space_id>?project=<project>``.
+        """
+        info: dict[str, Any] = {"tracker": "trackio"}
+        db_paths = sorted({p for p in written_files if "trackio/" in p and p.endswith(".db")})
+        space_id = env.get("ROAR_TRACKIO_SPACE_ID") or env.get("TRACKIO_SPACE_ID") or ""
+
+        for db_path in db_paths:
+            path = Path(db_path)
+            info["project"] = path.stem  # <project>.db -> <project>
+            if not path.exists():
+                continue
+            try:
+                con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                try:
+                    row = con.execute(
+                        "SELECT run_id, run_name, space_id FROM metrics ORDER BY id DESC LIMIT 1"
+                    ).fetchone()
+                finally:
+                    con.close()
+            except sqlite3.Error:
+                continue
+            if row:
+                info["run_id"] = row[0]
+                info["run_name"] = row[1]
+                if not space_id and row[2]:
+                    space_id = row[2]
+
+        if space_id and info.get("project"):
+            info["space_id"] = space_id
+            info["url"] = f"https://huggingface.co/spaces/{space_id}?project={info['project']}"
 
         return info if len(info) > 1 else None
 
