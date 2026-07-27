@@ -98,7 +98,11 @@ def _scope_visibility(repo_scope: Any, requested_public: bool | None = None) -> 
     if requested_public is False:
         return "private"
     # requested_public is True (--public):
-    if base == "private" and repo_scope is not None and getattr(repo_scope, "mode", None) == "project":
+    if (
+        base == "private"
+        and repo_scope is not None
+        and getattr(repo_scope, "mode", None) == "project"
+    ):
         raise PublishAuthError(
             "This repo is bound to a private project, so --public would publish a "
             "public DAG from a private project. Bind a public project "

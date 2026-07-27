@@ -14,12 +14,12 @@ import click
 from ...application.publish.requests import PutRequest
 from ...application.publish.results import PutResponse
 from ...application.publish.service import put_artifacts
-from ..context import RoarContext
-from ..decorators import require_init
 from ...publish_auth import (
     reset_requested_publish_visibility,
     set_requested_publish_visibility,
 )
+from ..context import RoarContext
+from ..decorators import require_init
 from ..publish_intent import (
     confirm_anonymous_public_publish,
     resolve_publish_intent,

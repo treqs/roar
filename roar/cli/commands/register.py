@@ -14,12 +14,12 @@ from ...application.publish.requests import RegisterLineageRequest
 from ...application.publish.results import RegisterLineageResponse, RegisterTagSummary
 from ...application.publish.service import register_lineage_target, resolve_register_lineage_target
 from ...application.tags import TagService
-from ..context import RoarContext
-from ..decorators import require_init
 from ...publish_auth import (
     reset_requested_publish_visibility,
     set_requested_publish_visibility,
 )
+from ..context import RoarContext
+from ..decorators import require_init
 from ..publish_intent import (
     confirm_anonymous_public_publish,
     confirm_defaulted_active_session_publish,
