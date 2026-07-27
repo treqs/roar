@@ -16,6 +16,10 @@ from ...application.publish.service import register_lineage_target, resolve_regi
 from ...application.tags import TagService
 from ..context import RoarContext
 from ..decorators import require_init
+from ...publish_auth import (
+    reset_requested_publish_visibility,
+    set_requested_publish_visibility,
+)
 from ..publish_intent import (
     confirm_anonymous_public_publish,
     confirm_defaulted_active_session_publish,
@@ -492,19 +496,27 @@ def register(
         click.echo("Registration aborted.")
         raise SystemExit(1)
 
-    response = register_lineage_target(
-        RegisterLineageRequest(
-            target=target,
-            roar_dir=ctx.roar_dir,
-            cwd=ctx.cwd,
-            dry_run=dry_run,
-            as_blake3=as_blake3,
-            public=publish_intent.public,
-            anonymous=publish_intent.anonymous,
-            skip_confirmation=yes,
-            confirm_callback=_confirm_secrets if not yes else None,
+    # Record the explicit --public/--private choice so every lazily-built
+    # GlaasClient in the publish resolves the same, flag-reconciled scope_request
+    # visibility (see publish_auth._scope_visibility). `public` is the raw flag
+    # (None when unset) so an unset flag still follows the scope default.
+    _vis_token = set_requested_publish_visibility(public)
+    try:
+        response = register_lineage_target(
+            RegisterLineageRequest(
+                target=target,
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                dry_run=dry_run,
+                as_blake3=as_blake3,
+                public=publish_intent.public,
+                anonymous=publish_intent.anonymous,
+                skip_confirmation=yes,
+                confirm_callback=_confirm_secrets if not yes else None,
+            )
         )
-    )
+    finally:
+        reset_requested_publish_visibility(_vis_token)
 
     if not response.success:
         if response.aborted_by_user:
