@@ -1,7 +1,8 @@
 """Unit tests for the trackio branch of ExperimentTrackerAnalyzer ([70]).
 
-trackio stores one SQLite DB per project; roar records only the run identity + the
-hosted HF-Space URL (never the metrics — TReqs stores no customer data).
+roar *scrapes* trackio exactly like W&B: it reads the run identity + the hosted HF
+Space URL that trackio itself persisted (``project_metadata.space_id``), and never
+the metrics (TReqs stores no customer data). No roar-side config, env, or flags.
 """
 
 import sqlite3
@@ -11,7 +12,11 @@ from roar.analyzers.experiment_trackers import ExperimentTrackerAnalyzer
 
 
 def _make_trackio_db(dirpath: Path, project: str, space_id: str | None = None) -> str:
-    """Create a minimal trackio-shaped SQLite DB, return its path."""
+    """Create a minimal trackio-shaped SQLite DB, return its path.
+
+    Mirrors the real schema: a ``metrics`` table and a ``project_metadata`` table
+    into which trackio writes ``space_id`` once a run syncs to a HF Space.
+    """
     db = dirpath / "huggingface" / "trackio" / f"{project}.db"
     db.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(db))
@@ -19,31 +24,23 @@ def _make_trackio_db(dirpath: Path, project: str, space_id: str | None = None) -
         "CREATE TABLE metrics (id INTEGER PRIMARY KEY, run_id TEXT, timestamp TEXT, "
         "run_name TEXT, step INTEGER, metrics TEXT, log_id TEXT, space_id TEXT)"
     )
+    con.execute("CREATE TABLE project_metadata (key TEXT, value TEXT)")
     for step in range(3):
         con.execute(
-            "INSERT INTO metrics (run_id, timestamp, run_name, step, metrics, log_id, space_id) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (
-                "run123",
-                "2026-07-27T00:00:00Z",
-                "brave-run-0",
-                step,
-                f'{{"loss": {round(1.0 / (step + 1), 4)}}}',
-                f"log{step}",
-                space_id,
-            ),
+            "INSERT INTO metrics (run_id, run_name, step, metrics) VALUES (?,?,?,?)",
+            ("run123", "brave-run-0", step, f'{{"loss": {round(1.0 / (step + 1), 4)}}}'),
         )
+    if space_id:
+        con.execute("INSERT INTO project_metadata (key, value) VALUES ('space_id', ?)", (space_id,))
     con.commit()
     con.close()
     return str(db)
 
 
 class TestTrackioExtractor:
-    def test_url_from_env_space_id(self, tmp_path: Path):
-        db = _make_trackio_db(tmp_path, "minimind-o")
-        info = ExperimentTrackerAnalyzer()._extract_trackio_info(
-            [db], {"ROAR_TRACKIO_SPACE_ID": "reproducible-ai/experiments"}
-        )
+    def test_url_from_persisted_space_metadata(self, tmp_path: Path):
+        db = _make_trackio_db(tmp_path, "minimind-o", space_id="reproducible-ai/experiments")
+        info = ExperimentTrackerAnalyzer()._extract_trackio_info([db], {})
         assert info is not None
         assert info["tracker"] == "trackio"
         assert info["project"] == "minimind-o"
@@ -54,14 +51,8 @@ class TestTrackioExtractor:
             == "https://huggingface.co/spaces/reproducible-ai/experiments?project=minimind-o"
         )
 
-    def test_space_id_from_db_column(self, tmp_path: Path):
-        db = _make_trackio_db(tmp_path, "yolo", space_id="reproducible-ai/experiments")
-        info = ExperimentTrackerAnalyzer()._extract_trackio_info([db], {})  # no env
-        assert info is not None
-        assert info["url"].endswith("/reproducible-ai/experiments?project=yolo")
-
-    def test_no_space_id_records_identity_but_no_url(self, tmp_path: Path):
-        db = _make_trackio_db(tmp_path, "cosyvoice")  # space_id None + no env
+    def test_no_space_metadata_records_identity_but_no_url(self, tmp_path: Path):
+        db = _make_trackio_db(tmp_path, "cosyvoice")  # local-only run, never synced
         info = ExperimentTrackerAnalyzer()._extract_trackio_info([db], {})
         assert info is not None
         assert info["project"] == "cosyvoice"

@@ -5,8 +5,6 @@ Usage: roar run [options] <command>
        roar run @N [--param=value ...]
 """
 
-import os
-
 import click
 
 from ...application.run import RunRequest, run_command
@@ -86,19 +84,6 @@ def _validate_add_tags(
     callback=_validate_add_tags,
     help="Stamp KIND=VALUE onto this run's output artifacts (repeatable).",
 )
-@click.option(
-    "--capture-trackio",
-    is_flag=True,
-    help="Route the workload's W&B / MLflow logging into trackio (zero code change), "
-    "so it syncs to a hosted HF Space whose URL is recorded on the DAG.",
-)
-@click.option(
-    "--trackio-space",
-    default=None,
-    metavar="OWNER/NAME",
-    help="HF Space id to sync trackio runs to (e.g. reproducible-ai/experiments); "
-    "used with --capture-trackio.",
-)
 @click.pass_obj
 @require_init
 def run(
@@ -112,8 +97,6 @@ def run(
     hash_algorithms: tuple[str, ...],
     block_tags: tuple[str, ...],
     add_tags: tuple[str, ...],
-    capture_trackio: bool,
-    trackio_space: str | None,
 ) -> None:
     """Run a command with provenance tracking.
 
@@ -134,14 +117,6 @@ def run(
         roar run @2                    # Re-run DAG node 2
         roar run @2 --epochs=10        # Re-run with parameter override
     """
-    # Trackio capture: set the env the injected sitecustomize reads. The traced
-    # child inherits os.environ (tracer builds env = dict(os.environ)), so the
-    # wandb/mlflow -> trackio shim fires and the analyzer records the Space URL.
-    if capture_trackio:
-        os.environ["ROAR_CAPTURE_TRACKIO"] = "1"
-        if trackio_space:
-            os.environ["ROAR_TRACKIO_SPACE_ID"] = trackio_space
-
     args_list = list(args)
 
     # Check for help
