@@ -237,7 +237,23 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     return click.confirm("Continue with registration? (secrets will be filtered)", default=False)
 
 
-def _register_notes(response: RegisterLineageResponse, *, on_glaas: bool) -> dict[str, str]:
+def _secret_scan_enabled() -> bool:
+    """Whether the publish-time secret scan actually runs.
+
+    Mirrors ``RegisterService.omit_filter``'s gate exactly (scan runs only when
+    ``registration.omit`` is present and ``enabled != false``). Used so a
+    *disabled* scan is never reported as "none detected" — that would be false
+    assurance that the lineage was scanned and found clean.
+    """
+    from ...integrations.config import config_get
+
+    omit_config = config_get("registration.omit")
+    return bool(omit_config) and bool(omit_config.get("enabled", True))
+
+
+def _register_notes(
+    response: RegisterLineageResponse, *, on_glaas: bool, secrets_scanned: bool
+) -> dict[str, str]:
     """Operational receipt details folded onto the reproducibility punchlist.
 
     Each becomes the indented note under its check, so the one checklist also
@@ -252,8 +268,13 @@ def _register_notes(response: RegisterLineageResponse, *, on_glaas: bool) -> dic
         )
     if ts and ts.remote:
         notes["pushed"] = f"pushed to {ts.remote}"
-    detected = len(response.secrets_detected or [])
-    notes["secrets"] = f"{detected} redacted" if detected else "none detected"
+    if not secrets_scanned:
+        notes["secrets"] = (
+            "scan disabled (registration.omit.enabled=false) — lineage NOT scanned for secrets"
+        )
+    else:
+        detected = len(response.secrets_detected or [])
+        notes["secrets"] = f"{detected} redacted" if detected else "none detected"
     if on_glaas:
         recorded = (
             f"{_format_jobs_line(response)} jobs · {response.artifacts_registered} artifacts · "
@@ -288,6 +309,7 @@ def _render_register_checklist(
             untracked_artifact_dirs,
         )
 
+        secrets_scanned = _secret_scan_enabled()
         report = build_report(
             committed=response.reproducible,
             pushed=bool(response.tag_summary and response.tag_summary.remote),
@@ -298,9 +320,10 @@ def _render_register_checklist(
             untracked_paths=untracked_artifact_dirs(ctx.roar_dir, ctx.cwd),
             on_glaas=on_glaas,
             secrets_detected=len(response.secrets_detected or []),
+            secrets_scanned=secrets_scanned,
             # Extra job-commit tags mean the session spanned multiple commits.
             single_commit=not (response.tag_summary and response.tag_summary.job_tags),
-            notes=_register_notes(response, on_glaas=on_glaas),
+            notes=_register_notes(response, on_glaas=on_glaas, secrets_scanned=secrets_scanned),
             na={"on_glaas": "dry run — nothing published yet"} if dry_run else None,
         )
     except Exception:

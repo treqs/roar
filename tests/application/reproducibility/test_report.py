@@ -160,3 +160,34 @@ def test_is_shareable_remote():
     assert not is_shareable_remote("~/proj")
     assert not is_shareable_remote("")
     assert not is_shareable_remote(None)
+
+
+def _secrets_check(**kwargs):
+    report = build_report(
+        committed=True, pushed=True, runtime_ok=True, unsourced_paths=[], **kwargs
+    )
+    return next((c for c in report.checks if c.key == "secrets"), None)
+
+
+def test_secrets_check_omitted_when_not_a_receipt():
+    # reproduce path passes no secrets_detected -> no secrets line at all.
+    assert _secrets_check() is None
+
+
+def test_secrets_check_passes_when_scanned_clean():
+    check = _secrets_check(secrets_detected=0, secrets_scanned=True)
+    assert check is not None and check.ok is True
+
+
+def test_secrets_check_passes_when_scanned_and_redacted():
+    check = _secrets_check(secrets_detected=2, secrets_scanned=True)
+    assert check is not None and check.ok is True
+
+
+def test_secrets_check_fails_when_scan_disabled():
+    # #243: a disabled scan must NOT read as green "no secrets" — that would be
+    # false assurance that the lineage was scanned and found clean.
+    check = _secrets_check(secrets_detected=0, secrets_scanned=False)
+    assert check is not None
+    assert check.ok is False
+    assert "not scanned" in check.detail.lower()
