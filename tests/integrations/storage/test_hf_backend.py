@@ -34,7 +34,8 @@ class TestParseHfDestination:
 class TestHFBackendUpload:
     def _mock_api(self):
         api = Mock()
-        api.create_repo.return_value = None
+        # roar does not create repos; it uploads into a pre-existing one.
+        api.repo_exists.return_value = True
         api.upload_file.return_value = None
         return api
 
@@ -50,9 +51,11 @@ class TestHFBackendUpload:
             url
             == "https://huggingface.co/reproducible-ai/minimind-o/resolve/main/model.safetensors"
         )
-        api.create_repo.assert_called_once()
-        assert api.create_repo.call_args.args[0] == "reproducible-ai/minimind-o"
-        assert api.create_repo.call_args.kwargs["repo_type"] == "model"
+        # roar checks existence but never creates the repo.
+        api.create_repo.assert_not_called()
+        api.repo_exists.assert_called_once_with(
+            repo_id="reproducible-ai/minimind-o", repo_type="model"
+        )
         api.upload_file.assert_called_once_with(
             path_or_fileobj=str(f),
             path_in_repo="model.safetensors",
@@ -69,7 +72,7 @@ class TestHFBackendUpload:
             url = backend.upload(f, "data.csv")
 
         assert url == "https://huggingface.co/datasets/reproducible-ai/mnist/resolve/main/data.csv"
-        assert api.create_repo.call_args.kwargs["repo_type"] == "dataset"
+        assert api.repo_exists.call_args.kwargs["repo_type"] == "dataset"
 
     def test_upload_with_path_prefix(self, tmp_path: Path):
         f = tmp_path / "epoch10.pt"
@@ -81,6 +84,20 @@ class TestHFBackendUpload:
 
         assert url.endswith("/owner/repo/resolve/main/checkpoints/epoch10.pt")
         assert api.upload_file.call_args.kwargs["path_in_repo"] == "checkpoints/epoch10.pt"
+
+    def test_upload_missing_repo_raises_actionable_error(self, tmp_path: Path):
+        """roar never creates the repo: a missing one fails clearly, and no
+        upload is attempted (mirroring S3/GCS on a missing bucket)."""
+        f = tmp_path / "model.safetensors"
+        f.write_bytes(b"weights")
+        api = self._mock_api()
+        api.repo_exists.return_value = False
+        with patch("roar.integrations.storage.hf.HfApi", return_value=api):
+            backend = HFBackend(bucket="owner", prefix="does-not-exist")
+            with pytest.raises(FileNotFoundError, match="does not exist"):
+                backend.upload(f, "model.safetensors")
+        api.upload_file.assert_not_called()
+        api.create_repo.assert_not_called()
 
     def test_exists_false_on_error(self, tmp_path: Path):
         api = self._mock_api()

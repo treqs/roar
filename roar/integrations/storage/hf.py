@@ -73,23 +73,45 @@ def _token() -> str | None:
 
 
 class HFBackend(StorageBackend):
-    """Upload artifacts to a Hugging Face Hub repo.
+    """Upload artifacts to a **pre-existing** Hugging Face Hub repo.
 
-    Auth: a write-scoped HF token from ``HF_TOKEN`` (or ``~/.hf_token``). The repo
-    is created on first use if it doesn't exist (idempotent). ``upload`` returns
-    the public ``resolve`` URL, which roar records as the artifact's
-    ``source_url``/``downloadLocation``.
+    Auth: a write-scoped HF token from ``HF_TOKEN`` (or ``~/.hf_token``).
+
+    roar does **not** create the repo, and makes no decision about its
+    visibility — exactly as the S3/GCS backends write a key into a bucket they
+    never create. The repo's existence and its public/private setting are the
+    operator's, decided once on HF; ``roar put`` only writes files into it. If
+    the repo doesn't exist, ``upload`` fails with an actionable error rather
+    than silently creating one (which would have to guess a visibility).
+
+    ``upload`` returns the public ``resolve`` URL, which roar records as the
+    artifact's ``source_url``/``downloadLocation``.
     """
 
-    def __init__(self, bucket: str, prefix: str = "", *, private: bool = False):
+    def __init__(self, bucket: str, prefix: str = ""):
         _ensure_hf()
         assert HfApi is not None  # guaranteed by _ensure_hf()
         self._repo_type, self._repo_id, self._prefix = parse_hf_destination(bucket, prefix)
         self._token = _token()
         self._api = HfApi(token=self._token)
-        self._api.create_repo(
-            self._repo_id, repo_type=self._repo_type, private=private, exist_ok=True
-        )
+        self._repo_checked = False
+
+    def _ensure_repo_exists(self) -> None:
+        """Fail fast with a clear message if the target repo doesn't exist.
+
+        Mirrors S3/GCS behaviour on a missing bucket: roar never creates the
+        container, so a missing repo is the operator's to create (with their
+        intended visibility), not roar's to conjure."""
+        if self._repo_checked:
+            return
+        if not self._api.repo_exists(repo_id=self._repo_id, repo_type=self._repo_type):
+            raise FileNotFoundError(
+                f"Hugging Face {self._repo_type} repo '{self._repo_id}' does not exist. "
+                "Create it on HF with your intended visibility (public or private), "
+                "then re-run. roar does not create repos, just as it does not create "
+                "S3 buckets — storage visibility is yours to set, not roar's to guess."
+            )
+        self._repo_checked = True
 
     def _full_key(self, remote_key: str) -> str:
         return f"{self._prefix}/{remote_key}" if self._prefix else remote_key
@@ -101,6 +123,7 @@ class HFBackend(StorageBackend):
         return f"{_HF}/{seg}{self._repo_id}/resolve/main/{full_key}"
 
     def upload(self, local_path: Path, remote_key: str) -> str:
+        self._ensure_repo_exists()
         full_key = self._full_key(remote_key)
         self._api.upload_file(
             path_or_fileobj=str(local_path),
