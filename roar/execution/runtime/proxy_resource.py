@@ -49,7 +49,20 @@ class ProxyRuntimeResource:
 
     def start(self, ctx: RunContext, environ: Mapping[str, str]) -> RuntimeResourceStart:
         del ctx
-        existing_endpoint = str(environ.get("AWS_ENDPOINT_URL") or "").strip() or None
+        # Detect a pre-existing S3 endpoint (e.g. MinIO/LocalStack) to chain to.
+        # Prefer the S3-scoped vars we also inject below, but fall back to the
+        # generic AWS_ENDPOINT_URL — that is what most MinIO/LocalStack users
+        # actually set, so ignoring it here would leave the proxy with no upstream
+        # and drop their S3 traffic on the floor.
+        existing_endpoint = (
+            str(
+                environ.get("AWS_ENDPOINT_URL_S3")
+                or environ.get("S3_ENDPOINT_URL")
+                or environ.get("AWS_ENDPOINT_URL")
+                or ""
+            ).strip()
+            or None
+        )
         try:
             self._handle = self._service.start_for_run(upstream_url=existing_endpoint)
         except Exception as exc:
@@ -57,8 +70,15 @@ class ProxyRuntimeResource:
             self.logger.warning("Failed to start proxy: %s", exc)
             return RuntimeResourceStart()
 
+        proxy_url = f"http://127.0.0.1:{self._handle.port}"
+        # Point S3 clients at the proxy with the S3-*scoped* endpoint override,
+        # not the service-agnostic AWS_ENDPOINT_URL. AWS_ENDPOINT_URL_S3 is
+        # honored by boto3 / aws CLI / aws-sdk-go-v2 and, unlike the global var,
+        # does not redirect non-S3 services (STS, EC2, CloudWatch, ...) into the
+        # S3-only proxy. S3_ENDPOINT_URL covers s5cmd, which ignores the SDK vars.
         env = {
-            "AWS_ENDPOINT_URL": f"http://127.0.0.1:{self._handle.port}",
+            "AWS_ENDPOINT_URL_S3": proxy_url,
+            "S3_ENDPOINT_URL": proxy_url,
         }
         if existing_endpoint:
             env["ROAR_UPSTREAM_S3_ENDPOINT"] = existing_endpoint
