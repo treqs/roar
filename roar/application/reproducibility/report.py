@@ -76,6 +76,7 @@ def build_report(
     single_commit: bool = True,
     untracked_paths: list[str] | None = None,
     secrets_detected: int | None = None,
+    secrets_scanned: bool = True,
     notes: dict[str, str] | None = None,
     na: dict[str, str] | None = None,
 ) -> ReproducibilityReport:
@@ -148,17 +149,20 @@ def build_report(
                 "only on this machine — run `roar register` to publish it",
             )
         )
-    # Receipt-only, register/put: a secret scan runs at publish time and any hits
-    # are redacted, so the published lineage is clean regardless — this line always
-    # passes and exists to confirm the scan ran (the note shows none/N redacted). It
-    # doesn't bear on reproducibility, so `reproduce` omits it (secrets_detected None).
+    # Receipt-only, register/put: when the secret scan runs, any hits are redacted
+    # so the published lineage is clean (the note shows none/N redacted) and this
+    # passes. But it must NOT pass — and must not claim "none detected" — when the
+    # scan was disabled (registration.omit.enabled=false): that's "not scanned", not
+    # "scanned clean", and reporting it green would be false assurance. Doesn't bear
+    # on reproducibility, so `reproduce` omits it (secrets_detected None).
     if secrets_detected is not None:
         checks.append(
             ReproCheck(
                 "secrets",
                 "no secrets in published lineage",
-                True,
-                "",
+                secrets_scanned,
+                "secret scan disabled (registration.omit.enabled=false) — the published "
+                "lineage was NOT scanned for secrets",
             )
         )
     report = ReproducibilityReport(checks=checks)

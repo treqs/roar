@@ -14,6 +14,10 @@ import click
 from ...application.publish.requests import PutRequest
 from ...application.publish.results import PutResponse
 from ...application.publish.service import put_artifacts
+from ...publish_auth import (
+    reset_requested_publish_visibility,
+    set_requested_publish_visibility,
+)
 from ..context import RoarContext
 from ..decorators import require_init
 from ..publish_intent import (
@@ -224,6 +228,9 @@ def put(
         click.echo("Publication aborted.")
         raise SystemExit(1)
 
+    # Record the explicit --public/--private choice so the publish resolves a
+    # flag-reconciled scope_request visibility (see publish_auth._scope_visibility).
+    _vis_token = set_requested_publish_visibility(public)
     try:
         response = put_artifacts(
             PutRequest(
@@ -245,6 +252,8 @@ def put(
         raise click.ClickException(str(e)) from e
     except Exception as e:  # pragma: no cover - defensive CLI boundary
         raise click.ClickException(f"Unexpected error during put: {e}") from e
+    finally:
+        reset_requested_publish_visibility(_vis_token)
 
     for warning in response.warnings:
         click.echo(f"Warning: {warning}", err=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import json
 import urllib.error
 import urllib.request
@@ -31,8 +32,32 @@ class PublishAuthContext:
     ssh_auth_available: bool = False
 
 
-def _scope_visibility(repo_scope: Any) -> str | None:
-    """Resolve the visibility for a scope_request from the active repo scope.
+# Request-scoped carrier for the explicit --public/--private choice. The publish
+# path builds several GlaasClients lazily and independently (session/artifact/job
+# registrars each construct their own), so there is no single object to thread the
+# flag through. The CLI records the choice here for the duration of one publish so
+# every lazily-built client resolves the SAME, flag-reconciled scope_request. It
+# defaults to None (no explicit choice) so non-publish callers are unaffected.
+_requested_public: contextvars.ContextVar[bool | None] = contextvars.ContextVar(
+    "roar_requested_public", default=None
+)
+
+
+def set_requested_publish_visibility(public: bool | None) -> contextvars.Token:
+    """Record the explicit ``--public``/``--private`` choice for this publish.
+
+    ``public=None`` means no explicit flag (fall back to the scope default).
+    Returns the token to pass to :func:`reset_requested_publish_visibility`.
+    """
+    return _requested_public.set(public)
+
+
+def reset_requested_publish_visibility(token: contextvars.Token) -> None:
+    _requested_public.reset(token)
+
+
+def _base_scope_visibility(repo_scope: Any) -> str | None:
+    """Visibility implied by the active repo scope alone, ignoring any flag.
 
     ``public`` -> ``"public"`` (attributed); ``anonymous`` -> ``None`` so the
     caller omits ``scope_request`` and the server uses the legacy anonymous
@@ -50,11 +75,48 @@ def _scope_visibility(repo_scope: Any) -> str | None:
     return "private"
 
 
+def _scope_visibility(repo_scope: Any, requested_public: bool | None = None) -> str | None:
+    """Resolve scope_request visibility, reconciling scope with an explicit flag.
+
+    Principle (a single, non-arbitrary rule): the ``--public``/``--private`` flag
+    governs the DAG's visibility; it may always **tighten** to private, but it may
+    not **escalate** a private *project* to a public DAG.
+
+    - no explicit flag -> the scope default (unchanged behaviour);
+    - ``--private`` -> ``"private"`` always (tightening is always safe);
+    - ``--public`` -> ``"public"``, EXCEPT when bound to a private project, where
+      it is rejected (publishing a public DAG from a private project would leak).
+
+    The anonymous scope (``None``) is never overridden — private publishing needs
+    an account, which the caller enforces separately.
+    """
+    base = _base_scope_visibility(repo_scope)
+    if requested_public is None:
+        requested_public = _requested_public.get()
+    if base is None or requested_public is None:
+        return base
+    if requested_public is False:
+        return "private"
+    # requested_public is True (--public):
+    if (
+        base == "private"
+        and repo_scope is not None
+        and getattr(repo_scope, "mode", None) == "project"
+    ):
+        raise PublishAuthError(
+            "This repo is bound to a private project, so --public would publish a "
+            "public DAG from a private project. Bind a public project "
+            "(`roar scope use <owner>/<public-project>`) or drop --public."
+        )
+    return "public"
+
+
 def load_publish_auth_context(
     start_dir: str | Path | None = None,
     *,
     allow_public_without_binding: bool = False,
     force_anonymous: bool = False,
+    requested_public: bool | None = None,
 ) -> PublishAuthContext:
     if force_anonymous:
         return PublishAuthContext(
@@ -130,7 +192,7 @@ def load_publish_auth_context(
         scope_request = {
             "owner_id": binding["owner_id"],
             "owner_type": binding["owner_type"],
-            "visibility": _scope_visibility(repo_scope) or "private",
+            "visibility": _scope_visibility(repo_scope, requested_public) or "private",
         }
         project_id = binding.get("project_id")
         if project_id:
@@ -139,7 +201,7 @@ def load_publish_auth_context(
         # Server-authoritative owner resolution; visibility follows the active
         # repo scope. The anonymous scope yields None here so we omit
         # scope_request entirely (server uses the legacy anonymous public scope).
-        visibility = _scope_visibility(repo_scope)
+        visibility = _scope_visibility(repo_scope, requested_public)
         if visibility is not None:
             scope_request = {
                 "owner_resolution": "current_user",

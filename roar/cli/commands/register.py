@@ -14,6 +14,10 @@ from ...application.publish.requests import RegisterLineageRequest
 from ...application.publish.results import RegisterLineageResponse, RegisterTagSummary
 from ...application.publish.service import register_lineage_target, resolve_register_lineage_target
 from ...application.tags import TagService
+from ...publish_auth import (
+    reset_requested_publish_visibility,
+    set_requested_publish_visibility,
+)
 from ..context import RoarContext
 from ..decorators import require_init
 from ..publish_intent import (
@@ -233,7 +237,23 @@ def _confirm_secrets(detected_secrets: list[str]) -> bool:
     return click.confirm("Continue with registration? (secrets will be filtered)", default=False)
 
 
-def _register_notes(response: RegisterLineageResponse, *, on_glaas: bool) -> dict[str, str]:
+def _secret_scan_enabled() -> bool:
+    """Whether the publish-time secret scan actually runs.
+
+    Mirrors ``RegisterService.omit_filter``'s gate exactly (scan runs only when
+    ``registration.omit`` is present and ``enabled != false``). Used so a
+    *disabled* scan is never reported as "none detected" — that would be false
+    assurance that the lineage was scanned and found clean.
+    """
+    from ...integrations.config import config_get
+
+    omit_config = config_get("registration.omit")
+    return bool(omit_config) and bool(omit_config.get("enabled", True))
+
+
+def _register_notes(
+    response: RegisterLineageResponse, *, on_glaas: bool, secrets_scanned: bool
+) -> dict[str, str]:
     """Operational receipt details folded onto the reproducibility punchlist.
 
     Each becomes the indented note under its check, so the one checklist also
@@ -248,8 +268,13 @@ def _register_notes(response: RegisterLineageResponse, *, on_glaas: bool) -> dic
         )
     if ts and ts.remote:
         notes["pushed"] = f"pushed to {ts.remote}"
-    detected = len(response.secrets_detected or [])
-    notes["secrets"] = f"{detected} redacted" if detected else "none detected"
+    if not secrets_scanned:
+        notes["secrets"] = (
+            "scan disabled (registration.omit.enabled=false) — lineage NOT scanned for secrets"
+        )
+    else:
+        detected = len(response.secrets_detected or [])
+        notes["secrets"] = f"{detected} redacted" if detected else "none detected"
     if on_glaas:
         recorded = (
             f"{_format_jobs_line(response)} jobs · {response.artifacts_registered} artifacts · "
@@ -284,6 +309,7 @@ def _render_register_checklist(
             untracked_artifact_dirs,
         )
 
+        secrets_scanned = _secret_scan_enabled()
         report = build_report(
             committed=response.reproducible,
             pushed=bool(response.tag_summary and response.tag_summary.remote),
@@ -294,9 +320,10 @@ def _render_register_checklist(
             untracked_paths=untracked_artifact_dirs(ctx.roar_dir, ctx.cwd),
             on_glaas=on_glaas,
             secrets_detected=len(response.secrets_detected or []),
+            secrets_scanned=secrets_scanned,
             # Extra job-commit tags mean the session spanned multiple commits.
             single_commit=not (response.tag_summary and response.tag_summary.job_tags),
-            notes=_register_notes(response, on_glaas=on_glaas),
+            notes=_register_notes(response, on_glaas=on_glaas, secrets_scanned=secrets_scanned),
             na={"on_glaas": "dry run — nothing published yet"} if dry_run else None,
         )
     except Exception:
@@ -492,19 +519,27 @@ def register(
         click.echo("Registration aborted.")
         raise SystemExit(1)
 
-    response = register_lineage_target(
-        RegisterLineageRequest(
-            target=target,
-            roar_dir=ctx.roar_dir,
-            cwd=ctx.cwd,
-            dry_run=dry_run,
-            as_blake3=as_blake3,
-            public=publish_intent.public,
-            anonymous=publish_intent.anonymous,
-            skip_confirmation=yes,
-            confirm_callback=_confirm_secrets if not yes else None,
+    # Record the explicit --public/--private choice so every lazily-built
+    # GlaasClient in the publish resolves the same, flag-reconciled scope_request
+    # visibility (see publish_auth._scope_visibility). `public` is the raw flag
+    # (None when unset) so an unset flag still follows the scope default.
+    _vis_token = set_requested_publish_visibility(public)
+    try:
+        response = register_lineage_target(
+            RegisterLineageRequest(
+                target=target,
+                roar_dir=ctx.roar_dir,
+                cwd=ctx.cwd,
+                dry_run=dry_run,
+                as_blake3=as_blake3,
+                public=publish_intent.public,
+                anonymous=publish_intent.anonymous,
+                skip_confirmation=yes,
+                confirm_callback=_confirm_secrets if not yes else None,
+            )
         )
-    )
+    finally:
+        reset_requested_publish_visibility(_vis_token)
 
     if not response.success:
         if response.aborted_by_user:

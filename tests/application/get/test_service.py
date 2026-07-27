@@ -378,3 +378,138 @@ def test_get_artifacts_cache_failure_falls_back_to_canonical(tmp_path: Path) -> 
     assert service.get.call_count == 2  # mirror failed, canonical retried
     arts = recorder.record.call_args.kwargs["output_artifacts"]
     assert arts[0].source_url == "https://canonical.example/model.pt"
+
+
+def test_get_artifacts_cache_hash_mismatch_falls_back_to_canonical(tmp_path: Path) -> None:
+    """A hash MISMATCH on the mirror is REPORTED (success=False), not raised — it
+    must still fall back to the canonical source instead of hard-failing the get."""
+    parsed_source = MagicMock(is_prefix=False, scheme="https")
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    mismatch = GetTransferResult(success=False, error="Hash mismatch: expected X, got Y")
+    good = GetTransferResult(
+        success=True,
+        downloaded_files=[
+            GetDownloadedFile(
+                remote_url="https://canonical.example/model.pt",
+                local_path=str(tmp_path / "model.pt"),
+                hash="X",
+                size=5,
+            )
+        ],
+    )
+    service.get.side_effect = [mismatch, good]
+    recorder = MagicMock()
+    recorder.record.return_value = (3, "u3")
+
+    with (
+        patch("roar.application.get.service.bootstrap"),
+        patch("roar.application.get.service.parse_source", return_value=parsed_source),
+        patch("roar.application.get.service.resolve_download_backend", return_value=MagicMock()),
+        patch("roar.application.get.service.resolve_git_state") as resolve_git_state,
+        patch("roar.application.get.service.create_database_context", return_value=db_ctx),
+        patch("roar.application.get.service.GetService", return_value=service),
+        patch("roar.application.get.service.LocalJobRecorder", return_value=recorder),
+    ):
+        resolve_git_state.return_value.commit = "deadbeef"
+        response = get_artifacts(
+            _request(
+                tmp_path,
+                source="https://canonical.example/model.pt",
+                cache="s3://mirror/model.pt",
+                expected_hash="X",
+            )
+        )
+
+    assert response.success is True
+    assert service.get.call_count == 2  # mismatch reported -> canonical retried
+    arts = recorder.record.call_args.kwargs["output_artifacts"]
+    assert arts[0].source_url == "https://canonical.example/model.pt"
+
+
+def test_get_artifacts_cache_prefix_records_per_file_canonical_urls(tmp_path: Path) -> None:
+    """A prefix --cache must record each file's OWN canonical URL, not the bare
+    canonical prefix for every file (which would collapse downloadLocation to the
+    directory)."""
+    parsed_source = MagicMock(is_prefix=True, scheme="s3")
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = MagicMock()
+    service.get.return_value = GetTransferResult(
+        success=True,
+        downloaded_files=[
+            GetDownloadedFile(
+                remote_url="s3://mirror/data/a.pt",
+                local_path=str(tmp_path / "a.pt"),
+                hash="h1",
+                size=5,
+            ),
+            GetDownloadedFile(
+                remote_url="s3://mirror/data/b.pt",
+                local_path=str(tmp_path / "b.pt"),
+                hash="h2",
+                size=5,
+            ),
+        ],
+    )
+    recorder = MagicMock()
+    recorder.record.return_value = (4, "u4")
+
+    with (
+        patch("roar.application.get.service.bootstrap"),
+        patch("roar.application.get.service.parse_source", return_value=parsed_source),
+        patch("roar.application.get.service.resolve_download_backend", return_value=MagicMock()),
+        patch("roar.application.get.service.resolve_git_state") as resolve_git_state,
+        patch("roar.application.get.service.create_database_context", return_value=db_ctx),
+        patch("roar.application.get.service.GetService", return_value=service),
+        patch("roar.application.get.service.LocalJobRecorder", return_value=recorder),
+    ):
+        resolve_git_state.return_value.commit = "deadbeef"
+        get_artifacts(
+            _request(
+                tmp_path,
+                source="s3://canon/data/",
+                cache="s3://mirror/data/",
+                destination=tmp_path,
+            )
+        )
+
+    arts = recorder.record.call_args.kwargs["output_artifacts"]
+    urls = sorted(a.source_url for a in arts)
+    assert urls == ["s3://canon/data/a.pt", "s3://canon/data/b.pt"]
+
+
+def test_get_artifacts_cache_without_hash_warns(tmp_path: Path) -> None:
+    """--cache without --hash records unverified provenance, so it must warn."""
+    parsed_source = MagicMock(is_prefix=False, scheme="https")
+    db_ctx = MagicMock()
+    db_ctx.__enter__.return_value = db_ctx
+    db_ctx.__exit__.return_value = None
+    service = _service_with_file(tmp_path, "s3://mirror/model.pt")
+    recorder = MagicMock()
+    recorder.record.return_value = (5, "u5")
+    logger = MagicMock()
+
+    with (
+        patch("roar.application.get.service.bootstrap"),
+        patch("roar.application.get.service.get_logger", return_value=logger),
+        patch("roar.application.get.service.parse_source", return_value=parsed_source),
+        patch("roar.application.get.service.resolve_download_backend", return_value=MagicMock()),
+        patch("roar.application.get.service.resolve_git_state") as resolve_git_state,
+        patch("roar.application.get.service.create_database_context", return_value=db_ctx),
+        patch("roar.application.get.service.GetService", return_value=service),
+        patch("roar.application.get.service.LocalJobRecorder", return_value=recorder),
+    ):
+        resolve_git_state.return_value.commit = "deadbeef"
+        get_artifacts(
+            _request(
+                tmp_path, source="https://canonical.example/model.pt", cache="s3://mirror/model.pt"
+            )
+        )
+
+    assert any(
+        call.args and "--hash" in str(call.args[0]) for call in logger.warning.call_args_list
+    )
