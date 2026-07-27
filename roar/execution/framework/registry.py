@@ -48,6 +48,7 @@ _BUILTIN_BACKEND_CONFIG_SECTIONS: frozenset[str] = frozenset({"ray", "osmo", "k8
 _registered_execution_backends: list[ExecutionBackend] = []
 _execution_backends_discovered = False
 _execution_backends_discovering = False
+_retrying_skipped_backend_imports = False
 
 
 def register_execution_backend(backend: ExecutionBackend) -> None:
@@ -81,7 +82,19 @@ def get_execution_backend(name: str) -> ExecutionBackend:
     # site-packages are fully importable (observed in Ray pip virtualenvs,
     # where roar's deps resolve fine moments later in the worker setup
     # hook). Retry the skipped imports once per lookup before giving up.
-    if _skipped_builtin_backend_imports:
+    #
+    # Never retry re-entrantly: the retry's own plugin imports pass through
+    # roar's tracking import hook, whose handle_import path lands back here.
+    # Without the guard each hooked import inside each plugin module fans out
+    # into another full retry pass — unbounded mutual recursion that pins the
+    # CPU and keeps Ray workers from ever registering (observed at worker
+    # startup on the K8s/Ray dogfood cluster). Nested lookups fall through to
+    # LookupError, which hook callers already treat as "no backend yet".
+    if (
+        _skipped_builtin_backend_imports
+        and not _execution_backends_discovering
+        and not _retrying_skipped_backend_imports
+    ):
         _retry_skipped_builtin_backend_imports()
         for backend in _registered_execution_backends:
             if backend.name == normalized_name:
@@ -91,6 +104,17 @@ def get_execution_backend(name: str) -> ExecutionBackend:
 
 
 def _retry_skipped_builtin_backend_imports() -> None:
+    global _retrying_skipped_backend_imports
+    if _retrying_skipped_backend_imports:
+        return
+    _retrying_skipped_backend_imports = True
+    try:
+        _retry_skipped_builtin_backend_imports_locked()
+    finally:
+        _retrying_skipped_backend_imports = False
+
+
+def _retry_skipped_builtin_backend_imports_locked() -> None:
     for module_name in list(_skipped_builtin_backend_imports):
         if module_name not in _BUILTIN_EXECUTION_BACKEND_MODULES:
             continue
