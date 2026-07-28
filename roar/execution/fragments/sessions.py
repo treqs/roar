@@ -30,13 +30,20 @@ def resolve_project_roar_dir(
         return Path(override) / ".roar"
 
     base = Path.cwd() if cwd is None else Path(cwd)
+    git_root: Path | None = None
     for parent in [base, *base.parents]:
         candidate = parent / ".roar"
         if candidate.is_dir():
             return candidate
         if (parent / ".git").exists():
+            git_root = parent
             break
-    return base / ".roar"
+    # On a fresh clone no .roar exists yet: anchor the fallback at the git
+    # root, not the bare cwd. A submit planner running in the workflow's
+    # working_directory subdir would otherwise save the session key under
+    # <subdir>/.roar while the run finalizer (cwd = repo root) loads from
+    # <root>/.roar — stranding the key and failing lineage publication.
+    return (git_root or base) / ".roar"
 
 
 def generate_fragment_session() -> dict[str, str]:
