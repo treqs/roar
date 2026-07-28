@@ -6,6 +6,7 @@ import collections
 import contextlib
 import functools
 import hashlib
+import inspect
 import io
 import os
 import queue
@@ -616,6 +617,40 @@ def _warn_task_capture_unavailable(reason: str) -> None:
     )
 
 
+@contextlib.contextmanager
+def _native_flush_task_scope(function_name: str):
+    task_id = _get_current_task_id()
+    resolved_function_name = function_name or _get_task_function_name()
+    thread_id = threading.get_native_id()
+    previous_launch_task_id = _current_native_launch_task_id()
+    _native_task_launch_context.task_id = task_id
+    _activate_threading_patch_for_native_task_attribution()
+    _register_native_thread_task(thread_id, task_id)
+    _register_task_timing(task_id, resolved_function_name)
+    exit_code = 0
+    try:
+        yield
+    except Exception:
+        exit_code = 1
+        raise
+    finally:
+        _deactivate_threading_patch_for_native_task_attribution()
+        if previous_launch_task_id:
+            _native_task_launch_context.task_id = previous_launch_task_id
+        else:
+            with contextlib.suppress(AttributeError):
+                delattr(_native_task_launch_context, "task_id")
+        with contextlib.suppress(Exception):
+            _flush_current_task_native_events_immediately()
+        with contextlib.suppress(Exception):
+            _emit_task_timing_fragment(
+                task_id,
+                function_name=resolved_function_name,
+                exit_code=exit_code,
+            )
+        _unregister_native_thread_task(thread_id, task_id)
+
+
 def _wrap_task_executor_for_native_flush(
     function: Callable[..., Any],
     *,
@@ -624,38 +659,24 @@ def _wrap_task_executor_for_native_flush(
     if getattr(function, "_roar_native_flush_wrapped", False):
         return function
 
-    @functools.wraps(function)
-    def _wrapped(*args, **kwargs):
-        task_id = _get_current_task_id()
-        resolved_function_name = function_name or _get_task_function_name()
-        thread_id = threading.get_native_id()
-        previous_launch_task_id = _current_native_launch_task_id()
-        _native_task_launch_context.task_id = task_id
-        _activate_threading_patch_for_native_task_attribution()
-        _register_native_thread_task(thread_id, task_id)
-        _register_task_timing(task_id, resolved_function_name)
-        exit_code = 0
-        try:
-            return function(*args, **kwargs)
-        except Exception:
-            exit_code = 1
-            raise
-        finally:
-            _deactivate_threading_patch_for_native_task_attribution()
-            if previous_launch_task_id:
-                _native_task_launch_context.task_id = previous_launch_task_id
-            else:
-                with contextlib.suppress(AttributeError):
-                    delattr(_native_task_launch_context, "task_id")
-            with contextlib.suppress(Exception):
-                _flush_current_task_native_events_immediately()
-            with contextlib.suppress(Exception):
-                _emit_task_timing_fragment(
-                    task_id,
-                    function_name=resolved_function_name,
-                    exit_code=exit_code,
-                )
-            _unregister_native_thread_task(thread_id, task_id)
+    # Async actor methods (e.g. Ray Train v2's TrainController.run) must stay
+    # coroutine functions after wrapping: Ray decides sync-vs-async dispatch by
+    # inspecting the executor, and a sync wrapper makes it treat the returned
+    # coroutine as the task result — which then fails to pickle ("cannot
+    # pickle 'coroutine' object") and the coroutine is never awaited.
+    if inspect.iscoroutinefunction(inspect.unwrap(function)):
+
+        @functools.wraps(function)
+        async def _wrapped(*args, **kwargs):
+            with _native_flush_task_scope(function_name):
+                return await function(*args, **kwargs)
+
+    else:
+
+        @functools.wraps(function)
+        def _wrapped(*args, **kwargs):
+            with _native_flush_task_scope(function_name):
+                return function(*args, **kwargs)
 
     cast(Any, _wrapped)._roar_native_flush_wrapped = True
     for attr in ("name", "method"):
