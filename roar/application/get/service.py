@@ -12,6 +12,7 @@ from ...core.operation_metadata import build_operation_metadata_json
 from ...db.context import create_database_context
 from ...execution.recording import LocalJobRecorder, LocalRecordedArtifact
 from ...integrations.download import parse_source, resolve_download_backend
+from ...integrations.download.base import DownloadError
 from .requests import GetRequest
 from .results import GetDownloadedFile, GetResponse
 from .transfer import GetService, GetTransferResult
@@ -22,10 +23,27 @@ def get_artifacts(request: GetRequest) -> GetResponse:
     bootstrap(request.roar_dir)
     logger = get_logger()
 
-    parsed_source = parse_source(request.source)
-    backend = resolve_download_backend(request.source)
+    parsed_source = parse_source(request.source)  # canonical — always what we RECORD
+    # Fetch location: the mirror (`--cache`) when given, else the canonical source.
+    # Recording below always uses the canonical `parsed_source`, so the artifact's
+    # source_url / the AI-BOM downloadLocation stay the public URL, not the mirror.
+    fetch_url = request.cache or request.source
+    backend = resolve_download_backend(fetch_url)
+    fetch_parsed = parse_source(fetch_url)
     repo_root = request.repo_root or request.cwd
-    is_prefix = request.source.rstrip("/") != request.source or parsed_source.is_prefix
+    is_prefix = fetch_url.rstrip("/") != fetch_url or fetch_parsed.is_prefix
+
+    # A `--cache` mirror is only integrity-bound to the canonical identity when a
+    # `--hash` is given. Without it, the mirror's bytes are recorded under the
+    # canonical source_url unverified — warn so provenance isn't silently trusted.
+    if request.cache and not request.expected_hash:
+        logger.warning(
+            "--cache %s used without --hash: the mirror's bytes are not integrity-checked "
+            "against the canonical source %s, yet are recorded under it. Pass --hash "
+            "<digest> to bind the download to a known hash.",
+            request.cache,
+            request.source,
+        )
 
     git_commit = None
     git_branch = None
@@ -88,20 +106,57 @@ def get_artifacts(request: GetRequest) -> GetResponse:
             pass
 
     with create_database_context(request.roar_dir) as db_ctx:
-        service = GetService(
-            backend=backend,
-            source=parsed_source,
-            repo_root=repo_root,
-        )
         t0 = time.time()
-        transfer_result = service.get(
-            destination=request.destination,
-            expected_hash=request.expected_hash,
-            dry_run=request.dry_run,
-            force=request.force,
-            is_prefix=is_prefix,
-            limit=request.limit,
-        )
+        fetched_from_cache = False
+        try:
+            transfer_result = GetService(
+                backend=backend,
+                source=fetch_parsed,
+                repo_root=repo_root,
+            ).get(
+                destination=request.destination,
+                expected_hash=request.expected_hash,
+                dry_run=request.dry_run,
+                force=request.force,
+                is_prefix=is_prefix,
+                limit=request.limit,
+            )
+            fetched_from_cache = bool(request.cache)
+            # The transfer layer REPORTS a hash mismatch (and other soft failures)
+            # as success=False rather than raising, so trigger the same cache
+            # fallback here — otherwise a corrupt mirror hard-fails the whole get
+            # even when the canonical source would succeed (the documented behavior).
+            if request.cache and not transfer_result.dry_run and not transfer_result.success:
+                raise DownloadError(transfer_result.error or "cache fetch was unsuccessful")
+        except (DownloadError, FileNotFoundError, ValueError, OSError) as exc:
+            # A `--cache` mirror is best-effort: on miss / unreachable / hash
+            # mismatch, fall back to the canonical source (still hash-verified via
+            # --hash if given, and by content-addressing at reproduce time). A get
+            # without a cache re-raises unchanged.
+            if not request.cache:
+                raise
+            logger.warning(
+                "cache fetch from %s failed (%s); falling back to canonical source %s",
+                request.cache,
+                exc,
+                request.source,
+            )
+            fetched_from_cache = False
+            canonical_is_prefix = (
+                request.source.rstrip("/") != request.source or parsed_source.is_prefix
+            )
+            transfer_result = GetService(
+                backend=resolve_download_backend(request.source),
+                source=parsed_source,
+                repo_root=repo_root,
+            ).get(
+                destination=request.destination,
+                expected_hash=request.expected_hash,
+                dry_run=request.dry_run,
+                force=request.force,
+                is_prefix=canonical_is_prefix,
+                limit=request.limit,
+            )
         download_duration = time.time() - t0
 
         result = _materialize_get_result(
@@ -114,6 +169,8 @@ def get_artifacts(request: GetRequest) -> GetResponse:
             git_repo=git_repo_url,
             duration_seconds=download_duration,
             backend=backend,
+            fetched_from_cache=fetched_from_cache,
+            fetch_url=fetch_url,
         )
 
     git_tag_name = None
@@ -145,6 +202,26 @@ def get_artifacts(request: GetRequest) -> GetResponse:
     )
 
 
+def _canonical_source_url(file_info, request: GetRequest, fetch_url, fetched_from_cache: bool):
+    """The canonical (recorded) URL for one downloaded file.
+
+    When the bytes came from the canonical source (no ``--cache``, or a cache
+    miss/mismatch that fell back), each file's own fetch URL is already canonical.
+    When they came from a ``--cache`` mirror, remap each file's mirror URL back
+    onto the canonical prefix, so a PREFIX get records each file's own canonical
+    object (``s3://canon/data/a.pt``) rather than the bare prefix for every file.
+    """
+    remote_url = file_info.remote_url or ""
+    if not fetched_from_cache:
+        return remote_url or request.source
+    # Fetched from the mirror: swap the mirror prefix for the canonical one.
+    if fetch_url and remote_url.startswith(fetch_url) and remote_url != fetch_url:
+        suffix = remote_url[len(fetch_url) :]
+        return request.source.rstrip("/") + "/" + suffix.lstrip("/")
+    # Single-file cache (or an unmappable URL): the file itself IS the canonical source.
+    return request.source
+
+
 def _materialize_get_result(
     *,
     db_ctx,
@@ -156,6 +233,8 @@ def _materialize_get_result(
     git_repo: str | None = None,
     duration_seconds: float = 0.0,
     backend=None,
+    fetched_from_cache: bool = False,
+    fetch_url: str | None = None,
 ) -> GetResponse:
     if transfer_result.dry_run or not transfer_result.success:
         return GetResponse(
@@ -204,11 +283,18 @@ def _materialize_get_result(
         # downloaded files are the composite's components.
         output_artifacts: list[LocalRecordedArtifact] = []
     else:
+        # Record the canonical source on each downloaded artifact so it is a
+        # SOURCE node with a known origin (source_type/source_url), not a bare
+        # local file. This is what a downstream AI-BOM derives `downloadLocation`
+        # from — so it must be each file's OWN canonical URL, not a shared prefix.
+        source_type = parsed_source.scheme or None
         output_artifacts = [
             LocalRecordedArtifact(
                 path=file_info.local_path,
                 hashes={"blake3": str(file_info.hash)},
                 size=int(file_info.size or 0),
+                source_type=source_type,
+                source_url=_canonical_source_url(file_info, request, fetch_url, fetched_from_cache),
             )
             for file_info in transfer_result.downloaded_files
         ]
@@ -427,6 +513,9 @@ def _build_get_command(request: GetRequest) -> str:
     user typed.
     """
     parts = ["roar get", request.source]
+    if request.cache:
+        # Record the mirror so a reproduce replays cache-first-then-canonical.
+        parts.append(f"--cache {request.cache}")
     if request.limit is not None:
         parts.append(f"--limit {request.limit}")
     if request.step_name:

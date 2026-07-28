@@ -41,10 +41,16 @@ class HFFileMeta:
 
 
 def _token() -> str | None:
+    """HF token, env-first then ``~/.hf_token`` — identical precedence to the
+    upload backend (``storage/hf.py``) so roar reads and writes under the SAME
+    identity. Env-first matches huggingface_hub's own convention and lets a
+    per-run ``HF_TOKEN`` override a stale token file."""
+    for var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"):
+        val = os.environ.get(var)
+        if val:
+            return val.strip()
     p = Path("~/.hf_token").expanduser()
-    if p.exists():
-        return p.read_text().strip()
-    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    return p.read_text().strip() if p.exists() else None
 
 
 def parse_hf_url(url: str) -> tuple[str, str, str, str]:

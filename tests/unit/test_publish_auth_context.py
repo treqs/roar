@@ -3,8 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from roar.auth_store import AuthenticatedUser, AuthState
-from roar.publish_auth import load_publish_auth_context
+from roar.publish_auth import (
+    PublishAuthError,
+    load_publish_auth_context,
+    reset_requested_publish_visibility,
+    set_requested_publish_visibility,
+)
 
 
 def _auth_state() -> AuthState:
@@ -144,6 +151,118 @@ def test_project_bound_private_publish_keeps_project_scope_request(tmp_path: Pat
         "project_id": "proj-456",
         "visibility": "private",
     }
+
+
+def test_project_bound_public_project_publishes_public_with_attribution(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".roar"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(
+        '[treqs]\nowner_id = "owner-123"\nowner_type = "organization"\n'
+        'project_id = "proj-456"\nvisibility = "public"\n',
+        encoding="utf-8",
+    )
+
+    with (
+        patch("roar.publish_auth.load_auth_state", return_value=_auth_state()),
+        patch("roar.publish_auth._has_ssh_auth_credentials", return_value=False),
+    ):
+        context = load_publish_auth_context(
+            start_dir=tmp_path,
+            allow_public_without_binding=False,
+        )
+
+    # Public project -> public visibility, org attribution (owner_id/project_id) preserved.
+    assert context.scope_request == {
+        "owner_id": "owner-123",
+        "owner_type": "organization",
+        "project_id": "proj-456",
+        "visibility": "public",
+    }
+
+
+def _write_project_config(tmp_path: Path, *, visibility: str | None = None) -> None:
+    config_dir = tmp_path / ".roar"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    vis = f'\nvisibility = "{visibility}"' if visibility else ""
+    (config_dir / "config.toml").write_text(
+        '[treqs]\nowner_id = "owner-123"\nowner_type = "organization"\n'
+        f'project_id = "proj-456"{vis}\n',
+        encoding="utf-8",
+    )
+
+
+class TestExplicitVisibilityReconciliation:
+    """The --public/--private flag governs DAG visibility ([70]/#240 fix): it may
+    always tighten to private, but may not escalate a private project to public."""
+
+    def _load(self, tmp_path: Path, requested_public: bool | None):
+        with (
+            patch("roar.publish_auth.load_auth_state", return_value=_auth_state()),
+            patch("roar.publish_auth._has_ssh_auth_credentials", return_value=False),
+        ):
+            return load_publish_auth_context(
+                start_dir=tmp_path,
+                allow_public_without_binding=False,
+                requested_public=requested_public,
+            )
+
+    def test_public_project_explicit_private_tightens(self, tmp_path: Path) -> None:
+        # The reported #240 bug: --private on a public project used to send public.
+        _write_project_config(tmp_path, visibility="public")
+        ctx = self._load(tmp_path, requested_public=False)
+        assert ctx.scope_request is not None
+        assert ctx.scope_request["visibility"] == "private"
+
+    def test_public_project_explicit_public_stays_public(self, tmp_path: Path) -> None:
+        _write_project_config(tmp_path, visibility="public")
+        ctx = self._load(tmp_path, requested_public=True)
+        assert ctx.scope_request is not None
+        assert ctx.scope_request["visibility"] == "public"
+
+    def test_private_project_explicit_public_is_rejected(self, tmp_path: Path) -> None:
+        _write_project_config(tmp_path)  # no visibility -> private project
+        with pytest.raises(PublishAuthError, match="private project"):
+            self._load(tmp_path, requested_public=True)
+
+    def test_private_project_explicit_private_stays_private(self, tmp_path: Path) -> None:
+        _write_project_config(tmp_path)
+        ctx = self._load(tmp_path, requested_public=False)
+        assert ctx.scope_request is not None
+        assert ctx.scope_request["visibility"] == "private"
+
+    def test_no_flag_follows_project_default(self, tmp_path: Path) -> None:
+        _write_project_config(tmp_path, visibility="public")
+        ctx = self._load(tmp_path, requested_public=None)
+        assert ctx.scope_request is not None
+        assert ctx.scope_request["visibility"] == "public"
+
+    def test_user_scope_explicit_public_is_not_rejected(self, tmp_path: Path) -> None:
+        # No project binding: --public on the current user's own DAG is allowed
+        # (the escalation guard is specific to a bound private PROJECT).
+        ctx = self._load(tmp_path, requested_public=True)
+        assert ctx.scope_request == {
+            "owner_resolution": "current_user",
+            "owner_type": "user",
+            "visibility": "public",
+        }
+
+    def test_contextvar_carries_the_choice_without_a_param(self, tmp_path: Path) -> None:
+        # The CLI sets a request-scoped contextvar so lazily-built clients that
+        # call load_publish_auth_context() with no param still reconcile.
+        _write_project_config(tmp_path, visibility="public")
+        token = set_requested_publish_visibility(False)
+        try:
+            with (
+                patch("roar.publish_auth.load_auth_state", return_value=_auth_state()),
+                patch("roar.publish_auth._has_ssh_auth_credentials", return_value=False),
+            ):
+                ctx = load_publish_auth_context(
+                    start_dir=tmp_path, allow_public_without_binding=False
+                )
+        finally:
+            reset_requested_publish_visibility(token)
+        assert ctx.scope_request is not None
+        assert ctx.scope_request["visibility"] == "private"
 
 
 def _expiring_auth_state() -> AuthState:

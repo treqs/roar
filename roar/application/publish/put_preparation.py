@@ -100,7 +100,9 @@ def prepare_put_execution(
     )
 
     destination_type = _destination_type(destination)
-    composite_source_type = destination_type if destination_type in {"s3", "gs", "https"} else None
+    composite_source_type = (
+        destination_type if destination_type in {"s3", "gs", "https", "hf"} else None
+    )
 
     return PreparedPutExecution(
         glaas_client=runtime.glaas_client,
