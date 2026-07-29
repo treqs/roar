@@ -308,9 +308,7 @@ def _drop_labels_for_absent_jobs(
     record's ``job_uid`` (GLaaS's ``sourceUid``), so match on that. Non-job
     labels (dag, artifact) are unaffected.
     """
-    package_job_uids = {
-        str(job.get("job_uid")) for job in job_records if job.get("job_uid")
-    }
+    package_job_uids = {str(job.get("job_uid")) for job in job_records if job.get("job_uid")}
     kept: list[dict[str, Any]] = []
     dropped = 0
     for label in labels:
