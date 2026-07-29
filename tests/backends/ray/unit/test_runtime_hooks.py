@@ -419,6 +419,149 @@ def test_patch_ray_init_conflicts_inside_preinstrumented_job(
     assert captured_runtime_env["env_vars"][ROAR_NO_TELEMETRY_ENV] == "1"
 
 
+def _set_injected_job_config(
+    monkeypatch: pytest.MonkeyPatch, runtime_env: dict[str, object]
+) -> None:
+    import json
+
+    monkeypatch.setenv(
+        "RAY_JOB_CONFIG_JSON_ENV_VAR",
+        json.dumps({"runtime_env": runtime_env}),
+    )
+
+
+def test_instrumented_driver_env_skips_keys_the_job_env_already_carries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_injected_job_config(
+        monkeypatch,
+        {
+            "env_vars": {ROAR_NO_TELEMETRY_ENV: "1", "ROAR_JOB_ID": "abc123"},
+            "worker_process_setup_hook": "roar.execution.runtime.worker_bootstrap.startup",
+        },
+    )
+
+    prepared = runtime_hooks._prepare_instrumented_job_worker_runtime_env({}, "abc123")
+
+    # ray >= 2.4 rejects the Job/driver merge on ANY duplicated env key, so
+    # nothing the Job env already delivers may be re-added driver-side.
+    assert "env_vars" not in prepared
+    assert prepared["py_executable"] == "roar-worker"
+
+
+def test_instrumented_driver_env_adds_contract_outside_a_submitted_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("RAY_JOB_CONFIG_JSON_ENV_VAR", raising=False)
+
+    prepared = runtime_hooks._prepare_instrumented_job_worker_runtime_env({}, "abc123")
+
+    assert prepared["env_vars"][ROAR_NO_TELEMETRY_ENV] == "1"
+    assert prepared["py_executable"] == "roar-worker"
+
+
+def test_instrumented_driver_defers_to_job_level_py_executable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_injected_job_config(
+        monkeypatch,
+        {"env_vars": {ROAR_NO_TELEMETRY_ENV: "1"}, "py_executable": "custom-exec"},
+    )
+
+    prepared = runtime_hooks._prepare_instrumented_job_worker_runtime_env({}, "abc123")
+
+    assert "py_executable" not in prepared
+
+
+def test_instrumented_driver_preserves_user_runtime_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_injected_job_config(monkeypatch, {"env_vars": {ROAR_NO_TELEMETRY_ENV: "1"}})
+
+    prepared = runtime_hooks._prepare_instrumented_job_worker_runtime_env(
+        {"env_vars": {"USER_KEY": "value"}, "working_dir": "/tmp/user"},
+        "abc123",
+    )
+
+    assert prepared["env_vars"] == {"USER_KEY": "value"}
+    assert prepared["working_dir"] == "/tmp/user"
+
+
+def test_drop_roar_env_keys_keeps_user_keys_and_drops_roar_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_injected_job_config(
+        monkeypatch,
+        {"env_vars": {"ROAR_JOB_ID": "job-level", "AWS_ENDPOINT_URL": "http://job:1"}},
+    )
+
+    runtime_env = {
+        "env_vars": {
+            "ROAR_JOB_ID": "driver-added",
+            "AWS_ENDPOINT_URL": "http://user:2",
+            ROAR_NO_TELEMETRY_ENV: "1",
+        },
+        "py_executable": "roar-worker",
+    }
+
+    result = runtime_hooks._drop_roar_env_keys_already_in_job_env(
+        runtime_env, user_env_keys={"AWS_ENDPOINT_URL"}
+    )
+
+    # roar-added duplicate dropped; user-supplied duplicate kept (ray should
+    # surface that conflict); roar keys absent from the job env kept.
+    assert "ROAR_JOB_ID" not in result["env_vars"]
+    assert result["env_vars"]["AWS_ENDPOINT_URL"] == "http://user:2"
+    assert result["env_vars"][ROAR_NO_TELEMETRY_ENV] == "1"
+    assert result["py_executable"] == "roar-worker"
+
+
+def test_patch_ray_init_merges_cleanly_inside_roar_submitted_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end shape of the native-harness failure: strict ray merge."""
+    import json
+
+    job_runtime_env = {
+        "working_dir": "gcs://pkg.zip",
+        "env_vars": {
+            "AWS_ENDPOINT_URL": "http://127.0.0.1:34270",
+            "ROAR_EXECUTION_BACKEND": "ray",
+            "ROAR_JOB_ID": "a293c31c",
+            "ROAR_JOB_INSTRUMENTED": "1",
+            ROAR_NO_TELEMETRY_ENV: "1",
+            "ROAR_WRAP": "1",
+        },
+        "worker_process_setup_hook": "roar.execution.runtime.worker_bootstrap.startup",
+    }
+    monkeypatch.setenv("RAY_JOB_CONFIG_JSON_ENV_VAR", json.dumps({"runtime_env": job_runtime_env}))
+    monkeypatch.setenv("ROAR_JOB_INSTRUMENTED", "1")
+    monkeypatch.setenv("ROAR_RAY_NODE_AGENTS", "0")
+    monkeypatch.setattr(
+        runtime_hooks,
+        "load_ray_config",
+        lambda: {"enabled": True, "pip_install": False},
+    )
+    monkeypatch.setattr(runtime_hooks, "register_pre_shutdown_ray_collection", lambda: None)
+
+    def strict_merge_ray_init(*_args, **kwargs):
+        driver_env = dict(kwargs.get("runtime_env", {}) or {})
+        parent = {key: value for key, value in job_runtime_env.items() if key != "env_vars"}
+        child = {key: value for key, value in driver_env.items() if key != "env_vars"}
+        if set(parent) & set(child):
+            raise ValueError("Failed to merge the Job's runtime env (field conflict)")
+        parent_env = dict(job_runtime_env.get("env_vars", {}))
+        child_env = dict(driver_env.get("env_vars", {}) or {})
+        if set(parent_env) & set(child_env):
+            raise ValueError("Failed to merge the Job's runtime env (env key conflict)")
+        return "ok"
+
+    fake_ray = SimpleNamespace(init=strict_merge_ray_init)
+    runtime_hooks.patch_ray_init(fake_ray)
+
+    assert fake_ray.init() == "ok"
+
+
 def test_patch_ray_init_registers_pre_shutdown_collection_for_instrumented_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

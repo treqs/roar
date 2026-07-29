@@ -6,6 +6,8 @@ import collections
 import contextlib
 import functools
 import hashlib
+import inspect
+import io
 import os
 import queue
 import re
@@ -601,6 +603,54 @@ def _deactivate_threading_patch_for_native_task_attribution() -> None:
             threading.Thread.start = _real_thread_start  # type: ignore[method-assign]
 
 
+def _warn_task_capture_unavailable(reason: str) -> None:
+    try:
+        import ray
+
+        version = getattr(ray, "__version__", "unknown")
+    except Exception:
+        version = "unknown"
+    print(
+        f"[roar] warning: per-task lineage capture is unavailable on ray {version} "
+        f"({reason}); task fragments may lack identity and file refs",
+        file=sys.stderr,
+    )
+
+
+@contextlib.contextmanager
+def _native_flush_task_scope(function_name: str):
+    task_id = _get_current_task_id()
+    resolved_function_name = function_name or _get_task_function_name()
+    thread_id = threading.get_native_id()
+    previous_launch_task_id = _current_native_launch_task_id()
+    _native_task_launch_context.task_id = task_id
+    _activate_threading_patch_for_native_task_attribution()
+    _register_native_thread_task(thread_id, task_id)
+    _register_task_timing(task_id, resolved_function_name)
+    exit_code = 0
+    try:
+        yield
+    except Exception:
+        exit_code = 1
+        raise
+    finally:
+        _deactivate_threading_patch_for_native_task_attribution()
+        if previous_launch_task_id:
+            _native_task_launch_context.task_id = previous_launch_task_id
+        else:
+            with contextlib.suppress(AttributeError):
+                delattr(_native_task_launch_context, "task_id")
+        with contextlib.suppress(Exception):
+            _flush_current_task_native_events_immediately()
+        with contextlib.suppress(Exception):
+            _emit_task_timing_fragment(
+                task_id,
+                function_name=resolved_function_name,
+                exit_code=exit_code,
+            )
+        _unregister_native_thread_task(thread_id, task_id)
+
+
 def _wrap_task_executor_for_native_flush(
     function: Callable[..., Any],
     *,
@@ -609,38 +659,24 @@ def _wrap_task_executor_for_native_flush(
     if getattr(function, "_roar_native_flush_wrapped", False):
         return function
 
-    @functools.wraps(function)
-    def _wrapped(*args, **kwargs):
-        task_id = _get_current_task_id()
-        resolved_function_name = function_name or _get_task_function_name()
-        thread_id = threading.get_native_id()
-        previous_launch_task_id = _current_native_launch_task_id()
-        _native_task_launch_context.task_id = task_id
-        _activate_threading_patch_for_native_task_attribution()
-        _register_native_thread_task(thread_id, task_id)
-        _register_task_timing(task_id, resolved_function_name)
-        exit_code = 0
-        try:
-            return function(*args, **kwargs)
-        except Exception:
-            exit_code = 1
-            raise
-        finally:
-            _deactivate_threading_patch_for_native_task_attribution()
-            if previous_launch_task_id:
-                _native_task_launch_context.task_id = previous_launch_task_id
-            else:
-                with contextlib.suppress(AttributeError):
-                    delattr(_native_task_launch_context, "task_id")
-            with contextlib.suppress(Exception):
-                _flush_current_task_native_events_immediately()
-            with contextlib.suppress(Exception):
-                _emit_task_timing_fragment(
-                    task_id,
-                    function_name=resolved_function_name,
-                    exit_code=exit_code,
-                )
-            _unregister_native_thread_task(thread_id, task_id)
+    # Async actor methods (e.g. Ray Train v2's TrainController.run) must stay
+    # coroutine functions after wrapping: Ray decides sync-vs-async dispatch by
+    # inspecting the executor, and a sync wrapper makes it treat the returned
+    # coroutine as the task result — which then fails to pickle ("cannot
+    # pickle 'coroutine' object") and the coroutine is never awaited.
+    if inspect.iscoroutinefunction(inspect.unwrap(function)):
+
+        @functools.wraps(function)
+        async def _wrapped(*args, **kwargs):
+            with _native_flush_task_scope(function_name):
+                return await function(*args, **kwargs)
+
+    else:
+
+        @functools.wraps(function)
+        def _wrapped(*args, **kwargs):
+            with _native_flush_task_scope(function_name):
+                return function(*args, **kwargs)
 
     cast(Any, _wrapped)._roar_native_flush_wrapped = True
     for attr in ("name", "method"):
@@ -653,7 +689,20 @@ def _wrap_task_executor_for_native_flush(
 def _patch_ray_task_execution_for_native_flush() -> None:
     try:
         from ray._private.function_manager import FunctionActorManager, FunctionExecutionInfo
-    except Exception:
+    except Exception as exc:
+        _warn_task_capture_unavailable(f"cannot import ray function manager: {exc}")
+        return
+
+    if not callable(getattr(FunctionActorManager, "get_execution_info", None)) and not callable(
+        getattr(FunctionActorManager, "_make_actor_method_executor", None)
+    ):
+        # A future Ray moved the executor internals: task-boundary capture
+        # cannot engage, and task fragments would silently arrive without
+        # per-task identity or file refs. Fail loudly instead
+        # (verified engaging on 2.46 and 2.54).
+        _warn_task_capture_unavailable(
+            "FunctionActorManager has neither get_execution_info nor _make_actor_method_executor"
+        )
         return
 
     current_get_execution_info = getattr(FunctionActorManager, "get_execution_info", None)
@@ -1630,6 +1679,10 @@ def _startup() -> None:
     if "libroar_tracer_preload" in os.environ.get("LD_PRELOAD", ""):
         _start_native_tracer_socket()
     builtins.open = _tracking_open
+    # pathlib (Path.open/read_bytes/write_bytes) and other stdlib callers
+    # resolve `io.open` by module attribute, not the builtin — without the
+    # preload tracer (e.g. KubeRay pods) those opens were invisible.
+    io.open = _tracking_open  # type: ignore[assignment]
     _patch_subprocess_for_native_task_attribution()
     _patch_boto3()
     _patch_pandas_parquet()

@@ -14,6 +14,7 @@ from roar.execution.framework.contract import BackendConfigAdapter, ExecutionBac
 _ENTRYPOINT_GROUP = "roar.execution_backends"
 _BUILTIN_EXECUTION_BACKEND_MODULES = (
     "roar.backends.ray.plugin",
+    "roar.backends.k8s.plugin",
     "roar.backends.osmo.plugin",
     "roar.backends.local.plugin",
 )
@@ -31,7 +32,9 @@ _skipped_builtin_backend_imports: dict[str, str] = {}
 # and triggering discovery would import every backend plugin module —
 # ~300ms of cost in exchange for checking a handful of stable env-var
 # names.
-_BUILTIN_JOB_ENVIRONMENT_MARKERS: frozenset[str] = frozenset({"RAY_JOB_ID"})
+_BUILTIN_JOB_ENVIRONMENT_MARKERS: frozenset[str] = frozenset(
+    {"RAY_JOB_ID", "ROAR_K8S_PARENT_JOB_UID"}
+)
 
 # Top-level TOML section names owned by built-in backends. The config
 # loader checks against this to decide whether a `config_get("X.Y")`
@@ -41,10 +44,11 @@ _BUILTIN_JOB_ENVIRONMENT_MARKERS: frozenset[str] = frozenset({"RAY_JOB_ID"})
 # would pay ~300ms loading every backend plugin just to confirm "hints"
 # isn't a backend-namespaced key. Kept in sync with each builtin
 # backend's ``BackendConfigAdapter.section_name`` by a consistency test.
-_BUILTIN_BACKEND_CONFIG_SECTIONS: frozenset[str] = frozenset({"ray", "osmo"})
+_BUILTIN_BACKEND_CONFIG_SECTIONS: frozenset[str] = frozenset({"ray", "osmo", "k8s"})
 _registered_execution_backends: list[ExecutionBackend] = []
 _execution_backends_discovered = False
 _execution_backends_discovering = False
+_retrying_skipped_backend_imports = False
 
 
 def register_execution_backend(backend: ExecutionBackend) -> None:
@@ -71,7 +75,64 @@ def get_execution_backend(name: str) -> ExecutionBackend:
     for backend in _registered_execution_backends:
         if backend.name == normalized_name:
             return backend
+
+    # A miss with skipped builtin imports may be a transient early-import
+    # failure, not a permanent one: sitecustomize (ROAR_WRAP=1) can trigger
+    # discovery at interpreter startup before the runtime environment's
+    # site-packages are fully importable (observed in Ray pip virtualenvs,
+    # where roar's deps resolve fine moments later in the worker setup
+    # hook). Retry the skipped imports once per lookup before giving up.
+    #
+    # Never retry re-entrantly: the retry's own plugin imports pass through
+    # roar's tracking import hook, whose handle_import path lands back here.
+    # Without the guard each hooked import inside each plugin module fans out
+    # into another full retry pass — unbounded mutual recursion that pins the
+    # CPU and keeps Ray workers from ever registering (observed at worker
+    # startup on the K8s/Ray dogfood cluster). Nested lookups fall through to
+    # LookupError, which hook callers already treat as "no backend yet".
+    if (
+        _skipped_builtin_backend_imports
+        and not _execution_backends_discovering
+        and not _retrying_skipped_backend_imports
+    ):
+        _retry_skipped_builtin_backend_imports()
+        for backend in _registered_execution_backends:
+            if backend.name == normalized_name:
+                return backend
+
     raise LookupError(f"unknown execution backend: {normalized_name or '<empty>'}")
+
+
+def _retry_skipped_builtin_backend_imports() -> None:
+    global _retrying_skipped_backend_imports
+    if _retrying_skipped_backend_imports:
+        return
+    _retrying_skipped_backend_imports = True
+    try:
+        _retry_skipped_builtin_backend_imports_locked()
+    finally:
+        _retrying_skipped_backend_imports = False
+
+
+def _retry_skipped_builtin_backend_imports_locked() -> None:
+    for module_name in list(_skipped_builtin_backend_imports):
+        if module_name not in _BUILTIN_EXECUTION_BACKEND_MODULES:
+            continue
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as exc:
+            _skipped_builtin_backend_imports[module_name] = str(exc)
+            continue
+        register = getattr(module, "register", None)
+        if not callable(register):
+            continue
+        try:
+            _register_entrypoint_payload(register)
+        except Exception as exc:
+            _skipped_builtin_backend_imports[f"{module_name}:register"] = str(exc)
+            continue
+        _skipped_builtin_backend_imports.pop(module_name, None)
+        _skipped_builtin_backend_imports.pop(f"{module_name}:register", None)
 
 
 def match_execution_backend_for_module(module_name: str) -> ExecutionBackend | None:

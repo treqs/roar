@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "roar-webhook.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "roar-webhook.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "roar-webhook.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "roar-webhook.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "roar-webhook.fullname" . }}
+      containers:
+        - name: webhook
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - roar.backends.k8s.webhook
+            - --port=8443
+            - --cert=/tls/tls.crt
+            - --key=/tls/tls.key
+          env:
+            - name: ROAR_WEBHOOK_GLAAS_URL
+              value: {{ required "glaas.url is required" .Values.glaas.url | quote }}
+            - name: ROAR_WEBHOOK_CLUSTER_GLAAS_URL
+              value: {{ required "glaas.clusterUrl is required" .Values.glaas.clusterUrl | quote }}
+            - name: ROAR_WEBHOOK_TRACER
+              value: {{ .Values.injection.tracer | quote }}
+            - name: ROAR_WEBHOOK_RUNTIME_SOURCE
+              value: {{ .Values.injection.runtimeSource | quote }}
+            - name: ROAR_WEBHOOK_RUNTIME_IMAGE
+              value: {{ include "roar-webhook.runtimeImage" . | quote }}
+            - name: ROAR_WEBHOOK_RUNTIME_REQUIREMENT
+              value: {{ .Values.injection.runtimeRequirement | quote }}
+            - name: ROAR_WEBHOOK_SESSION_TTL
+              value: {{ .Values.injection.sessionTtlSeconds | quote }}
+            {{- if .Values.injection.proxySidecar }}
+            - name: ROAR_WEBHOOK_PROXY_SIDECAR
+              value: "true"
+            - name: ROAR_WEBHOOK_PROXY_UPSTREAM
+              value: {{ .Values.injection.proxyUpstream | quote }}
+            {{- end }}
+            - name: ROAR_NO_TELEMETRY
+              value: "1"
+          ports:
+            - containerPort: 8443
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "roar-webhook.tlsSecretName" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "roar-webhook.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "roar-webhook.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "roar-webhook.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: 443
+      targetPort: 8443

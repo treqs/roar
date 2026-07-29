@@ -189,6 +189,18 @@ async fn handle_request_inner(state: &AppState, request: Request<Body>) -> Resul
 
     let mut response = Response::builder().status(status);
     for (name, value) in headers.iter() {
+        // Framing headers must not be copied verbatim: hyper frames the body
+        // itself (content-length for buffered bytes, chunked for streams).
+        // S3 sends CompleteMultipartUpload responses as Transfer-Encoding:
+        // chunked whitespace keep-alive streams; claiming chunked framing on
+        // the re-served buffered body makes the response unserializable and
+        // the client sees a dropped connection ("empty reply").
+        if name == axum::http::header::TRANSFER_ENCODING
+            || name == axum::http::header::CONNECTION
+            || (response_body_bytes.is_some() && name == axum::http::header::CONTENT_LENGTH)
+        {
+            continue;
+        }
         response = response.header(name, value);
     }
 

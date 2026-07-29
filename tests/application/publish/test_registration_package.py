@@ -203,6 +203,62 @@ def test_registration_package_includes_labels_when_provided(tmp_path: Path) -> N
     assert "labels" not in no_label_package
 
 
+def test_registration_package_drops_job_labels_for_jobs_not_in_package(tmp_path: Path) -> None:
+    """Regression: a job-scoped label whose job is absent from the package must
+    be dropped so the package stays internally consistent.
+
+    Labels are collected from the raw lineage, but the package's jobs are
+    noise-filtered by normalize_jobs_for_registration. A label on a dropped
+    (noise) job would otherwise reference a job not in the package, which GLaaS
+    rejects on publish with "Package label references a job not in the package".
+    """
+    labels = [
+        {
+            "entity_type": "job",
+            "session_hash": "local-hash",
+            "job_uid": "job-1",  # present in the package
+            "metadata": {"note": "kept"},
+        },
+        {
+            "entity_type": "job",
+            "session_hash": "local-hash",
+            "job_uid": "ghost-job",  # absent (e.g. a dropped noise job)
+            "metadata": {"note": "orphaned"},
+        },
+        {
+            "entity_type": "artifact",
+            "session_hash": "local-hash",
+            "artifact_hash": "b" * 64,
+            "metadata": {"accuracy": 0.97},
+        },
+    ]
+    package, encoded = build_registration_package(
+        session={"id": 7, "hash": "local-hash", "created_at": 123.0},
+        lineage=_lineage(),
+        git_context=GitContext(repo=None, commit="deadbeef", branch="main"),
+        cwd=tmp_path,
+        labels=labels,
+        created_at="2026-04-29T00:00:00Z",
+        producer_version="test-version",
+    )
+
+    package_job_uids = {job["job_uid"] for job in package["jobs"]}
+    assert "job-1" in package_job_uids
+    assert "ghost-job" not in package_job_uids
+
+    result_labels = package.get("labels", [])
+    job_labels = [label for label in result_labels if label["entity_type"] == "job"]
+    # Orphaned job label dropped; the in-package job label survives.
+    assert [label["job_uid"] for label in job_labels] == ["job-1"]
+    # Non-job labels are unaffected.
+    assert any(label["entity_type"] == "artifact" for label in result_labels)
+    # Every job label in the package now resolves to a package job.
+    assert all(label["job_uid"] in package_job_uids for label in job_labels)
+    # Digest reflects the filtered labels.
+    assert package["manifest"]["package_sha256"] == compute_registration_package_sha256(package)
+    assert json.loads(encoded)["labels"] == result_labels
+
+
 def test_registration_package_redacts_secret_shaped_label_metadata(tmp_path: Path) -> None:
     """Label metadata is user-authored key/value data synced alongside lineage --
     like commands and job metadata, it can accidentally carry a real secret, and

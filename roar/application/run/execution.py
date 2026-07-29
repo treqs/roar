@@ -28,6 +28,32 @@ class ExecutionReport:
     setup_error: bool = False
 
 
+RUN_REPORT_FILE_ENV = "ROAR_RUN_REPORT_FILE"
+
+
+def write_run_report_file(report: ExecutionReport) -> None:
+    """Write a machine-readable run outcome when ROAR_RUN_REPORT_FILE is set.
+
+    Wrappers that cannot see past the exit code (the k8s pod entrypoint) use
+    ``setup_error`` to distinguish "roar failed before launching the
+    workload" from "the workload ran and failed" — only the former is safe
+    to rerun uninstrumented. Advisory only: never fails the run.
+    """
+    target = str(os.environ.get(RUN_REPORT_FILE_ENV) or "").strip()
+    if not target:
+        return
+    import contextlib
+    import json
+
+    payload = {
+        "exit_code": report.exit_code,
+        "setup_error": report.setup_error,
+        "tracer_backend": report.tracer_backend,
+    }
+    with contextlib.suppress(OSError):
+        Path(target).write_text(json.dumps(payload), encoding="utf-8")
+
+
 def validate_git_clean(
     *,
     verb: str = "run",

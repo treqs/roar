@@ -70,6 +70,21 @@ class RoarContext:
         if cwd is None:
             cwd = Path.cwd()
 
+        # ROAR_PROJECT_DIR pins the project explicitly — the same contract
+        # the config loaders and fragment planners already honor
+        # (resolve_project_roar_dir). Gated on the directory existing so
+        # environments that propagate a host path into a pod (Ray worker
+        # env) fall back to the cwd walk instead of a phantom project.
+        override = str(os.environ.get("ROAR_PROJECT_DIR") or "").strip()
+        if override and Path(override).is_dir():
+            project_dir = Path(override)
+            return cls(
+                roar_dir=project_dir / ".roar",
+                repo_root=cls._get_repo_root(project_dir),
+                cwd=cwd,
+                is_interactive=sys.stdin.isatty(),
+            )
+
         # Get VCS provider and find repo root.
         repo_root = cls._get_repo_root(cwd)
 

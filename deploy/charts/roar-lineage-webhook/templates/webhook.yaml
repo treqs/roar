@@ -1,0 +1,49 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "roar-webhook.fullname" . }}
+  labels:
+    {{- include "roar-webhook.labels" . | nindent 4 }}
+  {{- if .Values.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "roar-webhook.fullname" . }}
+  {{- end }}
+webhooks:
+  - name: lineage.roar.glaas.ai
+    admissionReviewVersions: ["v1"]
+    sideEffects: NoneOnDryRun
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    reinvocationPolicy: {{ .Values.webhook.reinvocationPolicy }}
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    namespaceSelector:
+      matchLabels:
+        {{ .Values.namespaceSelector.key }}: {{ .Values.namespaceSelector.value }}
+    clientConfig:
+      service:
+        name: {{ include "roar-webhook.fullname" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+      {{- if not .Values.certManager.enabled }}
+      caBundle: {{ required "tls.caBundle is required unless certManager.enabled" .Values.tls.caBundle }}
+      {{- end }}
+    rules:
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["jobs"]
+      - apiGroups: ["jobset.x-k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE"]
+        resources: ["jobsets"]
+      - apiGroups: ["kubeflow.org"]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pytorchjobs"]
+      - apiGroups: ["trainer.kubeflow.org"]
+        apiVersions: ["*"]
+        operations: ["CREATE"]
+        resources: ["trainjobs"]
+      - apiGroups: ["ray.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["rayjobs"]

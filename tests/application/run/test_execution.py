@@ -41,3 +41,50 @@ def test_raises_on_dirty_tree_inside_repo(tmp_path, monkeypatch) -> None:
     with pytest.raises(ValueError) as excinfo:
         validate_git_clean(verb="run", args=["python", "train.py"])
     assert str(excinfo.value).startswith("Run blocked:")
+
+
+def test_write_run_report_file_writes_payload(tmp_path, monkeypatch) -> None:
+    from roar.application.run.execution import ExecutionReport, write_run_report_file
+
+    target = tmp_path / "report.json"
+    monkeypatch.setenv("ROAR_RUN_REPORT_FILE", str(target))
+
+    write_run_report_file(ExecutionReport(exit_code=3, tracer_backend="preload"))
+
+    import json
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload == {"exit_code": 3, "setup_error": False, "tracer_backend": "preload"}
+
+
+def test_write_run_report_file_marks_setup_error(tmp_path, monkeypatch) -> None:
+    from roar.application.run.execution import ExecutionReport, write_run_report_file
+
+    target = tmp_path / "report.json"
+    monkeypatch.setenv("ROAR_RUN_REPORT_FILE", str(target))
+
+    write_run_report_file(ExecutionReport(exit_code=1, setup_error=True))
+
+    import json
+
+    assert json.loads(target.read_text(encoding="utf-8"))["setup_error"] is True
+
+
+def test_write_run_report_file_noop_without_env(tmp_path, monkeypatch) -> None:
+    from roar.application.run.execution import ExecutionReport, write_run_report_file
+
+    monkeypatch.delenv("ROAR_RUN_REPORT_FILE", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    write_run_report_file(ExecutionReport(exit_code=0))
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_write_run_report_file_never_raises_on_unwritable_path(monkeypatch) -> None:
+    from roar.application.run.execution import ExecutionReport, write_run_report_file
+
+    monkeypatch.setenv("ROAR_RUN_REPORT_FILE", "/nonexistent-dir/report.json")
+
+    # Advisory only: an unwritable report path must not fail the run.
+    write_run_report_file(ExecutionReport(exit_code=0))

@@ -281,6 +281,93 @@ def test_flush_splits_oversized_single_fragment_by_refs(
     assert streamer._next_sequence == 4
 
 
+def test_post_403_renews_session_and_retries(monkeypatch: pytest.MonkeyPatch, token: str) -> None:
+    state = {"renewed": False}
+    renew_requests: list[urllib.request.Request] = []
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del timeout
+        if request.full_url.endswith("/renew"):
+            renew_requests.append(request)
+            state["renewed"] = True
+            return _FakeHttpResponse(status=200)
+        if not state["renewed"]:
+            raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", hdrs=None, fp=None)
+        return _FakeHttpResponse(status=202)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    streamer = GlaasFragmentStreamer(
+        session_id="session-expired",
+        token=token,
+        glaas_url="http://localhost:3001",
+        renew_ttl_seconds=1234,
+    )
+    streamer.append_fragment({"job_uid": "job-late"})
+
+    assert streamer.flush() is True
+    assert streamer._buffer == []
+    assert streamer.delivered_batches == 1
+    assert streamer.failed_batches == 0
+
+    assert len(renew_requests) == 1
+    renew = renew_requests[0]
+    assert renew.full_url == (
+        "http://localhost:3001/api/v1/fragments/sessions/session-expired/renew"
+    )
+    headers = {name.lower(): value for name, value in renew.header_items()}
+    assert headers["x-roar-fragment-token"] == token
+    assert json.loads(renew.data.decode("utf-8")) == {"ttl_seconds": 1234}
+
+
+def test_post_403_gives_up_when_renew_fails(monkeypatch: pytest.MonkeyPatch, token: str) -> None:
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del timeout
+        if request.full_url.endswith("/renew"):
+            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", hdrs=None, fp=None)
+        raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", hdrs=None, fp=None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    streamer = GlaasFragmentStreamer(
+        session_id="session-gone",
+        token=token,
+        glaas_url="http://localhost:3001",
+    )
+    fragment = {"job_uid": "job-lost"}
+    streamer.append_fragment(fragment)
+
+    assert streamer.flush() is False
+    assert streamer._buffer == [fragment]
+    assert streamer.pending_fragments == 1
+    assert streamer.failed_batches == 1
+
+
+def test_post_403_after_successful_renew_gives_up(
+    monkeypatch: pytest.MonkeyPatch, token: str
+) -> None:
+    post_attempts = {"count": 0}
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del timeout
+        if request.full_url.endswith("/renew"):
+            return _FakeHttpResponse(status=200)
+        post_attempts["count"] += 1
+        raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", hdrs=None, fp=None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    streamer = GlaasFragmentStreamer(
+        session_id="session-still-forbidden",
+        token=token,
+        glaas_url="http://localhost:3001",
+    )
+    streamer.append_fragment({"job_uid": "job-1"})
+
+    assert streamer.flush() is False
+    assert post_attempts["count"] == 2
+
+
 def test_close_flushes_remaining_fragments(monkeypatch: pytest.MonkeyPatch, token: str) -> None:
     streamer = GlaasFragmentStreamer(
         session_id="session-close",

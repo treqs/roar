@@ -1,0 +1,85 @@
+# roar-lineage-webhook chart values.
+
+replicas: 1
+
+image:
+  # The roar-runtime image (scripts/build_runtime_image.sh): serves the
+  # webhook and stages the runtime into instrumented pods.
+  repository: roar-runtime
+  tag: dev
+  pullPolicy: IfNotPresent
+
+glaas:
+  # GLaaS URL reachable from the webhook pod (fragment-session registration).
+  url: ""
+  # GLaaS URL reachable from instrumented workload pods (fragment streaming).
+  # Use a fully-qualified in-cluster or external URL — instrumented pods can
+  # live in any opted-in namespace.
+  clusterUrl: ""
+
+injection:
+  tracer: preload
+  # "image" stages the hermetic runtime via an init container (recommended);
+  # "install" pip-installs runtimeRequirement at container start.
+  runtimeSource: image
+  # Defaults to image.repository:image.tag when empty.
+  runtimeImage: ""
+  runtimeRequirement: roar-cli
+  sessionTtlSeconds: 86400
+  # Opt-in roar-proxy S3 sidecar for clients the in-process hooks can't
+  # see; requires runtimeSource=image.
+  proxySidecar: false
+  proxyUpstream: ""
+
+namespaceSelector:
+  # Namespaces opt in by carrying this label.
+  key: roar.glaas.ai/lineage
+  value: enabled
+
+webhook:
+  failurePolicy: Ignore
+  timeoutSeconds: 10
+  reinvocationPolicy: IfNeeded
+
+tls:
+  # Existing kubernetes.io/tls Secret with the serving cert for
+  # <release>-roar-lineage-webhook.<namespace>.svc. Required unless
+  # certManager.enabled.
+  secretName: ""
+  # Base64 PEM CA bundle matching the serving cert. Required unless
+  # certManager.enabled (cert-manager then injects it).
+  caBundle: ""
+
+certManager:
+  # Manage the serving cert with cert-manager (self-signed Issuer +
+  # Certificate; the CA bundle is injected via cert-manager annotations).
+  enabled: false
+
+secretCleanup:
+  # Credential Secrets cannot carry an ownerReference (the workload has no
+  # UID at CREATE admission), so an optional CronJob deletes roar-managed
+  # fragment Secrets older than maxAgeSeconds. Runs under its own
+  # ServiceAccount; the webhook's stays create-only.
+  #
+  # Off by default — enabling it is a real privilege and reliability
+  # trade-off; read before flipping:
+  # - RBAC: the CronJob's ServiceAccount gets cluster-wide list/delete on
+  #   Secrets. Kubernetes list responses include Secret data, so this is
+  #   equivalent to cluster-wide Secret READ; the roar label selector does
+  #   not narrow what the account is authorized to request. Treat the
+  #   cleanup image and ServiceAccount as privileged security components.
+  # - Renewal conflict: fragment sessions are renewed on 403 and can
+  #   outlive any fixed maxAgeSeconds. Deleting an aged Secret does not
+  #   affect running containers (env resolves at pod start), but a retry
+  #   pod, scale-up, or new Ray worker that references the deleted Secret
+  #   cannot start, and cluster-based `roar k8s attach` recovery is lost.
+  # Keep it disabled unless orphaned credential Secrets are a bigger
+  # problem in your cluster than the above; prefer a maxAgeSeconds well
+  # past your longest training run when you do enable it.
+  enabled: false
+  schedule: "0 3 * * *"
+  maxAgeSeconds: 604800
+
+resources: {}
+nodeSelector: {}
+tolerations: []

@@ -19,6 +19,7 @@ _EXPORTS = {
     "get_glaas_url": ".auth",
     "make_auth_header": ".auth",
     "parse_json_response": ".transport",
+    "renew_fragment_session": ".fragment_streamer",
     "request_json": ".transport",
     "sign_payload": ".auth",
 }

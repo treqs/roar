@@ -595,6 +595,11 @@ class GlaasClient:
         }
         return self._request("POST", "/api/v1/fragments/sessions", body)
 
+    # Fragment-session renewal lives in fragment_streamer.renew_fragment_session:
+    # it authenticates with the x-roar-fragment-token header. A client-method
+    # variant here once put the raw token in the query string, where access
+    # logs and proxies capture it — do not reintroduce it.
+
     def register_session(
         self,
         session_hash: str,

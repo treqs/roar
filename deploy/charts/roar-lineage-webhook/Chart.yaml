@@ -1,0 +1,14 @@
+apiVersion: v2
+name: roar-lineage-webhook
+description: >-
+  Zero-touch ML training lineage for Kubernetes: a mutating admission
+  webhook that instruments Jobs, JobSets, PyTorchJobs, TrainJobs, and
+  RayJobs in opted-in namespaces with roar lineage capture.
+type: application
+version: 0.1.0
+appVersion: "0.3.7"
+keywords:
+  - lineage
+  - provenance
+  - ml
+  - admission-webhook

@@ -1,0 +1,26 @@
+{{- if .Values.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "roar-webhook.fullname" . }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "roar-webhook.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "roar-webhook.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "roar-webhook.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "roar-webhook.tlsSecretName" . }}
+  dnsNames:
+    - {{ include "roar-webhook.fullname" . }}.{{ .Release.Namespace }}.svc
+    - {{ include "roar-webhook.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    name: {{ include "roar-webhook.fullname" . }}-selfsigned
+{{- end }}

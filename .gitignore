@@ -230,3 +230,6 @@ tests/benchmarks/results/
 # Design docs — internal only, not for version control
 docs/design/
 scratch/
+
+# k8s e2e harness downloaded tooling
+tests/backends/k8s/.tools/

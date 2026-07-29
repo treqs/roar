@@ -11,6 +11,12 @@ FragmentLocalFallback = Callable[[], None]
 FragmentEmitResult = Literal["streamed", "merged", "fallback", "skipped"]
 
 
+def _get_logger():
+    from roar.core.logging import get_logger
+
+    return get_logger()
+
+
 def emit_fragment_dicts(
     fragments: Sequence[dict[str, Any]],
     *,
@@ -28,6 +34,7 @@ def emit_fragment_dicts(
     glaas_url = str(resolved_env.get("GLAAS_URL") or "").strip()
 
     if session_id and token and glaas_url:
+        undelivered = len(normalized_fragments)
         try:
             streamer = GlaasFragmentStreamer(
                 session_id=session_id,
@@ -36,10 +43,20 @@ def emit_fragment_dicts(
             )
             for fragment in normalized_fragments:
                 streamer.append_fragment(fragment)
-            streamer.close()
-            return "streamed"
+            if streamer.close():
+                return "streamed"
+            undelivered = streamer.pending_fragments
         except Exception:
             pass
+        # Partial deliveries fall through with everything: downstream merges
+        # dedupe by task identity, while dropping fragments here would lose
+        # lineage for good.
+        _get_logger().warning(
+            "Fragment streaming incomplete for session %s: %d of %d fragment(s) undelivered",
+            session_id,
+            undelivered,
+            len(normalized_fragments),
+        )
 
     project_dir = str(resolved_env.get("ROAR_PROJECT_DIR", "")).strip()
     if local_merge is not None and project_dir:

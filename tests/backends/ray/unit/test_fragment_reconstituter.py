@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import importlib
 import json
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -83,6 +84,57 @@ def test_fetch_batches_reads_wrapped_glaas_response(
         {"sequence": 0, "encrypted_batch": "batch-0"},
         {"sequence": 1, "encrypted_batch": "batch-1"},
     ]
+
+
+def test_fetch_batches_renews_expired_session_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    state = {"renewed": False}
+    response_body = _wrapped_fragments_payload([{"sequence": 0, "encrypted_batch": "batch-0"}])
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del timeout
+        if request.full_url.endswith("/renew"):
+            state["renewed"] = True
+            return _FakeHttpResponse(b"{}")
+        if not state["renewed"]:
+            raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", hdrs=None, fp=None)
+        return _FakeHttpResponse(response_body)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    reconstituter = module.FragmentReconstituter(
+        session_id="session-expired-read",
+        token="ab" * 32,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    )
+
+    assert reconstituter._fetch_batches() == [{"sequence": 0, "encrypted_batch": "batch-0"}]
+    assert state["renewed"] is True
+
+
+def test_fetch_batches_returns_empty_when_renew_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del timeout
+        code = 404 if request.full_url.endswith("/renew") else 403
+        raise urllib.error.HTTPError(request.full_url, code, "nope", hdrs=None, fp=None)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    reconstituter = module.FragmentReconstituter(
+        session_id="session-dead",
+        token="ab" * 32,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    )
+
+    assert reconstituter._fetch_batches() == []
 
 
 def test_fetch_batches_supports_flat_response_fallback(
