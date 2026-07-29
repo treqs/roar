@@ -207,6 +207,8 @@ def build_registration_package(
         package["composites"] = composites
 
     if labels:
+        labels = _drop_labels_for_absent_jobs(labels, job_records)
+    if labels:
         filtered_labels, label_detections = _filter_label_secrets(labels, omit_filter)
         package["labels"] = filtered_labels
         _merge_redaction_detections(redaction, label_detections)
@@ -290,6 +292,40 @@ def _apply_redaction(
         },
         omit_filter,
     )
+
+
+def _drop_labels_for_absent_jobs(
+    labels: list[dict[str, Any]],
+    job_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Drop job-scoped labels whose target job is not in the package.
+
+    Labels are collected from the raw lineage, but the package's jobs are
+    noise-filtered by ``normalize_jobs_for_registration``. A job label left
+    pointing at a dropped job makes the package internally inconsistent — GLaaS
+    rejects it on publish with "Package label references a job not in the
+    package". The job label's target reaches the publish side through the job
+    record's ``job_uid`` (GLaaS's ``sourceUid``), so match on that. Non-job
+    labels (dag, artifact) are unaffected.
+    """
+    package_job_uids = {
+        str(job.get("job_uid")) for job in job_records if job.get("job_uid")
+    }
+    kept: list[dict[str, Any]] = []
+    dropped = 0
+    for label in labels:
+        if str(label.get("entity_type")) == "job":
+            job_uid = label.get("job_uid")
+            if not isinstance(job_uid, str) or job_uid not in package_job_uids:
+                dropped += 1
+                continue
+        kept.append(label)
+    if dropped:
+        get_logger().debug(
+            "Dropped %d job label(s) referencing jobs not in the registration package",
+            dropped,
+        )
+    return kept
 
 
 def _filter_label_secrets(
