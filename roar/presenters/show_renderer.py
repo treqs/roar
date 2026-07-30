@@ -392,6 +392,16 @@ class ShowRenderer:
                 cuda_parts.append(f"cuDNN {cuda['cudnn_version']}")
             if cuda_parts:
                 lines.append(f"  CUDA: {', '.join(cuda_parts)}")
+        acct = runtime.get("gpu_accounting")
+        if isinstance(acct, dict) and acct.get("enabled"):
+            if acct.get("gpu_used"):
+                peak_gb = (acct.get("gpu_peak_mem_mb") or 0) / 1024
+                count = acct.get("gpu_count_used") or 0
+                lines.append(
+                    f"  GPU used: yes, peak {peak_gb:.1f} GB across {count} GPU(s)"
+                )
+            else:
+                lines.append("  GPU used: no (accounting enabled)")
         if runtime.get("cpu"):
             cpu = runtime["cpu"]
             lines.append(f"  CPU: {cpu.get('model', 'unknown')} ({cpu.get('count', '?')} cores)")

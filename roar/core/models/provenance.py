@@ -170,6 +170,10 @@ class RuntimeInfo(RoarBaseModel):
     gpu: list[dict[str, Any]] | None = None
     cpu: dict[str, Any] | None = None
     memory: dict[str, int] | None = None
+    # Per-run GPU-usage fingerprint from NVIDIA accounting mode. Unlike the
+    # static cuda/gpu/cpu blocks (hardware-cached), this is collected fresh on
+    # every run because it reflects the just-finished workload's GPU usage.
+    gpu_accounting: dict[str, Any] | None = None
 
     @field_validator("command", mode="before")
     @classmethod

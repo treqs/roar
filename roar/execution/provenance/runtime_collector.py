@@ -191,6 +191,12 @@ class RuntimeCollectorService:
         self.logger.debug("Collecting memory info")
         memory_info = self._get_memory_info()
 
+        # GPU accounting fingerprint is per-run (reflects the just-finished
+        # workload's GPU usage), so it must NEVER be served from or written to
+        # the hardware-keyed cache. Collect it fresh on every call.
+        self.logger.debug("Collecting GPU accounting info")
+        gpu_accounting_info = self._get_gpu_accounting_info()
+
         self.logger.debug(
             "Runtime collection complete: container=%s, vm=%s, cuda=%s, gpu=%s",
             container_info is not None,
@@ -226,6 +232,7 @@ class RuntimeCollectorService:
             gpu=gpu_info,
             cpu=cpu_info,
             memory=memory_info,
+            gpu_accounting=gpu_accounting_info,
         )
 
     def _run_command(
@@ -421,6 +428,73 @@ class RuntimeCollectorService:
                     gpu_info.append(current_gpu)
 
         return gpu_info if gpu_info else None
+
+    def _get_gpu_accounting_info(self) -> dict[str, Any] | None:
+        """Record a per-run GPU-usage fingerprint from NVIDIA accounting mode.
+
+        When GPU accounting is enabled (e.g. by a companion AMI at boot), the
+        driver retains per-process peak-memory / utilization stats for
+        processes that have already exited. Since roar collects runtime info
+        AFTER the traced command exits, the just-finished training processes
+        are still present in the accounting table.
+
+        Auto-detecting: if accounting mode is not ``Enabled`` (disabled,
+        unsupported, or nvidia-smi absent), returns ``None`` — we capture
+        nothing rather than guessing. Any failure is swallowed (debug-logged);
+        telemetry must never crash a run.
+
+        Returns:
+            ``{"enabled": True, "gpu_used": bool, "gpu_count_used": int,
+            "gpu_peak_mem_mb": int}`` when accounting is enabled, else ``None``.
+        """
+        try:
+            mode = self._run_command(
+                ["nvidia-smi", "--query-gpu=accounting.mode", "--format=csv,noheader"]
+            )
+            # nvidia-smi missing/errored, or accounting not enabled → capture nothing.
+            if not mode or "enabled" not in mode.strip().lower().split("\n")[0]:
+                return None
+
+            # gpu_uuid is exposed by --query-accounted-apps, so distinct GPU
+            # UUIDs among accounted apps give a reliable gpu_count_used without
+            # per-index (-i <n>) iteration. nounits → max_memory_usage in MiB.
+            stdout = self._run_command(
+                [
+                    "nvidia-smi",
+                    "--query-accounted-apps=gpu_uuid,pid,max_memory_usage,gpu_utilization",
+                    "--format=csv,noheader,nounits",
+                ]
+            )
+
+            peak_mem_mb = 0
+            used_uuids: set[str] = set()
+            if stdout:
+                for line in stdout.strip().split("\n"):
+                    if not line.strip():
+                        continue
+                    parts = [p.strip() for p in line.split(",")]
+                    if len(parts) < 3:
+                        continue
+                    uuid = parts[0]
+                    try:
+                        mem = int(parts[2])
+                    except ValueError:
+                        # Non-numeric (e.g. "[N/A]") — no usable memory figure.
+                        continue
+                    if mem > 0:
+                        peak_mem_mb = max(peak_mem_mb, mem)
+                        if uuid:
+                            used_uuids.add(uuid)
+
+            return {
+                "enabled": True,
+                "gpu_used": bool(used_uuids),
+                "gpu_count_used": len(used_uuids),
+                "gpu_peak_mem_mb": peak_mem_mb,
+            }
+        except Exception as e:
+            self.logger.debug("Failed to collect GPU accounting info: %s", e)
+            return None
 
     def _get_cpu_info(self) -> dict[str, Any] | None:
         """Get CPU information."""
