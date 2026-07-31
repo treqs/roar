@@ -38,11 +38,7 @@ def _run_command_stub(mode_output, apps_output):
 class TestGetGpuAccountingInfo:
     def test_enabled_with_usage_multi_gpu(self, service):
         """Accounting Enabled: distinct GPU UUIDs → count, peak = max mem."""
-        apps = (
-            "GPU-aaaa, 1001, 2048, 90\n"
-            "GPU-aaaa, 1002, 4096, 85\n"
-            "GPU-bbbb, 1003, 3072, 70\n"
-        )
+        apps = "GPU-aaaa, 1001, 2048, 90\nGPU-aaaa, 1002, 4096, 85\nGPU-bbbb, 1003, 3072, 70\n"
         service._run_command = _run_command_stub("Enabled\n", apps)
 
         result = service._get_gpu_accounting_info()
@@ -102,11 +98,7 @@ class TestGetGpuAccountingInfo:
 
     def test_malformed_rows_are_skipped(self, service):
         """Non-numeric / short rows are skipped without crashing."""
-        apps = (
-            "GPU-aaaa, 1001, [N/A], [N/A]\n"
-            "garbage-line\n"
-            "GPU-bbbb, 1002, 1024, 50\n"
-        )
+        apps = "GPU-aaaa, 1001, [N/A], [N/A]\ngarbage-line\nGPU-bbbb, 1002, 1024, 50\n"
         service._run_command = _run_command_stub("Enabled\n", apps)
 
         result = service._get_gpu_accounting_info()

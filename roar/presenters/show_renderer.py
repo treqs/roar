@@ -397,9 +397,7 @@ class ShowRenderer:
             if acct.get("gpu_used"):
                 peak_gb = (acct.get("gpu_peak_mem_mb") or 0) / 1024
                 count = acct.get("gpu_count_used") or 0
-                lines.append(
-                    f"  GPU used: yes, peak {peak_gb:.1f} GB across {count} GPU(s)"
-                )
+                lines.append(f"  GPU used: yes, peak {peak_gb:.1f} GB across {count} GPU(s)")
             else:
                 lines.append("  GPU used: no (accounting enabled)")
         if runtime.get("cpu"):
