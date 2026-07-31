@@ -474,7 +474,9 @@ def build_reproduction_script(
                 metadata = json.loads(metadata)
             except (ValueError, TypeError):
                 metadata = {}
-        mods = run_modifier_flags(metadata.get("run_modifiers")) if isinstance(metadata, dict) else ""
+        mods = (
+            run_modifier_flags(metadata.get("run_modifiers")) if isinstance(metadata, dict) else ""
+        )
         prefix = f"roar run {mods}".strip()
         lines.append(f"{prefix} {cmd}")
     lines.append("")
