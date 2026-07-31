@@ -14,6 +14,18 @@ from ..context import RoarContext
 @click.argument("hash_prefix")
 @click.option("--run", "run_pipeline", is_flag=True, help="Run the full reproduction")
 @click.option(
+    "--script",
+    "emit_script",
+    is_flag=True,
+    help="Emit an editable reproduction shell script (clone, env, pipeline) without executing",
+)
+@click.option(
+    "--no-puts",
+    "no_puts",
+    is_flag=True,
+    help="Skip publish (roar put) steps — rebuild the artifact without re-publishing",
+)
+@click.option(
     "--lineage",
     "reproduce_lineage",
     is_flag=True,
@@ -52,6 +64,8 @@ def reproduce(
     ctx: RoarContext,
     hash_prefix: str,
     run_pipeline: bool,
+    emit_script: bool,
+    no_puts: bool,
     reproduce_lineage: bool,
     auto_confirm: bool,
     dpkg_any_version: bool,
@@ -95,6 +109,8 @@ def reproduce(
                 cwd=ctx.cwd,
                 target_kind="lineage" if reproduce_lineage else "artifact",
                 run_pipeline=run_pipeline,
+                emit_script=emit_script,
+                no_puts=no_puts,
                 auto_confirm=auto_confirm,
                 dpkg_any_version=dpkg_any_version,
                 pip_any_version=pip_any_version,

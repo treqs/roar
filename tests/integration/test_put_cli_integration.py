@@ -115,7 +115,12 @@ def test_put_registers_lineage_with_fake_glaas_and_updates_local_dag(
     assert dag["total_steps"] == 2
     nodes_by_step = {node["step_number"]: node for node in dag["nodes"]}
     put_node = nodes_by_step[2]
-    assert 'roar put model.pt -m "publish model"' in put_node["command"]
+    # The recorded put command is faithful: destination + visibility flag are
+    # captured, not just source + message (regression guard for the lossy-capture fix).
+    assert (
+        "roar put model.pt s3://test-bucket/models --private -m 'publish model'"
+        in put_node["command"]
+    )
     assert put_node["metrics"]["inputs"] >= 1
     assert put_node["metrics"]["outputs"] == 0
     assert 1 in put_node["dependencies"]

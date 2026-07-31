@@ -176,6 +176,10 @@ def _populate_run_build_common_labels(roar: dict[str, Any], metadata: dict[str, 
                         row.get(key),
                     )
 
+        # Per-run GPU-usage fingerprint from NVIDIA accounting mode. Only
+        # present when accounting was enabled; land it alongside cuda/gpu.
+        _copy_scalar_map(runtime.get("gpu_accounting"), roar, ["runtime", "gpu_accounting"])
+
     packages = metadata.get("packages")
     if isinstance(packages, dict):
         for manager, package_map in packages.items():

@@ -9,6 +9,7 @@ roar put ALWAYS registers lineage with GLaaS. This is not optional.
 
 from __future__ import annotations
 
+import shlex
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,6 +51,47 @@ from .put_composites import (
     register_put_composites_with_glaas,
 )
 from .results import PutCompositeRegistration, PutDryRunItem, PutUploadedFile
+
+
+def build_put_command(
+    sources: list[str],
+    destination: str | None,
+    *,
+    message: str,
+    public: bool = True,
+    anonymous: bool = False,
+    no_tag: bool = False,
+    as_dataset: bool = False,
+    step_name: str | None = None,
+) -> str:
+    """Reconstruct a faithful ``roar put`` command string for the job record.
+
+    The recorded command drives ``roar reproduce``, so it must include the
+    destination and every provenance-relevant flag — not just the sources and
+    message. Interaction/mode flags (``--yes``, ``--dry-run``) are intentionally
+    omitted: they control confirmation/preview, not the published result.
+    """
+    parts = ["roar", "put"]
+    if sources:
+        parts.extend(shlex.quote(s) for s in sources)
+    else:
+        parts.append("(session outputs)")
+    if destination:
+        parts.append(shlex.quote(destination))
+    if anonymous:
+        parts.append("--anonymous")
+    elif public is False:
+        parts.append("--private")
+    elif public:
+        parts.append("--public")
+    if no_tag:
+        parts.append("--no-tag")
+    if as_dataset:
+        parts.append("--as-dataset")
+    if step_name:
+        parts.extend(["--step-name", shlex.quote(step_name)])
+    parts.extend(["-m", shlex.quote(message)])
+    return " ".join(parts)
 
 
 def _upload_progress_message(done: int, total: int, uploaded_bytes: int) -> str:
@@ -145,6 +187,7 @@ class PutService:
         git_commit: str | None = None,
         git_tag: str | None = None,
         declared: bool = False,
+        command: str | None = None,
     ) -> PutResult:
         """
         Execute a put operation.
@@ -294,6 +337,7 @@ class PutService:
                 git_context=git_context,
                 sources=sources,
                 message=message,
+                command=command,
                 uploads=uploads,
                 uploaded_files=uploaded_files,
                 artifacts_info=artifacts_info,
@@ -416,9 +460,10 @@ class PutService:
             for item in composite_registrations
         ]
 
-        # Build command string
-        source_str = " ".join(sources) if sources else "(session outputs)"
-        command = f'roar put {source_str} -m "{message}"'
+        # Build command string. Prefer the faithful command (destination + flags)
+        # supplied by the caller; fall back to a destination-aware reconstruction.
+        if command is None:
+            command = build_put_command(sources, self._destination, message=message)
 
         # Build metadata
         metadata_json = build_put_operation_metadata_json(
@@ -551,6 +596,7 @@ class PutService:
         git_context: GitContext,
         sources: list[str],
         message: str,
+        command: str | None = None,
         uploads: list[_UploadedArtifact],
         uploaded_files: list[PutUploadedFile],
         artifacts_info: list[tuple[str, str]],
@@ -571,8 +617,8 @@ class PutService:
         registration_errors: list[str] = []
         lineage_composite_registrations: list[dict[str, Any]] = []
         composite_registrations: list[dict[str, Any]] = []
-        source_str = " ".join(sources) if sources else "(session outputs)"
-        command = f'roar put {source_str} -m "{message}"'
+        if command is None:
+            command = build_put_command(sources, self._destination, message=message)
         source_type = normalize_registration_source_type(destination_type)
 
         provisional_metadata_json = build_put_operation_metadata_json(
