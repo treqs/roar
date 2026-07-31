@@ -171,3 +171,24 @@ class TestCollectDoesNotCacheAccounting:
         # And the accounting fingerprint was NOT written into the hardware cache.
         cache = service._load_cache()
         assert "gpu_accounting" not in cache["data"]
+
+
+def test_assembler_carries_gpu_accounting_into_stored_runtime():
+    """Regression: the assembler that builds metadata['runtime'] must include
+    gpu_accounting, or system_labels / the published DAG never see it — the
+    RuntimeInfo field alone is dropped at _runtime_to_dict (real bug caught by
+    on-hardware testing of [86])."""
+    from roar.core.models.provenance import RuntimeInfo
+    from roar.execution.provenance.assembler import ProvenanceAssemblerService
+
+    fp = {"enabled": True, "gpu_used": True, "gpu_count_used": 2, "gpu_peak_mem_mb": 1264}
+    result = ProvenanceAssemblerService()._runtime_to_dict(RuntimeInfo(gpu_accounting=fp))
+    assert result["gpu_accounting"] == fp
+
+
+def test_assembler_omits_gpu_accounting_when_absent():
+    from roar.core.models.provenance import RuntimeInfo
+    from roar.execution.provenance.assembler import ProvenanceAssemblerService
+
+    result = ProvenanceAssemblerService()._runtime_to_dict(RuntimeInfo(gpu_accounting=None))
+    assert "gpu_accounting" not in result

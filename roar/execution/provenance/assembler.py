@@ -150,6 +150,11 @@ class ProvenanceAssemblerService:
             result["cpu"] = runtime.cpu
         if runtime.memory:
             result["memory"] = runtime.memory
+        # Per-run GPU-usage fingerprint from NVIDIA accounting mode (present only
+        # when accounting was enabled). Must be assembled into the stored runtime
+        # dict here, alongside cuda/gpu/cpu, or system_labels/the DAG never see it.
+        if runtime.gpu_accounting:
+            result["gpu_accounting"] = runtime.gpu_accounting
 
         return result
 
