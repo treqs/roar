@@ -175,8 +175,11 @@ def _apply_register_binds(
     response: RegisterLineageResponse,
     bind_targets: tuple[str, ...],
     no_bind: bool,
-) -> None:
+) -> list[str]:
     """Bind tags after a successful register — the "register implies bind" rule.
+
+    Returns each bind's rendered summary (so the caller can fold it into the
+    register checklist instead of printing a separate trailing block).
 
     Only a target that itself names a concrete artifact (a path or hash, not a
     step/job/session reference) gets the implicit bind — the named-artifact
@@ -195,11 +198,12 @@ def _apply_register_binds(
             refs.append(response.artifact_hash)
     refs.extend(bind_targets)
     if not refs:
-        return
+        return []
 
     from ...application.query.results import TagBindArtifactSummary
     from ...db.context import create_database_context
 
+    summaries: list[str] = []
     with create_database_context(ctx.roar_dir) as db_ctx:
         svc = TagService(db_ctx, ctx.cwd)
         for ref in refs:
@@ -216,7 +220,7 @@ def _apply_register_binds(
                 if artifact:
                     size = artifact.get("size")
 
-            click.echo(
+            summaries.append(
                 TagBindArtifactSummary(
                     display_target=resolved.display_target or ref,
                     action="bind",
@@ -225,6 +229,7 @@ def _apply_register_binds(
                     size=size,
                 ).render()
             )
+    return summaries
 
 
 def _confirm_secrets(detected_secrets: list[str]) -> bool:
@@ -293,6 +298,7 @@ def _render_register_checklist(
     *,
     on_glaas: bool,
     dry_run: bool = False,
+    bind_summaries: list[str] | None = None,
 ) -> None:
     """Render the shared reproducibility punchlist as register's receipt.
 
@@ -303,6 +309,7 @@ def _render_register_checklist(
     (any failure here must not break registration)."""
     try:
         from ...application.reproducibility.report import (
+            ReproCheck,
             build_report,
             render_report,
             unsourced_input_paths,
@@ -326,6 +333,20 @@ def _render_register_checklist(
             notes=_register_notes(response, on_glaas=on_glaas, secrets_scanned=secrets_scanned),
             na={"on_glaas": "dry run — nothing published yet"} if dry_run else None,
         )
+        # Fold the "register implies bind" result into the checklist as its own
+        # line(s) instead of a separate trailing block (declutter). A bind is a
+        # positive receipt, so it renders as a ✅ item; promotion details, if
+        # any, sit in the indented note.
+        for summary in bind_summaries or []:
+            lines = summary.splitlines() or [summary]
+            report.checks.append(
+                ReproCheck(
+                    key="bound",
+                    label=lines[0],
+                    ok=True,
+                    note="; ".join(line.strip() for line in lines[1:]),
+                )
+            )
     except Exception:
         return
 
@@ -551,6 +572,16 @@ def register(
     session_preview = _preview_hash(response.session_hash) if response.session_hash else ""
     session_url = _display_session_url(response.session_url, web_url, response.session_hash)
 
+    # Apply the implicit binds up front so their result can be folded into the
+    # register checklist (rather than printed as a separate trailing block).
+    bind_summaries = (
+        []
+        if dry_run
+        else _apply_register_binds(
+            ctx, target=target, response=response, bind_targets=bind_targets, no_bind=no_bind
+        )
+    )
+
     # Format output
     if dry_run:
         click.echo(f"Dry run: would register lineage for: {target}")
@@ -579,6 +610,9 @@ def register(
         click.echo("")
         click.echo("GLaaS:")
         click.echo(f"  Session:  {session_url}")
+        # No checklist on a no-op re-register — show any bind result plainly.
+        for summary in bind_summaries:
+            click.echo(summary)
     else:
         for warning in response.warnings:
             click.echo(f"Warning: {warning}", err=True)
@@ -594,8 +628,10 @@ def register(
                 click.echo(f"  - {error}", err=True)
 
         # One punchlist: reproducibility checks + what register did (tag/push/
-        # counts folded in as notes), replacing the old separate stat + tag block.
-        _render_register_checklist(ctx, target, response, on_glaas=True)
+        # counts + bind folded in), replacing the old separate stat/tag/bind blocks.
+        _render_register_checklist(
+            ctx, target, response, on_glaas=True, bind_summaries=bind_summaries
+        )
 
         click.echo("")
         click.echo("GLaaS:")
@@ -608,14 +644,8 @@ def register(
             click.echo(f"  roar reproduce {response.artifact_hash}")
 
     if not dry_run:
-        _apply_register_binds(
-            ctx,
-            target=target,
-            response=response,
-            bind_targets=bind_targets,
-            no_bind=no_bind,
-        )
-
+        # Binds were already applied above and folded into the checklist /
+        # already-registered output; nothing more to render here.
         from ...telemetry.hooks import record_action_trigger
 
         record_action_trigger("register", start_dir=ctx.cwd)
