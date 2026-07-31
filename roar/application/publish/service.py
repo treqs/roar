@@ -894,6 +894,8 @@ def put_artifacts(request: PutRequest) -> PutResponse:
             )
             put_commit_on_remote = is_shareable_remote(prepared.git_context.repo)
 
+            from .put_execution import build_put_command
+
             result = service.put_prepared(
                 prepared=prepared,
                 sources=request.sources,
@@ -902,6 +904,16 @@ def put_artifacts(request: PutRequest) -> PutResponse:
                 git_commit=git_commit,
                 git_tag=expected_tag,
                 declared=request.as_dataset,
+                command=build_put_command(
+                    request.sources,
+                    request.destination,
+                    message=request.message,
+                    public=request.public,
+                    anonymous=request.anonymous,
+                    no_tag=request.no_tag,
+                    as_dataset=request.as_dataset,
+                    step_name=request.step_name,
+                ),
             )
 
             # Apply step name label if provided.
