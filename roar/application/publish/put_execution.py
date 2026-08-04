@@ -33,6 +33,7 @@ from ...application.publish.remote_job_uids import (
 )
 from ...application.publish.session import build_staged_lineage_counts
 from ...application.system_labels import refresh_job_system_labels
+from ...core.label_origins import LABEL_ORIGIN_SYSTEM
 from ...core.interfaces.registration import GitContext
 from ...core.logging import get_logger
 from ...db.context import DatabaseContext
@@ -309,6 +310,13 @@ class PutService:
         artifact_hashes = [u.hash for u in uploads]
         artifacts_info = [(u.artifact_id, u.local_path) for u in uploads]
 
+        # Record each uploaded artifact's distribution URL as a reserved system
+        # label, scoped to this publication, so GLaaS can surface it as the
+        # AI-BOM downloadLocation (see _set_publish_distribution_labels).
+        self._set_publish_distribution_labels(
+            uploads, normalize_registration_source_type(destination_type)
+        )
+
         self._logger.debug(
             "Upload complete: %d file(s), collecting lineage for hashes: %s",
             len(uploaded_files),
@@ -538,6 +546,7 @@ class PutService:
                     job_uid=job_uid,
                     remote_job_uid=job_uid,
                     registration_errors=registration_result.errors,
+                    uploads=uploads,
                 )
 
         registration_error = (
@@ -810,6 +819,7 @@ class PutService:
                 job_uid=job_uid,
                 remote_job_uid=remote_put_job_uid,
                 registration_errors=registration_errors,
+                uploads=uploads,
             )
 
         composite_result_items = [
@@ -1040,6 +1050,48 @@ class PutService:
             return False
         return True
 
+    def _set_publish_distribution_labels(
+        self,
+        uploads: list[_UploadedArtifact],
+        source_type: str | None,
+    ) -> None:
+        """Record each uploaded artifact's distribution URL as a reserved system
+        label (``roar.distribution.url``), scoped to this publication.
+
+        GLaaS reads this as the artifact's AI-BOM ``downloadLocation``. Because
+        the label lives on the ``(artifact, session)`` scope rather than the
+        global content-addressed artifact row, two orgs publishing identical
+        bytes each carry their own download location — no cross-tenant bleed.
+        Gated on a recognized remote ``source_type`` so we never assert a
+        distribution URL for a non-remote destination (e.g. ``memory://``).
+        """
+        if not source_type:
+            return
+        labels_repo = getattr(self._db, "labels", None)
+        if labels_repo is None:
+            return
+        for uploaded in uploads:
+            if not uploaded.remote_url or not uploaded.artifact_id:
+                continue
+            current = labels_repo.get_current("artifact", artifact_id=uploaded.artifact_id)
+            metadata = current.get("metadata") if isinstance(current, dict) else None
+            metadata = dict(metadata) if isinstance(metadata, dict) else {}
+            roar_ns = metadata.get("roar")
+            roar_ns = dict(roar_ns) if isinstance(roar_ns, dict) else {}
+            distribution = roar_ns.get("distribution")
+            distribution = dict(distribution) if isinstance(distribution, dict) else {}
+            if distribution.get("url") == uploaded.remote_url:
+                continue  # already recorded — avoid a redundant label version
+            distribution["url"] = uploaded.remote_url
+            roar_ns["distribution"] = distribution
+            metadata["roar"] = roar_ns
+            labels_repo.create_version(
+                "artifact",
+                metadata,
+                artifact_id=uploaded.artifact_id,
+                write_origin=LABEL_ORIGIN_SYSTEM,
+            )
+
     def _sync_put_job_labels_with_glaas(
         self,
         *,
@@ -1049,15 +1101,22 @@ class PutService:
         job_uid: str,
         remote_job_uid: str,
         registration_errors: list[str],
+        uploads: list[_UploadedArtifact] | None = None,
     ) -> None:
-        """Sync the local current label document for the publish-time put job."""
+        """Sync the local current label document for the publish-time put job
+        and its published artifacts (carrying ``roar.distribution.url``)."""
+        artifacts = (
+            [{"id": u.artifact_id, "hash": u.hash} for u in uploads if u.artifact_id and u.hash]
+            if uploads
+            else []
+        )
         sync_publish_labels(
             glaas_client=glaas_client,
             db_ctx=self._db,
             session_id=None,
             session_hash=session_hash,
             jobs=[{"id": job_id, "job_uid": job_uid, "remote_job_uid": remote_job_uid}],
-            artifacts=[],
+            artifacts=artifacts,
             errors=registration_errors,
         )
 
