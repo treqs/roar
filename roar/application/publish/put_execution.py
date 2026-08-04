@@ -33,8 +33,8 @@ from ...application.publish.remote_job_uids import (
 )
 from ...application.publish.session import build_staged_lineage_counts
 from ...application.system_labels import refresh_job_system_labels
-from ...core.label_origins import LABEL_ORIGIN_SYSTEM
 from ...core.interfaces.registration import GitContext
+from ...core.label_origins import LABEL_ORIGIN_SYSTEM
 from ...core.logging import get_logger
 from ...db.context import DatabaseContext
 from ...db.hashing import hash_files_blake3
