@@ -968,8 +968,12 @@ class PutService:
                 "size": size,
                 "source_type": source_type,
             }
-            if uploaded.remote_url:
-                entry["source_url"] = uploaded.remote_url
+            # Deliberately do NOT record the upload destination as the artifact's
+            # global ``source_url`` here. That row is content-addressed and shared
+            # across orgs, so a per-publication URL would leak between tenants.
+            # The download location is published instead as a session-scoped
+            # ``roar.distribution.url`` label (see _set_publish_distribution_labels),
+            # which both the registration-session and this legacy inline path emit.
 
             payloads.append(entry)
 
