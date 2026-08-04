@@ -137,6 +137,10 @@ class RunCoordinator:
         extra_env: dict[str, str] = {
             ROAR_EXECUTION_BACKEND_ENV: str(ctx.execution_backend),
         }
+        if ctx.wandb_to_trackio:
+            # Consumed by the injected child sitecustomize, which activates the
+            # bundled wandb->trackio alias before the workload imports wandb.
+            extra_env["ROAR_WANDB_TO_TRACKIO"] = "1"
         runtime_observations = RuntimeObservationBundle()
         resource_env = self._runtime_resources.start_all(ctx, os.environ)
         extra_env.update(resource_env)

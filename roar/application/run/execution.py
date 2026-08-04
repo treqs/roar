@@ -218,6 +218,7 @@ def execute_and_report(
     tracer_fallback: bool | None = None,
     block_tags: list[str] | None = None,
     add_tags: list[str] | None = None,
+    wandb_to_trackio: bool = False,
 ) -> ExecutionReport:
     """Execute command via selected backend and show the run report."""
     hash_algos = cast(list[Literal["blake3", "sha256", "sha512", "md5"]], hash_algorithms)
@@ -240,6 +241,7 @@ def execute_and_report(
         tracer_fallback=tracer_fallback,
         block_tags=block_tags or [],
         add_tags=add_tags or [],
+        wandb_to_trackio=wandb_to_trackio,
     )
 
     backend = get_execution_backend(backend_name)

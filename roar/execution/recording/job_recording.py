@@ -342,6 +342,7 @@ class ExecutionJobRecorder:
                 hash_algorithms=list(ctx.hash_algorithms),
                 block_tags=tuple(ctx.block_tags),
                 add_tags=tuple(ctx.add_tags),
+                wandb_to_trackio=ctx.wandb_to_trackio,
             )
 
             # Register proxy artifacts first so downstream output/input queries include them.

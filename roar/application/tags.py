@@ -570,20 +570,26 @@ def parse_add_tags(pairs: Iterable[str]) -> dict[str, list[str]]:
 
 
 def build_run_modifiers(
-    block_tags: Iterable[str], add_tags: Iterable[str]
-) -> dict[str, list[str]] | None:
+    block_tags: Iterable[str],
+    add_tags: Iterable[str],
+    wandb_to_trackio: bool = False,
+) -> dict[str, Any] | None:
     """Build the ``run_modifiers`` metadata block, or None if there's nothing to record.
 
     Stores the raw flag strings verbatim (e.g. ``"license=GPL-3.0"``) so reproduce
-    replays exactly what was passed.
+    replays exactly what was passed. ``wandb_to_trackio`` records that the run used
+    ``roar run --wandb-to-trackio`` so reproduce re-emits the flag (and the
+    reproduction's ``import wandb`` resolves the same way the original run's did).
     """
     blocks = [b.strip() for b in block_tags if b.strip()]
     adds = [a.strip() for a in add_tags if a.strip()]
-    modifiers: dict[str, list[str]] = {}
+    modifiers: dict[str, Any] = {}
     if blocks:
         modifiers["block_tags"] = blocks
     if adds:
         modifiers["add_tags"] = adds
+    if wandb_to_trackio:
+        modifiers["wandb_to_trackio"] = True
     return modifiers or None
 
 
@@ -602,6 +608,8 @@ def run_modifier_flags(run_modifiers: Any) -> str:
         parts.append(f"--block-tag {shlex.quote(str(item))}")
     for item in run_modifiers.get("add_tags") or []:
         parts.append(f"--add-tag {shlex.quote(str(item))}")
+    if run_modifiers.get("wandb_to_trackio"):
+        parts.append("--wandb-to-trackio")
     return " ".join(parts)
 
 

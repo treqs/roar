@@ -84,6 +84,18 @@ def _validate_add_tags(
     callback=_validate_add_tags,
     help="Stamp KIND=VALUE onto this run's output artifacts (repeatable).",
 )
+@click.option(
+    "--wandb-to-trackio",
+    "wandb_to_trackio",
+    is_flag=True,
+    default=False,
+    help=(
+        "Route an unmodified wandb-instrumented workload through trackio. Mirrors "
+        "to TRACKIO_SPACE_ID (with HF_TOKEN) when set, else runs wandb as a silent "
+        "no-op. Recorded so `roar reproduce` re-emits it — a reproducer needs no "
+        "wandb account or extra flags."
+    ),
+)
 @click.pass_obj
 @require_init
 def run(
@@ -97,6 +109,7 @@ def run(
     hash_algorithms: tuple[str, ...],
     block_tags: tuple[str, ...],
     add_tags: tuple[str, ...],
+    wandb_to_trackio: bool,
 ) -> None:
     """Run a command with provenance tracking.
 
@@ -138,6 +151,7 @@ def run(
                 hash_algorithms=tuple(hash_algorithms),
                 block_tags=tuple(block_tags),
                 add_tags=tuple(add_tags),
+                wandb_to_trackio=wandb_to_trackio,
             )
         )
     except ValueError as exc:
@@ -178,6 +192,8 @@ Options:
   -n, --name <name>       Set the name label for this step
   --block-tag <kind[=value]>  Stop a tag kind (or one value) from being inherited (repeatable)
   --add-tag <kind=value>  Stamp a tag onto this run's outputs (repeatable)
+  --wandb-to-trackio      Route unmodified wandb logging through trackio (mirrors to
+                          TRACKIO_SPACE_ID when set, else a silent no-op); re-emitted by reproduce
 
 Hash algorithms: blake3 (default), sha256, sha512, md5
 
