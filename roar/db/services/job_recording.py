@@ -106,6 +106,7 @@ class JobRecordingService:
         hash_algorithms: list[str] | None = None,
         block_tags: tuple[str, ...] = (),
         add_tags: tuple[str, ...] = (),
+        wandb_to_trackio: bool = False,
     ) -> tuple[int, str]:
         """
         Record a job with its inputs and outputs.
@@ -173,7 +174,7 @@ class JobRecordingService:
         # Persist the roar-side run modifiers (--block-tag / --add-tag) on the job
         # metadata so `roar reproduce` can replay them; a bare re-run would
         # otherwise re-inherit blocked tags and drop stamped ones.
-        metadata = self._with_run_modifiers(metadata, block_tags, add_tags)
+        metadata = self._with_run_modifiers(metadata, block_tags, add_tags, wandb_to_trackio)
 
         # Create the job record
         job_id, job_uid = self._job_repo.create(
@@ -252,10 +253,13 @@ class JobRecordingService:
 
     @staticmethod
     def _with_run_modifiers(
-        metadata: str | None, block_tags: tuple[str, ...], add_tags: tuple[str, ...]
+        metadata: str | None,
+        block_tags: tuple[str, ...],
+        add_tags: tuple[str, ...],
+        wandb_to_trackio: bool = False,
     ) -> str | None:
         """Add a ``run_modifiers`` block to the job metadata JSON when flags were used."""
-        modifiers = build_run_modifiers(block_tags, add_tags)
+        modifiers = build_run_modifiers(block_tags, add_tags, wandb_to_trackio)
         if modifiers is None:
             return metadata
         data: dict[str, Any] = {}

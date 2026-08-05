@@ -10,6 +10,7 @@ from roar.application.reproduce.requests import ReproduceRequest
 from roar.application.reproduce.results import ReproducePreviewSummary, ReproduceRunSummary
 from roar.application.reproduce.service import (
     build_preview_summary,
+    build_reproduction_script,
     build_run_summary,
     reproduce_artifact,
 )
@@ -35,6 +36,20 @@ def _request(tmp_path: Path, **overrides) -> ReproduceRequest:
         out_path=overrides.pop("out_path", None),
         **overrides,
     )
+
+
+def test_build_reproduction_script_reemits_wandb_to_trackio() -> None:
+    # A run captured with --wandb-to-trackio re-emits the flag in the --script
+    # output, so the reproducer's `import wandb` resolves the same way.
+    pipeline = _pipeline("lineage")
+    pipeline.run_steps = [
+        {
+            "command": "python train.py",
+            "metadata": json.dumps({"run_modifiers": {"wandb_to_trackio": True}}),
+        }
+    ]
+    script = build_reproduction_script(pipeline, "b" * 64, target_kind="lineage")
+    assert "roar run --wandb-to-trackio python train.py" in script
 
 
 def _pipeline(target_kind: str = "artifact") -> MagicMock:

@@ -96,6 +96,9 @@ class RunContext(RoarBaseModel):
     git_repo: str | None = None
     block_tags: list[str] = Field(default_factory=list)
     add_tags: list[str] = Field(default_factory=list)
+    # `roar run --wandb-to-trackio`: activate the bundled wandb->trackio alias in
+    # the traced child (via ROAR_WANDB_TO_TRACKIO). Recorded so reproduce re-emits it.
+    wandb_to_trackio: bool = False
 
     @field_validator("roar_dir", mode="before")
     @classmethod

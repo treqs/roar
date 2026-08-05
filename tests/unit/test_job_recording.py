@@ -52,6 +52,7 @@ def test_record_registers_proxy_outputs_before_get_outputs(tmp_path: Path) -> No
         hash_algorithms=["blake3"],
         block_tags=[],
         add_tags=[],
+        wandb_to_trackio=False,
     )
     prov = {
         "data": {"read_files": [], "written_files": []},

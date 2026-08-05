@@ -64,6 +64,7 @@ def run_command(request: RunRequest) -> int:
         tracer_fallback=request.tracer_fallback,
         block_tags=list(request.block_tags),
         add_tags=list(request.add_tags),
+        wandb_to_trackio=request.wandb_to_trackio,
     )
 
 
@@ -112,6 +113,7 @@ def _execute_tracked_command(
     tracer_fallback: bool | None,
     block_tags: list[str] | None = None,
     add_tags: list[str] | None = None,
+    wandb_to_trackio: bool = False,
 ) -> int:
     resolved_config_start_dir = config_start_dir or _config_start_dir(roar_dir)
     try:
@@ -139,6 +141,7 @@ def _execute_tracked_command(
                 tracer_fallback=tracer_fallback,
                 block_tags=block_tags,
                 add_tags=add_tags,
+                wandb_to_trackio=wandb_to_trackio,
             )
         )
     except Exception:

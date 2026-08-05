@@ -131,4 +131,15 @@ if os.environ.get("ROAR_WRAP") == "1":
     )
 
 
+if os.environ.get("ROAR_WANDB_TO_TRACKIO"):
+    # `roar run --wandb-to-trackio`: alias wandb -> trackio (or a silent no-op)
+    # before the workload imports wandb. Best-effort — never break the workload.
+    try:
+        with SuppressTracking():
+            from roar.integrations import wandb_trackio
+
+            wandb_trackio.install()
+    except Exception:
+        pass
+
 atexit.register(_runtime_tracker.write_log)
