@@ -205,7 +205,12 @@ class TestPutService:
         assert sync_kwargs["jobs"] == [
             {"id": 42, "job_uid": "job-uid-1", "remote_job_uid": "job-uid-1"}
         ]
-        assert sync_kwargs["artifacts"] == []
+        # The published artifacts are now passed to the label sync so their
+        # reserved `roar.distribution.url` system label (the AI-BOM
+        # downloadLocation) is pushed to GLaaS alongside the put job's labels.
+        assert len(sync_kwargs["artifacts"]) == 1
+        assert sync_kwargs["artifacts"][0]["id"] == "artifact-uuid-1"
+        assert "hash" in sync_kwargs["artifacts"][0]
 
     def test_put_prepared_returns_registered_session_info(self, tmp_path: Path) -> None:
         model_file = tmp_path / "model.pt"
