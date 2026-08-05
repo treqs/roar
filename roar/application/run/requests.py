@@ -19,6 +19,7 @@ class RunRequest:
     hash_algorithms: tuple[str, ...] = field(default_factory=tuple)
     block_tags: tuple[str, ...] = field(default_factory=tuple)
     add_tags: tuple[str, ...] = field(default_factory=tuple)
+    wandb_to_trackio: bool = False
 
 
 @dataclass(frozen=True)

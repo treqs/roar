@@ -158,7 +158,20 @@ def load_publish_auth_context(
             else:
                 raise PublishAuthError(str(exc)) from exc
     binding = None if allow_public_without_binding else _load_repo_binding(start_dir)
-    repo_scope = None if allow_public_without_binding else load_repo_scope(start_dir)
+    repo_scope = load_repo_scope(start_dir)
+    # `allow_public_without_binding` permits a *scopeless* public publish, but it
+    # must not discard a **public project scope** — that binding carries the org
+    # attribution (supplier/author) the AI-BOM needs, and a public project's
+    # whole point is public + attributed. Regression fix: eef6fca (0.4.1) made a
+    # public project scope resolve to public=True, which the CLI feeds into
+    # `allow_public_without_binding=request.public`; dropping repo_scope here then
+    # published those DAGs anonymous. A *non-public* project scope with an
+    # explicit `--public` still drops (the user is overriding to public), as do
+    # public/anonymous/unset scopes.
+    if allow_public_without_binding and not (
+        repo_scope and repo_scope.mode == "project" and repo_scope.visibility == "public"
+    ):
+        repo_scope = None
     if binding and not access_token and not ssh_auth_available:
         raise PublishAuthError(
             "Repo is linked to GLaaS but no global auth state is available. Run `roar login`."

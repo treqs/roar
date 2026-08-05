@@ -31,6 +31,14 @@ class TestBuildRunModifiers:
         assert build_run_modifiers([], []) is None
         assert build_run_modifiers(["", "  "], [""]) is None
 
+    def test_wandb_to_trackio(self) -> None:
+        assert build_run_modifiers([], [], wandb_to_trackio=True) == {"wandb_to_trackio": True}
+        assert build_run_modifiers(["contains_pii"], [], wandb_to_trackio=True) == {
+            "block_tags": ["contains_pii"],
+            "wandb_to_trackio": True,
+        }
+        assert build_run_modifiers([], [], wandb_to_trackio=False) is None
+
 
 class TestRunModifierFlags:
     def test_renders_flags(self) -> None:
@@ -52,6 +60,13 @@ class TestRunModifierFlags:
     def test_roundtrip(self) -> None:
         mods = build_run_modifiers(["contains_pii"], ["license=MIT"])
         assert run_modifier_flags(mods) == "--block-tag contains_pii --add-tag license=MIT"
+
+    def test_wandb_to_trackio_flag(self) -> None:
+        assert run_modifier_flags({"wandb_to_trackio": True}) == "--wandb-to-trackio"
+        assert (
+            run_modifier_flags({"add_tags": ["license=MIT"], "wandb_to_trackio": True})
+            == "--add-tag license=MIT --wandb-to-trackio"
+        )
 
 
 class TestWithRunModifiersInjection:
@@ -78,6 +93,10 @@ class TestWithRunModifiersInjection:
         out = JobRecordingService._with_run_modifiers("not json", ("contains_pii",), ())
         assert json.loads(out) == {"run_modifiers": {"block_tags": ["contains_pii"]}}
 
+    def test_wandb_to_trackio_recorded(self) -> None:
+        out = JobRecordingService._with_run_modifiers(None, (), (), wandb_to_trackio=True)
+        assert json.loads(out) == {"run_modifiers": {"wandb_to_trackio": True}}
+
 
 class TestWrapWithRoarReplaysModifiers:
     def test_modifiers_inserted_between_run_and_command(self) -> None:
@@ -90,3 +109,15 @@ class TestWrapWithRoarReplaysModifiers:
     def test_no_modifiers_is_unchanged(self) -> None:
         ex = PipelineExecutor(roar_executable="roar")
         assert ex._wrap_with_roar("python3 x.py", "run", None) == "roar run python3 x.py"
+
+    def test_wandb_to_trackio_reemitted(self) -> None:
+        # The reproduce path: a run captured with --wandb-to-trackio re-emits the
+        # flag so the reproduction's `import wandb` resolves the same way.
+        ex = PipelineExecutor(roar_executable="roar")
+        wrapped = ex._wrap_with_roar(
+            "python3 train.py",
+            "run",
+            None,
+            modifiers=run_modifier_flags({"wandb_to_trackio": True}),
+        )
+        assert wrapped == "roar run --wandb-to-trackio python3 train.py"
