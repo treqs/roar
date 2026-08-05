@@ -180,6 +180,43 @@ def test_project_bound_public_project_publishes_public_with_attribution(tmp_path
     }
 
 
+def test_public_project_scope_survives_allow_public_without_binding(tmp_path: Path) -> None:
+    """A public project scope must keep its org attribution even when the caller
+    passes ``allow_public_without_binding=True``.
+
+    Regression (0.4.1, eef6fca): a public project scope resolves to
+    ``public=True``, which the CLI feeds into
+    ``allow_public_without_binding=request.public``. That flag previously dropped
+    the project scope, so the DAG published anonymous (owner all-zeros, no
+    project) with no AI-BOM. The scopeless-public path must apply only when there
+    is no project binding to preserve.
+    """
+    config_dir = tmp_path / ".roar"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(
+        '[treqs]\nowner_id = "owner-123"\nowner_type = "organization"\n'
+        'project_id = "proj-456"\nvisibility = "public"\n'
+        '[scope]\nmode = "project"\n',
+        encoding="utf-8",
+    )
+
+    with (
+        patch("roar.publish_auth.load_auth_state", return_value=_auth_state()),
+        patch("roar.publish_auth._has_ssh_auth_credentials", return_value=False),
+    ):
+        context = load_publish_auth_context(
+            start_dir=tmp_path,
+            allow_public_without_binding=True,
+        )
+
+    assert context.scope_request == {
+        "owner_id": "owner-123",
+        "owner_type": "organization",
+        "project_id": "proj-456",
+        "visibility": "public",
+    }
+
+
 def _write_project_config(tmp_path: Path, *, visibility: str | None = None) -> None:
     config_dir = tmp_path / ".roar"
     config_dir.mkdir(parents=True, exist_ok=True)
