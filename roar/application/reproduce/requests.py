@@ -20,6 +20,9 @@ class ReproduceRequest:
     package_sync: bool = False
     list_requirements: bool = False
     out_path: str | None = None
+    # Write the recorded pip pins to a requirements.txt (for debugging a failed
+    # install) instead of previewing/running; None means don't export.
+    export_requirements: str | None = None
     # Skip publish (`roar put`) steps — for third-party reproduction that
     # rebuilds the artifact without re-publishing to the owner's destination.
     no_puts: bool = False

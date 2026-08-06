@@ -253,6 +253,7 @@ class PythonPackageInstaller:
         presenter: IPresenter | None = None,
     ) -> tuple[bool, list[str]]:
         warnings: list[str] = []
+        unresolved_packages: list[str] = []
         active_presenter = presenter or self._presenter
         if not packages:
             self._print("No packages to install from provenance.")
@@ -302,6 +303,7 @@ class PythonPackageInstaller:
                     warnings.append(
                         f"Some pip packages failed to install: {(fallback.stderr or '').strip()}"
                     )
+                    unresolved_packages = list(failed_packages)
                 else:
                     for package in failed_packages:
                         warnings.append(
@@ -310,6 +312,24 @@ class PythonPackageInstaller:
             else:
                 for package in failed_packages:
                     warnings.append(f"Skipped {package} (exact version not found)")
+                unresolved_packages = list(failed_packages)
+
+        if unresolved_packages:
+            # A recorded pin could not be installed. Do NOT report success — that
+            # produced a green "Pip package installation complete" / "Environment
+            # ready" banner followed by a dead run (ModuleNotFoundError). Fail
+            # honestly so the reproduction reports the env-setup failure instead.
+            self._print(
+                f"\nEnvironment is NOT reproducible: {len(unresolved_packages)} recorded "
+                "pip package(s) could not be installed:"
+            )
+            for package in unresolved_packages:
+                self._print(f"  - {package}")
+            self._print(
+                "Re-run with --pip-any-version to install available versions instead, "
+                "or --export-requirements <path> to inspect/try the exact pins yourself."
+            )
+            return False, warnings
 
         self._print("Pip package installation complete")
         return True, warnings

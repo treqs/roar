@@ -212,6 +212,17 @@ class EnvironmentSetupService:
             if pip_warnings:
                 for w in pip_warnings:
                     self.logger.warning(w)
+            # Propagate a failed install instead of returning a healthy-looking
+            # EnvironmentInfo. Previously `success` was ignored, so an unresolved
+            # pin still produced "Environment ready" followed by a dead run. The
+            # reproduce service catches RuntimeError as "Environment setup failed".
+            if not success:
+                raise RuntimeError(
+                    "Required pip packages from the recorded provenance could not be "
+                    "installed — the reproduction environment is incomplete. Re-run with "
+                    "--pip-any-version to install available versions, or "
+                    "--export-requirements <path> to inspect/try the exact pins yourself."
+                )
             self.logger.debug("pip installation complete")
 
         self.logger.debug("Environment setup complete")

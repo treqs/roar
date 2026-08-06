@@ -59,6 +59,15 @@ from ..context import RoarContext
     default=None,
     help="Dump DAG lineage response to a JSON file",
 )
+@click.option(
+    "--export-requirements",
+    "export_requirements",
+    type=click.Path(),
+    default=None,
+    help="Write the recorded pip pins to a requirements.txt and exit (no run). "
+    "Debug a failed install with `pip install --dry-run -r <file>` to see which "
+    "pins don't resolve (yanked, private, or extra-index).",
+)
 @click.pass_obj
 def reproduce(
     ctx: RoarContext,
@@ -73,6 +82,7 @@ def reproduce(
     package_sync: bool,
     list_requirements: bool,
     out_path: str | None,
+    export_requirements: str | None,
 ) -> None:
     """Reproduce an artifact or lineage from a recorded hash.
 
@@ -117,6 +127,7 @@ def reproduce(
                 package_sync=package_sync,
                 list_requirements=list_requirements,
                 out_path=out_path,
+                export_requirements=export_requirements,
             )
         )
     except ValueError as exc:
