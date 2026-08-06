@@ -697,8 +697,10 @@ class TestInstallPipPackages:
             "Install available versions instead?", default=True
         )
 
-    def test_skips_failed_packages_when_user_declines_fallback(self, service, tmp_path):
-        """When user declines, skip the failed packages with warning."""
+    def test_declining_fallback_on_missing_pin_fails(self, service, tmp_path):
+        """When the user declines the any-version fallback, a recorded pin is
+        left uninstalled — so the install must FAIL, not silently succeed (P0-1).
+        Previously this returned True, yielding "Environment ready" + a dead run."""
         venv_dir = tmp_path / ".venv"
         venv_dir.mkdir()
         repo_dir = tmp_path
@@ -716,7 +718,7 @@ class TestInstallPipPackages:
                 auto_confirm=False,
             )
 
-        assert success is True
+        assert success is False
         assert any("exact version not found" in w for w in warnings)
 
     def test_identifies_individual_failed_packages(self, service, tmp_path):
