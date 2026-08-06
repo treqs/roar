@@ -179,8 +179,7 @@ class PipelineExecutor:
                 returncode = proc.wait(timeout=self._step_timeout)
             except subprocess.TimeoutExpired:
                 self._print(
-                    f"  Step timed out after {self._step_timeout}s — "
-                    "killing the process group"
+                    f"  Step timed out after {self._step_timeout}s — killing the process group"
                 )
                 self._kill_process_group(proc)
                 return False
