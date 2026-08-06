@@ -55,6 +55,32 @@ def test_returns_false_when_any_version_fallback_also_fails(monkeypatch):
     assert ok is False
 
 
+def test_returns_false_when_individually_resolvable_pins_conflict_in_combination(monkeypatch):
+    """The recovery path: the batch install fails, every pin passes its per-package
+    --dry-run (resolvable ALONE), but the combined re-install conflicts and pip
+    leaves an incomplete venv. Before the guard, that combined install's return
+    code was discarded -> "Environment ready" over a venv missing most packages
+    (MiniMind-O: 35 of 105). Must now fail honestly."""
+    inst = _installer()
+
+    def run_pip(venv_dir, repo_dir, args, show_output=False):
+        if "--dry-run" in args:
+            return _pip(0)  # each pin resolves on its own
+        if any("==" in a for a in args):
+            return _pip(1, "ResolutionImpossible")  # ...but not together
+        return _pip(0)
+
+    monkeypatch.setattr(inst, "_run_pip", run_pip)
+    ok, _warnings = inst.install_packages(
+        Path("/venv"),
+        ["torch==2.7.0", "numpy==2.0.0"],
+        Path("/repo"),
+        auto_confirm=True,
+        allow_any_version=False,
+    )
+    assert ok is False
+
+
 def test_returns_true_when_all_pins_install(monkeypatch):
     inst = _installer()
     monkeypatch.setattr(inst, "_run_pip", _fake_run_pip(all_ok=True))
