@@ -68,6 +68,7 @@ def get_installed_packages() -> dict[str, str]:
 def get_used_packages(
     modules_files: Sequence[str],
     installed_packages: Mapping[str, str | None],
+    imported_modules: Sequence[str] = (),
 ) -> dict[str, str | None]:
     used: dict[str, str | None] = {}
 
@@ -101,6 +102,30 @@ def get_used_packages(
 
             if not pkg_names and top_dir not in used:
                 used[top_dir] = None
+    except Exception:
+        pass
+
+    # Attribute packages the workload IMPORTED BY NAME, not just by loaded file.
+    # An aliased import (e.g. a `sys.modules["wandb"] = trackio` logging shim)
+    # leaves the loaded module's __file__ pointing at the alias target, so the
+    # file pass above records trackio and never wandb — yet the job genuinely
+    # depends on wandb (its dist metadata is queried, its install is required),
+    # so wandb silently drops out of the recorded environment. The import NAME is
+    # the honest signal: `import wandb` is captured even when sys.modules is
+    # pre-populated, because Python still calls __import__("wandb", ...).
+    #
+    # No false positives: we only add a name that (a) the workload actually
+    # imported, and (b) maps to an INSTALLED distribution — there is no
+    # unknown-name fallback here, and the tracer's own package is never
+    # attributed. A package that was never imported can never appear.
+    try:
+        for name in imported_modules:
+            top = name.split(".")[0]
+            if not top or top.startswith("_") or top == "roar":
+                continue
+            for pkg_name in pkg_dist_map.get(top, []):
+                if pkg_name in installed_packages and pkg_name not in used:
+                    used[pkg_name] = installed_packages[pkg_name]
     except Exception:
         pass
 
@@ -254,7 +279,9 @@ class RuntimeInjectionTracker:
             )
         )
         installed_packages = get_installed_packages()
-        used_packages = get_used_packages(modules_files, installed_packages)
+        used_packages = get_used_packages(
+            modules_files, installed_packages, sorted(self.imported_modules)
+        )
         data = {
             "opened_files": sorted(self.opened_files),
             "imported_modules": sorted(self.imported_modules),
