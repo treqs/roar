@@ -806,14 +806,17 @@ class TestPythonPinning:
         pipeline.run_steps = [{"metadata": json.dumps({"packages": {}})}]
         assert svc._recorded_python_version(pipeline) is None
 
-    def test_warn_only_on_minor_mismatch(self):
+    def test_confirm_only_warns_on_minor_mismatch(self):
         svc = self._svc()
-        svc._warn_python_mismatch("3.14.4", "3.14.9")  # same minor -> no warn
-        svc._warn_python_mismatch(None, "3.13.0")  # nothing recorded -> no warn
+        # auto_confirm=True so a mismatch warns-and-continues (no prompt/abort).
+        svc._confirm_python_mismatch("3.14.4", "3.14.9", auto_confirm=True)  # same minor
+        svc._confirm_python_mismatch(None, "3.13.0", auto_confirm=True)  # nothing recorded
         assert svc._presenter.print.call_count == 0
-        svc._warn_python_mismatch("3.14.4", "3.13.14")  # minor differs -> warn
-        msg = svc._presenter.print.call_args[0][0]
-        assert "Recorded Python was 3.14.4" in msg and "3.13.14" in msg
+        svc._confirm_python_mismatch("3.14.4", "3.13.14", auto_confirm=True)  # minor differs
+        printed = " ".join(str(c.args[0]) for c in svc._presenter.print.call_args_list)
+        assert "PYTHON VERSION MISMATCH" in printed
+        assert "3.14.4" in printed and "3.13.14" in printed
+        assert "uv" in printed  # recommends the deterministic fix
 
     def test_uv_venv_pins_recorded_version(self, tmp_path):
         svc = self._svc()
@@ -833,7 +836,7 @@ class TestPythonPinning:
         args = run.call_args_list[0].args[0]
         assert args[:2] == ["uv", "venv"] and "--python" in args and "3.14.4" in args
         # matched the recorded interpreter -> no mismatch warning
-        assert not any("Recorded Python" in str(c) for c in svc._presenter.print.call_args_list)
+        assert not any("MISMATCH" in str(c) for c in svc._presenter.print.call_args_list)
 
     def test_uv_falls_back_to_minor_then_default_with_warning(self, tmp_path):
         svc = self._svc()
@@ -854,11 +857,13 @@ class TestPythonPinning:
             return MagicMock(returncode=0)
 
         with patch("subprocess.run", side_effect=fake_run):
-            svc._create_venv(repo_dir, "3.14.4")
+            # auto_confirm so the resulting mismatch (3.14.4 -> 3.13.14) doesn't prompt.
+            svc._create_venv(repo_dir, "3.14.4", auto_confirm=True)
 
         pythons = [c for c in calls if "--python" in c]
         assert any("3.14.4" in c for c in pythons)
         assert any("3.14" in c and "3.14.4" not in c for c in pythons)
         assert calls[-1] == ["uv", "venv", str(venv_dir)]  # bare fallback last
-        warning = svc._presenter.print.call_args[0][0]
-        assert "Recorded Python was 3.14.4" in warning and "3.13.14" in warning
+        printed = " ".join(str(c.args[0]) for c in svc._presenter.print.call_args_list)
+        assert "PYTHON VERSION MISMATCH" in printed
+        assert "3.14.4" in printed and "3.13.14" in printed
