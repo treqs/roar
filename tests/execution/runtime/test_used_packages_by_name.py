@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.metadata as ilm
 import json
+import os
 import sys
 import types
 
@@ -86,6 +87,10 @@ def test_shadowed_import_recorded_through_write_log(tmp_path, monkeypatch):
     tracker.tracking_import("wandb")  # the real import-capture path
 
     tracker.write_log()
-    payload = json.loads(log_path.read_text())
+    # write_log writes the canonical path on its own, or a per-PID shard once the
+    # P0-9 sharding change is present; read whichever it produced.
+    shard = log_path.with_name(f"{log_path.name}.{os.getpid()}")
+    written = log_path if log_path.exists() else shard
+    payload = json.loads(written.read_text())
     assert "wandb" in payload["imported_modules"]
     assert payload["used_packages"].get("wandb") == "0.16.0"
