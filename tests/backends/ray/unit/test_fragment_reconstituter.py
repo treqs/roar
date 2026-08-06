@@ -314,6 +314,59 @@ def test_reconstitute_fetches_decrypts_and_merges_fragments(
     assert result.fragments_processed == 2
 
 
+def test_reconstitute_does_not_drop_fragments_available_after_initial_empty_read(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Reproduce a submit-only publication when worker fragments arrive late."""
+    module = _module()
+    token = "ac" * 32
+    fragment = {
+        "job_uid": "ray-task-late",
+        "parent_job_uid": "submit-job",
+        "ray_task_id": "task-late",
+    }
+    empty_response = _wrapped_fragments_payload([])
+    populated_response = _wrapped_fragments_payload(
+        [
+            {
+                "sequence": 0,
+                "encrypted_batch": _encrypt_batch(token, [fragment], 10),
+            }
+        ]
+    )
+    request_count = 0
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        nonlocal request_count
+        del request, timeout
+        request_count += 1
+        response = empty_response if request_count == 1 else populated_response
+        return _FakeHttpResponse(response)
+
+    merged_fragments: list[list[dict]] = []
+
+    def _fake_collect_fragments(*args, **kwargs) -> None:
+        if args:
+            merged_fragments.append(list(args[0]))
+            return
+        merged_fragments.append(list(kwargs["fragments"]))
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(module, "collect_fragments", _fake_collect_fragments)
+
+    result = module.FragmentReconstituter(
+        session_id="session-late-fragment",
+        token=token,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    ).reconstitute()
+
+    assert merged_fragments == [[fragment]]
+    assert request_count >= 2
+    assert result.fragments_processed == 1
+
+
 def test_resolve_s3_key_placeholders_rewrites_paths_when_concrete_match_exists() -> None:
     module = _module()
     fragments = [
