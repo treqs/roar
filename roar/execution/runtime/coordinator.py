@@ -7,6 +7,8 @@ Follows SRP: coordinates, doesn't implement details.
 
 from __future__ import annotations
 
+import contextlib
+import glob
 import os
 import secrets
 import sys
@@ -467,3 +469,9 @@ class RunCoordinator:
                     os.remove(log_file)
             except OSError:
                 pass
+        # Sweep any per-PID inject-log shards that merge_inject_logs didn't reach
+        # (e.g. a report written after the merge, or a merge that never ran).
+        if inject_log:
+            for shard in glob.glob(glob.escape(inject_log) + ".*"):
+                with contextlib.suppress(OSError):
+                    os.remove(shard)
