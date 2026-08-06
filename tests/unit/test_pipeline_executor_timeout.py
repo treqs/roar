@@ -43,18 +43,32 @@ def test_failing_command_returns_false(tmp_path):
 def test_timeout_kills_the_whole_process_group(tmp_path):
     """A shell child that spawns a long-lived grandchild must be fully reaped on
     timeout. Before the fix (shell=True + subprocess.run timeout), only the shell
-    died and the grandchild ran on. The grandchild here touches a marker after a
-    long sleep; if the tree was killed the marker must NOT appear."""
-    marker = tmp_path / "grandchild_finished"
+    died and the grandchild ran on — a false failure plus a silent GPU-cost leak.
+
+    We prove the kill by *liveness*, not by waiting out a sleep: the grandchild
+    bumps a counter file every 50ms. Once the step times out and the group is
+    SIGKILLed, the counter must stop advancing. (A plain ``os.kill(pid, 0)``
+    check is unreliable here — a killed-but-unreaped grandchild is a zombie, for
+    which ``os.kill`` still reports "alive".) No long fixed sleep, so this stays
+    ~1.5s on the slow macOS lane."""
+    heartbeat = tmp_path / "grandchild.heartbeat"
+    # Real files, not `python -c` payloads — the -c escaping for a multi-line
+    # loop is a trap (a single broken literal makes the child a no-op and the
+    # test silently inconclusive).
+    grand = tmp_path / "grand.py"
+    grand.write_text(
+        "import time\n"
+        "i = 0\n"
+        "while True:\n"
+        f"    open({str(heartbeat)!r}, 'w').write(str(i))\n"
+        "    i += 1\n"
+        "    time.sleep(0.05)\n"
+    )
     child = tmp_path / "child.py"
     child.write_text(
         "import subprocess, sys, time\n"
-        "grand = (\n"
-        "    'import time; time.sleep(20); "
-        f"open({str(marker)!r}, \"w\").close()'\n"
-        ")\n"
-        "subprocess.Popen([sys.executable, '-c', grand])\n"
-        "time.sleep(20)\n"
+        f"subprocess.Popen([sys.executable, {str(grand)!r}])\n"
+        "time.sleep(30)\n"
     )
 
     ex = _executor(step_timeout=1)
@@ -67,7 +81,18 @@ def test_timeout_kills_the_whole_process_group(tmp_path):
     assert result is False
     assert elapsed < 8, f"timeout should fire ~1s, took {elapsed:.1f}s"
 
-    # Give any survivor time to reach its marker write; it must not, because the
-    # whole process group (incl. the grandchild) was SIGKILLed.
-    time.sleep(3)
-    assert not marker.exists(), "grandchild survived the timeout — process group not killed"
+    # The grandchild starts heartbeating well within the 1s timeout.
+    deadline = start + 3
+    while not heartbeat.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert heartbeat.exists(), "grandchild never started — test inconclusive"
+
+    # If the whole group was killed the counter is frozen; a survivor keeps
+    # advancing it. Two reads 0.5s apart (>> the 50ms heartbeat) settle it.
+    before = heartbeat.read_text()
+    time.sleep(0.5)
+    after = heartbeat.read_text()
+    assert before == after, (
+        f"grandchild kept running after the timeout ({before!r} -> {after!r}) "
+        "— process group not killed"
+    )
