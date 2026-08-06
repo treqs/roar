@@ -5,6 +5,7 @@ Extracted from reproduce.py to follow Single Responsibility Principle.
 This service handles executing pipeline steps during reproduction.
 """
 
+import contextlib
 import json
 import os
 import shutil
@@ -208,10 +209,8 @@ class PipelineExecutor:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             proc.kill()
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            pass
 
     def _wrap_with_roar(
         self,
