@@ -163,7 +163,9 @@ def reproduce_artifact(
         return
 
     with _reproduction_session(environment.repo_dir, output):
-        steps_run, steps_total = PipelineExecutor(presenter=output).execute(
+        steps_run, steps_total = PipelineExecutor(
+            presenter=output, step_timeout=request.step_timeout
+        ).execute(
             pipeline,
             environment,
             request.auto_confirm,

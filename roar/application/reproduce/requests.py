@@ -20,6 +20,8 @@ class ReproduceRequest:
     package_sync: bool = False
     list_requirements: bool = False
     out_path: str | None = None
+    # Per-step wall-clock timeout in seconds for --run; None means no timeout.
+    step_timeout: int | None = None
     # Skip publish (`roar put`) steps — for third-party reproduction that
     # rebuilds the artifact without re-publishing to the owner's destination.
     no_puts: bool = False

@@ -59,6 +59,17 @@ from ..context import RoarContext
     default=None,
     help="Dump DAG lineage response to a JSON file",
 )
+@click.option(
+    "--step-timeout",
+    "step_timeout",
+    type=int,
+    default=None,
+    envvar="ROAR_REPRODUCE_STEP_TIMEOUT",
+    help="Per-step wall-clock timeout in seconds for --run. Default: no timeout "
+    "(a step may be slower on the reproducing host than on the one that made it). "
+    "Also settable via ROAR_REPRODUCE_STEP_TIMEOUT. On timeout the whole process "
+    "group is killed so no orphaned workload keeps burning compute.",
+)
 @click.pass_obj
 def reproduce(
     ctx: RoarContext,
@@ -73,6 +84,7 @@ def reproduce(
     package_sync: bool,
     list_requirements: bool,
     out_path: str | None,
+    step_timeout: int | None,
 ) -> None:
     """Reproduce an artifact or lineage from a recorded hash.
 
@@ -117,6 +129,7 @@ def reproduce(
                 package_sync=package_sync,
                 list_requirements=list_requirements,
                 out_path=out_path,
+                step_timeout=step_timeout,
             )
         )
     except ValueError as exc:
