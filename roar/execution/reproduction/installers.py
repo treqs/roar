@@ -253,6 +253,8 @@ class PythonPackageInstaller:
         presenter: IPresenter | None = None,
     ) -> tuple[bool, list[str]]:
         warnings: list[str] = []
+        unresolved_packages: list[str] = []
+        conflict_in_combination = False
         active_presenter = presenter or self._presenter
         if not packages:
             self._print("No packages to install from provenance.")
@@ -277,7 +279,18 @@ class PythonPackageInstaller:
                 succeeded_packages.append(package)
 
         if succeeded_packages:
-            self._run_pip(venv_dir, repo_dir, ["install", *succeeded_packages], show_output=True)
+            combined = self._run_pip(
+                venv_dir, repo_dir, ["install", *succeeded_packages], show_output=True
+            )
+            if combined.returncode != 0:
+                # Each of these pins resolved on its own (the per-package --dry-run
+                # above), but they conflict in combination: pip exited non-zero and
+                # left an incomplete/inconsistent venv. Individually-resolvable is
+                # NOT jointly-installable, so treat them as unresolved rather than
+                # discarding this return code and printing a false "Environment
+                # ready" over a venv missing most of its packages.
+                conflict_in_combination = True
+                unresolved_packages.extend(succeeded_packages)
 
         if failed_packages:
             self._print(f"\nExact versions not found for {len(failed_packages)} pip packages:")
@@ -302,6 +315,7 @@ class PythonPackageInstaller:
                     warnings.append(
                         f"Some pip packages failed to install: {(fallback.stderr or '').strip()}"
                     )
+                    unresolved_packages.extend(failed_packages)
                 else:
                     for package in failed_packages:
                         warnings.append(
@@ -310,6 +324,29 @@ class PythonPackageInstaller:
             else:
                 for package in failed_packages:
                     warnings.append(f"Skipped {package} (exact version not found)")
+                unresolved_packages.extend(failed_packages)
+
+        if unresolved_packages:
+            # A recorded pin could not be installed. Do NOT report success — that
+            # produced a green "Pip package installation complete" / "Environment
+            # ready" banner followed by a dead run (ModuleNotFoundError). Fail
+            # honestly so the reproduction reports the env-setup failure instead.
+            self._print(
+                f"\nEnvironment is NOT reproducible: {len(unresolved_packages)} recorded "
+                "pip package(s) could not be installed:"
+            )
+            for package in unresolved_packages:
+                self._print(f"  - {package}")
+            if conflict_in_combination:
+                self._print(
+                    "These pins resolve individually but conflict when installed "
+                    "together, so pip left an incomplete environment."
+                )
+            self._print(
+                "Re-run with --pip-any-version to install available versions instead, "
+                "or --export-requirements <path> to inspect/try the exact pins yourself."
+            )
+            return False, warnings
 
         self._print("Pip package installation complete")
         return True, warnings

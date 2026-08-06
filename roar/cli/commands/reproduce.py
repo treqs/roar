@@ -70,6 +70,15 @@ from ..context import RoarContext
     "Also settable via ROAR_REPRODUCE_STEP_TIMEOUT. On timeout the whole process "
     "group is killed so no orphaned workload keeps burning compute.",
 )
+@click.option(
+    "--export-requirements",
+    "export_requirements",
+    type=click.Path(),
+    default=None,
+    help="Write the recorded pip pins to a requirements.txt and exit (no run). "
+    "Debug a failed install with `pip install --dry-run -r <file>` to see which "
+    "pins don't resolve (yanked, private, or extra-index).",
+)
 @click.pass_obj
 def reproduce(
     ctx: RoarContext,
@@ -85,6 +94,7 @@ def reproduce(
     list_requirements: bool,
     out_path: str | None,
     step_timeout: int | None,
+    export_requirements: str | None,
 ) -> None:
     """Reproduce an artifact or lineage from a recorded hash.
 
@@ -130,6 +140,7 @@ def reproduce(
                 list_requirements=list_requirements,
                 out_path=out_path,
                 step_timeout=step_timeout,
+                export_requirements=export_requirements,
             )
         )
     except ValueError as exc:
