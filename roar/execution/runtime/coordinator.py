@@ -111,7 +111,12 @@ class RunCoordinator:
             "RunCoordinator.execute started: command=%s, job_type=%s", ctx.command, ctx.job_type
         )
         start_time = time.time()
-        run_job_uid = secrets.token_hex(4)
+        planned_run_job_uid = getattr(ctx, "run_job_uid", None)
+        run_job_uid = (
+            planned_run_job_uid.strip()
+            if isinstance(planned_run_job_uid, str) and planned_run_job_uid.strip()
+            else secrets.token_hex(4)
+        )
         is_build = ctx.job_type == "build"
         config_start_dir = resolve_run_config_start_dir(ctx)
 
