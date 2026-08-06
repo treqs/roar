@@ -8,6 +8,7 @@ This service handles executing pipeline steps during reproduction.
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from typing import TYPE_CHECKING
@@ -39,6 +40,7 @@ class PipelineExecutor:
         self,
         presenter: "IPresenter | None" = None,
         roar_executable: str | None = None,
+        step_timeout: int | None = None,
     ):
         """
         Initialize pipeline executor.
@@ -46,10 +48,13 @@ class PipelineExecutor:
         Args:
             presenter: Presenter for user feedback
             roar_executable: Path to roar executable (auto-detected if not provided)
+            step_timeout: Per-step wall-clock timeout in seconds; ``None`` (default)
+                means no timeout.
         """
         self._presenter = presenter or NullPresenter()
         self._roar_initialized = False
         self._roar_executable = roar_executable or self._detect_roar_executable()
+        self._step_timeout = step_timeout
 
     def execute(
         self,
@@ -153,30 +158,60 @@ class PipelineExecutor:
         # Set up environment
         env = self._prepare_environment(environment, env_vars=step_env_vars)
 
-        # Run the command
+        # Run the command in its own session/process group so that, if a timeout
+        # fires, we can kill the whole tree. shell=True means the direct child is
+        # a shell whose grandchild (e.g. train.py) would be orphaned by a plain
+        # kill of the shell — leaving a workload running on the GPU past the
+        # declared failure. `timeout` defaults to None (no timeout): a run should
+        # not be capped at an arbitrary wall-clock that also makes the row only
+        # reproducible on hardware at least as fast as the machine that made it.
         try:
             # Note: Using shell=True for complex commands with pipes, etc.
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 wrapped_command,
                 shell=True,
                 cwd=environment.repo_dir,
                 env=env,
-                timeout=3600,  # 1 hour timeout
+                start_new_session=True,
             )
+            try:
+                returncode = proc.wait(timeout=self._step_timeout)
+            except subprocess.TimeoutExpired:
+                self._print(
+                    f"  Step timed out after {self._step_timeout}s — "
+                    "killing the process group"
+                )
+                self._kill_process_group(proc)
+                return False
 
-            if result.returncode == 0:
+            if returncode == 0:
                 self._print("  Success")
                 return True
             else:
-                self._print(f"  Failed with exit code {result.returncode}")
+                self._print(f"  Failed with exit code {returncode}")
                 return False
 
-        except subprocess.TimeoutExpired:
-            self._print("  Step timed out after 1 hour")
-            return False
         except Exception as e:
             self._print(f"  Error: {e}")
             return False
+
+    @staticmethod
+    def _kill_process_group(proc: "subprocess.Popen[bytes]") -> None:
+        """SIGKILL the step's whole process group, then reap it.
+
+        With ``shell=True`` the workload is a grandchild of the shell, so killing
+        only ``proc`` leaves it orphaned (a false failure + a silent GPU-cost
+        leak on someone else's bill). ``start_new_session=True`` gives the step
+        its own group, which we kill here.
+        """
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            pass
 
     def _wrap_with_roar(
         self,
