@@ -211,7 +211,10 @@ class TestLoadPythonData:
         writer drops the key or the reader doesn't extract it, the loaded
         model's python_version is empty.
         """
-        from roar.execution.runtime.inject.tracker import RuntimeInjectionTracker
+        from roar.execution.runtime.inject.tracker import (
+            RuntimeInjectionTracker,
+            merge_inject_logs,
+        )
 
         log_path = tmp_path / "inject-log.json"
 
@@ -226,6 +229,7 @@ class TestLoadPythonData:
             inject_dir=str(tmp_path / "inject"),
         )
         tracker.write_log()
+        merge_inject_logs(str(log_path))  # write_log writes a per-PID shard; merge -> canonical
 
         data = DataLoaderService().load_python_data(str(log_path))
 
