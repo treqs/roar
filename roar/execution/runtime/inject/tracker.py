@@ -65,11 +65,29 @@ def get_installed_packages() -> dict[str, str]:
     return packages
 
 
+def _dist_is_in_repo(dist_name: str, repo_root: str) -> bool:
+    """True if ``dist_name``'s metadata resolves inside ``repo_root`` — i.e. it is
+    the workload's OWN package (an editable ``pip install -e .``, or the leftover
+    ``<pkg>.egg-info`` a later ``pip uninstall`` doesn't remove), not a real
+    third-party dependency installed under site-packages."""
+    try:
+        from importlib import metadata as importlib_metadata
+
+        dist = importlib_metadata.distribution(dist_name)
+        path = getattr(dist, "_path", None) or dist.locate_file("")
+        return os.path.abspath(str(path)).startswith(repo_root + os.sep)
+    except Exception:
+        return False
+
+
 def get_used_packages(
     modules_files: Sequence[str],
     installed_packages: Mapping[str, str | None],
+    imported_modules: Sequence[str] = (),
+    workload_root: str | None = None,
 ) -> dict[str, str | None]:
     used: dict[str, str | None] = {}
+    repo_root = os.path.abspath(workload_root) if workload_root else None
 
     try:
         from importlib import metadata as importlib_metadata
@@ -93,6 +111,12 @@ def get_used_packages(
                 continue
             if top_dir.startswith("_") or top_dir.endswith(".so"):
                 continue
+            if top_dir == "roar":
+                # roar records itself otherwise. roar-cli is installed separately
+                # and unpinned by _install_roar, so the pin is always redundant —
+                # harmless noise on a PyPI release, but fatal on an unpublished
+                # build (roar-cli==X.Y.dev0 can't resolve). P0-11.
+                continue
 
             pkg_names = pkg_dist_map.get(top_dir, [])
             for pkg_name in pkg_names:
@@ -101,6 +125,39 @@ def get_used_packages(
 
             if not pkg_names and top_dir not in used:
                 used[top_dir] = None
+    except Exception:
+        pass
+
+    # Attribute packages the workload IMPORTED BY NAME, not just by loaded file.
+    # An aliased import (e.g. a `sys.modules["wandb"] = trackio` logging shim)
+    # leaves the loaded module's __file__ pointing at the alias target, so the
+    # file pass above records trackio and never wandb — yet the job genuinely
+    # depends on wandb (its dist metadata is queried, its install is required),
+    # so wandb silently drops out of the recorded environment. The import NAME is
+    # the honest signal: `import wandb` is captured even when sys.modules is
+    # pre-populated, because Python still calls __import__("wandb", ...).
+    #
+    # No false positives: we only add a name that (a) the workload actually
+    # imported, and (b) maps to an INSTALLED distribution — there is no
+    # unknown-name fallback here, and the tracer's own package is never
+    # attributed. A package that was never imported can never appear.
+    try:
+        for name in imported_modules:
+            top = name.split(".")[0]
+            if not top or top.startswith("_") or top == "roar":
+                continue
+            for pkg_name in pkg_dist_map.get(top, []):
+                if pkg_name not in installed_packages or pkg_name in used:
+                    continue
+                # Skip the workload's OWN package. `pip install -e .` (and the
+                # leftover <pkg>.egg-info a later `pip uninstall` leaves, which
+                # importlib.metadata still reports as installed) resolves inside
+                # the repo, not site-packages. Pinning it would re-pin from PyPI
+                # the self-install we uninstalled to keep the tracer honest.
+                # P0-12 (#264 regression).
+                if repo_root and _dist_is_in_repo(pkg_name, repo_root):
+                    continue
+                used[pkg_name] = installed_packages[pkg_name]
     except Exception:
         pass
 
@@ -254,7 +311,12 @@ class RuntimeInjectionTracker:
             )
         )
         installed_packages = get_installed_packages()
-        used_packages = get_used_packages(modules_files, installed_packages)
+        used_packages = get_used_packages(
+            modules_files,
+            installed_packages,
+            sorted(self.imported_modules),
+            workload_root=os.getcwd(),
+        )
         data = {
             "opened_files": sorted(self.opened_files),
             "imported_modules": sorted(self.imported_modules),
