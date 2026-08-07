@@ -49,6 +49,7 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "textual>=0.80",
     "tomli>=2.0.0; python_version < '3.11'",
+    "huggingface_hub>=0.20.0",  # `roar put hf://` is a shipped path, not dev-only (P0-19)
 ]
 
 [project.urls]
@@ -68,7 +69,6 @@ dev = [
     "mypy>=1.13.0",
     "boto3>=1.28.0",
     "google-cloud-storage>=2.10.0",
-    "huggingface_hub>=0.20.0",
 ]
 
 [project.scripts]

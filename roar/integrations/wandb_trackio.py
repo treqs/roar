@@ -174,9 +174,16 @@ def _install_trackio_alias(space_id: str) -> bool:
 
 def _install_noop_wandb() -> None:
     """Alias ``wandb`` to a silent no-op module so an unmodified repo runs untracked."""
+    import importlib.machinery
     import types
 
     mod = types.ModuleType("wandb")
+    # types.ModuleType leaves __spec__ = None, and importlib.util.find_spec RAISES
+    # ("wandb.__spec__ is None") rather than returning None on that. accelerate's
+    # is_wandb_available() calls find_spec at `import accelerate`, so a credential-
+    # free host (i.e. every cold reproduce host) crashes on import. Give the stub a
+    # real spec. P0-15.
+    mod.__spec__ = importlib.machinery.ModuleSpec("wandb", loader=None)
 
     def _noop(*a, **k):
         return None
