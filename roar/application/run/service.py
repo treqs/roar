@@ -131,6 +131,7 @@ def _execute_tracked_command(
                 backend_name=backend_name,
                 execution_role=execution_role,
                 command=planned.command,
+                run_job_uid=getattr(planned, "run_job_uid", None),
                 job_type=job_type,
                 step_name=step_name,
                 verbosity=verbosity,

@@ -304,7 +304,7 @@ def test_reconstitute_fetches_decrypts_and_merges_fragments(
         roar_db_path=tmp_path / ".roar" / "roar.db",
     ).reconstitute()
 
-    assert len(captured_requests) == 1
+    assert len(captured_requests) == 2
     request = captured_requests[0]
     assert request.full_url.endswith(f"/api/v1/fragments/sessions/{session_id}/fragments")
     headers = {name.lower(): value for name, value in request.header_items()}
@@ -312,6 +312,112 @@ def test_reconstitute_fetches_decrypts_and_merges_fragments(
 
     assert merged_fragments == [[{"job_uid": "job-a"}, {"job_uid": "job-b"}]]
     assert result.fragments_processed == 2
+
+
+def test_reconstitute_does_not_drop_fragments_available_after_initial_empty_read(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Reproduce a submit-only publication when worker fragments arrive late."""
+    module = _module()
+    token = "ac" * 32
+    fragment = {
+        "job_uid": "ray-task-late",
+        "parent_job_uid": "submit-job",
+        "ray_task_id": "task-late",
+    }
+    empty_response = _wrapped_fragments_payload([])
+    populated_response = _wrapped_fragments_payload(
+        [
+            {
+                "sequence": 0,
+                "encrypted_batch": _encrypt_batch(token, [fragment], 10),
+            }
+        ]
+    )
+    request_count = 0
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        nonlocal request_count
+        del request, timeout
+        request_count += 1
+        response = empty_response if request_count == 1 else populated_response
+        return _FakeHttpResponse(response)
+
+    merged_fragments: list[list[dict]] = []
+    merged_driver_job_uids: list[str | None] = []
+
+    def _fake_collect_fragments(*args, **kwargs) -> None:
+        merged_driver_job_uids.append(kwargs.get("driver_job_uid"))
+        if args:
+            merged_fragments.append(list(args[0]))
+            return
+        merged_fragments.append(list(kwargs["fragments"]))
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(module, "collect_fragments", _fake_collect_fragments)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.FragmentReconstituter(
+        session_id="session-late-fragment",
+        token=token,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    ).reconstitute(driver_job_uid="submit-job")
+
+    assert merged_fragments == [[fragment]]
+    assert merged_driver_job_uids == ["submit-job"]
+    assert request_count >= 2
+    assert result.fragments_processed == 1
+    assert result.fetch_attempts == 3
+    assert result.batches_fetched == 1
+    assert result.error is None
+
+
+def test_reconstitute_waits_for_fragment_batch_watermark_to_stabilize(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    token = "ad" * 32
+    first_fragment = {"job_uid": "ray-task-first", "ray_task_id": "task-first"}
+    second_fragment = {"job_uid": "ray-task-second", "ray_task_id": "task-second"}
+    first_response = _wrapped_fragments_payload(
+        [{"sequence": 0, "encrypted_batch": _encrypt_batch(token, [first_fragment], 11)}]
+    )
+    complete_response = _wrapped_fragments_payload(
+        [
+            {"sequence": 0, "encrypted_batch": _encrypt_batch(token, [first_fragment], 11)},
+            {"sequence": 1, "encrypted_batch": _encrypt_batch(token, [second_fragment], 12)},
+        ]
+    )
+    responses = iter([first_response, complete_response, complete_response])
+
+    def _fake_urlopen(request: urllib.request.Request, timeout: int = 0):
+        del request, timeout
+        return _FakeHttpResponse(next(responses))
+
+    merged_fragments: list[list[dict]] = []
+    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(
+        module,
+        "collect_fragments",
+        lambda *args, **kwargs: merged_fragments.append(list(kwargs["fragments"])),
+    )
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    result = module.FragmentReconstituter(
+        session_id="session-growing-fragments",
+        token=token,
+        glaas_url="http://localhost:3001",
+        roar_db_path=tmp_path / ".roar" / "roar.db",
+    ).reconstitute()
+
+    assert merged_fragments == [[first_fragment, second_fragment]]
+    assert result.fetch_attempts == 3
+    assert result.batches_fetched == 2
+    assert result.fragments_processed == 2
+    assert result.error is None
 
 
 def test_resolve_s3_key_placeholders_rewrites_paths_when_concrete_match_exists() -> None:
@@ -550,6 +656,7 @@ def test_reconstitute_noop_when_no_remote_fragments(
     merge_calls: list[object] = []
     monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
     monkeypatch.setattr(module, "collect_fragments", lambda *args, **kwargs: merge_calls.append(1))
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
 
     result = module.FragmentReconstituter(
         session_id="session-3",
@@ -562,6 +669,8 @@ def test_reconstitute_noop_when_no_remote_fragments(
     assert result.fragments_processed == 0
     assert result.jobs_merged == 0
     assert result.artifacts_merged == 0
+    assert result.fetch_attempts == 4
+    assert result.error == "no fragment batches available after 4 fetch attempts"
 
 
 def test_reconstitute_handles_bad_token_without_db_writes(

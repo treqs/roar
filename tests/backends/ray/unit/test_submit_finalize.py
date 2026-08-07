@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 from roar.execution.fragments import reconstitution as submit_finalize
 from roar.execution.framework.contract import (
@@ -24,13 +24,21 @@ def test_build_ray_submit_finalizer_reconstitutes_lineage(monkeypatch) -> None:
     finalizer = submit_finalize.build_submit_finalizer("ray", "session-123")
     echo = MagicMock()
     reconstituter = MagicMock()
-    reconstituter.reconstitute.return_value = SimpleNamespace(jobs_merged=2, artifacts_merged=3)
+    reconstituter.reconstitute.return_value = SimpleNamespace(
+        jobs_merged=2,
+        artifacts_merged=3,
+        batches_fetched=4,
+        fragments_decrypted=6,
+        fragments_processed=5,
+        fetch_attempts=2,
+        error=None,
+    )
 
     monkeypatch.setattr(submit_finalize, "get_glaas_url", lambda: "http://localhost:3001")
     monkeypatch.setattr(
         submit_finalize,
         "load_fragment_session",
-        lambda *_args: {"token": "ab" * 32},
+        lambda *_args: {"token": "ab" * 32, "driver_job_uid": "submit-uid"},
     )
     monkeypatch.setattr(
         submit_finalize,
@@ -65,8 +73,11 @@ def test_build_ray_submit_finalizer_reconstitutes_lineage(monkeypatch) -> None:
 
     finalizer(_ctx())
 
-    reconstituter.reconstitute.assert_called_once_with()
-    echo.assert_called_once_with("[roar] lineage reconstituted: 2 jobs, 3 artifacts")
+    reconstituter.reconstitute.assert_called_once_with(driver_job_uid="submit-uid")
+    assert echo.call_args_list == [
+        call("[roar] lineage reconstituted: 2 jobs, 3 artifacts"),
+        call("[roar] lineage fragments: 4 batches, 6 decrypted, 5 processed, 2 fetch attempts"),
+    ]
 
 
 def test_build_ray_submit_finalizer_warns_when_key_loading_fails(monkeypatch) -> None:
@@ -89,3 +100,37 @@ def test_build_ray_submit_finalizer_warns_when_key_loading_fails(monkeypatch) ->
         in echo.call_args.args[0]
     )
     assert echo.call_args.kwargs["err"] is True
+
+
+def test_build_ray_submit_finalizer_warns_when_fragment_watermark_is_incomplete(
+    monkeypatch,
+) -> None:
+    finalizer = submit_finalize.build_submit_finalizer("ray", "session-123")
+    echo = MagicMock()
+    reconstituter = MagicMock()
+    reconstituter.reconstitute.return_value = SimpleNamespace(
+        jobs_merged=1,
+        artifacts_merged=2,
+        batches_fetched=3,
+        fragments_decrypted=5,
+        fragments_processed=4,
+        fetch_attempts=4,
+        error="fragment batch watermark did not stabilize before retry deadline",
+    )
+
+    monkeypatch.setattr(submit_finalize, "get_glaas_url", lambda: "http://localhost:3001")
+    monkeypatch.setattr(
+        submit_finalize,
+        "load_fragment_session",
+        lambda *_args: {"token": "ab" * 32, "driver_job_uid": "submit-uid"},
+    )
+    backend = MagicMock()
+    backend.distributed.fragment_reconstitution.create_reconstituter.return_value = reconstituter
+    monkeypatch.setattr(submit_finalize, "get_execution_backend", lambda _name: backend)
+    monkeypatch.setattr(submit_finalize.click, "echo", echo)
+
+    finalizer(_ctx())
+
+    warning = echo.call_args_list[-1]
+    assert "lineage reconstitution incomplete" in warning.args[0]
+    assert warning.kwargs["err"] is True

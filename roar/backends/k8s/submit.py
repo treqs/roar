@@ -178,6 +178,7 @@ def plan_kubectl_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
             + ", ".join(rewrite.skipped_containers)
         )
 
+    session["driver_job_uid"] = parent_job_uid
     save_fragment_session(roar_dir, session)
 
     prepared_path = _write_prepared_manifest(

@@ -45,6 +45,12 @@ def _maybe_reconstitute_lineage(ctx: RoarContext, *, backend_name: str, session_
         token = session_payload.get("token")
         if not isinstance(token, str) or not token:
             raise ValueError("missing token in fragment session payload")
+        driver_job_uid_value = session_payload.get("driver_job_uid")
+        driver_job_uid = (
+            driver_job_uid_value.strip()
+            if isinstance(driver_job_uid_value, str) and driver_job_uid_value.strip()
+            else None
+        )
     except Exception as exc:
         click.echo(
             f"[roar] warning: failed to load fragment session for session {session_id}: {exc}",
@@ -58,7 +64,7 @@ def _maybe_reconstitute_lineage(ctx: RoarContext, *, backend_name: str, session_
             token,
             str(glaas_url),
             ctx.roar_dir / "roar.db",
-        ).reconstitute()
+        ).reconstitute(driver_job_uid=driver_job_uid)
     except Exception as exc:
         click.echo(
             f"[roar] warning: lineage reconstitution failed for session {session_id}: {exc}",
@@ -69,3 +75,19 @@ def _maybe_reconstitute_lineage(ctx: RoarContext, *, backend_name: str, session_
     click.echo(
         f"[roar] lineage reconstituted: {result.jobs_merged} jobs, {result.artifacts_merged} artifacts"
     )
+    batches_fetched = int(getattr(result, "batches_fetched", 0) or 0)
+    fragments_decrypted = int(getattr(result, "fragments_decrypted", 0) or 0)
+    fragments_processed = int(getattr(result, "fragments_processed", 0) or 0)
+    fetch_attempts = int(getattr(result, "fetch_attempts", 0) or 0)
+    click.echo(
+        "[roar] lineage fragments: "
+        f"{batches_fetched} batches, {fragments_decrypted} decrypted, "
+        f"{fragments_processed} processed, "
+        f"{fetch_attempts} fetch attempts"
+    )
+    error = str(getattr(result, "error", "") or "").strip()
+    if error:
+        click.echo(
+            f"[roar] warning: lineage reconstitution incomplete for session {session_id}: {error}",
+            err=True,
+        )

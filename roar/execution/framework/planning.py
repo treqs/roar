@@ -18,6 +18,7 @@ def plan_execution_command(command: list[str]) -> ExecutionCommandPlan:
                 backend_name=backend.name,
                 command=list(planned.command),
                 execution_role=planned.execution_role,
+                run_job_uid=planned.run_job_uid,
                 session_id=planned.session_id,
                 finalize_run=planned.finalize_run,
             )
@@ -32,6 +33,7 @@ def plan_execution_command(command: list[str]) -> ExecutionCommandPlan:
                 backend_name=planned.backend_name,
                 command=list(planned.command),
                 execution_role=planned.execution_role,
+                run_job_uid=planned.run_job_uid,
                 session_id=planned.session_id,
                 finalize_run=build_submit_finalizer(planned.backend_name, planned.session_id),
             )
