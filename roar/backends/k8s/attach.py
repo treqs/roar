@@ -154,7 +154,7 @@ def attach_k8s_workload(
         token,
         str(glaas_url),
         roar_dir / "roar.db",
-    ).reconstitute()
+    ).reconstitute(driver_job_uid=parent_job_uid)
 
     return K8sAttachResult(
         exit_code=exit_code,

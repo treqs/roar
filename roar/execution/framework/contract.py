@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class FragmentReconstituterProtocol(Protocol):
-    def reconstitute(self) -> Any: ...
+    def reconstitute(self, *, driver_job_uid: str | None = None) -> Any: ...
 
 
 CommandMatcher = Callable[[list[str]], bool]
@@ -49,6 +49,7 @@ class ExecutionCommandPlan:
     backend_name: str
     command: list[str]
     execution_role: str | None = None
+    run_job_uid: str | None = None
     session_id: str | None = None
     finalize_run: SubmitRunFinalizer | None = None
 

@@ -67,6 +67,33 @@ def test_filter_lineage_secrets_redacts_command_and_metadata() -> None:
     assert result.jobs[1]["metadata"] == {"safe": True}
 
 
+def test_filter_lineage_secrets_redacts_ray_runtime_env_and_presigned_urls() -> None:
+    from roar.filters.omit import OmitFilter
+
+    fragment_token = "ab" * 32
+    command = (
+        "ray job submit --runtime-env-json "
+        f'\'{{"env_vars":{{"ROAR_FRAGMENT_TOKEN":"{fragment_token}",'
+        '"ROAR_SESSION_ID":"fragment-session"}}}}\' '
+        "--working-dir https://example.test/wheel?X-Amz-Signature=deadbeef"
+    )
+    result = filter_lineage_secrets(
+        lineage=LineageData(
+            jobs=[{"command": command, "metadata": {}}],
+            artifacts=[],
+            artifact_hashes=set(),
+            pipeline=None,
+        ),
+        omit_filter=OmitFilter({}),
+    )
+
+    filtered = str(result.jobs[0]["command"])
+    assert fragment_token not in filtered
+    assert "fragment-session" not in filtered
+    assert "deadbeef" not in filtered
+    assert filtered.count("[REDACTED]") == 3
+
+
 def test_detect_lineage_secrets_flags_bare_userinfo_git_url_with_real_filter() -> None:
     from roar.filters.omit import OmitFilter
 

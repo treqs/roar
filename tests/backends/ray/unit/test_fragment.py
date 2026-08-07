@@ -39,6 +39,7 @@ def _sample_fragment() -> TaskFragment:
             )
         ],
         worker_packages={"ray": "2.0.0"},
+        backend_metadata={"execution_role": "worker", "world_rank": 0},
     )
 
 

@@ -81,6 +81,7 @@ class RunContext(RoarBaseModel):
     command: Annotated[list[str], Field(min_length=1)]
     execution_backend: Annotated[str, Field(min_length=1)]
     execution_role: Annotated[str, Field(min_length=1)]
+    run_job_uid: str | None = None
     job_type: JobType | None = None
     step_name: str | None = None
     quiet: bool = False

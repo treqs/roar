@@ -9,7 +9,23 @@ RAY_STEP_NOISE_COMMANDS = (
     "ray_task:s3_proxy",
     "ray_task:s3_driver_proxy",
     "ray_task:RoarNodeAgent.__init__",
+    "ray_task:RoarNodeAgent.shutdown",
+    "ray_task:PlacementGroupCleaner.__init__",
+    "ray_task:RayTrainWorker.__init__",
+    "ray_task:SynchronizationActor.__init__",
+    "ray_task:_roar_prime_task",
+    "ray_task:broadcast_from_rank_zero",
+    "ray_task:poll_status",
+    "ray_task:shutdown_data_executors",
 )
+
+RAY_TRAIN_CONTROLLER_COMMANDS = (
+    "ray_task:TrainController.__init__",
+    "ray_task:TrainController.run",
+    "ray_task:DatasetManager.__init__",
+)
+
+RAY_TRAIN_WORKER_COMMANDS = ("ray_task:run_train_fn",)
 
 
 def is_ray_noise_command(command: str | None) -> bool:

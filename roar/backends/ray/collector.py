@@ -16,7 +16,11 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from roar.backends.ray.constants import RAY_STEP_NOISE_COMMANDS
+from roar.backends.ray.constants import (
+    RAY_STEP_NOISE_COMMANDS,
+    RAY_TRAIN_CONTROLLER_COMMANDS,
+    RAY_TRAIN_WORKER_COMMANDS,
+)
 from roar.backends.ray.fragment import TaskFragment, derive_task_identity
 from roar.execution.fragments.lineage import (
     FragmentLineageBackend,
@@ -286,11 +290,14 @@ def _ray_fragment_metadata(
     *,
     fallback_parent_job_uid: str | None,
 ) -> dict[str, Any]:
-    metadata: dict[str, Any] = {
-        "ray_task_id": fragment.task_id,
-        "ray_worker_id": fragment.worker_id,
-        "ray_node_id": fragment.node_id,
-    }
+    metadata: dict[str, Any] = dict(fragment.backend_metadata)
+    metadata.update(
+        {
+            "ray_task_id": fragment.task_id,
+            "ray_worker_id": fragment.worker_id,
+            "ray_node_id": fragment.node_id,
+        }
+    )
     if fragment.actor_id:
         metadata["ray_actor_id"] = fragment.actor_id
     if fallback_parent_job_uid and not fragment.parent_job_uid:
@@ -304,8 +311,15 @@ def _ray_fragment_role(
     fallback_parent_job_uid: str | None,
 ) -> str:
     command = _ray_fragment_command(fragment.task_name)
+    captured_role = str(fragment.backend_metadata.get("execution_role") or "").strip()
+    if captured_role:
+        return captured_role
+    if command in RAY_TRAIN_WORKER_COMMANDS:
+        return "worker"
+    if command in RAY_TRAIN_CONTROLLER_COMMANDS:
+        return "controller"
     if command in RAY_STEP_NOISE_COMMANDS:
-        return "noise"
+        return "internal"
 
     parent_job_uid = str(fragment.parent_job_uid or fallback_parent_job_uid or "").strip()
     task_name = str(fragment.task_name or "").strip()

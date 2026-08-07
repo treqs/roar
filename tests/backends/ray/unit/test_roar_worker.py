@@ -189,6 +189,34 @@ def test_start_fragment_uses_task_function_name(monkeypatch: pytest.MonkeyPatch)
     assert fragment.function_name == "ingest_shard"
 
 
+def test_start_fragment_captures_ray_train_rank_and_kubernetes_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import roar.backends.ray.roar_worker as roar_worker
+
+    monkeypatch.setenv("ROAR_JOB_ID", "job-abc")
+    monkeypatch.setenv("RANK", "1")
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+    monkeypatch.setenv("HOSTNAME", "ray-worker-1")
+    monkeypatch.setenv("POD_NAMESPACE", "treqs-dev")
+    monkeypatch.setattr(roar_worker, "_get_ray_job_id", lambda: "ray-job-123")
+
+    fragment = roar_worker._start_fragment("task-train", "ray.train._internal.run_train_fn")
+
+    assert fragment.backend_metadata == {
+        "execution_role": "worker",
+        "operation": "distributed_training",
+        "world_rank": 1,
+        "local_rank": 1,
+        "world_size": 2,
+        "ray_job_id": "ray-job-123",
+        "k8s_pod_name": "ray-worker-1",
+        "k8s_namespace": "treqs-dev",
+    }
+
+
 def test_parse_proxy_log_lines_extracts_s3_ops() -> None:
     import roar.backends.ray.roar_worker as roar_worker
 

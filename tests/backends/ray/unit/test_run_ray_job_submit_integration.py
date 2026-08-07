@@ -54,6 +54,7 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
                 backend_name="ray",
                 command=rewritten_command,
                 execution_role="submit",
+                run_job_uid="submit-uid",
                 session_id=None,
                 finalize_run=None,
             ),
@@ -67,6 +68,7 @@ def test_run_with_ray_job_submit_calls_rewrite() -> None:
     assert mock_exec.call_args.kwargs["backend_name"] == "ray"
     assert mock_exec.call_args.kwargs["execution_role"] == "submit"
     assert mock_exec.call_args.kwargs["command"] == rewritten_command
+    assert mock_exec.call_args.kwargs["run_job_uid"] == "submit-uid"
 
 
 def test_run_with_non_ray_command_does_not_call_rewrite() -> None:

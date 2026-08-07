@@ -61,12 +61,27 @@ def test_auto_reconstitution_populates_local_roar_db(
 
     result, _key_payload = _run_basic_file_job(project_dir, ray_cluster)
     counts = _count_rows(project_dir)
+    submit_jobs = query_roar_db(
+        project_dir,
+        """
+        SELECT job_uid
+        FROM jobs
+        WHERE execution_backend = 'ray' AND execution_role = 'submit'
+        """,
+    )
+    task_jobs = query_roar_db(
+        project_dir,
+        "SELECT parent_job_uid FROM jobs WHERE job_type = 'ray_task'",
+    )
 
     assert "[roar] lineage reconstituted:" in f"{result.stdout}\n{result.stderr}"
     assert counts["jobs"] > 0
     assert counts["artifacts"] > 0
     assert counts["job_inputs"] > 0
     assert counts["job_outputs"] > 0
+    assert len(submit_jobs) == 1
+    assert task_jobs
+    assert all(row["parent_job_uid"] == submit_jobs[0]["job_uid"] for row in task_jobs)
 
 
 def test_reconstituted_artifact_hash_rows_are_present_and_well_formed(
