@@ -91,6 +91,10 @@ def reproduce_artifact(
         hash_prefix=request.hash_prefix,
     )
 
+    if request.export_requirements:
+        _export_pip_requirements(pipeline, request.export_requirements, output)
+        return
+
     if not request.run_pipeline:
         _render_preview_summary(
             preview,
@@ -483,6 +487,28 @@ def build_reproduction_script(
         lines.append(f"{prefix} {cmd}")
     lines.append("")
     return "\n".join(lines)
+
+
+def _export_pip_requirements(pipeline: PipelineInfo, path: str, output: IPresenter) -> None:
+    """Write the recorded pip pins to a requirements.txt for offline debugging.
+
+    Complements ``--script`` (which emits the reproduction shell) by emitting the
+    *packages* in a pip-native form the user can try directly:
+    ``pip install --dry-run -r <file>`` shows exactly which pins don't resolve
+    (yanked, private, or on an extra index). No ``uv`` assumption.
+    """
+    summary = PipelineMetadataParser().summarize_requirements(
+        pipeline.build_steps, pipeline.run_steps
+    )
+    target = pipeline.artifact_hash or pipeline.session_hash or ""
+    header = [
+        f"# roar reproduce — recorded pip pins for {target[:12]}",
+        "# Try: pip install --dry-run -r <this file>  (shows which pins do not resolve)",
+        "# NOTE: the recorded --index-url/--extra-index-url is not replayed here yet,",
+        "#       so a pin published only on a custom index reads as 'not found'.",
+    ]
+    Path(path).write_text("\n".join([*header, *sorted(summary.pip)]) + "\n", encoding="utf-8")
+    output.print(f"Wrote {len(summary.pip)} pip requirement(s) to {path}")
 
 
 def build_preview_summary(
