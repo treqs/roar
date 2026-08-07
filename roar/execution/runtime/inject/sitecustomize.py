@@ -5,19 +5,40 @@ import os
 import sys
 
 
-def _prepend_roar_runtime_pythonpath() -> None:
-    """Prepend ``ROAR_RUNTIME_PYTHONPATH`` entries to ``sys.path`` (in order).
+def _roar_runtime_cache_root() -> str:
+    """``$XDG_CACHE_HOME/roar/runtime`` (default ``~/.cache/roar/runtime``).
 
-    When the traced Python has a lazy-installed ABI-matched runtime tree on
-    ``ROAR_RUNTIME_PYTHONPATH``, that tree must beat system site-packages —
-    the system copies are the wrong-ABI ones, which is exactly why we
-    installed the tree in the first place. Prepending the whole list in
-    declared order (cache, then bundled fallbacks) keeps the lazy-install
-    cache at ``sys.path[0]``.
+    Inlined to match ``lazy_install.runtime_cache_root()`` — this runs before
+    roar is importable, so it can't call into roar.
+    """
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = xdg if xdg else os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.abspath(os.path.join(base, "roar", "runtime"))
 
-    Logic is inlined (rather than imported from elsewhere in roar) because
-    this runs *before* roar is necessarily importable — making roar
-    importable is exactly what this function does.
+
+def _add_roar_runtime_pythonpath() -> None:
+    """Make roar importable in the traced process **without letting roar's own
+    environment shadow the workload's recorded packages**.
+
+    ``ROAR_RUNTIME_PYTHONPATH`` carries two very different kinds of entry:
+
+    - roar's lazy-installed **ABI-matched runtime cache**
+      (``~/.cache/roar/runtime/<tag>/site-packages``). This *must* beat the
+      system's wrong-ABI copies — that is why it was installed — so it is
+      **prepended**.
+    - roar's package root / the parent interpreter's **site-packages**, added so
+      a non-editable or cross-interpreter child can import roar at all. These are
+      **appended**, so the workload's own venv always wins.
+
+    Prepending the second kind was **P0-14**: when roar ran under a different
+    interpreter than the child (e.g. roar under system 3.10, workload venv 3.12),
+    its host ``dist-packages`` landed at ``sys.path[0]`` and shadowed the recorded
+    pins — the run executed against host packages and could certify GREEN for the
+    wrong reason. roar's core injection is pure-Python, so appending still leaves
+    it importable; ABI-specific backend deps are handled separately by the runtime
+    gate below.
+
+    Inlined (not imported from roar) because this runs before roar is importable.
     """
     if importlib.util.find_spec("roar") is not None:
         return
@@ -28,11 +49,17 @@ def _prepend_roar_runtime_pythonpath() -> None:
     ]
     if not new_paths:
         return
-    sys.path[:0] = new_paths
+    cache_root = _roar_runtime_cache_root()
+    must_win = [p for p in new_paths if os.path.abspath(p).startswith(cache_root + os.sep)]
+    others = [p for p in new_paths if p not in must_win]
+    if must_win:
+        sys.path[:0] = must_win  # ABI-matched cache must beat wrong-ABI system copies
+    if others:
+        sys.path.extend(others)  # roar's env must NOT shadow the workload's venv (P0-14)
     os.environ["ROAR_RUNTIME_PYTHONPATH_ACTIVE"] = os.pathsep.join(new_paths)
 
 
-_prepend_roar_runtime_pythonpath()
+_add_roar_runtime_pythonpath()
 
 from roar.execution.framework.runtime_imports import RuntimeImportController
 from roar.execution.runtime.inject.support import (
