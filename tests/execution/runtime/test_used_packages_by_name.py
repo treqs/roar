@@ -1,8 +1,12 @@
-"""P0-6: packages the workload imported by NAME are attributed even when the
-loaded module's file points elsewhere (an aliasing logging shim, e.g.
-``sys.modules["wandb"] = trackio``). Guarantee: no false positives — a package
-is recorded only if it was actually imported *and* is installed; the tracer
-itself is never attributed.
+"""P0-6 / P0-13: the name pass recovers a genuinely-used package the file pass
+mis-attributed because the import was ALIASED (e.g. `sys.modules["wandb"] =
+trackio`) — and ONLY that case. It must not attribute a normally-loaded import
+(file pass's job) nor a merely-probed optional import that happens to be
+installed (P0-13: `accelerate` probing `sagemaker` on a SageMaker AMI).
+
+Aliasing is detected via `loaded_files` (name -> the module file actually loaded
+for it): a name is attributed only when its loaded module lives in a *different*
+site-packages package than the name.
 """
 
 from __future__ import annotations
@@ -19,36 +23,62 @@ from roar.execution.runtime.inject.tracker import (
 )
 
 
-def test_imported_name_attributes_installed_dist_despite_alias(monkeypatch):
-    """`import wandb` while `wandb` is aliased to another module: the file pass
-    sees no wandb file, but the name pass records the real distribution."""
+def _loaded_as(pkg: str) -> str:
+    """A site-packages module file for top-level package ``pkg``."""
+    return f"/venv/lib/python3.12/site-packages/{pkg}/__init__.py"
+
+
+def test_aliased_import_attributed_by_name(monkeypatch):
+    """`import wandb` aliased to trackio: file pass sees only trackio, but the
+    name pass sees wandb was imported yet loaded a *different* package -> records
+    wandb."""
     monkeypatch.setattr(ilm, "packages_distributions", lambda: {"wandb": ["wandb"]})
     used = get_used_packages(
-        modules_files=[],  # the aliased import loaded no wandb file
+        modules_files=[],
         installed_packages={"wandb": "0.16.0", "trackio": "0.1.0"},
         imported_modules=["wandb"],
+        loaded_files={"wandb": _loaded_as("trackio")},  # aliased
     )
     assert used == {"wandb": "0.16.0"}
 
 
-def test_never_imported_package_is_not_added(monkeypatch):
-    """No false positives: a package that was not imported is never recorded,
-    even though it is installed and maps to a distribution."""
-    monkeypatch.setattr(
-        ilm, "packages_distributions", lambda: {"wandb": ["wandb"], "numpy": ["numpy"]}
+def test_probed_optional_import_is_not_attributed(monkeypatch):
+    """P0-13 (#264 regression): an optional import that merely happened to be
+    installed (loaded as ITSELF, or not loaded at all) is not aliased, so the
+    name pass leaves it out — no unsatisfiable substrate in the freeze."""
+    monkeypatch.setattr(ilm, "packages_distributions", lambda: {"sagemaker": ["sagemaker-core"]})
+    installed = {"sagemaker-core": "2.9.0"}
+    # loaded as itself (a real but merely-probed import) -> file pass's job, not ours
+    used_self = get_used_packages(
+        modules_files=[],
+        installed_packages=installed,
+        imported_modules=["sagemaker"],
+        loaded_files={"sagemaker": _loaded_as("sagemaker")},
     )
+    # probed via find_spec / lazy import -> never in loaded_files at all
+    used_absent = get_used_packages(
+        modules_files=[],
+        installed_packages=installed,
+        imported_modules=["sagemaker"],
+        loaded_files={},
+    )
+    assert "sagemaker-core" not in used_self
+    assert "sagemaker-core" not in used_absent
+
+
+def test_never_imported_package_is_not_added(monkeypatch):
+    monkeypatch.setattr(ilm, "packages_distributions", lambda: {"wandb": ["wandb"]})
     used = get_used_packages(
         modules_files=[],
-        installed_packages={"wandb": "0.16.0", "numpy": "2.0.0"},
-        imported_modules=["numpy", "os", "sys"],  # wandb never imported
+        installed_packages={"wandb": "0.16.0"},
+        imported_modules=["numpy", "os"],  # wandb never imported
+        loaded_files={"wandb": _loaded_as("trackio")},  # even if (somehow) aliased
     )
     assert "wandb" not in used
-    assert used.get("numpy") == "2.0.0"  # imported and installed -> attributed
 
 
 def test_imported_but_not_installed_and_tracer_never_attributed(monkeypatch):
-    """An imported name that isn't an installed dist is skipped (no unknown-name
-    fallback on this path), and roar (the tracer) is never recorded as a dep."""
+    """An aliased name that isn't installed is skipped; roar is never attributed."""
     monkeypatch.setattr(
         ilm, "packages_distributions", lambda: {"ghost": ["ghost"], "roar": ["roar-cli"]}
     )
@@ -56,14 +86,15 @@ def test_imported_but_not_installed_and_tracer_never_attributed(monkeypatch):
         modules_files=[],
         installed_packages={"roar-cli": "0.4.4"},  # 'ghost' not installed
         imported_modules=["ghost", "roar", "roar.execution.runtime"],
+        loaded_files={"ghost": _loaded_as("ghost_alias"), "roar": _loaded_as("roar_rt")},
     )
     assert used == {}
 
 
 def test_shadowed_import_recorded_through_write_log(tmp_path, monkeypatch):
     """End-to-end through the real capture path: tracking_import records the name,
-    write_log runs get_used_packages, and the shadowed package lands in the log's
-    used_packages — while a never-imported package would not."""
+    write_log builds loaded_files from sys.modules and runs get_used_packages, and
+    the aliased package lands in the log's used_packages."""
     from roar.execution.runtime.inject import tracker as tmod
 
     log_path = tmp_path / "log.json"
@@ -81,25 +112,24 @@ def test_shadowed_import_recorded_through_write_log(tmp_path, monkeypatch):
     monkeypatch.setattr(tmod, "get_installed_packages", lambda: {"wandb": "0.16.0"})
     monkeypatch.setattr(ilm, "packages_distributions", lambda: {"wandb": ["wandb"]})
 
-    # The shim: `wandb` resolves to a stand-in module with no __file__, so the
-    # file pass can't see it. The workload then imports it -> captured by name.
-    monkeypatch.setitem(sys.modules, "wandb", types.ModuleType("trackio_standin"))
-    tracker.tracking_import("wandb")  # the real import-capture path
+    # The shim: `wandb` resolves to a stand-in whose __file__ is trackio's, so the
+    # file pass records trackio, not wandb — but the name pass detects the alias.
+    stand_in = types.ModuleType("trackio_standin")
+    stand_in.__file__ = _loaded_as("trackio")
+    monkeypatch.setitem(sys.modules, "wandb", stand_in)
+    tracker.tracking_import("wandb")
 
     tracker.write_log()
-    # write_log writes the canonical path on its own, or a per-PID shard once the
-    # P0-9 sharding change is present; read whichever it produced.
     shard = log_path.with_name(f"{log_path.name}.{os.getpid()}")
-    written = log_path if log_path.exists() else shard
+    written = log_path if log_path.exists() else shard  # canonical, or per-PID shard (P0-9)
     payload = json.loads(written.read_text())
     assert "wandb" in payload["imported_modules"]
     assert payload["used_packages"].get("wandb") == "0.16.0"
 
 
 def test_roar_is_never_recorded_in_the_freeze_via_file_pass(monkeypatch):
-    """P0-11: roar records itself otherwise. A dev build would then pin
-    roar-cli==X.Y.dev0, which can't resolve on reproduce. The file pass must skip
-    roar just like the name pass does."""
+    """P0-11: the file pass must skip roar (roar-cli is installed separately and
+    unpinned; a dev build would otherwise pin an unresolvable roar-cli==X.Y.dev0)."""
     monkeypatch.setattr(ilm, "packages_distributions", lambda: {"roar": ["roar-cli"]})
     used = get_used_packages(
         modules_files=["/venv/lib/python3.12/site-packages/roar/__init__.py"],
@@ -116,28 +146,23 @@ class _FakeDist:
         return self._path
 
 
-def test_self_package_from_editable_egg_info_is_not_pinned(tmp_path, monkeypatch):
-    """P0-12 (#264 regression): `pip install -e .` (or its leftover
-    <pkg>.egg-info after uninstall) resolves inside the repo, so the name pass
-    must not re-pin the workload's own package from PyPI."""
-    repo = tmp_path / "repo"
-    egg_info = repo / "mypkg.egg-info"
-    egg_info.mkdir(parents=True)
+def test_self_package_from_editable_is_not_pinned(tmp_path, monkeypatch):
+    """P0-12: the workload's own `pip install -e .` package loads from the repo,
+    not site-packages, so it isn't aliased and the name pass leaves it out."""
     monkeypatch.setattr(ilm, "packages_distributions", lambda: {"mypkg": ["mypkg"]})
-    monkeypatch.setattr(ilm, "distribution", lambda name: _FakeDist(egg_info))
     used = get_used_packages(
         modules_files=[],
         installed_packages={"mypkg": "1.0"},
         imported_modules=["mypkg"],
-        workload_root=str(repo),
+        loaded_files={"mypkg": str(tmp_path / "repo" / "mypkg" / "__init__.py")},
+        workload_root=str(tmp_path / "repo"),
     )
     assert "mypkg" not in used
 
 
-def test_real_site_packages_dep_outside_repo_is_still_pinned(tmp_path, monkeypatch):
-    """The P0-12 skip must NOT drop a genuine dependency: a dist whose metadata
-    lives outside the repo (normal site-packages install) is still recorded even
-    when workload_root is set."""
+def test_real_aliased_dep_outside_repo_is_still_pinned(tmp_path, monkeypatch):
+    """A genuinely aliased dep whose metadata is outside the repo is still
+    recorded (the P0-12 repo skip must not drop it)."""
     repo = tmp_path / "repo"
     repo.mkdir()
     dist_info = tmp_path / "site-packages" / "wandb-0.16.0.dist-info"
@@ -148,6 +173,7 @@ def test_real_site_packages_dep_outside_repo_is_still_pinned(tmp_path, monkeypat
         modules_files=[],
         installed_packages={"wandb": "0.16.0"},
         imported_modules=["wandb"],
+        loaded_files={"wandb": _loaded_as("trackio")},  # aliased
         workload_root=str(repo),
     )
     assert used.get("wandb") == "0.16.0"
