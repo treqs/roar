@@ -77,10 +77,10 @@ BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
         re.compile(r"(sk-ant-[a-zA-Z0-9\-]+)"),
         "[ANTHROPIC_KEY_REDACTED]",
     ),
-    # HuggingFace token
+    # HuggingFace token — {20,} (not exact-34) to catch token-length variants (P0-16)
     (
         "huggingface_token",
-        re.compile(r"(hf_[a-zA-Z0-9]{34})"),
+        re.compile(r"(hf_[A-Za-z0-9]{20,})"),
         "[HF_TOKEN_REDACTED]",
     ),
     # GitLab personal/project/CI access tokens
