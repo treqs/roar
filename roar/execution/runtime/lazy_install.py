@@ -6,9 +6,9 @@ roar's bundled compiled deps don't match the traced Python's ABI. This
 module installs a matching tree of runtime deps on demand into a per-ABI
 cache directory under ``~/.cache/roar/runtime/<tag>/``.
 
-``sitecustomize.py``'s ``_append_roar_runtime_pythonpath`` prepends the
-cache directory to ``sys.path`` in the traced process, so imports there
-resolve to the ABI-matched copies before reaching roar's bundled tree.
+``sitecustomize.py`` prepends the cache directory only when its import names
+do not collide with the workload. A collision degrades optional backend
+dispatch instead of changing which packages the workload imports.
 """
 
 from __future__ import annotations

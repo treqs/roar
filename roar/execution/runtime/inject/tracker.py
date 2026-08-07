@@ -49,17 +49,27 @@ def get_loaded_shared_libs(real_open) -> list[str]:
     return sorted(libs)
 
 
-def get_installed_packages() -> dict[str, str]:
+def get_installed_packages(
+    excluded_paths: Sequence[str] = (),
+) -> dict[str, str]:
     packages: dict[str, str] = {}
     try:
         from importlib import metadata as importlib_metadata
 
         for dist in importlib_metadata.distributions():
+            try:
+                distribution_root = str(dist.locate_file(""))
+            except Exception:
+                distribution_root = ""
+            if distribution_root and is_under_any_runtime_path(distribution_root, excluded_paths):
+                continue
             metadata = cast(Mapping[str, str], dist.metadata)
             name = metadata.get("Name", None)
             version = metadata.get("Version", None)
             if name and version:
-                packages[name] = version
+                # Import resolution and distributions() both follow sys.path order.
+                # Preserve the first visible workload distribution for duplicate names.
+                packages.setdefault(name, version)
     except Exception:
         pass
     return packages
@@ -253,8 +263,15 @@ def get_active_runtime_pythonpath(environ: Mapping[str, str]) -> tuple[str, ...]
 def is_under_any_runtime_path(path: str, runtime_paths: Sequence[str]) -> bool:
     if not runtime_paths:
         return False
-    abs_path = os.path.abspath(path)
-    return any(abs_path.startswith(runtime_path) for runtime_path in runtime_paths)
+    abs_path = os.path.normcase(os.path.abspath(path))
+    for runtime_path in runtime_paths:
+        abs_runtime_path = os.path.normcase(os.path.abspath(runtime_path))
+        try:
+            if os.path.commonpath([abs_path, abs_runtime_path]) == abs_runtime_path:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 class RuntimeInjectionTracker:
@@ -331,7 +348,8 @@ class RuntimeInjectionTracker:
                 runtime_pythonpath,
             )
         )
-        installed_packages = get_installed_packages()
+        # Trev's #268: exclude roar's own runtime-tree dists from the installed set.
+        installed_packages = get_installed_packages(excluded_paths=runtime_pythonpath)
         # name -> loaded module file, so get_used_packages can tell an ALIASED
         # import (sys.modules[name] resolves to a different package) from a normal
         # or merely-probed one. Keyed by the sys.modules key (the import name),

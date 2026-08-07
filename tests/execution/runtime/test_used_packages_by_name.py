@@ -109,7 +109,8 @@ def test_shadowed_import_recorded_through_write_log(tmp_path, monkeypatch):
         log_file=str(log_path),
         inject_dir=str(tmp_path / "inject"),
     )
-    monkeypatch.setattr(tmod, "get_installed_packages", lambda: {"wandb": "0.16.0"})
+    # get_installed_packages now takes excluded_paths (#268); accept and ignore it.
+    monkeypatch.setattr(tmod, "get_installed_packages", lambda **_: {"wandb": "0.16.0"})
     monkeypatch.setattr(ilm, "packages_distributions", lambda: {"wandb": ["wandb"]})
 
     # The shim: `wandb` resolves to a stand-in whose __file__ is trackio's, so the

@@ -1,12 +1,12 @@
 """sitecustomize places ROAR_RUNTIME_PYTHONPATH entries with the right precedence.
 
 When the traced Python can't already import roar (the cross-Python /
-lazy-install scenario), ``sitecustomize.py`` adds ``ROAR_RUNTIME_PYTHONPATH``
-entries to ``sys.path`` with two different precedences:
+lazy-install scenario), ``sitecustomize.py`` adds safe
+``ROAR_RUNTIME_PYTHONPATH`` entries to ``sys.path`` with two precedences:
 
-- roar's **ABI-matched runtime cache** (``~/.cache/roar/runtime/<tag>/…``) is
-  **prepended** — it must beat the child's system copies (the friction-journal
-  bug: a lazy-installed ``typing_extensions`` 4.15 losing to system 4.4).
+- a non-conflicting **ABI-matched runtime cache** is **prepended** so it can
+  beat the child's system copies;
+- a cache with any workload import-name collision is not activated;
 - everything else (roar's host site-packages, added only so a cross-interpreter
   child can import roar) is **appended** — prepending it was P0-14: roar's host
   packages shadowed the workload's recorded pins and the run executed against
@@ -32,7 +32,7 @@ _PATCH_AND_IMPORT = """
 import importlib.util, importlib, sys
 _real = importlib.util.find_spec
 importlib.util.find_spec = lambda name, *a, **k: None if name == "roar" else _real(name, *a, **k)
-importlib.import_module("roar.execution.runtime.inject.sitecustomize")
+_sitecustomize = importlib.import_module("roar.execution.runtime.inject.sitecustomize")
 """
 
 
@@ -79,6 +79,75 @@ def test_abi_matched_cache_is_prepended(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
     assert f"first={cache_dir}" in result.stdout, result.stdout
+
+
+def test_abi_cache_with_workload_collision_is_not_activated(tmp_path: Path) -> None:
+    cache_home = tmp_path / "xdg"
+    cache_dir = cache_home / "roar" / "runtime" / "cp999" / "site-packages"
+    workload_dir = tmp_path / "workload"
+    cache_dir.mkdir(parents=True)
+    workload_dir.mkdir()
+    (cache_dir / "shadowpkg.py").write_text("MARK = 'cache'\n", encoding="utf-8")
+    (workload_dir / "shadowpkg.py").write_text("MARK = 'workload'\n", encoding="utf-8")
+
+    code = _PATCH_AND_IMPORT + textwrap.dedent(
+        f"""
+        import os, shadowpkg
+        target = {str(cache_dir)!r}
+        print("cache_present=" + str(target in sys.path))
+        print("winner=" + shadowpkg.MARK)
+        print("collisions=" + os.environ.get("ROAR_RUNTIME_CACHE_COLLISIONS", ""))
+        """
+    )
+    result = _run_python(
+        code,
+        roar_runtime_pythonpath=str(cache_dir),
+        extra_env={
+            "XDG_CACHE_HOME": str(cache_home),
+            "PYTHONPATH": os.pathsep.join([str(SOURCE_ROOT), str(workload_dir)]),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert "cache_present=False" in result.stdout, result.stdout
+    assert "winner=workload" in result.stdout, result.stdout
+    assert "collisions=shadowpkg" in result.stdout, result.stdout
+
+
+def test_in_process_repair_degrades_instead_of_activating_a_colliding_cache(
+    tmp_path: Path,
+) -> None:
+    cache_dir = tmp_path / "cache" / "site-packages"
+    workload_dir = tmp_path / "workload"
+    cache_dir.mkdir(parents=True)
+    workload_dir.mkdir()
+    (cache_dir / "shadowpkg.py").write_text("MARK = 'cache'\n", encoding="utf-8")
+    (workload_dir / "shadowpkg.py").write_text("MARK = 'workload'\n", encoding="utf-8")
+
+    code = _PATCH_AND_IMPORT + textwrap.dedent(
+        f"""
+        import os
+        from pathlib import Path
+        from roar.execution.runtime import lazy_install
+
+        lazy_install.ensure_runtime = lambda **_kwargs: Path({str(cache_dir)!r})
+        repaired = _sitecustomize._repair_runtime_in_process("cpython-999")
+        print("repaired=" + str(repaired))
+        print("cache_present=" + str({str(cache_dir)!r} in sys.path))
+        print("collisions=" + os.environ.get("ROAR_RUNTIME_CACHE_COLLISIONS", ""))
+        print(_sitecustomize._runtime_gate_degrade_message((3, 99)))
+        """
+    )
+    result = _run_python(
+        code,
+        extra_env={
+            "PYTHONPATH": os.pathsep.join([str(SOURCE_ROOT), str(workload_dir)]),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert "repaired=False" in result.stdout, result.stdout
+    assert "cache_present=False" in result.stdout, result.stdout
+    assert "collisions=shadowpkg" in result.stdout, result.stdout
+    assert "Runtime cache disabled to preserve workload imports: shadowpkg." in result.stdout
 
 
 def test_host_site_packages_are_appended_not_prepended(tmp_path: Path) -> None:

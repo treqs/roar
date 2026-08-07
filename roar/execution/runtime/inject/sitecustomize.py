@@ -1,8 +1,11 @@
 # ruff: noqa: E402
 import atexit
+import importlib.machinery
 import importlib.util
 import os
 import sys
+
+_RUNTIME_CACHE_COLLISIONS_ENV = "ROAR_RUNTIME_CACHE_COLLISIONS"
 
 
 def _roar_runtime_cache_root() -> str:
@@ -16,6 +19,116 @@ def _roar_runtime_cache_root() -> str:
     return os.path.abspath(os.path.join(base, "roar", "runtime"))
 
 
+def _path_key(path: str) -> str:
+    """Normalize a path for comparisons without changing import ordering."""
+    return os.path.normcase(os.path.realpath(os.path.abspath(path or os.curdir)))
+
+
+def _runtime_pythonpath_entries() -> list[str]:
+    return [
+        path for path in os.environ.get("ROAR_RUNTIME_PYTHONPATH", "").split(os.pathsep) if path
+    ]
+
+
+def _workload_search_path() -> list[str]:
+    """Return the original workload import roots, excluding Roar-owned paths."""
+    roar_paths = {_path_key(path) for path in _runtime_pythonpath_entries()}
+    roar_paths.update(
+        _path_key(path)
+        for path in os.environ.get("ROAR_RUNTIME_PYTHONPATH_ACTIVE", "").split(os.pathsep)
+        if path
+    )
+    roar_paths.add(_path_key(os.path.dirname(os.path.abspath(__file__))))
+    return [path for path in sys.path if _path_key(path) not in roar_paths]
+
+
+def _top_level_import_names(paths: list[str]) -> set[str]:
+    """Discover import names supplied by one or more site-packages trees."""
+    names: set[str] = set()
+    import_suffixes = sorted(
+        {
+            *importlib.machinery.SOURCE_SUFFIXES,
+            *importlib.machinery.BYTECODE_SUFFIXES,
+            *importlib.machinery.EXTENSION_SUFFIXES,
+        },
+        key=len,
+        reverse=True,
+    )
+    for path in paths:
+        try:
+            entries = os.scandir(path)
+        except OSError:
+            continue
+        with entries:
+            for entry in entries:
+                entry_name = entry.name
+                if entry_name.startswith(".") or entry_name == "__pycache__":
+                    continue
+                if entry_name.endswith((".dist-info", ".egg-info", ".data")):
+                    continue
+                try:
+                    if entry.is_dir():
+                        candidate = entry_name
+                    elif entry.is_file():
+                        candidate = ""
+                        for suffix in import_suffixes:
+                            if entry_name.endswith(suffix):
+                                candidate = entry_name[: -len(suffix)]
+                                break
+                    else:
+                        continue
+                except OSError:
+                    continue
+                if candidate.isidentifier():
+                    names.add(candidate)
+    return names
+
+
+def _runtime_cache_collisions(cache_paths: list[str]) -> tuple[str, ...]:
+    """Names a cache would shadow on the workload's unmodified search path."""
+    workload_paths = _workload_search_path()
+    collisions: list[str] = []
+    for name in sorted(_top_level_import_names(cache_paths)):
+        try:
+            spec = importlib.machinery.PathFinder.find_spec(name, workload_paths)
+        except Exception:
+            # Detection uncertainty must degrade rather than risk changing the workload.
+            collisions.append(name)
+            continue
+        if spec is not None:
+            collisions.append(name)
+    return tuple(collisions)
+
+
+def _record_runtime_cache_collisions(collisions: tuple[str, ...]) -> None:
+    if collisions:
+        os.environ[_RUNTIME_CACHE_COLLISIONS_ENV] = ",".join(collisions)
+    else:
+        os.environ.pop(_RUNTIME_CACHE_COLLISIONS_ENV, None)
+
+
+def _set_active_runtime_paths(paths: list[str]) -> None:
+    if paths:
+        os.environ["ROAR_RUNTIME_PYTHONPATH_ACTIVE"] = os.pathsep.join(paths)
+    else:
+        os.environ.pop("ROAR_RUNTIME_PYTHONPATH_ACTIVE", None)
+
+
+def _add_active_runtime_path(path: str, *, prepend: bool = False) -> None:
+    active = [
+        entry
+        for entry in os.environ.get("ROAR_RUNTIME_PYTHONPATH_ACTIVE", "").split(os.pathsep)
+        if entry
+    ]
+    if path in active:
+        return
+    if prepend:
+        active.insert(0, path)
+    else:
+        active.append(path)
+    _set_active_runtime_paths(active)
+
+
 def _add_roar_runtime_pythonpath() -> None:
     """Make roar importable in the traced process **without letting roar's own
     environment shadow the workload's recorded packages**.
@@ -25,7 +138,7 @@ def _add_roar_runtime_pythonpath() -> None:
     - roar's lazy-installed **ABI-matched runtime cache**
       (``~/.cache/roar/runtime/<tag>/site-packages``). This *must* beat the
       system's wrong-ABI copies — that is why it was installed — so it is
-      **prepended**.
+      **prepended only when none of its import names overlap the workload**.
     - roar's package root / the parent interpreter's **site-packages**, added so
       a non-editable or cross-interpreter child can import roar at all. These are
       **appended**, so the workload's own venv always wins.
@@ -42,21 +155,22 @@ def _add_roar_runtime_pythonpath() -> None:
     """
     if importlib.util.find_spec("roar") is not None:
         return
-    new_paths = [
-        path
-        for path in os.environ.get("ROAR_RUNTIME_PYTHONPATH", "").split(os.pathsep)
-        if path and path not in sys.path
-    ]
+    new_paths = [path for path in _runtime_pythonpath_entries() if path not in sys.path]
     if not new_paths:
         return
     cache_root = _roar_runtime_cache_root()
     must_win = [p for p in new_paths if os.path.abspath(p).startswith(cache_root + os.sep)]
     others = [p for p in new_paths if p not in must_win]
-    if must_win:
+    collisions = _runtime_cache_collisions(must_win) if must_win else ()
+    _record_runtime_cache_collisions(collisions)
+    active_paths: list[str] = []
+    if must_win and not collisions:
         sys.path[:0] = must_win  # ABI-matched cache must beat wrong-ABI system copies
+        active_paths.extend(must_win)
     if others:
         sys.path.extend(others)  # roar's env must NOT shadow the workload's venv (P0-14)
-    os.environ["ROAR_RUNTIME_PYTHONPATH_ACTIVE"] = os.pathsep.join(new_paths)
+        active_paths.extend(others)
+    _set_active_runtime_paths(active_paths)
 
 
 _add_roar_runtime_pythonpath()
@@ -121,14 +235,26 @@ def _repair_runtime_in_process(expected_soabi: str) -> bool:
     if tree is None:
         return False
     tree_str = str(tree)
+    collisions = _runtime_cache_collisions([tree_str])
+    _record_runtime_cache_collisions(collisions)
+    if collisions:
+        return False
     if tree_str not in sys.path:
         sys.path.insert(0, tree_str)
+    _add_active_runtime_path(tree_str, prepend=True)
     return matching_compiled_pydantic_core(sys.path, expected_soabi)
 
 
 def _runtime_gate_degrade_message(running_abi: tuple[int, int]) -> str:
+    collisions = os.environ.get(_RUNTIME_CACHE_COLLISIONS_ENV, "")
+    collision_message = (
+        f"  Runtime cache disabled to preserve workload imports: {collisions}.\n"
+        if collisions
+        else ""
+    )
     return (
         f"roar: no ABI-matched runtime found for Python {running_abi[0]}.{running_abi[1]}.\n"
+        f"{collision_message}"
         f"  Backend integrations (Ray, OSMO) are disabled for this run.\n"
         f"  File I/O is still captured.\n"
         f"  Fix one of:\n"

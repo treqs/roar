@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
+
+import pytest
 
 from roar.execution.runtime.inject.tracker import (
     RuntimeInjectionTracker,
+    get_active_runtime_pythonpath,
+    get_installed_packages,
+    get_used_packages,
     merge_inject_logs,
 )
 
@@ -80,6 +86,38 @@ def test_runtime_tracker_excludes_roar_runtime_pythonpath_modules(tmp_path) -> N
     merge_inject_logs(str(log_path))  # write_log writes a per-PID shard; merge -> canonical
     payload = json.loads(log_path.read_text(encoding="utf-8"))
     assert str(runtime_module) not in payload["modules_files"]
+
+
+def test_package_version_comes_from_imported_workload_distribution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workload = tmp_path / "workload" / "site-packages"
+    runtime = tmp_path / "runtime" / "site-packages"
+
+    def write_distribution(root: Path, version: str) -> Path:
+        root.mkdir(parents=True)
+        module = root / "shadowpkg.py"
+        module.write_text("VALUE = 1\n", encoding="utf-8")
+        metadata = root / f"shadowpkg-{version}.dist-info"
+        metadata.mkdir()
+        (metadata / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: shadowpkg\nVersion: {version}\n",
+            encoding="utf-8",
+        )
+        (metadata / "top_level.txt").write_text("shadowpkg\n", encoding="utf-8")
+        return module
+
+    workload_module = write_distribution(workload, "1.0")
+    write_distribution(runtime, "9.0")
+    monkeypatch.setattr(sys, "path", [str(workload), str(runtime), *sys.path])
+    runtime_paths = get_active_runtime_pythonpath({"ROAR_RUNTIME_PYTHONPATH_ACTIVE": str(runtime)})
+
+    installed = get_installed_packages(excluded_paths=runtime_paths)
+    used = get_used_packages([str(workload_module)], installed)
+
+    assert installed["shadowpkg"] == "1.0"
+    assert used["shadowpkg"] == "1.0"
 
 
 def test_runtime_tracker_excludes_roar_internal_env_reads(tmp_path) -> None:
