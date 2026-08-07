@@ -80,14 +80,29 @@ def _dist_is_in_repo(dist_name: str, repo_root: str) -> bool:
         return False
 
 
+def _site_packages_top(fpath: str) -> str | None:
+    """The top-level package dir for a file under site-packages, else None."""
+    idx = fpath.find("site-packages/")
+    if idx < 0:
+        return None
+    top = fpath[idx + len("site-packages/") :].split("/")[0]
+    if top.endswith(".py"):
+        top = top[:-3]
+    if top.startswith("_") or top.endswith((".dist-info", ".egg-info", ".so")):
+        return None
+    return top
+
+
 def get_used_packages(
     modules_files: Sequence[str],
     installed_packages: Mapping[str, str | None],
     imported_modules: Sequence[str] = (),
     workload_root: str | None = None,
+    loaded_files: Mapping[str, str] | None = None,
 ) -> dict[str, str | None]:
     used: dict[str, str | None] = {}
     repo_root = os.path.abspath(workload_root) if workload_root else None
+    loaded = loaded_files or {}
 
     try:
         from importlib import metadata as importlib_metadata
@@ -128,33 +143,39 @@ def get_used_packages(
     except Exception:
         pass
 
-    # Attribute packages the workload IMPORTED BY NAME, not just by loaded file.
-    # An aliased import (e.g. a `sys.modules["wandb"] = trackio` logging shim)
-    # leaves the loaded module's __file__ pointing at the alias target, so the
-    # file pass above records trackio and never wandb — yet the job genuinely
-    # depends on wandb (its dist metadata is queried, its install is required),
-    # so wandb silently drops out of the recorded environment. The import NAME is
-    # the honest signal: `import wandb` is captured even when sys.modules is
-    # pre-populated, because Python still calls __import__("wandb", ...).
+    # Recover packages the workload IMPORTED but that the file pass mis-attributed
+    # because the import was ALIASED — e.g. a `sys.modules["wandb"] = trackio`
+    # logging shim leaves the loaded module's __file__ pointing at trackio, so the
+    # file pass records trackio and never wandb, yet the job genuinely needs wandb
+    # (its dist metadata is queried; its install is required).
     #
-    # No false positives: we only add a name that (a) the workload actually
-    # imported, and (b) maps to an INSTALLED distribution — there is no
-    # unknown-name fallback here, and the tracer's own package is never
-    # attributed. A package that was never imported can never appear.
+    # Scope this strictly to the aliased case: attribute a name only when it was
+    # imported AND the module actually loaded for it lives in a DIFFERENT
+    # site-packages package than the name. This is precisely what the file pass
+    # cannot see. It deliberately excludes:
+    #   - normally-loaded imports (name == loaded package)  -> the file pass's job;
+    #   - merely-probed optional imports that happen to be installed (e.g.
+    #     accelerate probing `sagemaker` on a SageMaker AMI) -> not loaded as an
+    #     alias, so not attributed. Attributing those poisoned the freeze with
+    #     unsatisfiable substrate pins — P0-13 (#264 regression).
+    # A never-imported package can never appear; the tracer's own package and the
+    # workload's own (editable/self) package are excluded as well.
     try:
         for name in imported_modules:
             top = name.split(".")[0]
             if not top or top.startswith("_") or top == "roar":
                 continue
+            loaded_file = loaded.get(top)
+            if not loaded_file:
+                continue  # not actually loaded (find_spec probe / lazy import)
+            loaded_top = _site_packages_top(loaded_file)
+            if loaded_top is None or loaded_top == top:
+                continue  # loaded as itself / not under site-packages -> file pass handles it
             for pkg_name in pkg_dist_map.get(top, []):
                 if pkg_name not in installed_packages or pkg_name in used:
                     continue
-                # Skip the workload's OWN package. `pip install -e .` (and the
-                # leftover <pkg>.egg-info a later `pip uninstall` leaves, which
-                # importlib.metadata still reports as installed) resolves inside
-                # the repo, not site-packages. Pinning it would re-pin from PyPI
-                # the self-install we uninstalled to keep the tracer honest.
-                # P0-12 (#264 regression).
+                # The workload's OWN package (editable / leftover .egg-info in the
+                # repo) is not a third-party dep — P0-12.
                 if repo_root and _dist_is_in_repo(pkg_name, repo_root):
                     continue
                 used[pkg_name] = installed_packages[pkg_name]
@@ -311,11 +332,21 @@ class RuntimeInjectionTracker:
             )
         )
         installed_packages = get_installed_packages()
+        # name -> loaded module file, so get_used_packages can tell an ALIASED
+        # import (sys.modules[name] resolves to a different package) from a normal
+        # or merely-probed one. Keyed by the sys.modules key (the import name),
+        # whose __file__ may point at the alias target.
+        loaded_files = {
+            name: os.path.abspath(getattr(module, "__file__", ""))
+            for name, module in sys.modules.items()
+            if getattr(module, "__file__", None)
+        }
         used_packages = get_used_packages(
             modules_files,
             installed_packages,
             sorted(self.imported_modules),
             workload_root=os.getcwd(),
+            loaded_files=loaded_files,
         )
         data = {
             "opened_files": sorted(self.opened_files),
