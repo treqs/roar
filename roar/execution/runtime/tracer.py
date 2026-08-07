@@ -114,8 +114,9 @@ class TracerService:
     ) -> list[str]:
         """Probe the target Python and lazy-install a matching runtime tree on mismatch.
 
-        Returns a list of site-packages paths to prepend to
-        ``ROAR_RUNTIME_PYTHONPATH``. Empty on:
+        Returns a list of ABI-matched site-packages paths for
+        ``ROAR_RUNTIME_PYTHONPATH``. ``sitecustomize`` activates a returned
+        path only when it cannot shadow a workload import. Empty on:
         - non-Python targets (bash, make, etc.) — can't probe a python ABI;
         - matching ABI — bundled deps work as-is;
         - ``runtime.install = skip`` — opted out;
