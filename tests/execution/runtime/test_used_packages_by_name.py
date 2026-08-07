@@ -178,3 +178,31 @@ def test_real_aliased_dep_outside_repo_is_still_pinned(tmp_path, monkeypatch):
         workload_root=str(repo),
     )
     assert used.get("wandb") == "0.16.0"
+
+
+def test_dist_packages_import_is_recorded(monkeypatch):
+    """P0-18: a package loaded from dist-packages (system Python, e.g. the cert
+    AMI) must reach the freeze — the file pass previously only matched
+    site-packages, so it was dropped entirely."""
+    monkeypatch.setattr(
+        ilm, "packages_distributions", lambda: {"huggingface_hub": ["huggingface-hub"]}
+    )
+    used = get_used_packages(
+        modules_files=["/usr/lib/python3/dist-packages/huggingface_hub/__init__.py"],
+        installed_packages={"huggingface-hub": "1.27.0"},
+    )
+    assert used.get("huggingface-hub") == "1.27.0"
+
+
+def test_failed_probe_import_is_not_recorded_even_with_dist_packages(monkeypatch):
+    """P0-13 must stay fixed: a probed import that FAILED (never loaded, so not in
+    modules_files/loaded_files — only its name is in imported_modules) is not
+    recorded, even now that dist-packages is recognized."""
+    monkeypatch.setattr(ilm, "packages_distributions", lambda: {"sagemaker": ["sagemaker-core"]})
+    used = get_used_packages(
+        modules_files=[],  # import sagemaker failed -> not loaded
+        installed_packages={"sagemaker-core": "2.9.0"},
+        imported_modules=["sagemaker"],  # name recorded before the failed import
+        loaded_files={},  # not in sys.modules
+    )
+    assert "sagemaker-core" not in used
