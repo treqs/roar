@@ -11,6 +11,7 @@ from roar.execution.runtime.inject.tracker import (
     get_active_runtime_pythonpath,
     get_installed_packages,
     get_used_packages,
+    merge_inject_logs,
 )
 
 
@@ -37,6 +38,7 @@ def test_runtime_tracker_writes_expected_log_payload(tmp_path) -> None:
     assert tracker.patched_environ_get("VIRTUAL_ENV") == "/tmp/venv"
     tracker.write_log()
 
+    merge_inject_logs(str(log_path))  # write_log writes a per-PID shard; merge -> canonical
     payload = json.loads(log_path.read_text(encoding="utf-8"))
     assert str(data_path.resolve()) in payload["opened_files"]
     assert payload["env_reads"]["VIRTUAL_ENV"] == "/tmp/venv"
@@ -81,6 +83,7 @@ def test_runtime_tracker_excludes_roar_runtime_pythonpath_modules(tmp_path) -> N
         sys.path.remove(str(runtime_root))
         sys.modules.pop("runtime_only", None)
 
+    merge_inject_logs(str(log_path))  # write_log writes a per-PID shard; merge -> canonical
     payload = json.loads(log_path.read_text(encoding="utf-8"))
     assert str(runtime_module) not in payload["modules_files"]
 
@@ -145,6 +148,7 @@ def test_runtime_tracker_excludes_roar_internal_env_reads(tmp_path) -> None:
     assert tracker.patched_environ_get("HOME") == "/home/ubuntu"
     tracker.write_log()
 
+    merge_inject_logs(str(log_path))  # write_log writes a per-PID shard; merge -> canonical
     payload = json.loads(log_path.read_text(encoding="utf-8"))
     env_reads = payload["env_reads"]
     # User-facing reads are kept; roar's reserved namespace is dropped.
