@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import glob
 import json
 import os
 import platform
@@ -104,6 +105,61 @@ def get_used_packages(
         pass
 
     return used
+
+
+_MERGE_LIST_FIELDS = ("opened_files", "imported_modules", "modules_files", "shared_libs")
+_MERGE_DICT_FIELDS = ("used_packages", "installed_packages", "env_reads")
+
+
+def merge_inject_logs(base_path: str) -> None:
+    """Union per-PID inject-log shards (``{base_path}.<pid>``) into one record at
+    ``base_path``.
+
+    Every process in a traced tree writes its own shard (see
+    :meth:`RuntimeInjectionTracker.write_log`). Unioning them recovers the full
+    workload — packages, files and imports seen by the parent AND by any worker —
+    instead of whichever process happened to write last. Set/dict activity is
+    unioned; scalar identity (``argv``, ``python_version``, ...) is taken from the
+    richest shard, i.e. the one that imported the most modules: multiprocessing
+    workers (``python -c ...``) import a subset, the workload imports everything.
+
+    A no-op if there are no shards (e.g. the tracer produced no report).
+    """
+    shards: list[tuple[str, dict]] = []
+    for path in sorted(glob.glob(glob.escape(base_path) + ".*")):
+        try:
+            with open(path) as handle:
+                shards.append((path, json.load(handle)))
+        except (OSError, ValueError):
+            continue
+    if not shards:
+        return
+
+    # Richest shard = most imported modules -> the workload, not a worker.
+    primary = max((data for _, data in shards), key=lambda d: len(d.get("modules_files") or []))
+    merged: dict[str, Any] = dict(primary)
+
+    for field in _MERGE_LIST_FIELDS:
+        union: set[str] = set()
+        for _, data in shards:
+            union.update(data.get(field) or [])
+        merged[field] = sorted(union)
+
+    for field in _MERGE_DICT_FIELDS:
+        combined: dict[str, Any] = {}
+        for _, data in shards:
+            for key, value in (data.get(field) or {}).items():
+                # Prefer a concrete version over a None placeholder.
+                if key not in combined or combined[key] is None:
+                    combined[key] = value
+        merged[field] = dict(sorted(combined.items()))
+
+    with open(base_path, "w") as handle:
+        json.dump(merged, handle)
+
+    for path, _ in shards:
+        with contextlib.suppress(OSError):
+            os.remove(path)
 
 
 def get_active_runtime_pythonpath(environ: Mapping[str, str]) -> tuple[str, ...]:
@@ -214,8 +270,18 @@ class RuntimeInjectionTracker:
             "used_packages": used_packages,
             "python_version": platform.python_version(),
             "python_implementation": platform.python_implementation(),
+            "pid": os.getpid(),
+            "ppid": os.getppid(),
         }
-        with self._real_open(self._log_file, "w") as handle:
+        # Write to a PER-PID shard, not the shared ROAR_LOG_FILE. Every process in
+        # a traced tree (litdata/DataLoader workers, HF datasets num_proc, torchrun
+        # ranks, any multiprocessing spawn) inherits the same ROAR_LOG_FILE and
+        # runs this at exit; opening it "w" means each truncates the others, so the
+        # surviving record was whichever process wrote LAST — often a worker with a
+        # subset of the imports (or none of them), not the workload. Sharding by
+        # pid lets merge_inject_logs() union the full tree afterwards.
+        shard_path = f"{self._log_file}.{os.getpid()}"
+        with self._real_open(shard_path, "w") as handle:
             json.dump(data, handle)
 
 
