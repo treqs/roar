@@ -94,3 +94,60 @@ def test_shadowed_import_recorded_through_write_log(tmp_path, monkeypatch):
     payload = json.loads(written.read_text())
     assert "wandb" in payload["imported_modules"]
     assert payload["used_packages"].get("wandb") == "0.16.0"
+
+
+def test_roar_is_never_recorded_in_the_freeze_via_file_pass(monkeypatch):
+    """P0-11: roar records itself otherwise. A dev build would then pin
+    roar-cli==X.Y.dev0, which can't resolve on reproduce. The file pass must skip
+    roar just like the name pass does."""
+    monkeypatch.setattr(ilm, "packages_distributions", lambda: {"roar": ["roar-cli"]})
+    used = get_used_packages(
+        modules_files=["/venv/lib/python3.12/site-packages/roar/__init__.py"],
+        installed_packages={"roar-cli": "0.4.4.dev0"},
+    )
+    assert "roar-cli" not in used and "roar" not in used
+
+
+class _FakeDist:
+    def __init__(self, path):
+        self._path = path
+
+    def locate_file(self, rel=""):
+        return self._path
+
+
+def test_self_package_from_editable_egg_info_is_not_pinned(tmp_path, monkeypatch):
+    """P0-12 (#264 regression): `pip install -e .` (or its leftover
+    <pkg>.egg-info after uninstall) resolves inside the repo, so the name pass
+    must not re-pin the workload's own package from PyPI."""
+    repo = tmp_path / "repo"
+    egg_info = repo / "mypkg.egg-info"
+    egg_info.mkdir(parents=True)
+    monkeypatch.setattr(ilm, "packages_distributions", lambda: {"mypkg": ["mypkg"]})
+    monkeypatch.setattr(ilm, "distribution", lambda name: _FakeDist(egg_info))
+    used = get_used_packages(
+        modules_files=[],
+        installed_packages={"mypkg": "1.0"},
+        imported_modules=["mypkg"],
+        workload_root=str(repo),
+    )
+    assert "mypkg" not in used
+
+
+def test_real_site_packages_dep_outside_repo_is_still_pinned(tmp_path, monkeypatch):
+    """The P0-12 skip must NOT drop a genuine dependency: a dist whose metadata
+    lives outside the repo (normal site-packages install) is still recorded even
+    when workload_root is set."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    dist_info = tmp_path / "site-packages" / "wandb-0.16.0.dist-info"
+    dist_info.mkdir(parents=True)
+    monkeypatch.setattr(ilm, "packages_distributions", lambda: {"wandb": ["wandb"]})
+    monkeypatch.setattr(ilm, "distribution", lambda name: _FakeDist(dist_info))
+    used = get_used_packages(
+        modules_files=[],
+        installed_packages={"wandb": "0.16.0"},
+        imported_modules=["wandb"],
+        workload_root=str(repo),
+    )
+    assert used.get("wandb") == "0.16.0"
