@@ -149,7 +149,9 @@ class EnvironmentSetupService:
 
         # Create virtual environment, pinned to the recorded interpreter.
         self.logger.debug("Creating virtual environment...")
-        venv_dir = self._create_venv(repo_dir, self._recorded_python_version(pipeline))
+        venv_dir = self._create_venv(
+            repo_dir, self._recorded_python_version(pipeline), auto_confirm=auto_confirm
+        )
         self.logger.debug("Virtual environment created at: %s", venv_dir)
 
         # Initialize roar in the cloned repository
@@ -469,14 +471,19 @@ class EnvironmentSetupService:
 
         return repo_dir
 
-    def _create_venv(self, repo_dir: Path, target_version: str | None = None) -> Path:
+    def _create_venv(
+        self, repo_dir: Path, target_version: str | None = None, auto_confirm: bool = False
+    ) -> Path:
         """
         Create virtual environment in repository, pinned to the recorded Python.
 
-        We try the exact recorded interpreter (uv downloads a managed build if
-        needed), then the recorded major.minor, then fall back to the default
-        with a warning. We never block — a different interpreter still
-        reproduces, just less faithfully ("same setup" is best-effort).
+        With uv we provision the *exact* recorded interpreter (uv downloads a
+        managed build if needed). Without uv we can only use the interpreter roar
+        is running under; if that differs from the recorded one at the major.minor
+        level we warn, recommend uv, and — unless ``auto_confirm`` — ask before
+        continuing, because the recorded packages may not install or behave the
+        same (see :meth:`_confirm_python_mismatch`). We do not silently substitute
+        a different interpreter and then blame the package list.
 
         Returns:
             Path to venv directory
@@ -490,7 +497,7 @@ class EnvironmentSetupService:
         self._print("Creating virtual environment...")
 
         if self._use_uv:
-            self._create_venv_uv(venv_dir, repo_dir, target_version)
+            self._create_venv_uv(venv_dir, repo_dir, target_version, auto_confirm)
         else:
             # `python -m venv` can only use the running interpreter.
             subprocess.run(
@@ -498,7 +505,7 @@ class EnvironmentSetupService:
                 check=True,
                 cwd=repo_dir,
             )
-            self._warn_python_mismatch(target_version, self._get_python_version())
+            self._confirm_python_mismatch(target_version, self._get_python_version(), auto_confirm)
 
         gitignore = venv_dir / ".gitignore"
         if not gitignore.exists():
@@ -506,7 +513,13 @@ class EnvironmentSetupService:
 
         return venv_dir
 
-    def _create_venv_uv(self, venv_dir: Path, repo_dir: Path, target_version: str | None) -> None:
+    def _create_venv_uv(
+        self,
+        venv_dir: Path,
+        repo_dir: Path,
+        target_version: str | None,
+        auto_confirm: bool = False,
+    ) -> None:
         """Create the venv with uv, pinned to the recorded interpreter if we can."""
         for version in self._python_candidates(target_version):
             result = subprocess.run(
@@ -524,7 +537,9 @@ class EnvironmentSetupService:
 
         # Couldn't provision the recorded interpreter — use uv's default, then warn.
         subprocess.run(["uv", "venv", str(venv_dir)], check=True, cwd=repo_dir)
-        self._warn_python_mismatch(target_version, self._venv_python_version(venv_dir))
+        self._confirm_python_mismatch(
+            target_version, self._venv_python_version(venv_dir), auto_confirm
+        )
 
     def _recorded_python_version(self, pipeline: "PipelineInfo") -> str | None:
         """The interpreter version recorded for this lineage (e.g. '3.14.4'), or None."""
@@ -546,20 +561,58 @@ class EnvironmentSetupService:
             candidates.append(minor)
         return candidates
 
-    def _warn_python_mismatch(self, recorded: str | None, actual: str | None) -> None:
-        """Warn when the venv's interpreter differs from the recorded one at the
-        major.minor level. Patch differences (3.14.4 vs 3.14.6) aren't
-        reproducibility-relevant, so they don't warn."""
+    def _confirm_python_mismatch(
+        self, recorded: str | None, actual: str | None, auto_confirm: bool
+    ) -> None:
+        """Handle a major.minor interpreter mismatch between capture and reproduce.
+
+        Patch-level differences (3.14.4 vs 3.14.6) aren't reproducibility-relevant
+        and pass silently. For a major.minor mismatch the recorded packages (e.g.
+        ABI-tagged wheels) may fail to install or behave differently, so we warn
+        loudly, recommend uv (which provisions the *exact* recorded interpreter),
+        and — unless ``auto_confirm`` (``--yes``) — ask before continuing.
+        Declining aborts the reproduction rather than silently using the wrong
+        Python.
+
+        Many pure-Python repos still reproduce fine on a different minor, which is
+        why this warns-and-asks rather than hard-failing.
+        """
         if not recorded:
             return
         rec_minor = ".".join(recorded.split(".")[:2])
         act_minor = ".".join((actual or "").split(".")[:2])
         if act_minor and act_minor == rec_minor:
             return
+
         using = actual or "a different interpreter"
+        uv_url = "https://docs.astral.sh/uv/getting-started/installation/"
+        bar = "=" * 64
         self._print(
-            f"⚠  Recorded Python was {recorded}; reproducing with {using} — results may differ."
+            f"\n{bar}\n"
+            "⚠  PYTHON VERSION MISMATCH\n"
+            f"   Recorded at capture: Python {recorded}\n"
+            f"   Reproducing with:    Python {using}\n"
+            f"   The recorded packages were built for {rec_minor}; some (e.g.\n"
+            "   ABI-tagged wheels) may fail to install or behave differently on "
+            f"{act_minor or 'this interpreter'}.\n\n"
+            "   For a faithful reproduction, install uv and re-run — roar will then\n"
+            "   provision the exact recorded interpreter automatically:\n"
+            f"     {uv_url}\n"
+            f"{bar}"
         )
+
+        if auto_confirm:
+            self._print("Continuing with the mismatched interpreter (--yes).")
+            return
+
+        if not self._presenter.confirm(
+            f"Continue reproducing with Python {using} anyway?", default=False
+        ):
+            raise RuntimeError(
+                f"Reproduction aborted: recorded Python {recorded} is not available "
+                f"(no uv to provision it). Install uv ({uv_url}) or re-run with "
+                "--yes to proceed anyway."
+            )
 
     @staticmethod
     def _venv_python_version(venv_dir: Path) -> str | None:
