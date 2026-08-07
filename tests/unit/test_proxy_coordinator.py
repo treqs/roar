@@ -106,6 +106,16 @@ class TestRuntimeResourceLifecycle:
 
         assert resource.stop_calls == [0]
 
+    def test_planned_run_job_uid_is_used_for_tracing(self):
+        mock_tracer = _make_mock_tracer()
+        ctx = _make_ctx()
+        ctx.run_job_uid = "submit-uid"
+
+        coord = RunCoordinator(tracer_service=mock_tracer)
+        self._run_coord(coord, ctx)
+
+        assert mock_tracer.execute.call_args.kwargs["job_id"] == "submit-uid"
+
     def test_runtime_resource_is_stopped_on_tracer_preflight_failure(self):
         resource = _FakeRuntimeResource(start_env={"AWS_ENDPOINT_URL": "http://127.0.0.1:9090"})
         mock_tracer = _make_mock_tracer()

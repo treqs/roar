@@ -84,6 +84,23 @@ def test_maybe_rewrite_injects_roar_session_id_into_runtime_env(
     assert rewritten.finalize_run is None
 
 
+def test_maybe_rewrite_uses_one_uid_for_submit_parent_and_ray_workers(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _, rewritten, _ = _rewrite_with_fragment_session(monkeypatch, tmp_path)
+
+    runtime_env = _runtime_env_json(rewritten.command)
+    env_vars = runtime_env["env_vars"]
+    key = _fixed_fragment_key()
+    key_path = tmp_path / ".roar" / "fragment-sessions" / f"{key['session_id']}.key"
+    saved_session = json.loads(key_path.read_text(encoding="utf-8"))
+
+    assert rewritten.run_job_uid == env_vars["ROAR_JOB_ID"]
+    assert env_vars["ROAR_DRIVER_JOB_UID"] == rewritten.run_job_uid
+    assert saved_session["driver_job_uid"] == rewritten.run_job_uid
+
+
 def test_maybe_rewrite_saves_key_file_to_roar_dir(
     monkeypatch,
     tmp_path: Path,

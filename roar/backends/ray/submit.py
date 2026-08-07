@@ -87,6 +87,7 @@ def plan_ray_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
         except Exception:
             pass
         else:
+            key["driver_job_uid"] = context.job_id
             save_key(resolve_project_roar_dir(), key)
             env_vars["ROAR_SESSION_ID"] = key["session_id"]
             env_vars["ROAR_FRAGMENT_TOKEN"] = key["token"]
@@ -102,6 +103,7 @@ def plan_ray_job_submit_command(command: list[str]) -> ExecutionCommandPlan:
         backend_name="ray",
         command=[*before_separator, "--", *entrypoint],
         execution_role="submit",
+        run_job_uid=context.job_id,
         session_id=fragment_session_id,
     )
 
@@ -115,6 +117,7 @@ def _build_instrumented_env_vars(
         existing_env_vars,
         build_submit_source_environ(context),
         job_id=context.job_id,
+        driver_job_uid=context.job_id,
         overwrite_existing=True,
     )
     env_vars[ROAR_EXECUTION_BACKEND_ENV] = "ray"

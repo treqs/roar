@@ -43,7 +43,7 @@ class K8sFragmentReconstituter:
         self._glaas_url = glaas_url.rstrip("/")
         self._roar_db_path = roar_db_path
 
-    def reconstitute(self) -> K8sReconstitutionResult:
+    def reconstitute(self, *, driver_job_uid: str | None = None) -> K8sReconstitutionResult:
         batches = self._fetch_batches()
         if not batches:
             return K8sReconstitutionResult()
@@ -63,7 +63,7 @@ class K8sFragmentReconstituter:
             return K8sReconstitutionResult()
 
         fragments = self._deduplicate_by_task_identity(fragments)
-        driver_job_uid = next(
+        resolved_driver_job_uid = str(driver_job_uid or "").strip() or next(
             (
                 str(fragment.get("parent_job_uid") or "").strip()
                 for fragment in fragments
@@ -78,7 +78,7 @@ class K8sFragmentReconstituter:
             collect_k8s_fragments(
                 fragments,
                 project_dir=str(self._project_dir()),
-                driver_job_uid=driver_job_uid,
+                driver_job_uid=resolved_driver_job_uid,
                 session_id=session_id,
                 step_number=step_number,
             )

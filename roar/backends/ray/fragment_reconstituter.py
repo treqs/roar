@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import sqlite3
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -30,6 +30,10 @@ class ReconstitutionResult:
     jobs_merged: int = 0
     artifacts_merged: int = 0
     fragments_processed: int = 0
+    batches_fetched: int = 0
+    fragments_decrypted: int = 0
+    fetch_attempts: int = 0
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -48,16 +52,25 @@ class FragmentReconstituter:
         token: str,
         glaas_url: str,
         roar_db_path: Path,
+        empty_fetch_attempts: int = 4,
+        empty_fetch_backoff_seconds: float = 0.5,
     ) -> None:
         self._session_id = session_id
         self._token = token
         self._glaas_url = glaas_url.rstrip("/")
         self._roar_db_path = roar_db_path
+        self._empty_fetch_attempts = max(1, int(empty_fetch_attempts))
+        self._empty_fetch_backoff_seconds = max(0.0, float(empty_fetch_backoff_seconds))
+        self._last_fetch_error: str | None = None
 
-    def reconstitute(self) -> ReconstitutionResult:
-        batches = self._fetch_batches()
+    def reconstitute(self, *, driver_job_uid: str | None = None) -> ReconstitutionResult:
+        batches, fetch_attempts, fetch_error = self._fetch_batches_until_stable()
         if not batches:
-            return ReconstitutionResult()
+            return ReconstitutionResult(
+                fetch_attempts=fetch_attempts,
+                error=fetch_error
+                or f"no fragment batches available after {fetch_attempts} fetch attempts",
+            )
 
         try:
             key = bytes.fromhex(self._token)
@@ -67,27 +80,36 @@ class FragmentReconstituter:
                 self._session_id,
                 exc,
             )
-            return ReconstitutionResult()
+            return ReconstitutionResult(
+                batches_fetched=len(batches),
+                fetch_attempts=fetch_attempts,
+                error=f"invalid fragment token: {exc}",
+            )
 
         fragments: list[dict[str, Any]] = []
         for batch in batches:
             fragments.extend(self._decrypt_batch(batch, key))
 
         if not fragments:
-            return ReconstitutionResult()
+            return ReconstitutionResult(
+                batches_fetched=len(batches),
+                fetch_attempts=fetch_attempts,
+                error="no fragments decrypted from fetched batches",
+            )
 
+        fragments_decrypted = len(fragments)
         fragments = self._resolve_s3_key_placeholders(fragments)
         fragments = self._drop_proxy_fallback_duplicates(fragments)
         fragments = self._deduplicate_fragments(fragments)
         jobs_before, artifacts_before = self._count_local_rows()
         session_id, step_number = _resolve_active_session_context(str(self._roar_db_path))
-        driver_job_uid = str(os.environ.get("ROAR_JOB_ID", "")).strip() or None
+        resolved_driver_job_uid = str(driver_job_uid or "").strip() or None
 
         try:
             collect_fragments(
                 fragments=fragments,
                 project_dir=str(self._project_dir()),
-                driver_job_uid=driver_job_uid,
+                driver_job_uid=resolved_driver_job_uid,
                 session_id=session_id,
                 step_number=step_number,
             )
@@ -97,16 +119,57 @@ class FragmentReconstituter:
                 self._session_id,
                 exc,
             )
-            return ReconstitutionResult(fragments_processed=len(fragments))
+            return ReconstitutionResult(
+                fragments_processed=len(fragments),
+                batches_fetched=len(batches),
+                fragments_decrypted=fragments_decrypted,
+                fetch_attempts=fetch_attempts,
+                error=f"fragment merge failed: {exc}",
+            )
 
         jobs_after, artifacts_after = self._count_local_rows()
         return ReconstitutionResult(
             jobs_merged=max(0, jobs_after - jobs_before),
             artifacts_merged=max(0, artifacts_after - artifacts_before),
             fragments_processed=len(fragments),
+            batches_fetched=len(batches),
+            fragments_decrypted=fragments_decrypted,
+            fetch_attempts=fetch_attempts,
+            error=fetch_error,
         )
 
+    def _fetch_batches_until_stable(
+        self,
+    ) -> tuple[list[dict[str, Any]], int, str | None]:
+        """Poll until a non-empty batch watermark is observed twice."""
+        latest_batches: list[dict[str, Any]] = []
+        latest_watermark: tuple[int, tuple[int, ...]] | None = None
+        last_error: str | None = None
+        for attempt in range(1, self._empty_fetch_attempts + 1):
+            batches = self._fetch_batches()
+            last_error = self._last_fetch_error
+            if batches:
+                watermark = (
+                    len(batches),
+                    tuple(self._sequence_key(batch) for batch in batches),
+                )
+                if latest_batches and watermark == latest_watermark:
+                    return batches, attempt, None
+                latest_batches = batches
+                latest_watermark = watermark
+            if attempt < self._empty_fetch_attempts:
+                delay = self._empty_fetch_backoff_seconds * (2 ** (attempt - 1))
+                time.sleep(delay)
+        if latest_batches:
+            return (
+                latest_batches,
+                self._empty_fetch_attempts,
+                "fragment batch watermark did not stabilize before retry deadline",
+            )
+        return [], self._empty_fetch_attempts, last_error
+
     def _fetch_batches(self) -> list[dict[str, Any]]:
+        self._last_fetch_error = None
         request = urllib.request.Request(
             url=f"{self._glaas_url}/api/v1/fragments/sessions/{self._session_id}/fragments",
             headers={"x-roar-fragment-token": self._token},
@@ -128,6 +191,7 @@ class FragmentReconstituter:
                 except Exception as retry_exc:
                     exc = retry_exc  # type: ignore[assignment]
             if payload is None:
+                self._last_fetch_error = str(exc)
                 _get_logger().warning(
                     "Failed to fetch fragments for session %s: %s",
                     self._session_id,
@@ -135,6 +199,7 @@ class FragmentReconstituter:
                 )
                 return []
         except Exception as exc:
+            self._last_fetch_error = str(exc)
             _get_logger().warning(
                 "Failed to fetch fragments for session %s: %s",
                 self._session_id,
@@ -144,6 +209,7 @@ class FragmentReconstituter:
 
         rows = payload.get("data", {}).get("fragments", payload.get("fragments"))
         if not isinstance(rows, list):
+            self._last_fetch_error = "fragment response is missing fragments list"
             _get_logger().warning(
                 "Invalid fragment response for session %s: missing fragments list",
                 self._session_id,
