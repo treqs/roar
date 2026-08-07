@@ -78,6 +78,35 @@ def test_assign_step_numbers_ignores_timestamp_gaps_without_dependencies() -> No
     assert step_map == {"a1111111": 2, "b2222222": 2, "c3333333": 2}
 
 
+def test_ray_train_worker_metadata_and_role_are_preserved() -> None:
+    fragment = _make_fragment("worker01", 1.0, function_name="run_train_fn")
+    execution_fragment = fragment.to_execution_fragment()
+    execution_fragment.backend_metadata = {
+        "execution_role": "worker",
+        "operation": "distributed_training",
+        "world_rank": 0,
+        "world_size": 2,
+        "k8s_pod_name": "ray-worker-0",
+    }
+
+    metadata = ray_collector._ray_fragment_metadata(
+        execution_fragment,
+        fallback_parent_job_uid="submit01",
+    )
+
+    assert (
+        ray_collector._ray_fragment_role(
+            execution_fragment,
+            fallback_parent_job_uid="submit01",
+        )
+        == "worker"
+    )
+    assert metadata["operation"] == "distributed_training"
+    assert metadata["world_rank"] == 0
+    assert metadata["world_size"] == 2
+    assert metadata["k8s_pod_name"] == "ray-worker-0"
+
+
 def test_assign_step_numbers_sequential_pipeline_steps() -> None:
     fragments = [
         _make_fragment("ingest01", 5.0, writes=("processed",)),

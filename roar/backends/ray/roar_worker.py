@@ -255,7 +255,117 @@ def _start_fragment(task_id: str, function_name: str = "") -> TaskFragment:
         started_at=started_at,
         ended_at=now,
         exit_code=0,
+        backend_metadata=_capture_execution_metadata(resolved_function_name),
     )
+
+
+def _capture_execution_metadata(function_name: str) -> dict[str, Any]:
+    """Capture Ray Train and Kubernetes identity without workload changes."""
+    metadata: dict[str, Any] = {}
+    parts = [part for part in str(function_name or "").split(".") if part and part != "<locals>"]
+    command_name = (
+        (".".join(parts[-2:]) if len(parts) >= 2 and parts[-2][:1].isupper() else parts[-1])
+        if parts
+        else ""
+    )
+
+    if command_name == "run_train_fn":
+        metadata.update(
+            execution_role="worker",
+            operation="distributed_training",
+        )
+    elif command_name in {"TrainController.__init__", "TrainController.run"}:
+        metadata["execution_role"] = "controller"
+    elif command_name in {
+        "PlacementGroupCleaner.__init__",
+        "RayTrainWorker.__init__",
+        "SynchronizationActor.__init__",
+        "RoarNodeAgent.shutdown",
+        "_roar_prime_task",
+        "broadcast_from_rank_zero",
+        "poll_status",
+        "shutdown_data_executors",
+    }:
+        metadata["execution_role"] = "internal"
+
+    rank_fields = {
+        "world_rank": ("RANK", "WORLD_RANK"),
+        "local_rank": ("LOCAL_RANK",),
+        "node_rank": ("NODE_RANK", "GROUP_RANK", "PET_NODE_RANK"),
+        "world_size": ("WORLD_SIZE",),
+        "local_world_size": ("LOCAL_WORLD_SIZE",),
+    }
+    for metadata_key, env_names in rank_fields.items():
+        value = _first_int_env(*env_names)
+        if value is not None:
+            metadata[metadata_key] = value
+
+    ray_job_id = _get_ray_job_id()
+    if ray_job_id:
+        metadata["ray_job_id"] = ray_job_id
+
+    if os.environ.get("KUBERNETES_SERVICE_HOST"):
+        pod_name = str(
+            os.environ.get("ROAR_K8S_POD_NAME")
+            or os.environ.get("POD_NAME")
+            or os.environ.get("HOSTNAME")
+            or ""
+        ).strip()
+        namespace = (
+            str(
+                os.environ.get("ROAR_K8S_NAMESPACE") or os.environ.get("POD_NAMESPACE") or ""
+            ).strip()
+            or _service_account_namespace()
+        )
+        node_name = str(
+            os.environ.get("ROAR_K8S_NODE_NAME")
+            or os.environ.get("K8S_NODE_NAME")
+            or os.environ.get("NODE_NAME")
+            or ""
+        ).strip()
+        cluster_name = str(os.environ.get("ROAR_K8S_CLUSTER") or "").strip()
+        if pod_name:
+            metadata["k8s_pod_name"] = pod_name
+        if namespace:
+            metadata["k8s_namespace"] = namespace
+        if node_name:
+            metadata["k8s_node_name"] = node_name
+        if cluster_name:
+            metadata["k8s_cluster"] = cluster_name
+
+    return metadata
+
+
+def _first_int_env(*names: str) -> int | None:
+    for name in names:
+        value = str(os.environ.get(name) or "").strip()
+        if not value:
+            continue
+        try:
+            return int(value)
+        except ValueError:
+            continue
+    return None
+
+
+def _get_ray_job_id() -> str | None:
+    try:
+        ray = sys.modules.get("ray")
+        if ray is None:
+            return None
+        value = ray.get_runtime_context().get_job_id()
+        return _to_text(value)
+    except Exception:
+        return None
+
+
+def _service_account_namespace() -> str:
+    path = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+    try:
+        with _real_open(path, encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
 
 
 def _register_task_timing(task_id: str, function_name: str) -> None:
