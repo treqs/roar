@@ -131,6 +131,8 @@ CORE_CONFIGURABLE_KEYS: dict[str, dict[str, Any]] = {
             "GITHUB_TOKEN",
             "DATABASE_URL",
             "AWS_SECRET_ACCESS_KEY",
+            "HF_TOKEN",
+            "HUGGING_FACE_HUB_TOKEN",
         ],
         "description": "Env var names whose values should be redacted (comma-separated)",
     },

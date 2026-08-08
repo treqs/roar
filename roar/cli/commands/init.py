@@ -81,7 +81,10 @@ names = [
     "GITHUB_TOKEN",
     "DATABASE_URL",
     "AWS_SECRET_ACCESS_KEY",
+    "HF_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
 ]
+# (HF token *values* are also caught unconditionally by roar's built-in patterns.)
 
 [registration.omit.allowlist]
 # Regex patterns that should NOT be redacted (reduce false positives)
