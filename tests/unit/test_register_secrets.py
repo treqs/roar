@@ -115,3 +115,26 @@ def test_filter_git_context_secrets_without_filter_returns_context_unchanged() -
 
     assert filtered is context
     assert detections == []
+
+
+def test_hf_token_env_vars_are_redacted_by_default() -> None:
+    """P0-16: HF_TOKEN / HUGGING_FACE_HUB_TOKEN must be in the built-in env-var
+    redaction defaults so a live token doesn't reach a published DAG."""
+    from roar.filters.omit import OmitFilter
+    from roar.integrations.config.raw import _DEFAULT_REGISTRATION_OMIT
+
+    names = OmitFilter(_DEFAULT_REGISTRATION_OMIT).env_var_names
+    assert "HF_TOKEN" in names
+    assert "HUGGING_FACE_HUB_TOKEN" in names
+
+
+def test_hf_token_value_regex_catches_length_variants() -> None:
+    """P0-16: the always-on HF value pattern is hf_[A-Za-z0-9]{20,}, not exact-34,
+    so a token that isn't 34 chars is still caught (defense-in-depth)."""
+    from roar.filters.omit import OmitFilter
+
+    f = OmitFilter({})  # BUILTIN_PATTERNS apply regardless of config
+    ids_30 = {m.pattern_id for m in f.detect_secrets("token=hf_" + "A" * 30)}
+    ids_34 = {m.pattern_id for m in f.detect_secrets("token=hf_" + "A" * 34)}
+    assert "huggingface_token" in ids_30  # 30 chars: the old {34} regex MISSED this
+    assert "huggingface_token" in ids_34

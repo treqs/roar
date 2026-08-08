@@ -28,6 +28,8 @@ _DEFAULT_REGISTRATION_OMIT = {
             "GITHUB_TOKEN",
             "DATABASE_URL",
             "AWS_SECRET_ACCESS_KEY",
+            "HF_TOKEN",
+            "HUGGING_FACE_HUB_TOKEN",
         ]
     },
     "patterns": [],

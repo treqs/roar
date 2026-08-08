@@ -109,6 +109,8 @@ class EnvVarsConfig(ConfigBaseModel):
             "GITHUB_TOKEN",
             "DATABASE_URL",
             "AWS_SECRET_ACCESS_KEY",
+            "HF_TOKEN",
+            "HUGGING_FACE_HUB_TOKEN",
         ]
     )
 
@@ -133,6 +135,8 @@ class OmitConfig(ConfigBaseModel):
     enabled: bool = True
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     env_vars: EnvVarsConfig = Field(default_factory=EnvVarsConfig)
+    # Value regexes (incl. the HF token) live in filters.omit.BUILTIN_PATTERNS,
+    # which is applied unconditionally and can't be disabled by config.
     patterns: list[CustomPattern] = Field(default_factory=list)
     allowlist: AllowlistConfig = Field(default_factory=AllowlistConfig)
 
