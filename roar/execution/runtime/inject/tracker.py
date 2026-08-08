@@ -90,17 +90,27 @@ def _dist_is_in_repo(dist_name: str, repo_root: str) -> bool:
         return False
 
 
+# Package install roots. "dist-packages" (Debian/Ubuntu system Python, e.g. the
+# cert AMIs) must be recognized alongside "site-packages" — otherwise packages
+# installed there are dropped from the freeze entirely (P0-18): the workload
+# imports them, but the file pass ignored them and the aliased-only name pass
+# (P0-13 fix) doesn't rescue a normally-loaded import.
+_PACKAGE_ROOT_MARKERS = ("site-packages/", "dist-packages/")
+
+
 def _site_packages_top(fpath: str) -> str | None:
-    """The top-level package dir for a file under site-packages, else None."""
-    idx = fpath.find("site-packages/")
-    if idx < 0:
-        return None
-    top = fpath[idx + len("site-packages/") :].split("/")[0]
-    if top.endswith(".py"):
-        top = top[:-3]
-    if top.startswith("_") or top.endswith((".dist-info", ".egg-info", ".so")):
-        return None
-    return top
+    """The top-level package dir for a file under a package install root, else None."""
+    for marker in _PACKAGE_ROOT_MARKERS:
+        idx = fpath.find(marker)
+        if idx < 0:
+            continue
+        top = fpath[idx + len(marker) :].split("/")[0]
+        if top.endswith(".py"):
+            top = top[:-3]
+        if top.startswith("_") or top.endswith((".dist-info", ".egg-info", ".so")):
+            return None
+        return top
+    return None
 
 
 def get_used_packages(
@@ -123,18 +133,8 @@ def get_used_packages(
 
     try:
         for fpath in modules_files:
-            if "site-packages" not in fpath:
-                continue
-            idx = fpath.find("site-packages/")
-            if idx < 0:
-                continue
-            after_sp = fpath[idx + len("site-packages/") :]
-            top_dir = after_sp.split("/")[0]
-            if top_dir.endswith(".py"):
-                top_dir = top_dir[:-3]
-            if top_dir.endswith(".dist-info") or top_dir.endswith(".egg-info"):
-                continue
-            if top_dir.startswith("_") or top_dir.endswith(".so"):
+            top_dir = _site_packages_top(fpath)
+            if top_dir is None:
                 continue
             if top_dir == "roar":
                 # roar records itself otherwise. roar-cli is installed separately
