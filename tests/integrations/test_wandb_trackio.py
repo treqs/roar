@@ -84,3 +84,16 @@ def test_does_not_clobber_existing_wandb():
     sys.modules["wandb"] = sentinel
     wandb_trackio.install(environ={"ROAR_WANDB_TO_TRACKIO": "off"})
     assert sys.modules["wandb"] is sentinel
+
+
+def test_noop_wandb_has_a_spec_so_find_spec_does_not_raise():
+    """P0-15: a __spec__=None module makes importlib.util.find_spec RAISE, which
+    crashes `import accelerate` (is_wandb_available) on any credential-free host.
+    The no-op stub must carry a real spec."""
+    import importlib.util
+
+    wandb_trackio.install(environ={"ROAR_WANDB_TO_TRACKIO": "off"})
+    stub = sys.modules["wandb"]
+    assert stub.__spec__ is not None
+    # This raised ValueError("wandb.__spec__ is None") before the fix.
+    assert importlib.util.find_spec("wandb") is stub.__spec__
