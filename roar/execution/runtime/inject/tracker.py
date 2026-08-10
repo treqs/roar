@@ -274,6 +274,43 @@ def is_under_any_runtime_path(path: str, runtime_paths: Sequence[str]) -> bool:
     return False
 
 
+def _roar_site_packages_root(inject_dir: str) -> str | None:
+    """roar's own install root — the site-packages (or ``uv tool`` venv) holding
+    the roar package. ``inject_dir`` is ``<root>/roar/execution/runtime/inject``,
+    so the root is four levels up. None if the shape is unexpected."""
+    root = os.path.abspath(inject_dir)
+    for _ in range(4):
+        parent = os.path.dirname(root)
+        if parent == root:
+            return None
+        root = parent
+    return root
+
+
+def roar_footprint_paths(inject_dir: str, sys_prefix: str) -> tuple[str, ...]:
+    """Location(s) whose loaded modules are roar's OWN footprint, to subtract from
+    the freeze by PATH — never by name.
+
+    The campaign runs roar in its own ``uv tool`` venv, ABI-matched to the workload
+    (the mandatory P0-14 layout). There ``ROAR_RUNTIME_PYTHONPATH_ACTIVE`` is null,
+    so the runtime-path filter is inert and roar's dependency footprint leaks into
+    the freeze — P0-11 (broad). roar's install root is knowable structurally, so we
+    exclude modules loaded from it. This distinguishes roar's copy of a package
+    from a same-named copy in the workload's venv (a different path); name-keying
+    could not, and stripped the workload's own tqdm / typing-extensions — P0-28.
+
+    Guarded to the ISOLATED case: when roar shares the workload venv (its root is
+    under the interpreter's own prefix), path cannot tell the copies apart, so this
+    returns nothing and the freeze safely OVER-includes rather than risk dropping a
+    workload dependency."""
+    root = _roar_site_packages_root(inject_dir)
+    if not root:
+        return ()
+    if is_under_any_runtime_path(root, (sys_prefix,)):
+        return ()  # shared venv — do not path-exclude (over-include is the safe side)
+    return (root,)
+
+
 class RuntimeInjectionTracker:
     """Capture generic process activity for the parent-side recorder."""
 
@@ -338,6 +375,14 @@ class RuntimeInjectionTracker:
             return
 
         runtime_pythonpath = get_active_runtime_pythonpath(self._environ)
+        # Also exclude roar's own install root by LOCATION. In the campaign's
+        # ABI-matched uv-tool layout ROAR_RUNTIME_PYTHONPATH_ACTIVE is null, so the
+        # runtime-path filter alone leaves roar's dependency footprint in the freeze
+        # (P0-11 broad). Path-keyed, never name-keyed (P0-28), so a same-named
+        # workload copy in a different venv survives.
+        exclusion_paths = runtime_pythonpath + roar_footprint_paths(
+            self._inject_dir, sys.prefix
+        )
         modules_files = sorted(
             os.path.abspath(getattr(module, "__file__", ""))
             for module in sys.modules.values()
@@ -345,11 +390,12 @@ class RuntimeInjectionTracker:
             and not os.path.abspath(getattr(module, "__file__", "")).startswith(self._inject_dir)
             and not is_under_any_runtime_path(
                 os.path.abspath(getattr(module, "__file__", "")),
-                runtime_pythonpath,
+                exclusion_paths,
             )
         )
-        # Trev's #268: exclude roar's own runtime-tree dists from the installed set.
-        installed_packages = get_installed_packages(excluded_paths=runtime_pythonpath)
+        # Trev's #268 + P0-11 broad: exclude roar's runtime-tree AND install-root
+        # dists from the installed set, so the file pass can't resolve them.
+        installed_packages = get_installed_packages(excluded_paths=exclusion_paths)
         # name -> loaded module file, so get_used_packages can tell an ALIASED
         # import (sys.modules[name] resolves to a different package) from a normal
         # or merely-probed one. Keyed by the sys.modules key (the import name),
