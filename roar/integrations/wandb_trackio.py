@@ -129,6 +129,14 @@ def _install_trackio_alias(space_id: str) -> bool:
         try:
             if not hasattr(run, "summary"):
                 run.summary = {}
+            if not hasattr(run, "get_url"):
+                # wandb code (e.g. lerobot) calls run.get_url(); trackio's Run has
+                # no such method. run.url exists but returns the bare space id, not
+                # a URL — aliasing it would stop the crash and publish a broken link
+                # that still passes a smoke test. COMPOSE the Spaces URL instead;
+                # space_id and project are both in scope here.
+                _project = kwargs.get("project")
+                run.get_url = lambda: f"https://huggingface.co/spaces/{space_id}?project={_project}"
         except Exception:
             pass
         trackio.run = run
