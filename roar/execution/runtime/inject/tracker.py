@@ -98,6 +98,75 @@ def _dist_is_in_repo(dist_name: str, repo_root: str) -> bool:
 _PACKAGE_ROOT_MARKERS = ("site-packages/", "dist-packages/")
 
 
+# Standard-library / builtin top-level names never belong in a package freeze,
+# and must not be attributed as roar-only (which would let a stdlib name roar
+# imported shadow a same-named workload package). Bootstrap-safe: available since
+# the interpreter starts.
+_STDLIB = frozenset(getattr(sys, "stdlib_module_names", frozenset()))
+
+
+def _normalize_dist(name: str) -> str:
+    return name.lower().replace("_", "-")
+
+
+def _req_dist_name(requirement: str) -> str:
+    """The distribution name at the head of a Requires-Dist string, e.g.
+    ``pydantic>=2.0.0`` -> ``pydantic``; ``click (>=8.1)`` -> ``click``."""
+    head = requirement.strip()
+    for sep in (";", " ", "[", "(", "<", ">", "=", "!", "~"):
+        idx = head.find(sep)
+        if idx >= 0:
+            head = head[:idx]
+    return head.strip()
+
+
+def roar_dependency_closure(root: str = "roar-cli") -> set[str]:
+    """Transitive runtime-dependency distribution names of ``root`` (normalized),
+    read from installed metadata. Extras-gated (dev/test) deps are skipped so the
+    freeze isn't scrubbed of a package that only *shares a name* with a dev extra.
+    Best-effort: returns an empty set on any failure, so exclusion degrades to the
+    frame/baseline signals rather than dropping anything unexpectedly."""
+    try:
+        from importlib import metadata as importlib_metadata
+    except Exception:
+        return set()
+    seen: set[str] = set()
+    stack = [root]
+    while stack:
+        name = _normalize_dist(stack.pop())
+        if name in seen:
+            continue
+        seen.add(name)
+        try:
+            requirements = importlib_metadata.requires(name) or []
+        except Exception:
+            continue
+        for requirement in requirements:
+            if "extra ==" in requirement or "extra==" in requirement:
+                continue
+            dep = _req_dist_name(requirement)
+            if dep:
+                stack.append(dep)
+    seen.discard(_normalize_dist(root))
+    return seen
+
+
+def _installed_top_names(modules: Any) -> set[str]:
+    """Top-level import names of the given installed (site-/dist-packages) modules.
+    ``__file__`` is used raw — ``_site_packages_top`` keys on a path substring, so
+    no abspath is needed (that call is per-module and this runs on the hot start
+    path). Used to resolve roar's bootstrap footprint from the install snapshot."""
+    names: set[str] = set()
+    for module in modules:
+        fpath = getattr(module, "__file__", None)
+        if not fpath:
+            continue
+        top = _site_packages_top(fpath)
+        if top and top != "roar":
+            names.add(top)
+    return names
+
+
 def _site_packages_top(fpath: str) -> str | None:
     """The top-level package dir for a file under a package install root, else None."""
     for marker in _PACKAGE_ROOT_MARKERS:
@@ -119,17 +188,29 @@ def get_used_packages(
     imported_modules: Sequence[str] = (),
     workload_root: str | None = None,
     loaded_files: Mapping[str, str] | None = None,
+    roar_exclusive_names: Sequence[str] = (),
+    pkg_dist_map: Mapping[str, list[str]] | None = None,
 ) -> dict[str, str | None]:
     used: dict[str, str | None] = {}
     repo_root = os.path.abspath(workload_root) if workload_root else None
     loaded = loaded_files or {}
+    # Top-level import names that ONLY roar's own machinery imported (never the
+    # workload). When roar shares the workload's venv, roar's deps (pydantic,
+    # click, blake3, ...) load from the same site-packages as the workload's and
+    # the file pass would otherwise pin them as if the job needed them — P0-11 /
+    # P0-18's "roar footprint" that makes a thin freeze rebuild by luck. A name is
+    # only here when NO non-roar module imported it (see tracking_import), so a
+    # package the workload genuinely uses — even one roar also imports, e.g.
+    # pyyaml on a timm row — is never dropped.
+    roar_exclusive = set(roar_exclusive_names)
 
-    try:
-        from importlib import metadata as importlib_metadata
+    if pkg_dist_map is None:
+        try:
+            from importlib import metadata as importlib_metadata
 
-        pkg_dist_map = importlib_metadata.packages_distributions()
-    except Exception:
-        pkg_dist_map = {}
+            pkg_dist_map = importlib_metadata.packages_distributions()
+        except Exception:
+            pkg_dist_map = {}
 
     try:
         for fpath in modules_files:
@@ -141,6 +222,9 @@ def get_used_packages(
                 # and unpinned by _install_roar, so the pin is always redundant —
                 # harmless noise on a PyPI release, but fatal on an unpublished
                 # build (roar-cli==X.Y.dev0 can't resolve). P0-11.
+                continue
+            if top_dir in roar_exclusive:
+                # A dependency only roar's own machinery imported (P0-11 broad).
                 continue
 
             pkg_names = pkg_dist_map.get(top_dir, [])
@@ -173,7 +257,7 @@ def get_used_packages(
     try:
         for name in imported_modules:
             top = name.split(".")[0]
-            if not top or top.startswith("_") or top == "roar":
+            if not top or top.startswith("_") or top == "roar" or top in roar_exclusive:
                 continue
             loaded_file = loaded.get(top)
             if not loaded_file:
@@ -195,7 +279,13 @@ def get_used_packages(
     return used
 
 
-_MERGE_LIST_FIELDS = ("opened_files", "imported_modules", "modules_files", "shared_libs")
+_MERGE_LIST_FIELDS = (
+    "opened_files",
+    "imported_modules",
+    "modules_files",
+    "shared_libs",
+    "roar_exclusive",
+)
 _MERGE_DICT_FIELDS = ("used_packages", "installed_packages", "env_reads")
 
 
@@ -295,6 +385,19 @@ class RuntimeInjectionTracker:
         self.opened_files: set[str] = set()
         self.imported_modules: set[str] = set()
         self.env_reads: dict[str, str] = {}
+        # Import attribution by ORIGIN (the importing module's __name__): a
+        # top-level name goes to workload_import_names if ANY non-roar module
+        # imported it, and to roar_import_names when a roar.* module did. Their
+        # difference (roar-only) is subtracted from the freeze so roar's own
+        # dependency footprint doesn't masquerade as the workload's. P0-11/P0-18.
+        self.workload_import_names: set[str] = set()
+        self.roar_import_names: set[str] = set()
+        # sys.modules keys present when install() runs — roar's own bootstrap
+        # footprint (roar + the deps it imports to build the tracker, before
+        # __import__ is patched, so tracking_import can't attribute them). Keys are
+        # snapshotted cheaply at install; their top-level names are resolved at
+        # write_log (off the hot start path).
+        self._install_baseline_keys: set[str] = set()
 
         if not hasattr(self._environ, _ORIGINAL_ENVIRON_GET_ATTR):
             with contextlib.suppress(Exception):
@@ -304,6 +407,10 @@ class RuntimeInjectionTracker:
 
     def install(self) -> None:
         """Patch builtins and environ access for activity capture."""
+        # Everything loaded right now is roar's bootstrap footprint: the workload
+        # hasn't run yet. Snapshot the keys cheaply (a set copy) before patching
+        # __import__ so it covers deps roar imported to build the tracker itself.
+        self._install_baseline_keys = set(sys.modules)
         builtins.open = self.tracking_open
         builtins.__import__ = self.tracking_import
         setattr(self._environ, _ENVIRON_GET_METHOD_NAME, self.patched_environ_get)
@@ -320,6 +427,25 @@ class RuntimeInjectionTracker:
 
     def tracking_import(self, name, globals=None, locals=None, fromlist=(), level=0):
         self.imported_modules.add(name)
+        # Attribute this import by its ORIGIN. A cache hit still calls __import__
+        # with the requesting module's globals, so `import yaml` issued from the
+        # workload is observed here even when roar loaded yaml first at injection —
+        # which is exactly what a presence/timing check on sys.modules cannot see.
+        if level == 0 and name:
+            top = name.split(".")[0]
+            if top and not top.startswith("_") and top not in _STDLIB:
+                origin = (globals or {}).get("__name__") or ""
+                if origin == "roar" or origin.startswith("roar."):
+                    self.roar_import_names.add(top)
+                else:
+                    origin_file = (globals or {}).get("__file__")
+                    if origin_file and _site_packages_top(origin_file) is None:
+                        # Only the workload's OWN loose code — the entry script,
+                        # local modules, an editable repo — protects a name from
+                        # roar-dependency exclusion. An installed package's internal
+                        # import (e.g. pydantic importing itself) lives under a
+                        # package root, so it can't masquerade as a workload need.
+                        self.workload_import_names.add(top)
         module = self._real_import(name, globals, locals, fromlist, level)
 
         if self._environ.get("ROAR_WRAP") != "1":
@@ -359,12 +485,42 @@ class RuntimeInjectionTracker:
             for name, module in sys.modules.items()
             if getattr(module, "__file__", None)
         }
+        # roar's declared dependency closure, mapped from distribution names to the
+        # import names the file pass keys on. Catches deps roar pulls in via
+        # importlib (e.g. the ABI gate importing pydantic) that neither the origin
+        # hook nor the install baseline can observe.
+        closure_dists = roar_dependency_closure()
+        try:
+            from importlib import metadata as importlib_metadata
+
+            pkg_dist_map = importlib_metadata.packages_distributions()
+        except Exception:
+            pkg_dist_map = {}
+        closure_imports = {
+            imp
+            for imp, dists in pkg_dist_map.items()
+            if any(_normalize_dist(d) in closure_dists for d in dists)
+        }  # pkg_dist_map is reused by get_used_packages below (built once).
+        # roar-only footprint = what roar imported (post-install, by origin), what
+        # was already loaded at install time (bootstrap), and roar's declared
+        # dependency closure — MINUS anything the workload itself imported. That
+        # last subtraction is what keeps a shared dependency (e.g. pyyaml on a timm
+        # row) in the freeze even though roar depends on and loaded it too.
+        # P0-11/P0-18.
+        install_baseline = _installed_top_names(
+            sys.modules[k] for k in self._install_baseline_keys if k in sys.modules
+        )
+        roar_exclusive = (
+            self.roar_import_names | install_baseline | closure_imports
+        ) - self.workload_import_names
         used_packages = get_used_packages(
             modules_files,
             installed_packages,
             sorted(self.imported_modules),
             workload_root=os.getcwd(),
             loaded_files=loaded_files,
+            roar_exclusive_names=sorted(roar_exclusive),
+            pkg_dist_map=pkg_dist_map,
         )
         data = {
             "opened_files": sorted(self.opened_files),
@@ -372,6 +528,7 @@ class RuntimeInjectionTracker:
             "env_reads": dict(sorted(self.env_reads.items())),
             "modules_files": modules_files,
             "roar_inject_dir": self._inject_dir,
+            "roar_exclusive": sorted(roar_exclusive),
             "shared_libs": get_loaded_shared_libs(self._real_open),
             "sys_prefix": sys.prefix,
             "sys_base_prefix": sys.base_prefix,
