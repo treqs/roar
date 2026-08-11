@@ -34,6 +34,7 @@ class TaskFragment:
     reads: list[ArtifactRef] = field(default_factory=list)
     writes: list[ArtifactRef] = field(default_factory=list)
     worker_packages: dict[str, str] | None = None
+    backend_metadata: dict[str, Any] = field(default_factory=dict)
     task_identity: str = ""
 
     def __post_init__(self) -> None:
@@ -67,6 +68,7 @@ class TaskFragment:
             reads=list(self.reads),
             writes=list(self.writes),
             worker_packages=self.worker_packages,
+            backend_metadata=dict(self.backend_metadata),
             task_identity=self.task_identity,
         )
 
@@ -80,6 +82,7 @@ class TaskFragment:
         hydrated.setdefault("ray_actor_id", None)
         hydrated.setdefault("recorded_at", None)
         hydrated.setdefault("worker_packages", None)
+        hydrated["backend_metadata"] = dict(hydrated.get("backend_metadata") or {})
         hydrated["reads"] = [
             _artifact_ref_from_mapping(item)
             for item in hydrated.get("reads", [])
@@ -109,6 +112,7 @@ class TaskFragment:
             reads=list(fragment.reads),
             writes=list(fragment.writes),
             worker_packages=fragment.worker_packages,
+            backend_metadata=dict(fragment.backend_metadata),
             task_identity=fragment.task_identity,
         )
 

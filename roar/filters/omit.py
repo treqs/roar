@@ -168,6 +168,27 @@ BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
         ),
         r"\1=[REDACTED]",
     ),
+    # Sensitive environment values embedded in JSON, including Ray's
+    # --runtime-env-json command argument. Optional backslashes cover JSON
+    # nested inside a serialized command string.
+    (
+        "json_named_secret",
+        re.compile(
+            r"((?:\\?[\"'])(?:ROAR_SESSION_ID|[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)[A-Z_]*)(?:\\?[\"'])\s*:\s*(?:\\?[\"']))(.*?)(\\?[\"'])",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED]\3",
+    ),
+    # Presigned URLs carry credentials in query parameters even when the URL
+    # itself is only a temporary wheel or artifact download location.
+    (
+        "aws_presigned_url",
+        re.compile(
+            r"([?&]X-Amz-(?:Signature|Credential|Security-Token)=)([^&#\s]+)",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED]",
+    ),
 ]
 
 # Schemeless scp-style git remotes: user@host:path (e.g. git@github.com:org/repo.git,
