@@ -202,8 +202,8 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         jobs = [job for job in jobs_by_uid.values() if isinstance(job, dict)]
         return {
             "jobs": len(jobs),
-            "inputs": sum(len(job.get("inputs", [])) for job in jobs),
-            "outputs": sum(len(job.get("outputs", [])) for job in jobs),
+            "inputs": sum(len(_dedup_artifacts_by_hash(job.get("inputs", []))) for job in jobs),
+            "outputs": sum(len(_dedup_artifacts_by_hash(job.get("outputs", []))) for job in jobs),
         }
 
     def _compute_registration_session_hash(
@@ -230,8 +230,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             inputs = sorted(
                 [
                     {"hash": artifact.get("hash"), "path": artifact.get("path")}
-                    for artifact in job.get("inputs", [])
-                    if isinstance(artifact, dict)
+                    for artifact in _dedup_artifacts_by_hash(job.get("inputs", []))
                 ],
                 key=lambda artifact: (
                     str(artifact.get("hash") or ""),
@@ -241,8 +240,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             outputs = sorted(
                 [
                     {"hash": artifact.get("hash"), "path": artifact.get("path")}
-                    for artifact in job.get("outputs", [])
-                    if isinstance(artifact, dict)
+                    for artifact in _dedup_artifacts_by_hash(job.get("outputs", []))
                 ],
                 key=lambda artifact: (
                     str(artifact.get("hash") or ""),
@@ -1152,6 +1150,22 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         """Suppress default stderr logging for integration tests."""
+
+
+def _dedup_artifacts_by_hash(artifacts: Any) -> list[dict[str, Any]]:
+    """Model glaas's ``(job_id, artifact_hash)`` storage key: byte-identical edges
+    written to several paths collapse to one stored row, keeping the
+    lexicographically-smallest path. Mirrors roar's staged-count / canonical dedup
+    so this fake counts and hashes the way the real server stores (P0-22)."""
+    by_hash: dict[str, dict[str, Any]] = {}
+    for artifact in artifacts if isinstance(artifacts, list) else []:
+        if not isinstance(artifact, dict) or not artifact.get("hash"):
+            continue
+        digest = artifact["hash"]
+        current = by_hash.get(digest)
+        if current is None or str(artifact.get("path") or "") < str(current.get("path") or ""):
+            by_hash[digest] = artifact
+    return list(by_hash.values())
 
 
 def _parse_metadata_object(value: Any) -> dict[str, Any]:
