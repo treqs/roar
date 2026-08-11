@@ -380,9 +380,7 @@ class RuntimeInjectionTracker:
         # runtime-path filter alone leaves roar's dependency footprint in the freeze
         # (P0-11 broad). Path-keyed, never name-keyed (P0-28), so a same-named
         # workload copy in a different venv survives.
-        exclusion_paths = runtime_pythonpath + roar_footprint_paths(
-            self._inject_dir, sys.prefix
-        )
+        exclusion_paths = runtime_pythonpath + roar_footprint_paths(self._inject_dir, sys.prefix)
         modules_files = sorted(
             os.path.abspath(getattr(module, "__file__", ""))
             for module in sys.modules.values()

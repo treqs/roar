@@ -63,7 +63,9 @@ def test_shared_venv_is_not_location_excluded(tmp_path):
     interpreter prefix; path cannot tell the copies apart, so no location exclusion
     is applied and the freeze safely over-includes (never a false negative)."""
     venv = tmp_path / "venv"
-    inject_dir = str(venv / "lib" / "python3.12" / "site-packages" / "roar" / "execution" / "runtime" / "inject")
+    inject_dir = str(
+        venv / "lib" / "python3.12" / "site-packages" / "roar" / "execution" / "runtime" / "inject"
+    )
     assert roar_footprint_paths(inject_dir, str(venv)) == ()
 
 
