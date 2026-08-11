@@ -109,12 +109,44 @@ def build_git_context_from_lineage(lineage: LineageData) -> GitContext:
     )
 
 
+def _distinct_edge_count(entries: list[dict[str, Any]]) -> int:
+    """Count byte-identical edges once. The server stages artifacts
+    content-addressed, so several output paths that share bytes (timm's
+    ``os.link`` last/best/checkpoint — one inode, three names) collapse to a
+    single stored entry. Keyed on ``(hash, byte_ranges)`` so genuinely distinct
+    partial reads of the same file (same hash, different ranges) are NOT collapsed.
+    """
+    seen: set[tuple[str, str]] = set()
+    for entry in entries:
+        digest = entry.get("hash")
+        if not digest:
+            continue
+        seen.add((digest, repr(entry.get("byte_ranges"))))
+    return len(seen)
+
+
 def build_staged_lineage_counts(jobs: list[dict[str, Any]]) -> dict[str, int]:
-    """Build lightweight finalize expectations for staged registration-session lineage."""
+    """Build finalize expectations for staged registration-session lineage.
+
+    Counts DISTINCT content edges per job, not per-path rows. The server dedups
+    staged artifacts by content, so asserting the raw path count made finalize
+    fail — ``Staged lineage counts did not match finalize expectations: outputs
+    expected N, got M`` — for any workload writing identical bytes to two names
+    (P0-22). When a job has no byte-identical edges (every currently-passing row,
+    which passed *because* its counts already agreed) distinct == path, so this is
+    a no-op there and only changes the count for duplicate-byte outputs.
+
+    Scope note: this aligns roar's *expectation* to the server's content-dedup so
+    the row can finalize. Whether duplicate path-edges should be *preserved* in the
+    stored record (fidelity) is a separate, server-side (glaas-api) decision this
+    does not make. Per-job distinct matches the observed intra-job hardlink case;
+    a real duplicate-byte capture (nerf/012) is needed to confirm the server's
+    grouping if it dedups across jobs.
+    """
     return {
         "jobs": len(jobs),
-        "inputs": sum(len(job.get("_inputs", [])) for job in jobs),
-        "outputs": sum(len(job.get("_outputs", [])) for job in jobs),
+        "inputs": sum(_distinct_edge_count(job.get("_inputs", [])) for job in jobs),
+        "outputs": sum(_distinct_edge_count(job.get("_outputs", [])) for job in jobs),
     }
 
 
