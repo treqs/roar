@@ -23,6 +23,7 @@ from .job_preparation import (
     normalize_jobs_for_registration,
     order_jobs_for_registration,
 )
+from .pending_publication import clear_pending, write_pending
 from .remote_job_uids import prepare_jobs_for_remote_publication
 from .secrets import (
     detect_lineage_secrets,
@@ -323,6 +324,18 @@ class RegisterService:
         finalized_session_url = prepared.session_url
         finalize_failed = False
         already_registered = False
+        # Durable breadcrumb: a publish is starting. If the host dies before the
+        # server session is finalized (batch2 lineage-export non-durability), this
+        # marker — removed on success below — lets `roar register <session_hash>`
+        # re-drive from the durable roar.db instead of stranding a paid run.
+        # Best-effort; never raises. W1.
+        if registration_session_id:
+            write_pending(
+                roar_dir,
+                session_hash=session_hash,
+                registration_session_id=registration_session_id,
+                mode=registration_session_mode,
+            )
         with Spinner("Publishing lineage to GLaaS...") as spin:
             refresh_job_artifact_references(lineage.jobs, lineage.artifacts)
 
@@ -508,6 +521,10 @@ class RegisterService:
         success = (
             batch_result.jobs_failed == 0 and total_artifacts_failed == 0 and not finalize_failed
         )
+        if success:
+            # Publish confirmed — drop the durability breadcrumb. A crash before
+            # this point leaves the marker so the run can be recovered. W1.
+            clear_pending(roar_dir, session_hash)
         if success and session_id is not None:
             try:
                 with create_database_context(roar_dir) as db_ctx:
