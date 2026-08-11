@@ -5,7 +5,7 @@ build-backend = "maturin"
 
 [project]
 name = "roar-cli"
-version = "0.4.3"
+version = "0.4.4rc5"
 description = "Reproducibility and provenance tracker for ML training pipelines"
 authors = [
     { name="TReqs Team", email="info@treqs.ai" }
