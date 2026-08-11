@@ -70,6 +70,42 @@ def test_sync_aliases_to_trackio_and_strips_wandb_only_kwargs():
     assert "commit" not in calls["log"][1]  # wandb-only log kwarg stripped
 
 
+def test_lerobot_resume_none_is_dropped_before_trackio():
+    """trackio.init raises ValueError on ``resume=None``; wandb's default IS None
+    and lerobot always passes the kwarg (``resume="must" if cfg.resume else None``),
+    so it dies in init(). The shim must drop a None resume."""
+    calls: dict = {}
+    fake = types.ModuleType("trackio")
+    fake.init = lambda *a, **k: calls.__setitem__("init", k) or types.SimpleNamespace(summary={})
+    fake.log = lambda *a, **k: None
+    sys.modules["trackio"] = fake
+
+    wandb_trackio.install(environ={"ROAR_WANDB_TO_TRACKIO": "1", "TRACKIO_SPACE_ID": "org/space"})
+    import wandb
+
+    wandb.init(project="p", resume=None)  # would raise inside trackio without the drop
+    assert "resume" not in calls["init"]
+
+
+def test_lerobot_log_data_kwarg_is_forwarded_positionally():
+    """``wandb.log(data=..., step=...)`` — wandb's first param is named ``data``,
+    trackio's is ``metrics``, so the keyword form is a TypeError. The shim forwards
+    it positionally so the metrics actually reach trackio."""
+    calls: dict = {}
+    fake = types.ModuleType("trackio")
+    fake.init = lambda *a, **k: types.SimpleNamespace(summary={})
+    fake.log = lambda *a, **k: calls.__setitem__("log", (a, k))
+    sys.modules["trackio"] = fake
+
+    wandb_trackio.install(environ={"ROAR_WANDB_TO_TRACKIO": "1", "TRACKIO_SPACE_ID": "org/space"})
+    import wandb
+
+    wandb.log(data={"loss": 0.5}, step=3)
+    args, kwargs = calls["log"]
+    assert args and args[0] == {"loss": 0.5}  # metrics forwarded positionally
+    assert "data" not in kwargs  # no TypeError-inducing keyword survives
+
+
 def test_off_beats_a_configured_space():
     fake = types.ModuleType("trackio")
     fake.init = lambda *a, **k: None
