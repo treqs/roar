@@ -45,6 +45,26 @@ class PreparedPublishSession:
     registration_session_mode: str | None = None
 
 
+def _dedup_edges_by_hash(edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse edges to one per CONTENT hash — matching glaas, which keys job
+    inputs/outputs on ``(job_id, artifact_hash)`` and so drops duplicate-path edges
+    for the same bytes (timm's ``os.link`` last/best/checkpoint = one inode, three
+    names). Keeps the lexicographically-smallest path so the surviving edge is
+    deterministic across roar and glaas. Edges without a resolvable hash are
+    dropped. A no-op when a job has no byte-identical edges — i.e. every currently
+    passing row — so existing session hashes are unchanged. P0-22.
+    """
+    by_hash: dict[str, dict[str, Any]] = {}
+    for edge in edges:
+        digest = _canonical_artifact_hash(edge)
+        if not digest:
+            continue
+        current = by_hash.get(digest)
+        if current is None or str(edge.get("path") or "") < str(current.get("path") or ""):
+            by_hash[digest] = edge
+    return list(by_hash.values())
+
+
 def build_canonical_session_payload(
     *,
     lineage: LineageData,
@@ -63,7 +83,7 @@ def build_canonical_session_payload(
                         "hash": _canonical_artifact_hash(artifact),
                         "path": artifact.get("path"),
                     }
-                    for artifact in job.get("_inputs", [])
+                    for artifact in _dedup_edges_by_hash(job.get("_inputs", []))
                 ],
                 key=lambda artifact: (
                     str(artifact.get("hash") or ""),
@@ -76,7 +96,7 @@ def build_canonical_session_payload(
                         "hash": _canonical_artifact_hash(artifact),
                         "path": artifact.get("path"),
                     }
-                    for artifact in job.get("_outputs", [])
+                    for artifact in _dedup_edges_by_hash(job.get("_outputs", []))
                 ],
                 key=lambda artifact: (
                     str(artifact.get("hash") or ""),
@@ -110,11 +130,19 @@ def build_git_context_from_lineage(lineage: LineageData) -> GitContext:
 
 
 def build_staged_lineage_counts(jobs: list[dict[str, Any]]) -> dict[str, int]:
-    """Build lightweight finalize expectations for staged registration-session lineage."""
+    """Finalize expectations for staged registration-session lineage.
+
+    Counts DISTINCT content hashes per job — matching glaas, which stores job
+    edges keyed on ``(job_id, artifact_hash)`` and so collapses byte-identical
+    outputs written to several names (timm ``os.link`` last/best/checkpoint) to one
+    row. Asserting the raw per-path count made finalize 400 with "Staged lineage
+    counts did not match" (P0-22). A no-op for every currently-passing row (no
+    duplicate edges → distinct == path).
+    """
     return {
         "jobs": len(jobs),
-        "inputs": sum(len(job.get("_inputs", [])) for job in jobs),
-        "outputs": sum(len(job.get("_outputs", [])) for job in jobs),
+        "inputs": sum(len(_dedup_edges_by_hash(job.get("_inputs", []))) for job in jobs),
+        "outputs": sum(len(_dedup_edges_by_hash(job.get("_outputs", []))) for job in jobs),
     }
 
 
