@@ -124,6 +124,12 @@ def _install_trackio_alias(space_id: str) -> bool:
     def init(*args, **kwargs):
         for k in _WANDB_ONLY_INIT:
             kwargs.pop(k, None)
+        # wandb's `resume` default is None ("do not resume"); trackio accepts only
+        # "must"/"allow"/"never" and RAISES ValueError on None. Callers that always
+        # pass the kwarg (lerobot: `resume="must" if cfg.resume else None`) therefore
+        # die in init(). Map wandb's None onto trackio's "never" — same meaning.
+        if kwargs.get("resume") is None:
+            kwargs.pop("resume", None)
         kwargs.setdefault("space_id", space_id)
         run = _orig_init(*args, **kwargs)
         try:
@@ -148,6 +154,11 @@ def _install_trackio_alias(space_id: str) -> bool:
 
     def log(*args, **kwargs):
         kwargs.pop("commit", None)
+        # wandb's first parameter is NAMED `data`; trackio names it `metrics`. Callers
+        # using the keyword form (lerobot: `wandb.log(data=batch_data, step=step)`)
+        # otherwise get TypeError: log() got an unexpected keyword argument 'data'.
+        if "data" in kwargs and not args:
+            args = (kwargs.pop("data"),)
         if args and isinstance(args[0], dict):
             args = (_to_jsonable(args[0]), *args[1:])
         try:
