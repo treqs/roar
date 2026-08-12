@@ -202,6 +202,8 @@ class GlaasClient:
     def _make_auth_header(self, method: str, path: str, body: bytes | None = None) -> str | None:
         if self._force_anonymous:
             return None
+        if self._publish_auth.delegated_auth_available:
+            return None
         if self._publish_auth.access_token and not self._bearer_auth_rejected:
             return f"Bearer {self._publish_auth.access_token}"
         return make_auth_header(method, path, body)
@@ -214,7 +216,11 @@ class GlaasClient:
         return make_auth_header(method, path, body)
 
     def _can_fallback_from_bearer_to_ssh(self) -> bool:
-        if self._force_anonymous or self._bearer_auth_rejected:
+        if (
+            self._force_anonymous
+            or self._bearer_auth_rejected
+            or self._publish_auth.delegated_auth_available
+        ):
             return False
         if not self._publish_auth.access_token:
             return False
@@ -231,6 +237,8 @@ class GlaasClient:
         """
         if self._force_anonymous:
             return False
+        if self._publish_auth.delegated_auth_available:
+            return True
         if self._publish_auth.access_token:
             return True
         if not self.base_url:

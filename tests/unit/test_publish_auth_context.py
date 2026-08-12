@@ -96,6 +96,35 @@ def test_private_publish_without_binding_uses_current_user_scope_request(
     }
 
 
+def test_delegated_publish_ignores_ambient_auth_and_resolves_private_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ROAR_DELEGATED_AUTH", "1")
+    monkeypatch.setenv("ROAR_DELEGATED_USER_SUB", "sub-123")
+    monkeypatch.setenv("ROAR_DELEGATED_DB_USER_ID", "user-123")
+    monkeypatch.setenv("ROAR_DELEGATED_CREATOR_IDENTITY", "treqs:user:sub-123")
+    monkeypatch.setenv("ROAR_DELEGATED_OWNER_ID", "org-123")
+    monkeypatch.setenv("ROAR_DELEGATED_OWNER_TYPE", "organization")
+    monkeypatch.setenv("ROAR_DELEGATED_PROJECT_ID", "project-456")
+    monkeypatch.setenv("ROAR_DELEGATED_VISIBILITY", "private")
+
+    with patch("roar.publish_auth.load_auth_state", side_effect=AssertionError("must not load")):
+        context = load_publish_auth_context(
+            start_dir=tmp_path,
+            allow_public_without_binding=False,
+        )
+
+    assert context.access_token is None
+    assert context.delegated_auth_available
+    assert context.creator_identity == "treqs:user:sub-123"
+    assert context.scope_request == {
+        "owner_id": "org-123",
+        "owner_type": "organization",
+        "project_id": "project-456",
+        "visibility": "private",
+    }
+
+
 def test_public_scope_uses_current_user_public_scope_request(tmp_path: Path) -> None:
     config_dir = tmp_path / ".roar"
     config_dir.mkdir(parents=True)

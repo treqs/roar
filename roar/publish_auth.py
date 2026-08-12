@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ class PublishAuthContext:
     db_user_id: str | None = None
     creator_identity: str | None = None
     ssh_auth_available: bool = False
+    delegated_auth_available: bool = False
 
 
 # Request-scoped carrier for the explicit --public/--private choice. The publish
@@ -127,20 +129,29 @@ def load_publish_auth_context(
             db_user_id=None,
             creator_identity=None,
             ssh_auth_available=False,
+            delegated_auth_available=False,
         )
 
+    delegated_auth_available = os.environ.get("ROAR_DELEGATED_AUTH") == "1"
     access_token = None
     auth_provider = None
     user_sub = None
     db_user_id = None
-    auth_state = load_auth_state()
+    # A delegated task deliberately ignores ambient workstation credentials.
+    # Its loopback broker adds the real upstream authorization out of process.
+    auth_state = None if delegated_auth_available else load_auth_state()
     if auth_state is not None:
         access_token = auth_state.access_token
         auth_provider = auth_state.provider
         user_sub = auth_state.user.sub or None
         db_user_id = auth_state.user.db_user_id
 
-    ssh_auth_available = _has_ssh_auth_credentials()
+    ssh_auth_available = False if delegated_auth_available else _has_ssh_auth_credentials()
+
+    if delegated_auth_available:
+        auth_provider = "treqs-lineage-task"
+        user_sub = os.environ.get("ROAR_DELEGATED_USER_SUB") or None
+        db_user_id = os.environ.get("ROAR_DELEGATED_DB_USER_ID") or None
 
     # Proactively renew an expiring/expired bearer so register doesn't ride on a
     # token `roar whoami` already calls "expired" (which then reads as a bug when
@@ -157,8 +168,15 @@ def load_publish_auth_context(
                 access_token = None
             else:
                 raise PublishAuthError(str(exc)) from exc
-    binding = None if allow_public_without_binding else _load_repo_binding(start_dir)
-    repo_scope = load_repo_scope(start_dir)
+    delegated_scope = _load_delegated_scope() if delegated_auth_available else None
+    binding = (
+        delegated_scope
+        if delegated_auth_available
+        else None
+        if allow_public_without_binding
+        else _load_repo_binding(start_dir)
+    )
+    repo_scope = None if delegated_auth_available else load_repo_scope(start_dir)
     # `allow_public_without_binding` permits a *scopeless* public publish, but it
     # must not discard a **public project scope** — that binding carries the org
     # attribution (supplier/author) the AI-BOM needs, and a public project's
@@ -172,7 +190,8 @@ def load_publish_auth_context(
         repo_scope and repo_scope.mode == "project" and repo_scope.visibility == "public"
     ):
         repo_scope = None
-    if binding and not access_token and not ssh_auth_available:
+    has_publish_auth = bool(access_token or ssh_auth_available or delegated_auth_available)
+    if binding and not has_publish_auth:
         raise PublishAuthError(
             "Repo is linked to GLaaS but no global auth state is available. Run `roar login`."
         )
@@ -183,19 +202,21 @@ def load_publish_auth_context(
         }
         if repo_scope.project_id:
             binding["project_id"] = repo_scope.project_id
-        if not access_token and not ssh_auth_available:
+        if not has_publish_auth:
             raise PublishAuthError(
                 "Repo is linked to GLaaS but no global auth state is available. Run `roar login`."
             )
 
-    if not binding and not allow_public_without_binding and not access_token:
+    if not binding and not allow_public_without_binding and not has_publish_auth:
         raise PublishAuthError(
             "Private registration requires GLaaS login when no project scope is linked. "
             "Run `roar login`, use `roar scope use <project-id>`, or rerun with --public."
         )
 
     creator_identity = None
-    if not access_token and allow_public_without_binding:
+    if delegated_auth_available:
+        creator_identity = os.environ.get("ROAR_DELEGATED_CREATOR_IDENTITY") or None
+    elif not access_token and allow_public_without_binding:
         creator_identity, resolved_db_user_id = _load_authenticated_creator_identity()
         if resolved_db_user_id and not db_user_id:
             db_user_id = resolved_db_user_id
@@ -205,7 +226,9 @@ def load_publish_auth_context(
         scope_request = {
             "owner_id": binding["owner_id"],
             "owner_type": binding["owner_type"],
-            "visibility": _scope_visibility(repo_scope, requested_public) or "private",
+            "visibility": binding.get("visibility")
+            or _scope_visibility(repo_scope, requested_public)
+            or "private",
         }
         project_id = binding.get("project_id")
         if project_id:
@@ -230,7 +253,24 @@ def load_publish_auth_context(
         db_user_id=db_user_id,
         creator_identity=creator_identity,
         ssh_auth_available=ssh_auth_available,
+        delegated_auth_available=delegated_auth_available,
     )
+
+
+def _load_delegated_scope() -> dict[str, str]:
+    values = {
+        "owner_id": os.environ.get("ROAR_DELEGATED_OWNER_ID", "").strip(),
+        "owner_type": os.environ.get("ROAR_DELEGATED_OWNER_TYPE", "").strip(),
+        "project_id": os.environ.get("ROAR_DELEGATED_PROJECT_ID", "").strip(),
+        "visibility": os.environ.get("ROAR_DELEGATED_VISIBILITY", "").strip(),
+    }
+    if (
+        not all(values.values())
+        or values["owner_type"] not in {"user", "organization"}
+        or values["visibility"] not in {"public", "private"}
+    ):
+        raise PublishAuthError("Delegated GLaaS scope is missing or invalid")
+    return values
 
 
 def resolve_publish_creator_identity(context: PublishAuthContext) -> str:
