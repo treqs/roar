@@ -295,4 +295,9 @@ if os.environ.get("ROAR_WANDB_TO_TRACKIO"):
     except Exception:
         pass
 
+# Everything above is Roar's injection bootstrap, not workload activity. Keep a
+# boundary snapshot so its Python packages and loaded shared libraries cannot
+# leak into lineage merely because compatible copies exist in the workload venv.
+_runtime_tracker.mark_workload_boundary()
+
 atexit.register(_runtime_tracker.write_log)

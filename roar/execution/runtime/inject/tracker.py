@@ -84,8 +84,11 @@ def _dist_is_in_repo(dist_name: str, repo_root: str) -> bool:
         from importlib import metadata as importlib_metadata
 
         dist = importlib_metadata.distribution(dist_name)
-        path = getattr(dist, "_path", None) or dist.locate_file("")
-        return os.path.abspath(str(path)).startswith(repo_root + os.sep)
+        path = os.path.abspath(str(getattr(dist, "_path", None) or dist.locate_file("")))
+        normalized = path.replace(os.sep, "/")
+        if any(marker in normalized for marker in _PACKAGE_ROOT_MARKERS):
+            return False  # a repo-local .venv is installed state, not project source
+        return path.startswith(repo_root + os.sep)
     except Exception:
         return False
 
@@ -96,6 +99,7 @@ def _dist_is_in_repo(dist_name: str, repo_root: str) -> bool:
 # imports them, but the file pass ignored them and the aliased-only name pass
 # (P0-13 fix) doesn't rescue a normally-loaded import.
 _PACKAGE_ROOT_MARKERS = ("site-packages/", "dist-packages/")
+_STDLIB = frozenset(getattr(sys, "stdlib_module_names", frozenset()))
 
 
 def _site_packages_top(fpath: str) -> str | None:
@@ -119,6 +123,7 @@ def get_used_packages(
     imported_modules: Sequence[str] = (),
     workload_root: str | None = None,
     loaded_files: Mapping[str, str] | None = None,
+    workload_imports: Sequence[str] = (),
 ) -> dict[str, str | None]:
     used: dict[str, str | None] = {}
     repo_root = os.path.abspath(workload_root) if workload_root else None
@@ -186,6 +191,35 @@ def get_used_packages(
                     continue
                 # The workload's OWN package (editable / leftover .egg-info in the
                 # repo) is not a third-party dep — P0-12.
+                if repo_root and _dist_is_in_repo(pkg_name, repo_root):
+                    continue
+                used[pkg_name] = installed_packages[pkg_name]
+    except Exception:
+        pass
+
+    # A workload may explicitly import a package that Roar already loaded while
+    # bootstrapping the injected runtime (blake3 is the important example). Its
+    # file is deliberately absent from modules_files because it belongs to the
+    # pre-workload snapshot, but the post-boundary import proves the workload
+    # requires it. Recover only those successful, already-loaded imports here.
+    # Failed optional probes have no loaded_file and remain excluded (P0-13).
+    try:
+        for name in workload_imports:
+            top = name.split(".")[0]
+            if not top or top.startswith("_") or top == "roar":
+                continue
+            loaded_file = loaded.get(top)
+            if not loaded_file or _site_packages_top(loaded_file) != top:
+                continue
+            pkg_names = pkg_dist_map.get(top, [])
+            if not pkg_names and top in installed_packages:
+                # Some extension-backed distributions omit top_level metadata,
+                # so packages_distributions() has no reverse entry (observed
+                # with blake3 in the injected cross-environment process).
+                pkg_names = [top]
+            for pkg_name in pkg_names:
+                if pkg_name not in installed_packages or pkg_name in used:
+                    continue
                 if repo_root and _dist_is_in_repo(pkg_name, repo_root):
                     continue
                 used[pkg_name] = installed_packages[pkg_name]
@@ -332,6 +366,9 @@ class RuntimeInjectionTracker:
         self.opened_files: set[str] = set()
         self.imported_modules: set[str] = set()
         self.env_reads: dict[str, str] = {}
+        self.workload_import_names: set[str] = set()
+        self._baseline_module_files: set[str] = set()
+        self._baseline_shared_libs: set[str] = set()
 
         if not hasattr(self._environ, _ORIGINAL_ENVIRON_GET_ATTR):
             with contextlib.suppress(Exception):
@@ -345,6 +382,27 @@ class RuntimeInjectionTracker:
         builtins.__import__ = self.tracking_import
         setattr(self._environ, _ENVIRON_GET_METHOD_NAME, self.patched_environ_get)
 
+    def mark_workload_boundary(self) -> None:
+        """Discard injection bootstrap activity and snapshot its native footprint."""
+        self._baseline_module_files = {
+            os.path.abspath(getattr(module, "__file__", ""))
+            for module in sys.modules.values()
+            if getattr(module, "__file__", None)
+        }
+        roar_root = _roar_site_packages_root(self._inject_dir)
+        runtime_paths = get_active_runtime_pythonpath(self._environ)
+        self._baseline_shared_libs = {
+            path
+            for path in get_loaded_shared_libs(self._real_open)
+            if any(marker in path.replace(os.sep, "/") for marker in _PACKAGE_ROOT_MARKERS)
+            or (roar_root and is_under_any_runtime_path(path, (roar_root,)))
+            or is_under_any_runtime_path(path, runtime_paths)
+        }
+        self.opened_files.clear()
+        self.imported_modules.clear()
+        self.env_reads.clear()
+        self.workload_import_names.clear()
+
     def tracking_open(self, *args, **kwargs):
         if is_suppressed():
             return self._real_open(*args, **kwargs)
@@ -357,6 +415,24 @@ class RuntimeInjectionTracker:
 
     def tracking_import(self, name, globals=None, locals=None, fromlist=(), level=0):
         self.imported_modules.add(name)
+        # Rescue only imports explicitly issued by loose workload code. This is
+        # the useful origin signal from #275 without its name-keyed dependency
+        # subtraction, which #277 reverted for dropping same-named workload deps.
+        if level == 0 and name:
+            top = name.split(".")[0]
+            origin = (globals or {}).get("__name__") or ""
+            origin_file = (globals or {}).get("__file__")
+            if (
+                top
+                and not top.startswith("_")
+                and top not in _STDLIB
+                and (
+                    origin == "__main__"
+                    or (origin_file and _site_packages_top(origin_file) is None)
+                )
+                and not (origin == "roar" or origin.startswith("roar."))
+            ):
+                self.workload_import_names.add(top)
         module = self._real_import(name, globals, locals, fromlist, level)
 
         if self._environ.get("ROAR_WRAP") != "1":
@@ -385,6 +461,7 @@ class RuntimeInjectionTracker:
             os.path.abspath(getattr(module, "__file__", ""))
             for module in sys.modules.values()
             if getattr(module, "__file__", None)
+            and os.path.abspath(getattr(module, "__file__", "")) not in self._baseline_module_files
             and not os.path.abspath(getattr(module, "__file__", "")).startswith(self._inject_dir)
             and not is_under_any_runtime_path(
                 os.path.abspath(getattr(module, "__file__", "")),
@@ -403,12 +480,21 @@ class RuntimeInjectionTracker:
             for name, module in sys.modules.items()
             if getattr(module, "__file__", None)
         }
+        preloaded_workload_imports = sorted(
+            name
+            for name in self.workload_import_names
+            if (
+                loaded_files.get(name)
+                and os.path.abspath(loaded_files[name]) in self._baseline_module_files
+            )
+        )
         used_packages = get_used_packages(
             modules_files,
             installed_packages,
             sorted(self.imported_modules),
             workload_root=os.getcwd(),
             loaded_files=loaded_files,
+            workload_imports=preloaded_workload_imports,
         )
         data = {
             "opened_files": sorted(self.opened_files),
@@ -416,7 +502,9 @@ class RuntimeInjectionTracker:
             "env_reads": dict(sorted(self.env_reads.items())),
             "modules_files": modules_files,
             "roar_inject_dir": self._inject_dir,
-            "shared_libs": get_loaded_shared_libs(self._real_open),
+            "shared_libs": sorted(
+                set(get_loaded_shared_libs(self._real_open)) - self._baseline_shared_libs
+            ),
             "sys_prefix": sys.prefix,
             "sys_base_prefix": sys.base_prefix,
             "virtual_env": self._original_environ_get("VIRTUAL_ENV", ""),
