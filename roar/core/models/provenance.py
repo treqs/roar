@@ -67,6 +67,9 @@ class PythonInjectData(RoarBaseModel):
     installed_packages: dict[str, str] = Field(default_factory=dict)
     python_version: str = ""
     python_implementation: str = ""
+    # Health of the sitecustomize package-capture channel. A missing/invalid
+    # Python capture must not be confused with a successful empty package set.
+    capture_status: str = "missing"
 
     @computed_field  # type: ignore[prop-decorator]
     @property

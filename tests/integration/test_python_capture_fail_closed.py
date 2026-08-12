@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
+def _roar(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "roar", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def _latest_metadata(cwd: Path) -> dict:
+    connection = sqlite3.connect(cwd / ".roar" / "roar.db")
+    row = connection.execute("SELECT metadata FROM jobs ORDER BY id DESC LIMIT 1").fetchone()
+    connection.close()
+    assert row is not None
+    return json.loads(row[0])
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["env", "PYTHONPATH=.", sys.executable, "-c", "import click"],
+        ["env", "-u", "PYTHONPATH", sys.executable, "-c", "import click"],
+        [sys.executable, "-E", "-c", "import click"],
+        [sys.executable, "-I", "-c", "import click"],
+        [sys.executable, "-S", "-c", "pass"],
+        ["sh", "-c", f"PYTHONPATH=. {sys.executable} -c 'import click'"],
+    ],
+    ids=["env-replace", "env-unset", "python-E", "python-I", "python-S", "shell-replace"],
+)
+def test_suppressed_injection_warns_and_records_failed_capture(
+    tmp_path: Path, command: list[str]
+) -> None:
+    assert _roar(tmp_path, "init", "-n").returncode == 0
+    assert _roar(tmp_path, "tracer", "use", "preload").returncode == 0
+
+    run = _roar(tmp_path, "run", *command)
+
+    assert run.returncode == 0
+    assert "Python package capture did not complete" in run.stderr
+    assert _latest_metadata(tmp_path)["python_capture"] == "missing"
+
+
+def test_successful_python_capture_has_no_warning(tmp_path: Path) -> None:
+    assert _roar(tmp_path, "init", "-n").returncode == 0
+    assert _roar(tmp_path, "tracer", "use", "preload").returncode == 0
+
+    run = _roar(tmp_path, "run", sys.executable, "-c", "import click")
+
+    assert run.returncode == 0
+    assert "Python package capture did not complete" not in run.stderr
+    assert _latest_metadata(tmp_path)["python_capture"] == "complete"
+
+
+def test_non_python_command_is_not_misreported(tmp_path: Path) -> None:
+    assert _roar(tmp_path, "init", "-n").returncode == 0
+    assert _roar(tmp_path, "tracer", "use", "preload").returncode == 0
+
+    run = _roar(tmp_path, "run", "/bin/true")
+
+    assert run.returncode == 0
+    assert "Python package capture did not complete" not in run.stderr
+    assert _latest_metadata(tmp_path)["python_capture"] == "not-applicable"

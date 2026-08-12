@@ -180,8 +180,11 @@ def runtime_captured(pipeline) -> bool:
     from ...execution.reproduction.pipeline_metadata import PipelineMetadataParser
 
     try:
-        runtime = PipelineMetadataParser().first_runtime(pipeline.build_steps, pipeline.run_steps)
-        return bool((runtime.get("python") or {}).get("version"))
+        parser = PipelineMetadataParser()
+        runtime = parser.first_runtime(pipeline.build_steps, pipeline.run_steps)
+        return bool(
+            (runtime.get("python") or {}).get("version")
+        ) and parser.python_capture_complete(pipeline.build_steps, pipeline.run_steps)
     except Exception:
         return False
 
