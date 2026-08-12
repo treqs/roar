@@ -291,6 +291,13 @@ class RunCoordinator:
             collect_dropped_paths=(ctx.verbosity == "debug"),
             command=list(ctx.command),
         )
+        if prov.get("python_capture") in {"missing", "invalid"}:
+            self.presenter.print_error(
+                "warning: Python package capture did not complete; this job's package list is "
+                "incomplete and its runtime reproducibility check will fail.\n"
+                "  Avoid replacing/removing PYTHONPATH, `env -i`, and Python -E/-I/-S. "
+                "Use `env -C <dir> python ...` when only a working-directory change is needed."
+            )
         t_prov_end = time.perf_counter()
         n_read = len(prov.get("data", {}).get("read_files", []))
         n_written = len(prov.get("data", {}).get("written_files", []))
