@@ -10,6 +10,11 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
+_MACOS_PROTECTED_BINARY = pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="macOS protected system binaries reject preload before the workload starts",
+)
+
 
 def _roar(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -33,14 +38,25 @@ def _latest_metadata(cwd: Path) -> dict:
 @pytest.mark.parametrize(
     "command",
     [
-        ["env", "PYTHONPATH=.", sys.executable, "-c", "import click"],
-        ["env", "-u", "PYTHONPATH", sys.executable, "-c", "import click"],
-        [sys.executable, "-E", "-c", "import click"],
-        [sys.executable, "-I", "-c", "import click"],
-        [sys.executable, "-S", "-c", "pass"],
-        ["sh", "-c", f"PYTHONPATH=. {sys.executable} -c 'import click'"],
+        pytest.param(
+            ["env", "PYTHONPATH=.", sys.executable, "-c", "import click"],
+            marks=_MACOS_PROTECTED_BINARY,
+            id="env-replace",
+        ),
+        pytest.param(
+            ["env", "-u", "PYTHONPATH", sys.executable, "-c", "import click"],
+            marks=_MACOS_PROTECTED_BINARY,
+            id="env-unset",
+        ),
+        pytest.param([sys.executable, "-E", "-c", "import click"], id="python-E"),
+        pytest.param([sys.executable, "-I", "-c", "import click"], id="python-I"),
+        pytest.param([sys.executable, "-S", "-c", "pass"], id="python-S"),
+        pytest.param(
+            ["sh", "-c", f"PYTHONPATH=. {sys.executable} -c 'import click'"],
+            marks=_MACOS_PROTECTED_BINARY,
+            id="shell-replace",
+        ),
     ],
-    ids=["env-replace", "env-unset", "python-E", "python-I", "python-S", "shell-replace"],
 )
 def test_suppressed_injection_warns_and_records_failed_capture(
     tmp_path: Path, command: list[str]
