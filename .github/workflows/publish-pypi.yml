@@ -42,7 +42,8 @@ jobs:
           rustup component add rust-src --toolchain nightly
 
       - name: Install bpf-linker
-        run: cargo install bpf-linker
+        # Keep release builds aligned with the version validated in CI.
+        run: cargo install bpf-linker --version 0.10.4 --locked
 
       - name: Verify version matches release tag
         if: github.event_name == 'release' && matrix.arch == 'x86_64'
