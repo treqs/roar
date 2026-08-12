@@ -341,9 +341,41 @@ class RuntimeInjectionTracker:
 
     def install(self) -> None:
         """Patch builtins and environ access for activity capture."""
+        self._install_fork_worker_finalizer()
         builtins.open = self.tracking_open
         builtins.__import__ = self.tracking_import
         setattr(self._environ, _ENVIRON_GET_METHOD_NAME, self.patched_environ_get)
+
+    def _install_fork_worker_finalizer(self) -> None:
+        """Make multiprocessing fork workers emit their per-PID inject shard.
+
+        ``multiprocessing`` workers terminate through ``os._exit``, bypassing
+        Python's ordinary atexit handlers. Its own shutdown path does run
+        child-local ``Finalize`` callbacks, so register one after each fork. The
+        existing parent-side shard merger then sees the worker report exactly as
+        intended by PR #265.
+        """
+        try:
+            from multiprocessing import util as multiprocessing_util
+
+            multiprocessing_util.register_after_fork(
+                self, RuntimeInjectionTracker._register_in_fork_child
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _register_in_fork_child(tracker: RuntimeInjectionTracker) -> None:
+        try:
+            from multiprocessing import util as multiprocessing_util
+
+            multiprocessing_util.Finalize(
+                None,
+                tracker.write_log,
+                exitpriority=-100,
+            )
+        except Exception:
+            pass
 
     def tracking_open(self, *args, **kwargs):
         if is_suppressed():

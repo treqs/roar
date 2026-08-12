@@ -8,6 +8,7 @@ recovering the full workload instead of whichever process wrote last.
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 
 from roar.execution.runtime.inject.tracker import (
@@ -34,11 +35,40 @@ def _shard(base, pid, data):
     (base.parent / f"{base.name}.{pid}").write_text(json.dumps(data), encoding="utf-8")
 
 
+def _record_fork_only_import(tracker):
+    tracker.imported_modules.add("fork_only_dependency")
+
+
 def test_write_log_writes_a_per_pid_shard_not_the_shared_file(tmp_path):
     log_path = tmp_path / "inject-log.json"
     _tracker(log_path).write_log()
     assert not log_path.exists()  # the shared path is NOT truncated
     assert (tmp_path / f"inject-log.json.{os.getpid()}").exists()  # the shard is
+
+
+def test_real_fork_worker_writes_its_own_pid_shard(tmp_path):
+    """Linux multiprocessing fork workers use os._exit, so ordinary atexit does
+    not run. The multiprocessing finalizer must write the worker's real shard."""
+    if "fork" not in multiprocessing.get_all_start_methods():
+        return
+
+    log_path = tmp_path / "inject-log.json"
+    tracker = _tracker(log_path)
+    tracker._install_fork_worker_finalizer()
+    process = multiprocessing.get_context("fork").Process(
+        target=_record_fork_only_import,
+        args=(tracker,),
+    )
+    process.start()
+    process.join(timeout=10)
+
+    assert process.exitcode == 0
+    worker_shard = tmp_path / f"inject-log.json.{process.pid}"
+    assert worker_shard.exists()
+    payload = json.loads(worker_shard.read_text())
+    assert payload["pid"] == process.pid
+    assert "fork_only_dependency" in payload["imported_modules"]
+    assert not (tmp_path / f"inject-log.json.{os.getpid()}").exists()
 
 
 def test_worker_shard_does_not_clobber_the_workload_record(tmp_path):
