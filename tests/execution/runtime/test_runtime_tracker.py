@@ -154,3 +154,40 @@ def test_runtime_tracker_excludes_roar_internal_env_reads(tmp_path) -> None:
     # User-facing reads are kept; roar's reserved namespace is dropped.
     assert env_reads == {"HOME": "/home/ubuntu"}
     assert not any(key.startswith("ROAR_") for key in env_reads)
+
+
+def test_workload_boundary_drops_bootstrap_modules_and_shared_libs(tmp_path, monkeypatch) -> None:
+    from roar.execution.runtime.inject import tracker as tracker_module
+
+    log_path = tmp_path / "inject-log.json"
+
+    class _FakeController:
+        def handle_import(self, module_name: str, module) -> None:
+            return None
+
+    tracker = RuntimeInjectionTracker({}, _FakeController(), log_file=str(log_path))
+    bootstrap_module = tmp_path / "site-packages" / "click" / "__init__.py"
+    workload_module = tmp_path / "site-packages" / "numpy" / "__init__.py"
+    bootstrap = type(sys)("click")
+    bootstrap.__file__ = str(bootstrap_module)
+    workload = type(sys)("numpy")
+    workload.__file__ = str(workload_module)
+    monkeypatch.setitem(sys.modules, "click", bootstrap)
+
+    bootstrap_lib = "/tool/site-packages/cryptography/_rust.abi3.so"
+    libs = [[bootstrap_lib], [bootstrap_lib, "/venv/numpy.libs/libopenblas.so"]]
+    monkeypatch.setattr(tracker_module, "get_loaded_shared_libs", lambda _open: libs.pop(0))
+    monkeypatch.setattr(
+        tracker_module,
+        "get_installed_packages",
+        lambda **_: {"click": "8.4.2", "numpy": "2.5.1"},
+    )
+    tracker.mark_workload_boundary()
+    monkeypatch.setitem(sys.modules, "numpy", workload)
+    tracker.write_log()
+
+    merge_inject_logs(str(log_path))
+    payload = json.loads(log_path.read_text())
+    assert str(bootstrap_module) not in payload["modules_files"]
+    assert str(workload_module) in payload["modules_files"]
+    assert payload["shared_libs"] == ["/venv/numpy.libs/libopenblas.so"]

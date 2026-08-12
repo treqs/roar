@@ -180,6 +180,23 @@ def test_real_aliased_dep_outside_repo_is_still_pinned(tmp_path, monkeypatch):
     assert used.get("wandb") == "0.16.0"
 
 
+def test_preloaded_dep_in_repo_local_venv_is_not_mistaken_for_self_package(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    dist_info = repo / ".venv" / "lib" / "python3.12" / "site-packages" / "blake3.dist-info"
+    dist_info.mkdir(parents=True)
+    monkeypatch.setattr(ilm, "packages_distributions", lambda: {"blake3": ["blake3"]})
+    monkeypatch.setattr(ilm, "distribution", lambda name: _FakeDist(dist_info))
+    used = get_used_packages(
+        modules_files=[],
+        installed_packages={"blake3": "1.0.9"},
+        imported_modules=["blake3"],
+        loaded_files={"blake3": str(dist_info.parent / "blake3" / "__init__.py")},
+        workload_root=str(repo),
+        workload_imports=["blake3"],
+    )
+    assert used == {"blake3": "1.0.9"}
+
+
 def test_dist_packages_import_is_recorded(monkeypatch):
     """P0-18: a package loaded from dist-packages (system Python, e.g. the cert
     AMI) must reach the freeze — the file pass previously only matched
@@ -206,3 +223,16 @@ def test_failed_probe_import_is_not_recorded_even_with_dist_packages(monkeypatch
         loaded_files={},  # not in sys.modules
     )
     assert "sagemaker-core" not in used
+
+
+def test_explicit_import_of_preloaded_roar_dependency_is_recorded(monkeypatch):
+    """`import blake3` remains a requirement even when injection preloaded it."""
+    monkeypatch.setattr(ilm, "packages_distributions", lambda: {"blake3": ["blake3"]})
+    used = get_used_packages(
+        modules_files=[],
+        installed_packages={"blake3": "1.0.9"},
+        imported_modules=["blake3"],
+        loaded_files={"blake3": _loaded_as("blake3")},
+        workload_imports=["blake3"],
+    )
+    assert used == {"blake3": "1.0.9"}
