@@ -39,6 +39,10 @@ def _record_fork_only_import(tracker):
     tracker.imported_modules.add("fork_only_dependency")
 
 
+def _exit_without_multiprocessing_cleanup():
+    os._exit(0)
+
+
 def test_write_log_writes_a_per_pid_shard_not_the_shared_file(tmp_path):
     log_path = tmp_path / "inject-log.json"
     _tracker(log_path).write_log()
@@ -69,6 +73,26 @@ def test_real_fork_worker_writes_its_own_pid_shard(tmp_path):
     assert payload["pid"] == process.pid
     assert "fork_only_dependency" in payload["imported_modules"]
     assert not (tmp_path / f"inject-log.json.{os.getpid()}").exists()
+
+
+def test_forced_os_exit_remains_outside_finalizer_guarantee(tmp_path):
+    """Document the lifecycle boundary: user code that calls os._exit bypasses
+    multiprocessing cleanup as well as atexit. Crash safety needs incremental
+    import journaling; the orderly-worker finalizer must not pretend otherwise."""
+    if "fork" not in multiprocessing.get_all_start_methods():
+        return
+
+    log_path = tmp_path / "inject-log.json"
+    tracker = _tracker(log_path)
+    tracker._install_fork_worker_finalizer()
+    process = multiprocessing.get_context("fork").Process(
+        target=_exit_without_multiprocessing_cleanup
+    )
+    process.start()
+    process.join(timeout=10)
+
+    assert process.exitcode == 0
+    assert not (tmp_path / f"inject-log.json.{process.pid}").exists()
 
 
 def test_worker_shard_does_not_clobber_the_workload_record(tmp_path):
