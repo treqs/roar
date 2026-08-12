@@ -210,6 +210,15 @@ class ProvenanceService:
             python_data.shared_libs,
             python_data.sys_prefix,
         )
+        if python_data.capture_status != "complete":
+            from .native_package_fallback import collect_native_python_packages
+
+            native_pip = collect_native_python_packages(
+                set(tracer_data.opened_files) | set(tracer_data.read_files)
+            )
+            if native_pip:
+                packages["pip"] = native_pip
+                python_data.capture_status = "native-fallback"
         # Merge with classification packages if needed
         if not packages.get("pip") and classification.get("packages"):
             packages["pip"] = classification["packages"]
@@ -260,6 +269,7 @@ class ProvenanceService:
                 "shared_libs": python_data.shared_libs,
                 "used_packages": python_data.used_packages,
                 "installed_packages": python_data.installed_packages,
+                "capture_status": python_data.capture_status,
             },
         }
         analyzer_results = analyzers.run_analyzers(analyzer_context, config=config)

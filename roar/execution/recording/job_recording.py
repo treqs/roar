@@ -392,6 +392,8 @@ class ExecutionJobRecorder:
             metadata["packages"] = prov["executables"]["packages"]
         if prov.get("runtime"):
             metadata["runtime"] = prov["runtime"]
+        if prov.get("python_capture"):
+            metadata["python_capture"] = prov["python_capture"]
         if prov.get("analysis"):
             metadata["analysis"] = prov["analysis"]
         metadata["git"] = git_info

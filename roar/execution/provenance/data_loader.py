@@ -195,6 +195,7 @@ class DataLoaderService:
             return PythonInjectData(
                 sys_prefix=sys.prefix,
                 sys_base_prefix=sys.base_prefix,
+                capture_status="missing",
             )
 
         try:
@@ -206,6 +207,7 @@ class DataLoaderService:
             return PythonInjectData(
                 sys_prefix=sys.prefix,
                 sys_base_prefix=sys.base_prefix,
+                capture_status="invalid",
             )
 
         return PythonInjectData(
@@ -219,4 +221,5 @@ class DataLoaderService:
             installed_packages=data.get("installed_packages", {}),
             python_version=data.get("python_version", ""),
             python_implementation=data.get("python_implementation", ""),
+            capture_status="complete",
         )

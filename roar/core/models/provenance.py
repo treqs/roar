@@ -67,6 +67,10 @@ class PythonInjectData(RoarBaseModel):
     installed_packages: dict[str, str] = Field(default_factory=dict)
     python_version: str = ""
     python_implementation: str = ""
+    # Whether the sitecustomize-based collector produced a readable record.
+    # Missing/invalid must remain distinct from a successful capture whose
+    # workload genuinely imported no third-party packages.
+    capture_status: str = "missing"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
