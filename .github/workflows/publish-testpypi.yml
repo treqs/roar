@@ -35,7 +35,8 @@ jobs:
           rustup component add rust-src --toolchain nightly
 
       - name: Install bpf-linker
-        run: cargo install bpf-linker
+        # Keep release builds aligned with the version validated in CI.
+        run: cargo install bpf-linker --version 0.10.4 --locked
 
       - name: Build and stage Rust binaries
         uses: ./.github/actions/build-rust-binaries
