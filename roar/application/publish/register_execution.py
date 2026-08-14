@@ -406,6 +406,7 @@ class RegisterService:
                                             jobs=remote_registration_jobs,
                                             artifacts=label_artifacts,
                                             errors=registration_errors,
+                                            registration_session_id=registration_session_id,
                                         )
                             except Exception as e:
                                 return RegisterResult(
@@ -426,6 +427,7 @@ class RegisterService:
                                     jobs=remote_registration_jobs,
                                     artifacts=label_artifacts,
                                     errors=registration_errors,
+                                    registration_session_id=registration_session_id,
                                 )
             else:
                 if has_lineage_composites(lineage.artifacts):

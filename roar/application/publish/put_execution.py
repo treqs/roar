@@ -820,6 +820,7 @@ class PutService:
                 remote_job_uid=remote_put_job_uid,
                 registration_errors=registration_errors,
                 uploads=uploads,
+                registration_session_id=registration_session_id,
             )
 
         composite_result_items = [
@@ -1106,6 +1107,7 @@ class PutService:
         remote_job_uid: str,
         registration_errors: list[str],
         uploads: list[_UploadedArtifact] | None = None,
+        registration_session_id: str | None = None,
     ) -> None:
         """Sync the local current label document for the publish-time put job
         and its published artifacts (carrying ``roar.distribution.url``)."""
@@ -1122,6 +1124,7 @@ class PutService:
             jobs=[{"id": job_id, "job_uid": job_uid, "remote_job_uid": remote_job_uid}],
             artifacts=artifacts,
             errors=registration_errors,
+            registration_session_id=registration_session_id,
         )
 
     def _link_put_job_artifacts_with_glaas(

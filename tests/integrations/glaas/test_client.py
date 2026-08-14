@@ -80,6 +80,27 @@ def test_finalize_current_user_private_scope_reports_server_support_gap() -> Non
     )
 
 
+def test_registration_session_label_sync_uses_scoped_route_and_auth() -> None:
+    client = _optional_auth_client()
+    client._registration_session_mode = "anonymous_public"
+    client._registration_session_token = "registration-token"
+    labels = [{"entity_type": "dag", "session_hash": "a" * 64, "metadata": {}}]
+
+    with patch.object(client, "_request", return_value=({"processed": 1}, None)) as request:
+        result, error = client.sync_labels_under_registration_session("reg-123", labels)
+
+    assert result == {"processed": 1}
+    assert error is None
+    request.assert_called_once_with(
+        "POST",
+        "/api/v1/registration-sessions/reg-123/labels/batch",
+        {"labels": labels},
+        auth_header_value="RegistrationSession registration-token",
+        allow_auth_fallback=False,
+    )
+    assert client._registration_session_token is None
+
+
 class TestGlaasClientExceptions:
     """Test that GlaasClient raises proper exceptions."""
 

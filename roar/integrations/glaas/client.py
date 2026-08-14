@@ -688,8 +688,6 @@ class GlaasClient:
             allow_auth_fallback=False,
         )
         error = _normalize_scope_error(self._publish_auth.scope_request, error)
-        if error is None and self._registration_session_mode == "anonymous_public":
-            self._clear_registration_session_auth()
         return result, error
 
     def sync_labels(
@@ -700,6 +698,25 @@ class GlaasClient:
         if not labels:
             return {"created": 0, "updated": 0, "unchanged": 0}, None
         return self._request("POST", "/api/v1/labels/sync", {"labels": labels})
+
+    def sync_labels_under_registration_session(
+        self,
+        registration_session_id: str,
+        labels: list[dict[str, Any]],
+    ) -> tuple[dict | None, str | None]:
+        """Sync labels only to lineage finalized by this registration session."""
+        if not labels:
+            return {"created": 0, "updated": 0, "noops": 0}, None
+        result, error = self._request(
+            "POST",
+            f"/api/v1/registration-sessions/{registration_session_id}/labels/batch",
+            {"labels": labels},
+            auth_header_value=self._registration_session_auth_header(),
+            allow_auth_fallback=False,
+        )
+        if error is None and self._registration_session_mode == "anonymous_public":
+            self._clear_registration_session_auth()
+        return result, error
 
     def reconcile_labels(
         self,

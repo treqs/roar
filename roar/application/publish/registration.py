@@ -468,6 +468,7 @@ def sync_publish_labels(
     jobs: list[dict[str, Any]],
     artifacts: list[dict[str, Any]],
     errors: list[str] | None = None,
+    registration_session_id: str | None = None,
 ) -> int:
     """Sync current local labels for published entities to GLaaS.
 
@@ -490,7 +491,15 @@ def sync_publish_labels(
         glaas_client=glaas_client,
     )
 
-    _label_result, label_error = resolved_remote_registry.sync_labels(payloads)
+    if registration_session_id:
+        _label_result, label_error = (
+            resolved_remote_registry.client.sync_labels_under_registration_session(
+                registration_session_id,
+                payloads,
+            )
+        )
+    else:
+        _label_result, label_error = resolved_remote_registry.sync_labels(payloads)
     if label_error:
         if errors is not None:
             errors.append(f"Label sync failed: {label_error}")
