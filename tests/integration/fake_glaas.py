@@ -679,11 +679,15 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 )
                 return
             raw_labels = payload.get("labels", [])
-            labels = [
-                {**label, "session_hash": lineage_hash}
-                for label in raw_labels
-                if isinstance(label, dict)
-            ] if isinstance(raw_labels, list) else []
+            labels = (
+                [
+                    {**label, "session_hash": lineage_hash}
+                    for label in raw_labels
+                    if isinstance(label, dict)
+                ]
+                if isinstance(raw_labels, list)
+                else []
+            )
             self._record_label_sync(labels)
             self._write_json(
                 200,

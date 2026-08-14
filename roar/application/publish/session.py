@@ -392,10 +392,7 @@ def prepare_publish_session(
     )
 
     should_use_registration_sessions = (
-        has_access_token
-        or has_ssh_auth
-        or has_delegated_auth
-        or supports_anonymous_public_path
+        has_access_token or has_ssh_auth or has_delegated_auth or supports_anonymous_public_path
     )
 
     if should_use_registration_sessions:
