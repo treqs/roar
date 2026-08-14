@@ -355,10 +355,14 @@ def prepare_publish_session(
     publish_auth = resolved_remote_registry.publish_auth
     access_token = getattr(publish_auth, "access_token", None)
     ssh_auth_available = getattr(publish_auth, "ssh_auth_available", False)
+    delegated_auth_available = getattr(publish_auth, "delegated_auth_available", False)
     scope_request = getattr(publish_auth, "scope_request", None)
 
     has_access_token = isinstance(access_token, str) and bool(access_token.strip())
     has_ssh_auth = ssh_auth_available if isinstance(ssh_auth_available, bool) else False
+    has_delegated_auth = (
+        delegated_auth_available if isinstance(delegated_auth_available, bool) else False
+    )
 
     anonymous_public_capable = (
         scope_request is None
@@ -388,7 +392,10 @@ def prepare_publish_session(
     )
 
     should_use_registration_sessions = (
-        has_access_token or has_ssh_auth or supports_anonymous_public_path
+        has_access_token
+        or has_ssh_auth
+        or has_delegated_auth
+        or supports_anonymous_public_path
     )
 
     if should_use_registration_sessions:

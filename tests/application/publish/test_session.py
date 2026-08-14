@@ -234,6 +234,50 @@ def test_prepare_publish_session_creates_registration_session_with_scoped_ssh_on
     session_service.register.assert_not_called()
 
 
+def test_prepare_publish_session_creates_registration_session_with_delegated_auth(
+    tmp_path: Path,
+) -> None:
+    glaas_client = MagicMock()
+    glaas_client.publish_auth.access_token = None
+    glaas_client.publish_auth.scope_request = {
+        "owner_id": "owner-123",
+        "owner_type": "organization",
+        "project_id": "proj-123",
+        "visibility": "private",
+    }
+    glaas_client.publish_auth.ssh_auth_available = False
+    glaas_client.publish_auth.delegated_auth_available = True
+    session_service = MagicMock()
+    session_service.compute_session_hash.return_value = "session-hash"
+    session_service.create_registration_session.return_value = SessionRegistrationResult(
+        success=True,
+        session_hash="session-hash",
+        session_url=None,
+        registration_session_id="reg-session-delegated-123",
+    )
+
+    result = prepare_publish_session(
+        glaas_client=glaas_client,
+        session_service=session_service,
+        roar_dir=tmp_path / ".roar",
+        session_id=7,
+        git_context=_git_context(),
+        logger=MagicMock(),
+        register_with_glaas=True,
+    )
+
+    assert result == PreparedPublishSession(
+        session_hash="session-hash",
+        session_url=None,
+        registration_session_id="reg-session-delegated-123",
+    )
+    session_service.create_registration_session.assert_called_once_with(
+        client_session_id=None,
+        mode=None,
+    )
+    session_service.register.assert_not_called()
+
+
 def test_prepare_publish_session_uses_anonymous_public_registration_sessions_when_supported(
     tmp_path: Path,
 ) -> None:
