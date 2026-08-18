@@ -344,8 +344,11 @@ class PutService:
         )
 
         # Collect lineage for all uploaded artifacts (merged)
-        collector = self._lineage_collector or LineageCollector()
-        lineage = collector.collect(artifact_hashes, self._roar_dir)
+        if prepared.lineage is not None:
+            lineage = prepared.lineage
+        else:
+            collector = self._lineage_collector or LineageCollector()
+            lineage = collector.collect(artifact_hashes, self._roar_dir)
         self._logger.debug(
             "Lineage collected: %d job(s), %d artifact(s)",
             len(lineage.jobs),

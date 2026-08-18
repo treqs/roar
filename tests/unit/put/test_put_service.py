@@ -86,6 +86,7 @@ def _prepared_put(
     registration_session_id: str | None = None,
     registration_session_status: str | None = None,
     delegated_put_operation: DelegatedPutOperation | None = None,
+    lineage: LineageData | None = None,
 ) -> PreparedPutExecution:
     resolved: list[ResolvedSource] = []
     for source in sources:
@@ -126,10 +127,40 @@ def _prepared_put(
         registration_session_id=registration_session_id,
         registration_session_status=registration_session_status,
         delegated_put_operation=delegated_put_operation,
+        lineage=lineage,
     )
 
 
 class TestPutService:
+    def test_put_prepared_uses_the_reserved_lineage_snapshot(self, tmp_path: Path) -> None:
+        model_file = tmp_path / "model.pt"
+        model_file.write_bytes(b"model data")
+        lineage = LineageData(
+            jobs=[{"job_uid": "reserved-upstream", "command": "python upstream.py"}],
+            artifacts=[],
+            artifact_hashes=set(),
+        )
+        collector = MagicMock()
+        coordinator = _create_mock_coordinator()
+        service = PutService(
+            db_context=_create_mock_db(),
+            backend=MemoryBackend(bucket="test-bucket", prefix="models"),
+            destination="memory://test-bucket/models",
+            repo_root=tmp_path,
+            lineage_collector=collector,
+            registration_coordinator=coordinator,
+        )
+
+        result = service.put_prepared(
+            prepared=_prepared_put(tmp_path, sources=[model_file], lineage=lineage),
+            sources=[str(model_file)],
+            message="publish reserved snapshot",
+        )
+
+        assert result.success is True
+        collector.collect.assert_not_called()
+        assert coordinator.register_lineage.call_args.kwargs["jobs"] == lineage.jobs
+
     def test_closed_registration_session_retry_does_not_upload_again(self, tmp_path: Path) -> None:
         model_file = tmp_path / "model.pt"
         model_file.write_bytes(b"model data")

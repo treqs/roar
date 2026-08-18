@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy import text
 
+from ...core.interfaces.lineage import LineageData
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
 from ...db.hashing import hash_files_blake3
@@ -62,6 +63,7 @@ class PreparedPutExecution:
     dataset_identifiers: list[dict[str, Any]] = field(default_factory=list)
     additional_composite_roots: dict[Path, list[ResolvedSource]] = field(default_factory=dict)
     delegated_put_operation: DelegatedPutOperation | None = None
+    lineage: LineageData | None = None
 
 
 def prepare_put_execution(
@@ -139,16 +141,22 @@ def prepare_put_execution(
         ),
     }
     delegated_task_identity = _delegated_task_identity()
+    collected_lineage: LineageData | None = None
     if delegated_task_identity is not None:
         pending_put_job_uid = _pending_put_job_uid(
             db_ctx,
             delegated_task_identity,
             session_id,
         )
-        operation_payload["lineage_revision"] = _local_lineage_revision(
-            db_ctx,
-            session_id,
-            exclude_job_uid=pending_put_job_uid,
+        from .lineage import LineageCollector
+
+        collected_lineage = LineageCollector().collect(
+            sorted(set(source_hashes.values())),
+            roar_dir,
+        )
+        collected_lineage = _without_lineage_job(collected_lineage, pending_put_job_uid)
+        operation_payload["lineage_revision"] = _collected_lineage_revision(
+            collected_lineage,
         )
     request_fingerprint = _fingerprint(operation_payload)
     delegated_put_operation = _reserve_delegated_put_operation(
@@ -212,6 +220,7 @@ def prepare_put_execution(
         dataset_identifiers=dataset_identifiers,
         additional_composite_roots=additional_composite_roots,
         delegated_put_operation=delegated_put_operation,
+        lineage=collected_lineage,
     )
 
 
@@ -282,166 +291,49 @@ def _pending_put_job_uid(db_ctx: Any, task_identity: str, session_id: int) -> st
     return str(row["put_job_uid"]) if row and row["put_job_uid"] else None
 
 
-def _local_lineage_revision(
-    db_ctx: Any,
-    session_id: int,
-    *,
-    exclude_job_uid: str | None = None,
-) -> str:
-    query_params = {
-        "session_id": session_id,
-        "exclude_job_uid": exclude_job_uid,
-    }
-    jobs = db_ctx.session.execute(
-        text(
-            """
-            SELECT id, job_uid, parent_job_uid, timestamp, command,
-                   step_number, step_identity, git_repo, git_commit, git_branch,
-                   duration_seconds, exit_code, status, execution_backend,
-                   execution_role, job_type, metadata
-            FROM jobs
-            WHERE session_id = :session_id
-              AND (:exclude_job_uid IS NULL OR job_uid IS NULL OR job_uid != :exclude_job_uid)
-            ORDER BY id
-            """
-        ),
-        query_params,
-    ).mappings()
-    links = db_ctx.session.execute(
-        text(
-            """
-            SELECT 'input' AS relation, link.job_id, link.artifact_id, link.path,
-                   link.byte_ranges
-            FROM job_inputs AS link
-            JOIN jobs AS job ON job.id = link.job_id
-            WHERE job.session_id = :session_id
-              AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
-            UNION ALL
-            SELECT 'output' AS relation, link.job_id, link.artifact_id, link.path,
-                   link.byte_ranges
-            FROM job_outputs AS link
-            JOIN jobs AS job ON job.id = link.job_id
-            WHERE job.session_id = :session_id
-              AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
-            ORDER BY relation, job_id, artifact_id, path
-            """
-        ),
-        query_params,
-    ).mappings()
-    artifacts = db_ctx.session.execute(
-        text(
-            """
-            WITH lineage_artifacts AS (
-                SELECT link.artifact_id
-                FROM job_inputs AS link
-                JOIN jobs AS job ON job.id = link.job_id
-                WHERE job.session_id = :session_id
-                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
-                UNION
-                SELECT link.artifact_id
-                FROM job_outputs AS link
-                JOIN jobs AS job ON job.id = link.job_id
-                WHERE job.session_id = :session_id
-                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
-            )
-            SELECT artifact.id, artifact.size, artifact.first_seen_path,
-                   artifact.source_type, artifact.source_url, artifact.capture_method,
-                   artifact.kind, artifact.component_count, artifact.metadata
-            FROM artifacts AS artifact
-            JOIN lineage_artifacts ON lineage_artifacts.artifact_id = artifact.id
-            ORDER BY artifact.id
-            """
-        ),
-        query_params,
-    ).mappings()
-    artifact_hashes = db_ctx.session.execute(
-        text(
-            """
-            WITH lineage_artifacts AS (
-                SELECT link.artifact_id
-                FROM job_inputs AS link
-                JOIN jobs AS job ON job.id = link.job_id
-                WHERE job.session_id = :session_id
-                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
-                UNION
-                SELECT link.artifact_id
-                FROM job_outputs AS link
-                JOIN jobs AS job ON job.id = link.job_id
-                WHERE job.session_id = :session_id
-                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
-            )
-            SELECT hashes.artifact_id, hashes.algorithm, hashes.digest
-            FROM artifact_hashes AS hashes
-            JOIN lineage_artifacts ON lineage_artifacts.artifact_id = hashes.artifact_id
-            ORDER BY hashes.artifact_id, hashes.algorithm, hashes.digest
-            """
-        ),
-        query_params,
-    ).mappings()
-    composite_components = db_ctx.session.execute(
-        text(
-            """
-            WITH lineage_artifacts AS (
-                SELECT link.artifact_id
-                FROM job_inputs AS link
-                JOIN jobs AS job ON job.id = link.job_id
-                WHERE job.session_id = :session_id
-                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
-                UNION
-                SELECT link.artifact_id
-                FROM job_outputs AS link
-                JOIN jobs AS job ON job.id = link.job_id
-                WHERE job.session_id = :session_id
-                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
-            )
-            SELECT component.composite_artifact_id, component.ordinal,
-                   component.relative_path, component.leaf_kind,
-                   component.component_algorithm, component.component_digest,
-                   component.component_size, component.component_type
-            FROM composite_artifact_components AS component
-            JOIN lineage_artifacts
-              ON lineage_artifacts.artifact_id = component.composite_artifact_id
-            ORDER BY component.composite_artifact_id, component.ordinal,
-                     component.relative_path
-            """
-        ),
-        query_params,
-    ).mappings()
-    membership_indexes = db_ctx.session.execute(
-        text(
-            """
-            WITH lineage_artifacts AS (
-                SELECT link.artifact_id
-                FROM job_inputs AS link
-                JOIN jobs AS job ON job.id = link.job_id
-                WHERE job.session_id = :session_id
-                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
-                UNION
-                SELECT link.artifact_id
-                FROM job_outputs AS link
-                JOIN jobs AS job ON job.id = link.job_id
-                WHERE job.session_id = :session_id
-                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
-            )
-            SELECT membership.*
-            FROM composite_membership_indexes AS membership
-            JOIN lineage_artifacts
-              ON lineage_artifacts.artifact_id = membership.composite_artifact_id
-            ORDER BY membership.composite_artifact_id
-            """
-        ),
-        query_params,
-    ).mappings()
+def _without_lineage_job(lineage: LineageData, job_uid: str | None) -> LineageData:
+    if not job_uid:
+        return lineage
+    return LineageData(
+        jobs=[job for job in lineage.jobs if job.get("job_uid") != job_uid],
+        artifacts=lineage.artifacts,
+        artifact_hashes=lineage.artifact_hashes,
+        pipeline=lineage.pipeline,
+    )
+
+
+def _collected_lineage_revision(lineage: LineageData) -> str:
+    """Hash the exact target-rooted lineage snapshot passed to put execution."""
+    jobs = sorted(
+        (_stable_json_value(job) for job in lineage.jobs),
+        key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+    )
+    artifacts = sorted(
+        (_stable_json_value(artifact) for artifact in lineage.artifacts),
+        key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+    )
     return _fingerprint(
         {
-            "jobs": [dict(row) for row in jobs],
-            "links": [dict(row) for row in links],
-            "artifacts": [dict(row) for row in artifacts],
-            "artifact_hashes": [dict(row) for row in artifact_hashes],
-            "composite_components": [dict(row) for row in composite_components],
-            "membership_indexes": [dict(row) for row in membership_indexes],
+            "jobs": jobs,
+            "artifacts": artifacts,
+            "artifact_hashes": sorted(lineage.artifact_hashes),
         }
     )
+
+
+def _stable_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _stable_json_value(child) for key, child in sorted(value.items())}
+    if isinstance(value, (list, tuple)):
+        return [_stable_json_value(child) for child in value]
+    if isinstance(value, set):
+        normalized = [_stable_json_value(child) for child in value]
+        return sorted(normalized, key=lambda child: json.dumps(child, sort_keys=True))
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.hex()
+    return value
 
 
 def _reserve_delegated_put_operation(
