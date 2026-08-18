@@ -398,20 +398,25 @@ impl CollectorState {
         } else {
             parent_pid
         };
-        let info = capture_process_info(pid, fallback_parent).unwrap_or_else(|| ProcessInfo {
+        let mut info = capture_process_info(pid, fallback_parent).unwrap_or_else(|| ProcessInfo {
             pid,
             parent_pid: fallback_parent,
-            command: if pid == self.root_pid {
-                self.root_command.clone()
-            } else {
-                Vec::new()
-            },
-            env: if pid == self.root_pid {
-                self.root_env.clone()
-            } else {
-                HashMap::new()
-            },
+            command: Vec::new(),
+            env: HashMap::new(),
         });
+
+        if pid == self.root_pid {
+            // We launched this process, so its argv is known exactly. Prefer it
+            // over /proc, which reports what the kernel ran rather than what the
+            // user asked for: a `#!/usr/bin/env python3` script reads back as
+            // `/usr/bin/env python3 ./train.sh`, and is empty altogether if the
+            // process exits before the read. Descendants have no such source and
+            // keep using /proc.
+            info.command = self.root_command.clone();
+            if info.env.is_empty() {
+                info.env = self.root_env.clone();
+            }
+        }
 
         self.processes.insert(pid, info);
     }
@@ -1030,6 +1035,34 @@ mod tests {
     use super::*;
     use tracer_schema::FileRecord;
 
+    /// The root's argv is what we were asked to run, not what /proc reports.
+    /// Using our own live pid as the root makes the two differ observably: the
+    /// launcher command below is nothing like this test binary's real argv.
+    #[test]
+    fn the_root_command_comes_from_the_launcher_not_proc() {
+        let launched = vec!["./train.sh".to_string()];
+        let mut state = CollectorState::new(std::process::id(), launched.clone());
+
+        state.ensure_process(std::process::id());
+
+        let root = state.processes.get(&std::process::id()).unwrap();
+        assert_eq!(root.command, launched);
+        // /proc was still consulted for everything else.
+        assert!(!root.env.is_empty(), "env should still come from /proc");
+    }
+
+    /// Descendants have no launcher-supplied argv, so they keep using /proc.
+    #[test]
+    fn a_descendant_command_still_comes_from_proc() {
+        let mut state = CollectorState::new(1, vec!["./train.sh".to_string()]);
+
+        state.ensure_process(std::process::id());
+
+        let child = state.processes.get(&std::process::id()).unwrap();
+        assert_ne!(child.command, vec!["./train.sh".to_string()]);
+        assert!(!child.command.is_empty());
+    }
+
     fn written_record(path: &str) -> FileRecord {
         FileRecord {
             path: path.to_string(),
@@ -1076,7 +1109,10 @@ mod tests {
 
         state.reconcile_renamed_outputs(&mut summary);
 
-        assert_eq!(summary.files[0].path, final_str, "record rewritten to final name");
+        assert_eq!(
+            summary.files[0].path, final_str,
+            "record rewritten to final name"
+        );
         assert!(summary.written_files.contains(&final_str));
         assert!(!summary.written_files.contains(&temp_str));
         let _ = fs::remove_dir_all(&dir);
@@ -1108,7 +1144,10 @@ mod tests {
         };
         state.reconcile_renamed_outputs(&mut summary);
 
-        assert_eq!(summary.files[0].path, temp_str, "deleted file path unchanged");
+        assert_eq!(
+            summary.files[0].path, temp_str,
+            "deleted file path unchanged"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
