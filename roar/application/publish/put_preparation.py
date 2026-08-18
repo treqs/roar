@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -39,6 +40,7 @@ class DelegatedPutOperation:
     session_id: int
     ordinal: int
     request_fingerprint: str
+    put_job_uid: str
 
 
 @dataclass(frozen=True)
@@ -138,7 +140,16 @@ def prepare_put_execution(
     }
     delegated_task_identity = _delegated_task_identity()
     if delegated_task_identity is not None:
-        operation_payload["lineage_revision"] = _local_lineage_revision(db_ctx, session_id)
+        pending_put_job_uid = _pending_put_job_uid(
+            db_ctx,
+            delegated_task_identity,
+            session_id,
+        )
+        operation_payload["lineage_revision"] = _local_lineage_revision(
+            db_ctx,
+            session_id,
+            exclude_job_uid=pending_put_job_uid,
+        )
     request_fingerprint = _fingerprint(operation_payload)
     delegated_put_operation = _reserve_delegated_put_operation(
         db_ctx=db_ctx,
@@ -251,40 +262,184 @@ def _delegated_task_identity() -> str | None:
     return hashlib.sha256("\0".join(values).encode()).hexdigest()
 
 
-def _local_lineage_revision(db_ctx: Any, session_id: int) -> str:
+def _pending_put_job_uid(db_ctx: Any, task_identity: str, session_id: int) -> str | None:
+    row = (
+        db_ctx.session.execute(
+            text(
+                """
+                SELECT put_job_uid
+                FROM delegated_put_operations
+                WHERE task_identity = :task_identity
+                  AND session_id = :session_id
+                  AND status = 'pending'
+                """
+            ),
+            {"task_identity": task_identity, "session_id": session_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    return str(row["put_job_uid"]) if row and row["put_job_uid"] else None
+
+
+def _local_lineage_revision(
+    db_ctx: Any,
+    session_id: int,
+    *,
+    exclude_job_uid: str | None = None,
+) -> str:
+    query_params = {
+        "session_id": session_id,
+        "exclude_job_uid": exclude_job_uid,
+    }
     jobs = db_ctx.session.execute(
         text(
             """
-            SELECT id, job_uid, step_number, step_identity, command, git_repo,
-                   git_commit, git_branch, status, exit_code
+            SELECT id, job_uid, parent_job_uid, timestamp, command,
+                   step_number, step_identity, git_repo, git_commit, git_branch,
+                   duration_seconds, exit_code, status, execution_backend,
+                   execution_role, job_type, metadata
             FROM jobs
             WHERE session_id = :session_id
+              AND (:exclude_job_uid IS NULL OR job_uid IS NULL OR job_uid != :exclude_job_uid)
             ORDER BY id
             """
         ),
-        {"session_id": session_id},
+        query_params,
     ).mappings()
     links = db_ctx.session.execute(
         text(
             """
-            SELECT 'input' AS relation, link.job_id, link.artifact_id, link.path
+            SELECT 'input' AS relation, link.job_id, link.artifact_id, link.path,
+                   link.byte_ranges
             FROM job_inputs AS link
             JOIN jobs AS job ON job.id = link.job_id
             WHERE job.session_id = :session_id
+              AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
             UNION ALL
-            SELECT 'output' AS relation, link.job_id, link.artifact_id, link.path
+            SELECT 'output' AS relation, link.job_id, link.artifact_id, link.path,
+                   link.byte_ranges
             FROM job_outputs AS link
             JOIN jobs AS job ON job.id = link.job_id
             WHERE job.session_id = :session_id
+              AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
             ORDER BY relation, job_id, artifact_id, path
             """
         ),
-        {"session_id": session_id},
+        query_params,
+    ).mappings()
+    artifacts = db_ctx.session.execute(
+        text(
+            """
+            WITH lineage_artifacts AS (
+                SELECT link.artifact_id
+                FROM job_inputs AS link
+                JOIN jobs AS job ON job.id = link.job_id
+                WHERE job.session_id = :session_id
+                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
+                UNION
+                SELECT link.artifact_id
+                FROM job_outputs AS link
+                JOIN jobs AS job ON job.id = link.job_id
+                WHERE job.session_id = :session_id
+                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
+            )
+            SELECT artifact.id, artifact.size, artifact.first_seen_path,
+                   artifact.source_type, artifact.source_url, artifact.capture_method,
+                   artifact.kind, artifact.component_count, artifact.metadata
+            FROM artifacts AS artifact
+            JOIN lineage_artifacts ON lineage_artifacts.artifact_id = artifact.id
+            ORDER BY artifact.id
+            """
+        ),
+        query_params,
+    ).mappings()
+    artifact_hashes = db_ctx.session.execute(
+        text(
+            """
+            WITH lineage_artifacts AS (
+                SELECT link.artifact_id
+                FROM job_inputs AS link
+                JOIN jobs AS job ON job.id = link.job_id
+                WHERE job.session_id = :session_id
+                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
+                UNION
+                SELECT link.artifact_id
+                FROM job_outputs AS link
+                JOIN jobs AS job ON job.id = link.job_id
+                WHERE job.session_id = :session_id
+                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
+            )
+            SELECT hashes.artifact_id, hashes.algorithm, hashes.digest
+            FROM artifact_hashes AS hashes
+            JOIN lineage_artifacts ON lineage_artifacts.artifact_id = hashes.artifact_id
+            ORDER BY hashes.artifact_id, hashes.algorithm, hashes.digest
+            """
+        ),
+        query_params,
+    ).mappings()
+    composite_components = db_ctx.session.execute(
+        text(
+            """
+            WITH lineage_artifacts AS (
+                SELECT link.artifact_id
+                FROM job_inputs AS link
+                JOIN jobs AS job ON job.id = link.job_id
+                WHERE job.session_id = :session_id
+                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
+                UNION
+                SELECT link.artifact_id
+                FROM job_outputs AS link
+                JOIN jobs AS job ON job.id = link.job_id
+                WHERE job.session_id = :session_id
+                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
+            )
+            SELECT component.composite_artifact_id, component.ordinal,
+                   component.relative_path, component.leaf_kind,
+                   component.component_algorithm, component.component_digest,
+                   component.component_size, component.component_type
+            FROM composite_artifact_components AS component
+            JOIN lineage_artifacts
+              ON lineage_artifacts.artifact_id = component.composite_artifact_id
+            ORDER BY component.composite_artifact_id, component.ordinal,
+                     component.relative_path
+            """
+        ),
+        query_params,
+    ).mappings()
+    membership_indexes = db_ctx.session.execute(
+        text(
+            """
+            WITH lineage_artifacts AS (
+                SELECT link.artifact_id
+                FROM job_inputs AS link
+                JOIN jobs AS job ON job.id = link.job_id
+                WHERE job.session_id = :session_id
+                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
+                UNION
+                SELECT link.artifact_id
+                FROM job_outputs AS link
+                JOIN jobs AS job ON job.id = link.job_id
+                WHERE job.session_id = :session_id
+                  AND (:exclude_job_uid IS NULL OR job.job_uid IS NULL OR job.job_uid != :exclude_job_uid)
+            )
+            SELECT membership.*
+            FROM composite_membership_indexes AS membership
+            JOIN lineage_artifacts
+              ON lineage_artifacts.artifact_id = membership.composite_artifact_id
+            ORDER BY membership.composite_artifact_id
+            """
+        ),
+        query_params,
     ).mappings()
     return _fingerprint(
         {
             "jobs": [dict(row) for row in jobs],
             "links": [dict(row) for row in links],
+            "artifacts": [dict(row) for row in artifacts],
+            "artifact_hashes": [dict(row) for row in artifact_hashes],
+            "composite_components": [dict(row) for row in composite_components],
+            "membership_indexes": [dict(row) for row in membership_indexes],
         }
     )
 
@@ -300,6 +455,7 @@ def _reserve_delegated_put_operation(
         return None
 
     now = time.time()
+    candidate_put_job_uid = f"delegated-put-{secrets.token_hex(12)}"
     row = (
         db_ctx.session.execute(
             text(
@@ -309,6 +465,7 @@ def _reserve_delegated_put_operation(
                     session_id,
                     ordinal,
                     request_fingerprint,
+                    put_job_uid,
                     status,
                     created_at,
                     updated_at,
@@ -318,6 +475,7 @@ def _reserve_delegated_put_operation(
                     :session_id,
                     1,
                     :request_fingerprint,
+                    :put_job_uid,
                     'pending',
                     :now,
                     :now,
@@ -334,18 +492,24 @@ def _reserve_delegated_put_operation(
                         THEN excluded.request_fingerprint
                         ELSE delegated_put_operations.request_fingerprint
                     END,
+                    put_job_uid = CASE
+                        WHEN delegated_put_operations.status = 'completed'
+                        THEN excluded.put_job_uid
+                        ELSE delegated_put_operations.put_job_uid
+                    END,
                     status = 'pending',
                     updated_at = excluded.updated_at,
                     completed_at = NULL
                 WHERE delegated_put_operations.status = 'completed'
                    OR delegated_put_operations.request_fingerprint = excluded.request_fingerprint
-                RETURNING ordinal, request_fingerprint
+                RETURNING ordinal, request_fingerprint, put_job_uid
                 """
             ),
             {
                 "task_identity": delegated_task_identity,
                 "session_id": session_id,
                 "request_fingerprint": request_fingerprint,
+                "put_job_uid": candidate_put_job_uid,
                 "now": now,
             },
         )
@@ -363,6 +527,7 @@ def _reserve_delegated_put_operation(
         session_id=session_id,
         ordinal=int(row["ordinal"]),
         request_fingerprint=str(row["request_fingerprint"]),
+        put_job_uid=str(row["put_job_uid"]),
     )
 
 

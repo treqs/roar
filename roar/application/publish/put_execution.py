@@ -19,7 +19,7 @@ from ...application.publish.composite_builder import CompositeArtifactBuilder
 from ...application.publish.composites import build_publish_composite_results
 from ...application.publish.lineage import LineageCollector
 from ...application.publish.metadata import build_put_operation_metadata_json
-from ...application.publish.put_preparation import PreparedPutExecution
+from ...application.publish.put_preparation import DelegatedPutOperation, PreparedPutExecution
 from ...application.publish.registration import (
     normalize_registration_hashes,
     normalize_registration_source_type,
@@ -360,6 +360,7 @@ class PutService:
                 coordinator=coordinator,
                 registration_session_id=registration_session_id,
                 registration_session_mode=registration_session_mode,
+                delegated_put_operation=prepared.delegated_put_operation,
                 session_id=session_id,
                 fallback_session_hash=session_hash or "",
                 git_context=git_context,
@@ -620,6 +621,7 @@ class PutService:
         coordinator: RegistrationCoordinator,
         registration_session_id: str,
         registration_session_mode: str | None,
+        delegated_put_operation: DelegatedPutOperation | None,
         session_id: int,
         fallback_session_hash: str,
         git_context: GitContext,
@@ -663,18 +665,30 @@ class PutService:
             timestamp=time.time(),
         )
 
-        step_number = self._db.sessions.get_next_step_number(session_id)
-        job_id, job_uid = self._db.jobs.create(
-            command=command,
-            timestamp=time.time(),
-            session_id=session_id,
-            step_number=step_number,
-            metadata=provisional_metadata_json,
-            execution_backend="local",
-            execution_role="host",
-            job_type="put",
-            exit_code=0,
+        stable_put_job_uid = (
+            delegated_put_operation.put_job_uid if delegated_put_operation is not None else None
         )
+        existing_put_job = (
+            self._db.jobs.get_by_uid(stable_put_job_uid) if stable_put_job_uid else None
+        )
+        if existing_put_job is not None:
+            job_id = int(existing_put_job["id"])
+            job_uid = str(existing_put_job["job_uid"])
+            step_number = int(existing_put_job.get("step_number") or 0)
+        else:
+            step_number = self._db.sessions.get_next_step_number(session_id)
+            job_id, job_uid = self._db.jobs.create(
+                command=command,
+                timestamp=time.time(),
+                job_uid=stable_put_job_uid,
+                session_id=session_id,
+                step_number=step_number,
+                metadata=provisional_metadata_json,
+                execution_backend="local",
+                execution_role="host",
+                job_type="put",
+                exit_code=0,
+            )
         self._logger.debug(
             "Put job created before registration-session finalize: id=%s, uid=%s, step=%d",
             job_id,

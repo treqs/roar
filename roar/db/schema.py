@@ -257,6 +257,7 @@ CREATE TABLE IF NOT EXISTS delegated_put_operations (
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     ordinal INTEGER NOT NULL,
     request_fingerprint TEXT NOT NULL,
+    put_job_uid TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('pending', 'completed')),
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
@@ -266,7 +267,7 @@ CREATE TABLE IF NOT EXISTS delegated_put_operations (
 """
 
 
-_SCHEMA_VERSION = 4  # Bump when adding new migrations below.
+_SCHEMA_VERSION = 5  # Bump when adding new migrations below.
 
 
 def run_migrations(conn) -> None:
@@ -390,6 +391,7 @@ def run_migrations(conn) -> None:
             session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
             ordinal INTEGER NOT NULL,
             request_fingerprint TEXT NOT NULL,
+            put_job_uid TEXT NOT NULL,
             status TEXT NOT NULL CHECK (status IN ('pending', 'completed')),
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL,
@@ -398,6 +400,23 @@ def run_migrations(conn) -> None:
         )
         """
     )
+
+    delegated_put_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(delegated_put_operations)").fetchall()
+    }
+    if "put_job_uid" not in delegated_put_columns:
+        conn.execute(
+            "ALTER TABLE delegated_put_operations ADD COLUMN put_job_uid TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(
+            """
+            UPDATE delegated_put_operations
+            SET put_job_uid = 'delegated-put-' || substr(task_identity, 1, 16)
+                || '-' || session_id || '-' || ordinal
+            WHERE put_job_uid = ''
+            """
+        )
 
     # Stamp the schema version so subsequent opens skip the full migration check.
     conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")

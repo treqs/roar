@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import text
 
+from roar.application.publish.put_execution import PutService
 from roar.application.publish.put_preparation import (
     PreparedPutExecution,
     complete_delegated_put_operation,
@@ -13,6 +14,7 @@ from roar.application.publish.put_preparation import (
 )
 from roar.core.interfaces.registration import GitContext
 from roar.db.context import create_database_context
+from roar.integrations.storage import MemoryBackend
 
 
 def test_prepare_put_execution_requires_active_session(tmp_path: Path) -> None:
@@ -311,6 +313,183 @@ def test_delegated_put_rejects_changed_lineage_while_retry_is_pending(
             )
             db_ctx.commit()
 
+            with pytest.raises(ValueError, match="different delegated put operation"):
+                _prepare_model_put(db_ctx, runtime, roar_dir, tmp_path)
+
+
+def test_delegated_put_retry_excludes_its_persisted_sink_and_recovers_closed_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_delegated_task(monkeypatch)
+    (tmp_path / "model.pt").write_bytes(b"model")
+    roar_dir = tmp_path / ".roar"
+    runtime = MagicMock()
+    runtime.session_service.compute_session_hash.return_value = "local-session-hash"
+    git_context = GitContext(repo="repo", branch="main", commit="deadbeef")
+
+    with create_database_context(roar_dir) as db_ctx:
+        session_id = db_ctx.sessions.get_or_create_active()
+        db_ctx.commit()
+        with (
+            patch(
+                "roar.application.publish.put_preparation.resolve_roar_git_context",
+                return_value=git_context,
+            ),
+            patch(
+                "roar.application.publish.put_preparation.prepare_publish_session",
+                side_effect=[
+                    MagicMock(
+                        session_hash="provisional-hash",
+                        session_url=None,
+                        registration_session_id="registration-session",
+                        registration_session_mode="delegated",
+                        registration_session_status="active",
+                    ),
+                    MagicMock(
+                        session_hash="authoritative-hash",
+                        session_url="https://glaas.example/dag/authoritative-hash",
+                        registration_session_id="registration-session",
+                        registration_session_mode="delegated",
+                        registration_session_status="closed",
+                    ),
+                ],
+            ),
+        ):
+            first = _prepare_model_put(db_ctx, runtime, roar_dir, tmp_path)
+            assert first.delegated_put_operation is not None
+            put_job_uid = first.delegated_put_operation.put_job_uid
+            put_job_id, created_uid = db_ctx.jobs.create(
+                command="roar put model.pt memory://bucket/prefix",
+                timestamp=1,
+                job_uid=put_job_uid,
+                session_id=session_id,
+                step_number=1,
+                job_type="put",
+            )
+            assert created_uid == put_job_uid
+            db_ctx.session.execute(
+                text(
+                    """
+                    INSERT INTO artifacts (id, size, first_seen_at, first_seen_path)
+                    VALUES ('put-artifact', 5, 1, 'model.pt')
+                    """
+                )
+            )
+            db_ctx.jobs.add_input(put_job_id, "put-artifact", "model.pt")
+            db_ctx.commit()
+
+            retry = _prepare_model_put(db_ctx, runtime, roar_dir, tmp_path)
+            assert retry.delegated_put_operation == first.delegated_put_operation
+            service = PutService(
+                db_context=db_ctx,
+                backend=MemoryBackend(bucket="bucket", prefix="prefix"),
+                destination="memory://bucket/prefix",
+                repo_root=tmp_path,
+            )
+            result = service.put_prepared(
+                prepared=retry,
+                sources=["model.pt"],
+                message="retry",
+            )
+            assert result.success is True
+            assert result.session_hash == "authoritative-hash"
+            complete_delegated_put_operation(db_ctx, retry.delegated_put_operation)
+
+            row = (
+                db_ctx.session.execute(
+                    text(
+                        """
+                    SELECT status, ordinal, put_job_uid
+                    FROM delegated_put_operations
+                    WHERE task_identity = :task_identity AND session_id = :session_id
+                    """
+                    ),
+                    {
+                        "task_identity": retry.delegated_put_operation.task_identity,
+                        "session_id": session_id,
+                    },
+                )
+                .mappings()
+                .one()
+            )
+            put_job_count = db_ctx.session.execute(
+                text("SELECT COUNT(*) FROM jobs WHERE job_uid = :job_uid"),
+                {"job_uid": put_job_uid},
+            ).scalar_one()
+
+    assert dict(row) == {"status": "completed", "ordinal": 1, "put_job_uid": put_job_uid}
+    assert put_job_count == 1
+
+
+@pytest.mark.parametrize(
+    ("mutation_sql", "params"),
+    [
+        ("UPDATE jobs SET job_type = 'ray_task' WHERE job_uid = 'upstream'", {}),
+        ("UPDATE jobs SET parent_job_uid = 'parent' WHERE job_uid = 'upstream'", {}),
+        (
+            "UPDATE jobs SET metadata = :metadata WHERE job_uid = 'upstream'",
+            {"metadata": '{"changed":true}'},
+        ),
+        (
+            "UPDATE job_inputs SET byte_ranges = '[[0,4]]' WHERE job_id = :job_id",
+            {"job_id": 1},
+        ),
+    ],
+)
+def test_delegated_put_rejects_emitted_lineage_contract_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation_sql: str,
+    params: dict[str, object],
+) -> None:
+    _set_delegated_task(monkeypatch)
+    (tmp_path / "model.pt").write_bytes(b"model")
+    roar_dir = tmp_path / ".roar"
+    runtime = MagicMock()
+    runtime.session_service.compute_session_hash.return_value = "local-session-hash"
+    git_context = GitContext(repo="repo", branch="main", commit="deadbeef")
+
+    with create_database_context(roar_dir) as db_ctx:
+        session_id = db_ctx.sessions.get_or_create_active()
+        job_id, _ = db_ctx.jobs.create(
+            command="python upstream.py",
+            timestamp=1,
+            job_uid="upstream",
+            session_id=session_id,
+            step_number=1,
+            metadata="{}",
+        )
+        db_ctx.session.execute(
+            text(
+                """
+                INSERT INTO artifacts (id, size, first_seen_at, first_seen_path)
+                VALUES ('upstream-artifact', 5, 1, 'input.bin')
+                """
+            )
+        )
+        db_ctx.jobs.add_input(job_id, "upstream-artifact", "input.bin")
+        db_ctx.commit()
+        with (
+            patch(
+                "roar.application.publish.put_preparation.resolve_roar_git_context",
+                return_value=git_context,
+            ),
+            patch(
+                "roar.application.publish.put_preparation.prepare_publish_session",
+                return_value=MagicMock(
+                    session_hash="session-hash",
+                    session_url=None,
+                    registration_session_id="registration-session",
+                    registration_session_mode="delegated",
+                    registration_session_status="active",
+                ),
+            ),
+        ):
+            _prepare_model_put(db_ctx, runtime, roar_dir, tmp_path)
+            bound_params = {**params, "job_id": job_id}
+            db_ctx.session.execute(text(mutation_sql), bound_params)
+            db_ctx.commit()
             with pytest.raises(ValueError, match="different delegated put operation"):
                 _prepare_model_put(db_ctx, runtime, roar_dir, tmp_path)
 
