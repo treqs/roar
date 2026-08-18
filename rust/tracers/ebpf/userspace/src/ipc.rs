@@ -15,9 +15,23 @@ const MAX_PAYLOAD_SIZE: u32 = 16 * 1024 * 1024;
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(tag = "type")]
 pub enum ClientMessage {
-    Register { run_id: u64, root_pid: u32 },
-    Deregister { run_id: u64 },
-    GetReport { run_id: u64 },
+    Register {
+        run_id: u64,
+        root_pid: u32,
+        /// The command the client was asked to run. Authoritative for the root
+        /// process, which /proc reports post-exec. Defaulted so a client and
+        /// daemon of different versions still speak to each other -- the wire
+        /// format is field-named MessagePack, so the extra key is ignored by an
+        /// older daemon and absent-means-empty for an older client.
+        #[serde(default)]
+        root_command: Vec<String>,
+    },
+    Deregister {
+        run_id: u64,
+    },
+    GetReport {
+        run_id: u64,
+    },
     Ping,
 }
 
@@ -92,6 +106,7 @@ mod tests {
             ClientMessage::Register {
                 run_id: 42,
                 root_pid: 1234,
+                root_command: vec!["./train.sh".to_string()],
             },
             ClientMessage::Deregister { run_id: 42 },
             ClientMessage::GetReport { run_id: 42 },
@@ -146,6 +161,7 @@ mod tests {
         let msg = ClientMessage::Register {
             run_id: 99,
             root_pid: 5678,
+            root_command: vec!["./train.sh".to_string()],
         };
         let payload = rmp_serde::to_vec_named(&msg).unwrap();
 
@@ -167,11 +183,42 @@ mod tests {
         let msg = ClientMessage::Register {
             run_id: 123,
             root_pid: 4567,
+            root_command: vec!["python".to_string(), "train.py".to_string()],
         };
         send_message(&mut a, &msg).unwrap();
 
         let received: ClientMessage = recv_message(&mut b).unwrap();
         assert_eq!(received, msg);
+    }
+
+    /// `roard` is long-lived, so a running daemon can predate the client that
+    /// connects to it (and vice versa across an upgrade). The wire format is
+    /// field-named MessagePack, so a Register that omits root_command must
+    /// still decode -- as empty, which every caller treats as "fall back to
+    /// /proc" rather than as an empty command line.
+    #[test]
+    fn a_register_without_root_command_still_decodes() {
+        #[derive(Serialize)]
+        #[serde(tag = "type")]
+        enum LegacyClientMessage {
+            Register { run_id: u64, root_pid: u32 },
+        }
+
+        let legacy = LegacyClientMessage::Register {
+            run_id: 7,
+            root_pid: 4242,
+        };
+        let payload = rmp_serde::to_vec_named(&legacy).unwrap();
+
+        let decoded: ClientMessage = rmp_serde::from_slice(&payload).unwrap();
+        assert_eq!(
+            decoded,
+            ClientMessage::Register {
+                run_id: 7,
+                root_pid: 4242,
+                root_command: vec![],
+            }
+        );
     }
 
     #[test]
