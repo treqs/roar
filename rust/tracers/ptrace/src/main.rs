@@ -108,10 +108,16 @@ struct TracerState {
 
     // CWD cache per PID
     cwd_cache: HashMap<u32, String>,
+
+    // The command the launcher was asked to run, and the pid it became. This
+    // is authoritative for the root process: /proc reports what the kernel ran
+    // rather than what the user asked for.
+    root_pid: Option<i32>,
+    root_command: Vec<String>,
 }
 
 impl TracerState {
-    fn new() -> Self {
+    fn new(root_command: Vec<String>) -> Self {
         TracerState {
             processes: HashMap::new(),
             fd_tracker: FdTracker::new(None),
@@ -126,6 +132,8 @@ impl TracerState {
             pending_fchdirs: HashMap::new(),
             active_pids: HashSet::new(),
             cwd_cache: HashMap::new(),
+            root_pid: None,
+            root_command,
         }
     }
 }
@@ -170,9 +178,26 @@ fn capture_process_info(pid: Pid, state: &mut TracerState, parent_pid: Option<u3
     if pid_raw <= 0 {
         return;
     }
-    if let Some(info) = capture_proc_info(pid_raw as u32, parent_pid) {
-        state.processes.insert(pid_raw, info);
+    let is_root = state.root_pid == Some(pid_raw);
+    let mut info = match capture_proc_info(pid_raw as u32, parent_pid) {
+        Some(info) => info,
+        // The root's argv came from the launcher, so it is worth recording even
+        // when /proc could not be read at all.
+        None if is_root => ProcessInfo {
+            pid: pid_raw as u32,
+            parent_pid,
+            command: Vec::new(),
+            env: HashMap::new(),
+        },
+        None => return,
+    };
+    if is_root && !state.root_command.is_empty() {
+        // Authoritative: we launched it. /proc would report the post-exec argv,
+        // so a `#!/usr/bin/env python3` script reads back as
+        // `/usr/bin/env python3 ./train.sh` rather than `./train.sh`.
+        info.command = state.root_command.clone();
     }
+    state.processes.insert(pid_raw, info);
 }
 
 // =============================================================================
@@ -781,7 +806,7 @@ fn run_preflight(json_output: bool, command: Option<&str>) -> i32 {
 fn run_tracer(command: Vec<String>, output_file: &str) -> i32 {
     let start_time = timestamp_now();
 
-    let mut state = TracerState::new();
+    let mut state = TracerState::new(command.clone());
 
     // Fork and trace
     match unsafe { fork() } {
@@ -807,6 +832,7 @@ fn run_tracer(command: Vec<String>, output_file: &str) -> i32 {
             // Parent: wait for child to stop at exec, then trace
             let child_pid = child.as_raw();
             state.active_pids.insert(child_pid);
+            state.root_pid = Some(child_pid);
 
             // Wait for initial stop
             match waitpid(child, None) {
