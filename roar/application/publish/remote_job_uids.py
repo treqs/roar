@@ -48,3 +48,24 @@ def prepare_jobs_for_remote_publication(
         prepared_jobs.append(prepared)
 
     return prepared_jobs
+
+
+def apply_remote_publication_job_uid_mapping(
+    jobs: list[dict[str, Any]],
+    remote_uid_by_local_uid: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Apply the authoritative mapping persisted by a completed publication."""
+    prepared_jobs: list[dict[str, Any]] = []
+    for job in jobs:
+        prepared = dict(job)
+        local_job_uid = prepared.get("job_uid")
+        if isinstance(local_job_uid, str) and local_job_uid:
+            remote_job_uid = remote_uid_by_local_uid.get(local_job_uid)
+            if remote_job_uid:
+                prepared["remote_job_uid"] = remote_job_uid
+
+        parent_job_uid = prepared.get("parent_job_uid")
+        if isinstance(parent_job_uid, str) and parent_job_uid:
+            prepared["remote_parent_job_uid"] = remote_uid_by_local_uid.get(parent_job_uid)
+        prepared_jobs.append(prepared)
+    return prepared_jobs

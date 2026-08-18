@@ -311,6 +311,9 @@ class RegistrationCoordinator(IRegistrationCoordinator):
                         links_failed=0,
                         errors=[],
                         already_registered_session_hash=distinct[0],
+                        existing_binding_prepared=bool(
+                            batch_counts.get("existing_binding_prepared", False)
+                        ),
                     )
                 # Partial overlap (some new + some already elsewhere) or jobs
                 # spanning multiple DAGs — can't form one DAG without a job

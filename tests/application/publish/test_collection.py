@@ -27,6 +27,42 @@ def test_collect_register_lineage_returns_missing_file_error(tmp_path: Path) -> 
     assert error == "File not found: missing.csv"
 
 
+def test_collect_register_lineage_selects_active_session_without_a_prebootstrap_hash(
+    tmp_path: Path,
+) -> None:
+    collector = MagicMock()
+    collector.collect_session.return_value = LineageData(
+        jobs=[{"job_uid": "job-active"}],
+        artifacts=[],
+        artifact_hashes=set(),
+        pipeline={"id": 17},
+    )
+    with patch("roar.application.publish.collection.create_database_context") as mock_ctx:
+        db_ctx = MagicMock()
+        db_ctx.__enter__ = MagicMock(return_value=db_ctx)
+        db_ctx.__exit__ = MagicMock(return_value=None)
+        db_ctx.sessions.get_active.return_value = {"id": 17}
+        mock_ctx.return_value = db_ctx
+
+        collected, error = collect_register_lineage(
+            target=ResolvedRegisterTarget(kind="active_session", value=""),
+            roar_dir=tmp_path / ".roar",
+            cwd=tmp_path,
+            lineage_collector=collector,
+            session_service=MagicMock(),
+            logger=MagicMock(),
+        )
+
+    assert error is None
+    assert collected == CollectedRegisterLineage(
+        lineage=collector.collect_session.return_value,
+        session_id=17,
+        artifact_hash="",
+        session_hash_override=None,
+    )
+    collector.collect_session.assert_called_once_with(17, tmp_path / ".roar")
+
+
 def test_collect_register_lineage_resolves_s3_artifact_by_tracked_path(tmp_path: Path) -> None:
     collector = MagicMock()
     collector.collect.return_value = LineageData(

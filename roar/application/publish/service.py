@@ -21,6 +21,7 @@ from .results import (
     PutUploadedFile,
     RegisterLineageResponse,
 )
+from .targets import ResolvedRegisterTarget
 
 if TYPE_CHECKING:
     from ...db.query_context import QueryDatabaseContext
@@ -566,10 +567,14 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         )
 
     try:
-        resolved_target = resolve_register_lineage_target(
-            request.target,
-            cwd=request.cwd,
-            roar_dir=request.roar_dir,
+        resolved_target = (
+            ResolvedRegisterTarget(kind="active_session", value="")
+            if request.target is None
+            else resolve_register_lineage_target(
+                request.target,
+                cwd=request.cwd,
+                roar_dir=request.roar_dir,
+            )
         )
         runtime_kwargs: dict[str, Any] = {
             "start_dir": str(request.cwd),

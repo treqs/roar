@@ -850,6 +850,7 @@ class GlaasClient:
             "already_registered": [
                 str(h) for h in (result.get("already_registered_session_hashes") or []) if h
             ],
+            "existing_binding_prepared": bool(result.get("existing_binding_prepared", False)),
         }
         return result.get("job_ids", []), result.get("errors", []), None, counts
 

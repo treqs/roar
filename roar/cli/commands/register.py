@@ -171,7 +171,7 @@ def _render_tag_summary(summary: RegisterTagSummary | None) -> None:
 def _apply_register_binds(
     ctx: RoarContext,
     *,
-    target: str,
+    target: str | None,
     response: RegisterLineageResponse,
     bind_targets: tuple[str, ...],
     no_bind: bool,
@@ -190,7 +190,7 @@ def _apply_register_binds(
     rather than failing the command.
     """
     refs: list[str] = []
-    if not no_bind and response.artifact_hash:
+    if target is not None and not no_bind and response.artifact_hash:
         resolved_target = resolve_register_lineage_target(
             target, cwd=ctx.cwd, roar_dir=ctx.roar_dir
         )
@@ -487,15 +487,16 @@ def register(
         raise click.ClickException("--anonymous requires public visibility; remove --private.")
 
     target_was_defaulted = target is None
+    active_session_hash: str | None = None
     if target is None:
-        # No target -> register the whole active session. Resolving to the
-        # session's canonical hash routes through the session_hash collection
-        # path, which includes every job in the session (e.g. a downstream
-        # evaluate step), not just an artifact's upstream ancestry.
+        # Resolve a hash only for the confirmation preview. The application
+        # receives target=None so it selects the active session after publish
+        # bootstrap; bootstrap can change the creator identity and therefore
+        # the canonical hash.
         from ...application.query.status import StatusQueryError, compute_active_session_hash
 
         try:
-            target = compute_active_session_hash(ctx.roar_dir)
+            active_session_hash = compute_active_session_hash(ctx.roar_dir)
         except StatusQueryError as exc:
             raise click.ClickException(str(exc)) from exc
 
@@ -510,7 +511,7 @@ def register(
         and not yes
         and not dry_run
         and not confirm_defaulted_active_session_publish(
-            session_hash=target,
+            session_hash=active_session_hash or "",
             command_name="roar register",
             start_dir=str(ctx.cwd),
             roar_dir=ctx.roar_dir,
@@ -571,6 +572,7 @@ def register(
     web_url = _resolve_glaas_web_url(start_dir=str(ctx.cwd))
     session_preview = _preview_hash(response.session_hash) if response.session_hash else ""
     session_url = _display_session_url(response.session_url, web_url, response.session_hash)
+    display_target = target if target is not None else "active session"
 
     # Apply the implicit binds up front so their result can be folded into the
     # register checklist (rather than printed as a separate trailing block).
@@ -584,7 +586,7 @@ def register(
 
     # Format output
     if dry_run:
-        click.echo(f"Dry run: would register lineage for: {target}")
+        click.echo(f"Dry run: would register lineage for: {display_target}")
         click.echo(f"  Session: {session_preview}")
         click.echo(f"  Jobs: {response.jobs_registered}")
         click.echo(f"  Artifacts: {response.artifacts_registered}")
@@ -592,7 +594,7 @@ def register(
         # Secrets now ride as a line on the reproducibility punchlist below
         # ("no secrets in published lineage", note: none detected / N redacted).
         # Preview reproducibility BEFORE publishing (not yet on GLaaS).
-        _render_register_checklist(ctx, target, response, on_glaas=False, dry_run=True)
+        _render_register_checklist(ctx, display_target, response, on_glaas=False, dry_run=True)
         click.echo("")
         click.echo("GLaaS:")
         click.echo(f"  Session:  {session_url}")
@@ -604,7 +606,7 @@ def register(
         for warning in response.warnings:
             click.echo(f"Warning: {warning}", err=True)
         _render_tag_summary(response.tag_summary)
-        click.echo(f"Already registered on GLaaS: {target}")
+        click.echo(f"Already registered on GLaaS: {display_target}")
         click.echo(f"  Session: {session_preview}")
         click.echo(f"  Labels: {response.labels_synced}")
         click.echo("")
@@ -616,7 +618,7 @@ def register(
     else:
         for warning in response.warnings:
             click.echo(f"Warning: {warning}", err=True)
-        click.echo(f"Registered lineage for: {target}")
+        click.echo(f"Registered lineage for: {display_target}")
         click.echo(f"  Session: {session_preview}")
         # Secrets ride as a punchlist line (see the checklist below).
 
@@ -630,7 +632,7 @@ def register(
         # One punchlist: reproducibility checks + what register did (tag/push/
         # counts + bind folded in), replacing the old separate stat/tag/bind blocks.
         _render_register_checklist(
-            ctx, target, response, on_glaas=True, bind_summaries=bind_summaries
+            ctx, display_target, response, on_glaas=True, bind_summaries=bind_summaries
         )
 
         click.echo("")

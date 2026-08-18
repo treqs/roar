@@ -363,9 +363,9 @@ def test_register_cli_renders_warnings_above_summary(tmp_path: Path) -> None:
 def test_register_cli_no_target_defaults_to_active_session(tmp_path: Path) -> None:
     """`roar register` with no target registers the whole active session.
 
-    It resolves the active session's canonical hash and passes it as the target
-    so the session_hash collection path runs (the full DAG, incl. downstream
-    steps), not an artifact's upstream-only ancestry.
+    It resolves the active session's canonical hash only for confirmation, then
+    preserves target=None so the application selects the active session after
+    publish bootstrap (the full DAG, including downstream steps).
     """
     runner = CliRunner()
     session_hash = "c" * 64
@@ -381,7 +381,7 @@ def test_register_cli_no_target_defaults_to_active_session(tmp_path: Path) -> No
 
     assert result.exit_code == 0, result.output
     request = mock_register.call_args.args[0]
-    assert request.target == session_hash
+    assert request.target is None
 
 
 def test_register_cli_no_target_without_active_session_errors(tmp_path: Path) -> None:
@@ -482,7 +482,7 @@ def test_register_cli_accepts_defaulted_active_session_publish_prompt(tmp_path: 
 
     assert result.exit_code == 0, result.output
     request = mock_register.call_args.args[0]
-    assert request.target == session_hash
+    assert request.target is None
 
 
 def test_register_cli_defaulted_active_session_prompt_has_no_in_flight_warning_by_default(
@@ -562,7 +562,7 @@ def test_register_cli_yes_skips_defaulted_active_session_prompt(tmp_path: Path) 
     assert result.exit_code == 0, result.output
     assert "Publish the whole active session?" not in result.output
     request = mock_register.call_args.args[0]
-    assert request.target == session_hash
+    assert request.target is None
 
 
 def test_register_cli_dry_run_skips_defaulted_active_session_prompt(tmp_path: Path) -> None:
@@ -583,7 +583,7 @@ def test_register_cli_dry_run_skips_defaulted_active_session_prompt(tmp_path: Pa
     assert result.exit_code == 0, result.output
     assert "Publish the whole active session?" not in result.output
     request = mock_register.call_args.args[0]
-    assert request.target == session_hash
+    assert request.target is None
     assert request.dry_run is True
 
 

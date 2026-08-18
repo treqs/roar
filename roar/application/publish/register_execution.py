@@ -23,7 +23,10 @@ from .job_preparation import (
     normalize_jobs_for_registration,
     order_jobs_for_registration,
 )
-from .remote_job_uids import prepare_jobs_for_remote_publication
+from .remote_job_uids import (
+    apply_remote_publication_job_uid_mapping,
+    prepare_jobs_for_remote_publication,
+)
 from .secrets import (
     detect_lineage_secrets,
     filter_git_context_secrets,
@@ -294,10 +297,30 @@ class RegisterService:
         registration_jobs = order_jobs_for_registration(
             normalize_jobs_for_registration(lineage.jobs)
         )
-        remote_registration_jobs = (
-            prepare_jobs_for_remote_publication(registration_jobs, session_hash)
-            if registration_session_id
-            else registration_jobs
+        closed_remote_uid_mapping: dict[str, str] = {}
+        if registration_session_id and registration_session_status == "closed" and session_id:
+            with create_database_context(roar_dir) as db_ctx:
+                closed_remote_uid_mapping = load_glaas_publication_job_mapping(
+                    db_ctx=db_ctx,
+                    session_id=session_id,
+                )
+        if registration_session_id and closed_remote_uid_mapping:
+            remote_registration_jobs = apply_remote_publication_job_uid_mapping(
+                registration_jobs,
+                closed_remote_uid_mapping,
+            )
+        elif registration_session_id:
+            remote_registration_jobs = prepare_jobs_for_remote_publication(
+                registration_jobs,
+                session_hash,
+            )
+        else:
+            remote_registration_jobs = registration_jobs
+        missing_closed_remote_uid_mapping = bool(
+            registration_session_id
+            and registration_session_status == "closed"
+            and session_id
+            and not closed_remote_uid_mapping
         )
         if registration_session_id and view_edges_by_job:
             for job in remote_registration_jobs:
@@ -326,6 +349,10 @@ class RegisterService:
 
         composite_registrations: list[dict[str, Any]] = []
         registration_errors: list[str] = []
+        if missing_closed_remote_uid_mapping:
+            registration_errors.append(
+                "Closed publication is missing its persisted remote job identity mapping"
+            )
         finalized_session_hash = session_hash
         finalized_session_url = prepared.session_url
         finalize_failed = False
@@ -345,7 +372,7 @@ class RegisterService:
                 links_failed=0,
                 errors=[],
             )
-            if session_id is not None:
+            if session_id is not None and not registration_errors:
                 with create_database_context(roar_dir) as db_ctx:
                     batch_result.labels_synced = sync_publish_labels(
                         glaas_client=self.glaas_client,
@@ -427,6 +454,24 @@ class RegisterService:
                     already_registered = True
                     finalized_session_hash = batch_result.already_registered_session_hash
                     finalized_session_url = None
+                    if batch_result.existing_binding_prepared:
+                        finalize_result = (
+                            self.coordinator.session_service.finalize_registration_session(
+                                registration_session_id=registration_session_id,
+                                git_context=git_context,
+                            )
+                        )
+                        if not finalize_result.success:
+                            registration_errors.append(
+                                "Existing publication binding finalize failed: "
+                                f"{finalize_result.error}"
+                            )
+                        elif finalize_result.session_hash != finalized_session_hash:
+                            registration_errors.append(
+                                "Existing publication binding returned a different lineage hash"
+                            )
+                        else:
+                            finalized_session_url = finalize_result.session_url
                     if session_id is not None:
                         with create_database_context(roar_dir) as db_ctx:
                             batch_result.labels_synced = sync_publish_labels(
@@ -437,6 +482,11 @@ class RegisterService:
                                 jobs=remote_registration_jobs,
                                 artifacts=label_artifacts,
                                 errors=registration_errors,
+                                registration_session_id=(
+                                    registration_session_id
+                                    if batch_result.existing_binding_prepared
+                                    else None
+                                ),
                             )
                 elif batch_result.jobs_failed == 0 and batch_result.links_failed == 0:
                     spin.update("Finalizing lineage...")
@@ -661,6 +711,28 @@ def persist_glaas_publication_mapping(
         session_id,
         json.dumps(metadata, sort_keys=True, separators=(",", ":")),
     )
+
+
+def load_glaas_publication_job_mapping(
+    *,
+    db_ctx: Any,
+    session_id: int,
+) -> dict[str, str]:
+    """Load the authoritative local-to-remote job mapping for label refresh."""
+    session = db_ctx.sessions.get(session_id)
+    if not isinstance(session, dict):
+        return {}
+    metadata = _load_session_metadata(session.get("metadata"))
+    jobs = (((metadata.get("roar") or {}).get("remote_publication") or {}).get("glaas") or {}).get(
+        "jobs"
+    )
+    if not isinstance(jobs, dict):
+        return {}
+    return {
+        str(local_uid): str(remote_uid)
+        for local_uid, remote_uid in jobs.items()
+        if isinstance(remote_uid, str) and remote_uid
+    }
 
 
 def _load_session_metadata(raw_metadata: Any) -> dict[str, Any]:
