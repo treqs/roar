@@ -268,8 +268,10 @@ class PutService:
         uploads: list[_UploadedArtifact] = []
         composite_registrations: list[dict[str, Any]] = []
         lineage_composite_registrations: list[dict[str, Any]] = []
-        with Spinner(f"Hashing {len(resolved)} file(s)..."):
-            hashes_by_path = self._hash_files_batch([source.path for source in resolved])
+        hashes_by_path = prepared.source_hashes
+        if not hashes_by_path:
+            with Spinner(f"Hashing {len(resolved)} file(s)..."):
+                hashes_by_path = self._hash_files_batch([source.path for source in resolved])
 
         # Uploads are the long pole of a put (multi-GB artifacts to S3/GCS); show a
         # live N/M + cumulative-bytes counter rather than a dead terminal.

@@ -887,6 +887,14 @@ def put_artifacts(request: PutRequest) -> PutResponse:
                 destination=request.destination,
                 git_commit=git_commit,
                 logger=logger,
+                operation_options={
+                    "anonymous": request.anonymous,
+                    "as_dataset": request.as_dataset,
+                    "message": request.message,
+                    "no_tag": request.no_tag,
+                    "public": request.public,
+                    "step_name": request.step_name,
+                },
             )
 
             # Reproducibility facts for the receipt: same commit-span source as

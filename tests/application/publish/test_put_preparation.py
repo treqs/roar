@@ -34,6 +34,7 @@ def test_prepare_put_execution_builds_session_git_and_source_plan(tmp_path: Path
     db_ctx = MagicMock()
     db_ctx.sessions.get_active.return_value = {"id": 7}
     runtime = MagicMock()
+    runtime.session_service.compute_session_hash.return_value = "local-session-hash"
     prepared_session = MagicMock(
         session_hash="session-hash",
         session_url="https://glaas/session",
@@ -51,7 +52,7 @@ def test_prepare_put_execution_builds_session_git_and_source_plan(tmp_path: Path
         patch(
             "roar.application.publish.put_preparation.prepare_publish_session",
             return_value=prepared_session,
-        ),
+        ) as prepare_session,
         patch(
             "roar.application.publish.put_preparation.infer_publish_dataset_identifiers",
             return_value=[],
@@ -81,8 +82,65 @@ def test_prepare_put_execution_builds_session_git_and_source_plan(tmp_path: Path
         resolved_sources=prepared.resolved_sources,
         destination_type="memory",
         composite_source_type=None,
+        source_hashes=prepared.source_hashes,
     )
     assert [item.path for item in prepared.resolved_sources] == [model.resolve()]
+    assert prepared.source_hashes[str(model.resolve())]
+    call = prepare_session.call_args.kwargs
+    assert call["operation_kind"] == "put"
+    assert len(call["operation_fingerprint"]) == 64
+
+
+def test_prepare_put_execution_fingerprints_source_content(tmp_path: Path) -> None:
+    model = tmp_path / "model.pt"
+    model.write_bytes(b"model-v1")
+    db_ctx = MagicMock()
+    db_ctx.sessions.get_active.return_value = {"id": 7}
+    runtime = MagicMock()
+    runtime.session_service.compute_session_hash.return_value = "local-session-hash"
+    prepared_session = MagicMock(
+        session_hash="session-hash",
+        session_url=None,
+        registration_session_id=None,
+        registration_session_mode=None,
+    )
+
+    with (
+        patch(
+            "roar.application.publish.put_preparation.resolve_roar_git_context",
+            return_value=GitContext(repo="repo", branch="main", commit="deadbeef"),
+        ),
+        patch(
+            "roar.application.publish.put_preparation.prepare_publish_session",
+            return_value=prepared_session,
+        ) as prepare_session,
+    ):
+        prepare_put_execution(
+            db_ctx=db_ctx,
+            runtime=runtime,
+            roar_dir=tmp_path / ".roar",
+            repo_root=tmp_path,
+            sources=["model.pt"],
+            destination="memory://bucket/prefix",
+            git_commit="deadbeef",
+            logger=MagicMock(),
+        )
+        first_fingerprint = prepare_session.call_args.kwargs["operation_fingerprint"]
+
+        model.write_bytes(b"model-v2")
+        prepare_put_execution(
+            db_ctx=db_ctx,
+            runtime=runtime,
+            roar_dir=tmp_path / ".roar",
+            repo_root=tmp_path,
+            sources=["model.pt"],
+            destination="memory://bucket/prefix",
+            git_commit="deadbeef",
+            logger=MagicMock(),
+        )
+        second_fingerprint = prepare_session.call_args.kwargs["operation_fingerprint"]
+
+    assert first_fingerprint != second_fingerprint
 
 
 def test_prepare_put_execution_propagates_missing_source(tmp_path: Path) -> None:

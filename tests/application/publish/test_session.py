@@ -5,7 +5,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from roar.application.publish.session import PreparedPublishSession, prepare_publish_session
+from roar.application.publish.session import (
+    PreparedPublishSession,
+    delegated_client_session_id,
+    prepare_publish_session,
+)
 from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import GitContext, SessionRegistrationResult
 
@@ -29,6 +33,32 @@ def _lineage() -> LineageData:
             }
         ]
     )
+
+
+def test_delegated_client_session_id_is_operation_scoped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ROAR_DELEGATED_JOB_ID", "job-1")
+    monkeypatch.setenv("ROAR_DELEGATED_EXECUTION_ATTEMPT_ID", "attempt-1")
+    monkeypatch.setenv("ROAR_DELEGATED_TASK_ID", "task-1")
+
+    register_id = delegated_client_session_id(
+        operation_kind="register",
+        operation_fingerprint="lineage-a",
+    )
+
+    assert register_id == delegated_client_session_id(
+        operation_kind="register",
+        operation_fingerprint="lineage-a",
+    )
+    assert register_id != delegated_client_session_id(
+        operation_kind="register",
+        operation_fingerprint="lineage-b",
+    )
+    assert register_id != delegated_client_session_id(
+        operation_kind="put",
+        operation_fingerprint="lineage-a",
+    )
+    assert register_id is not None
+    assert register_id.startswith("roar-delegated-v2-")
 
 
 def test_prepare_publish_session_computes_hash_without_registering(tmp_path: Path) -> None:

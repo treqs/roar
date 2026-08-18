@@ -48,8 +48,12 @@ class PreparedPublishSession:
     registration_session_status: str | None = None
 
 
-def _delegated_client_session_id() -> str | None:
-    """Return a stable retry key scoped to one TReqs task capability."""
+def delegated_client_session_id(
+    *,
+    operation_kind: str,
+    operation_fingerprint: str,
+) -> str | None:
+    """Return a stable retry key for one publication operation in a TReqs task."""
     identity = [
         os.environ.get("ROAR_DELEGATED_JOB_ID"),
         os.environ.get("ROAR_DELEGATED_EXECUTION_ATTEMPT_ID"),
@@ -57,8 +61,18 @@ def _delegated_client_session_id() -> str | None:
     ]
     if not all(identity):
         return None
-    digest = hashlib.sha256("\0".join(str(value) for value in identity).encode()).hexdigest()
-    return f"roar-delegated-v1-{digest}"
+    if not operation_kind or not operation_fingerprint:
+        raise ValueError("Delegated publication requires an operation identity")
+    digest = hashlib.sha256(
+        "\0".join(
+            [
+                *(str(value) for value in identity),
+                operation_kind,
+                operation_fingerprint,
+            ]
+        ).encode()
+    ).hexdigest()
+    return f"roar-delegated-v2-{digest}"
 
 
 def build_canonical_session_payload(
@@ -320,6 +334,8 @@ def prepare_publish_session(
     session_hash_override: str | None = None,
     lineage: LineageData | None = None,
     creator_identity: str | None = None,
+    operation_kind: str = "register",
+    operation_fingerprint: str | None = None,
 ) -> PreparedPublishSession:
     """Compute and optionally register the publish session."""
     resolved_remote_registry = coerce_remote_registry(
@@ -418,7 +434,14 @@ def prepare_publish_session(
             f" (mode={registration_session_mode})" if registration_session_mode else "",
         )
         session_result = resolved_session_service.create_registration_session(
-            client_session_id=(_delegated_client_session_id() if has_delegated_auth else None),
+            client_session_id=(
+                delegated_client_session_id(
+                    operation_kind=operation_kind,
+                    operation_fingerprint=operation_fingerprint or session_hash,
+                )
+                if has_delegated_auth
+                else None
+            ),
             mode=registration_session_mode,
         )
         if not session_result.success:

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
 from urllib.parse import urlparse
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
+from ...db.hashing import hash_files_blake3
 from ...integrations.glaas import GlaasClient
 from ..git import resolve_roar_git_context
 from .datasets import (
@@ -35,6 +39,7 @@ class PreparedPutExecution:
     resolved_sources: list[ResolvedSource]
     destination_type: str
     composite_source_type: str | None
+    source_hashes: dict[str, str] = field(default_factory=dict)
     registration_session_id: str | None = None
     registration_session_mode: str | None = None
     registration_session_status: str | None = None
@@ -52,6 +57,7 @@ def prepare_put_execution(
     destination: str,
     git_commit: str | None,
     logger: ILogger,
+    operation_options: Mapping[str, Any] | None = None,
 ) -> PreparedPutExecution:
     """Resolve the local context needed to execute a put workflow."""
     from .source_resolution import SourceResolver
@@ -76,6 +82,48 @@ def prepare_put_execution(
         session_service=runtime.session_service,
         registration_coordinator=runtime_dict.get("registration_coordinator"),
     )
+    resolver = SourceResolver(
+        repo_root=repo_root,
+        session_repo=db_ctx.sessions,
+        job_repo=db_ctx.jobs,
+    )
+    resolved_sources = resolver.resolve(sources)
+    source_hashes = hash_files_blake3([source.path for source in resolved_sources])
+    missing_hashes = [
+        str(source.path) for source in resolved_sources if str(source.path) not in source_hashes
+    ]
+    if missing_hashes:
+        raise OSError(f"Failed to hash put source: {missing_hashes[0]}")
+
+    operation_payload = {
+        "destination": destination,
+        "local_session_hash": runtime.session_service.compute_session_hash(
+            roar_dir=str(roar_dir),
+            session_id=session_id,
+        ),
+        "local_session_id": session_id,
+        "options": dict(operation_options or {}),
+        "sources": sorted(
+            [
+                {
+                    "digest": source_hashes[str(source.path)],
+                    "path": os.path.relpath(source.path.resolve(), repo_root.resolve()),
+                    "relative_key": source.relative_key,
+                    "size": source.path.stat().st_size,
+                }
+                for source in resolved_sources
+            ],
+            key=lambda source: (source["path"], source["relative_key"]),
+        ),
+    }
+    operation_fingerprint = hashlib.sha256(
+        json.dumps(
+            operation_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
     publish_session = prepare_publish_session(
         remote_registry=remote_registry,
         roar_dir=roar_dir,
@@ -83,14 +131,9 @@ def prepare_put_execution(
         git_context=git_context,
         logger=logger,
         register_with_glaas=True,
+        operation_kind="put",
+        operation_fingerprint=operation_fingerprint,
     )
-
-    resolver = SourceResolver(
-        repo_root=repo_root,
-        session_repo=db_ctx.sessions,
-        job_repo=db_ctx.jobs,
-    )
-    resolved_sources = resolver.resolve(sources)
     dataset_identifiers = infer_publish_dataset_identifiers(
         repo_root=repo_root,
         source_specs=sources,
@@ -121,6 +164,7 @@ def prepare_put_execution(
         resolved_sources=resolved_sources,
         destination_type=destination_type,
         composite_source_type=composite_source_type,
+        source_hashes=source_hashes,
         dataset_identifiers=dataset_identifiers,
         additional_composite_roots=additional_composite_roots,
     )
