@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -14,6 +15,10 @@ _MACOS_PROTECTED_BINARY = pytest.mark.skipif(
     sys.platform == "darwin",
     reason="macOS protected system binaries reject preload before the workload starts",
 )
+
+# `true` is /bin/true on most Linux distributions but only /usr/bin/true on
+# macOS, where a hardcoded /bin/true exits 127 and looks like a roar failure.
+_TRUE_BINARY = shutil.which("true") or "/usr/bin/true"
 
 
 def _roar(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -86,7 +91,7 @@ def test_non_python_command_is_not_misreported(tmp_path: Path) -> None:
     assert _roar(tmp_path, "init", "-n").returncode == 0
     assert _roar(tmp_path, "tracer", "use", "preload").returncode == 0
 
-    run = _roar(tmp_path, "run", "/bin/true")
+    run = _roar(tmp_path, "run", _TRUE_BINARY)
 
     assert run.returncode == 0
     assert "Python package capture did not complete" not in run.stderr
