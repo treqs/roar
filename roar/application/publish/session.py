@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -43,6 +45,20 @@ class PreparedPublishSession:
     session_url: str | None = None
     registration_session_id: str | None = None
     registration_session_mode: str | None = None
+    registration_session_status: str | None = None
+
+
+def _delegated_client_session_id() -> str | None:
+    """Return a stable retry key scoped to one TReqs task capability."""
+    identity = [
+        os.environ.get("ROAR_DELEGATED_JOB_ID"),
+        os.environ.get("ROAR_DELEGATED_EXECUTION_ATTEMPT_ID"),
+        os.environ.get("ROAR_DELEGATED_TASK_ID"),
+    ]
+    if not all(identity):
+        return None
+    digest = hashlib.sha256("\0".join(str(value) for value in identity).encode()).hexdigest()
+    return f"roar-delegated-v1-{digest}"
 
 
 def build_canonical_session_payload(
@@ -402,7 +418,7 @@ def prepare_publish_session(
             f" (mode={registration_session_mode})" if registration_session_mode else "",
         )
         session_result = resolved_session_service.create_registration_session(
-            client_session_id=None,
+            client_session_id=(_delegated_client_session_id() if has_delegated_auth else None),
             mode=registration_session_mode,
         )
         if not session_result.success:
@@ -413,11 +429,29 @@ def prepare_publish_session(
             "Registration session ready: %s",
             session_result.registration_session_id,
         )
+        if session_result.status == "closed" and session_result.registration_session_id:
+            finalized = resolved_session_service.finalize_registration_session(
+                registration_session_id=session_result.registration_session_id,
+                git_context=git_context,
+            )
+            if not finalized.success:
+                raise ValueError(
+                    "Closed registration session could not return its publication receipt: "
+                    f"{finalized.error}"
+                )
+            return PreparedPublishSession(
+                session_hash=finalized.session_hash,
+                session_url=finalized.session_url,
+                registration_session_id=session_result.registration_session_id,
+                registration_session_mode=session_result.registration_session_mode,
+                registration_session_status="closed",
+            )
         return PreparedPublishSession(
             session_hash=session_hash,
             session_url=None,
             registration_session_id=session_result.registration_session_id,
             registration_session_mode=session_result.registration_session_mode,
+            registration_session_status=session_result.status,
         )
 
     logger.debug("Registering session with GLaaS")

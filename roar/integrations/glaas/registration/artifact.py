@@ -360,6 +360,7 @@ class ArtifactRegistrationService(IArtifactRegistrar):
                 errors=errors,
             )
 
+        validation_error_count = len(errors)
         total_success = 0
         total_errors = 0
         # Distinct artifacts (one per batch entry), not the server's per-hash
@@ -389,25 +390,6 @@ class ArtifactRegistrationService(IArtifactRegistrar):
                 )
             )
 
-            # Backwards compat with glaas instances that pre-date the staged
-            # artifact endpoint (https://github.com/treqs-inc/glaas-api/pull/50).
-            # 404 on the very first batch means the server doesn't know the
-            # endpoint; bail out cleanly so the bearer link path's
-            # implicit stub-create still works as the legacy fallback. (This is
-            # exactly the pre-Phase-3 behavior — has the M1 bug, but doesn't
-            # break the register itself.)
-            if batch_error and "HTTP 404" in batch_error and batch_idx == 0 and total_success == 0:
-                self._logger.info(
-                    "Phase 3 endpoint not present on this glaas instance (HTTP 404); "
-                    "falling back to legacy link-implicit artifact creation. "
-                    "Upgrade glaas-api to fix the 0-byte artifact issue."
-                )
-                return ArtifactRegistrationResult(
-                    success_count=0,
-                    error_count=0,
-                    errors=[],
-                )
-
             total_success += success_count
             total_errors += error_count
 
@@ -419,7 +401,7 @@ class ArtifactRegistrationService(IArtifactRegistrar):
 
         return ArtifactRegistrationResult(
             success_count=distinct_registered,
-            error_count=total_errors + len(errors),
+            error_count=total_errors + validation_error_count,
             errors=errors,
         )
 

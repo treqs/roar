@@ -738,6 +738,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             confirm_callback=request.confirm_callback,
             prepared=prepared,
             composite_leaf_hashes=composite_leaf_hashes,
+            view_edges_by_job=view_edges_by_job,
         )
 
         # Push the consumes view edges now that the jobs + the anchor composite are
@@ -745,7 +746,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         # under publication-scoped *remote* UIDs; translate via the mapping registration
         # persisted to the session metadata. Best-effort: never fails an otherwise-
         # successful registration.
-        if result.success and view_edges_by_job:
+        if result.success and view_edges_by_job and not prepared.registration_session_id:
             remote_uid_by_local = _load_remote_job_uid_mapping(
                 roar_dir=request.roar_dir, session_id=collected_lineage.session_id
             )

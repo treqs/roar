@@ -37,6 +37,7 @@ class PreparedPutExecution:
     composite_source_type: str | None
     registration_session_id: str | None = None
     registration_session_mode: str | None = None
+    registration_session_status: str | None = None
     dataset_identifiers: list[dict[str, Any]] = field(default_factory=list)
     additional_composite_roots: dict[Path, list[ResolvedSource]] = field(default_factory=dict)
 
@@ -112,6 +113,11 @@ def prepare_put_execution(
         git_context=git_context,
         registration_session_id=publish_session.registration_session_id,
         registration_session_mode=publish_session.registration_session_mode,
+        registration_session_status=(
+            publish_session.registration_session_status
+            if isinstance(publish_session.registration_session_status, str)
+            else None
+        ),
         resolved_sources=resolved_sources,
         destination_type=destination_type,
         composite_source_type=composite_source_type,

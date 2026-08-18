@@ -83,6 +83,8 @@ def _prepared_put(
     session_url: str = "https://glaas.ai/dag/session_hash_abc123",
     destination_type: str = "memory",
     composite_source_type: str | None = None,
+    registration_session_id: str | None = None,
+    registration_session_status: str | None = None,
 ) -> PreparedPutExecution:
     resolved: list[ResolvedSource] = []
     for source in sources:
@@ -120,10 +122,47 @@ def _prepared_put(
         resolved_sources=resolved,
         destination_type=destination_type,
         composite_source_type=composite_source_type,
+        registration_session_id=registration_session_id,
+        registration_session_status=registration_session_status,
     )
 
 
 class TestPutService:
+    def test_closed_registration_session_retry_does_not_upload_again(self, tmp_path: Path) -> None:
+        model_file = tmp_path / "model.pt"
+        model_file.write_bytes(b"model data")
+        db = _create_mock_db()
+        backend = MemoryBackend(bucket="test-bucket", prefix="models")
+        service = PutService(
+            db_context=db,
+            backend=backend,
+            destination="memory://test-bucket/models",
+            repo_root=tmp_path,
+            lineage_collector=MagicMock(),
+            registration_coordinator=_create_mock_coordinator(),
+        )
+
+        with patch.object(service, "_hash_files_batch") as hash_files:
+            result = service.put_prepared(
+                prepared=_prepared_put(
+                    tmp_path,
+                    sources=[model_file],
+                    session_hash="authoritative-session-hash",
+                    session_url="https://glaas.example/dag/authoritative-session-hash",
+                    registration_session_id="registration-session-1",
+                    registration_session_status="closed",
+                ),
+                sources=[str(model_file)],
+                message="retry publish model",
+            )
+
+        assert result.success is True
+        assert result.session_hash == "authoritative-session-hash"
+        assert result.session_url == "https://glaas.example/dag/authoritative-session-hash"
+        assert result.uploaded_files == []
+        hash_files.assert_not_called()
+        db.jobs.create.assert_not_called()
+
     def test_put_prepared_single_file_creates_job(self, tmp_path: Path) -> None:
         model_file = tmp_path / "model.pt"
         model_file.write_bytes(b"model data")

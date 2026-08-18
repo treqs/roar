@@ -414,6 +414,7 @@ def preregister_lineage_composites(
     payloads: list[CompositeRegistrationCandidate],
     registration_errors: list[str],
     logger: ILogger,
+    registration_session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Register lineage composites before the main link phase."""
     registrations: list[dict[str, Any]] = []
@@ -423,7 +424,14 @@ def preregister_lineage_composites(
     )
 
     for item in payloads:
-        response = resolved_remote_registry.register_composite_artifact(item.payload)
+        response = (
+            resolved_remote_registry.client.register_composite_artifact_under_registration_session(
+                registration_session_id,
+                item.payload,
+            )
+            if registration_session_id
+            else resolved_remote_registry.register_composite_artifact(item.payload)
+        )
         result, error = parse_composite_registration_response(response)
 
         registration: dict[str, Any] = {

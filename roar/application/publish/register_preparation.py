@@ -28,6 +28,7 @@ class PreparedRegisterExecution:
     git_tag_repo_root: Path | None
     registration_session_id: str | None = None
     registration_session_mode: str | None = None
+    registration_session_status: str | None = None
 
 
 def prepare_register_execution(
@@ -108,4 +109,9 @@ def prepare_register_execution(
         git_tag_repo_root=git_tag_repo_root,
         registration_session_id=publish_session.registration_session_id,
         registration_session_mode=publish_session.registration_session_mode,
+        registration_session_status=(
+            publish_session.registration_session_status
+            if isinstance(publish_session.registration_session_status, str)
+            else None
+        ),
     )

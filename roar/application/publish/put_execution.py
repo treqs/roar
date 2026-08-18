@@ -220,6 +220,7 @@ class PutService:
         session_hash = prepared.session_hash
         registration_session_id = prepared.registration_session_id
         registration_session_mode = prepared.registration_session_mode
+        registration_session_status = prepared.registration_session_status
         git_context = prepared.git_context
         resolved = prepared.resolved_sources
         destination_type = prepared.destination_type
@@ -244,6 +245,23 @@ class PutService:
                 session_url=prepared.session_url,
                 dry_run=True,
                 would_upload=[PutDryRunItem(path=str(r.path), exists=r.exists) for r in resolved],
+            )
+
+        # Delegated broker sessions use a deterministic client-session id. If a
+        # previous attempt reached finalize but the caller lost the response,
+        # create/resume returns the closed session and its authoritative receipt.
+        # Treat that as a completed retry before hashing or uploading anything;
+        # closed registration-session capabilities cannot accept more staging and
+        # re-uploading large artifacts would be both wasteful and misleading.
+        if registration_session_id and registration_session_status == "closed":
+            self._logger.debug(
+                "Put publication already finalized for registration session %s",
+                registration_session_id,
+            )
+            return PutResult(
+                success=True,
+                session_hash=session_hash,
+                session_url=prepared.session_url,
             )
 
         # Process each file: hash, create artifact, upload
@@ -675,19 +693,56 @@ class PutService:
             composite_builder=self._composite_builder,
             declared=declared,
         )
+        uploaded_artifacts = self._build_uploaded_artifacts_for_registration(
+            uploads,
+            source_type,
+        )
+        staged_artifacts = prepare_batch_registration_artifacts(
+            uploaded_artifacts + lineage.artifacts,
+            registration_session_id,
+            fallback_to_hash=True,
+            prefer_blake3_first=True,
+        )
 
         put_job_registered = False
         put_job_links_succeeded = False
         with Spinner("Publishing lineage to GLaaS...") as spin:
+            spin.update("Staging lineage composites...")
+            lineage_composite_registrations = preregister_put_lineage_composites_with_glaas(
+                db_ctx=self._db,
+                glaas_client=client,
+                lineage_artifacts=lineage.artifacts,
+                session_hash=fallback_session_hash,
+                registration_errors=registration_errors,
+                dataset_identifiers=dataset_identifiers,
+                composite_builder=self._composite_builder,
+                logger=self._logger,
+                registration_session_id=registration_session_id,
+            )
+            spin.update("Staging output composites...")
+            composite_registrations = register_put_composites_with_glaas(
+                db_ctx=self._db,
+                glaas_client=client,
+                composite_results=composite_results_for_linking,
+                registration_errors=registration_errors,
+                dataset_identifiers=dataset_identifiers,
+                logger=self._logger,
+                registration_session_id=registration_session_id,
+            )
             spin.update("Staging lineage jobs and artifacts...")
             registration_result = coordinator.register_lineage_under_registration_session(
                 registration_session_id=registration_session_id,
                 git_context=git_context,
                 jobs=remote_lineage_jobs,
+                artifacts=staged_artifacts,
             )
             registration_errors.extend(registration_result.errors)
 
-            if registration_result.jobs_failed == 0 and registration_result.links_failed == 0:
+            if (
+                registration_result.jobs_failed == 0
+                and registration_result.links_failed == 0
+                and not registration_errors
+            ):
                 spin.update("Staging put job...")
                 put_job_result = coordinator.job_service.create_job_under_registration_session(
                     command=command,
@@ -756,39 +811,6 @@ class PutService:
                     else:
                         session_hash = finalize_result.session_hash
                         session_url = finalize_result.session_url
-
-                        spin.update("Registering lineage composites...")
-                        lineage_composite_registrations = (
-                            preregister_put_lineage_composites_with_glaas(
-                                db_ctx=self._db,
-                                glaas_client=client,
-                                lineage_artifacts=lineage.artifacts,
-                                session_hash=session_hash,
-                                registration_errors=registration_errors,
-                                dataset_identifiers=dataset_identifiers,
-                                composite_builder=self._composite_builder,
-                                logger=self._logger,
-                            )
-                        )
-
-                        composite_results = build_publish_composite_results(
-                            resolved_sources=resolved,
-                            hashes_by_path=hashes_by_path,
-                            session_hash=session_hash,
-                            source_type=composite_source_type,
-                            additional_composite_roots=additional_composite_roots,
-                            composite_builder=self._composite_builder,
-                            declared=declared,
-                        )
-                        spin.update("Registering output composites...")
-                        composite_registrations = register_put_composites_with_glaas(
-                            db_ctx=self._db,
-                            glaas_client=client,
-                            composite_results=composite_results,
-                            registration_errors=registration_errors,
-                            dataset_identifiers=dataset_identifiers,
-                            logger=self._logger,
-                        )
 
         metadata_json = build_put_operation_metadata_json(
             message=message,

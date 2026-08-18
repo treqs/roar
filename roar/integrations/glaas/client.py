@@ -381,6 +381,21 @@ class GlaasClient:
         result, error = self._request("POST", "/api/v1/artifacts/composites", payload)
         return result, error
 
+    def register_composite_artifact_under_registration_session(
+        self,
+        registration_session_id: str,
+        payload: dict[str, Any],
+    ) -> tuple[dict | None, str | None]:
+        """Stage immutable composite metadata before session finalization."""
+        body = {key: value for key, value in payload.items() if key != "session_hash"}
+        return self._request(
+            "POST",
+            f"/api/v1/registration-sessions/{registration_session_id}/artifacts/composites",
+            body,
+            auth_header_value=self._registration_session_auth_header(),
+            allow_auth_fallback=False,
+        )
+
     def get_composite_components(self, hash_prefix: str) -> tuple[dict | None, str | None]:
         """
         Fetch stored component membership rows for a composite artifact.
@@ -876,6 +891,21 @@ class GlaasClient:
         """
         body: dict[str, Any] = {"view_edges": view_edges}
         return self._request("POST", f"/api/v1/jobs/{job_uid}/artifacts", body)
+
+    def register_job_view_edges_under_registration_session(
+        self,
+        registration_session_id: str,
+        job_uid: str,
+        view_edges: list[dict],
+    ) -> tuple[dict | None, str | None]:
+        """Stage view edges while both the job and composite are private."""
+        return self._request(
+            "POST",
+            f"/api/v1/registration-sessions/{registration_session_id}/jobs/{job_uid}/view-edges",
+            {"view_edges": view_edges},
+            auth_header_value=self._registration_session_auth_header(),
+            allow_auth_fallback=False,
+        )
 
     def register_job_inputs_under_registration_session(
         self,

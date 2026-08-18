@@ -39,6 +39,7 @@ def preregister_put_lineage_composites_with_glaas(
     dataset_identifiers: list[dict[str, Any]] | None,
     composite_builder: Any,
     logger: ILogger,
+    registration_session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Prepare and preregister lineage composites for the put workflow."""
     payloads = build_put_lineage_composite_payloads(
@@ -55,6 +56,7 @@ def preregister_put_lineage_composites_with_glaas(
         payloads=payloads,
         registration_errors=registration_errors,
         logger=logger,
+        registration_session_id=registration_session_id,
     )
 
 
@@ -164,6 +166,7 @@ def register_put_composites_with_glaas(
     registration_errors: list[str],
     dataset_identifiers: list[dict[str, Any]] | None,
     logger: ILogger,
+    registration_session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Register generated composite artifacts with GLaaS and persist local state."""
     composite_registrations: list[dict[str, Any]] = []
@@ -186,7 +189,14 @@ def register_put_composites_with_glaas(
         if metadata_json is not None:
             payload["metadata"] = metadata_json
 
-        response = resolved_remote_registry.register_composite_artifact(payload)
+        response = (
+            resolved_remote_registry.client.register_composite_artifact_under_registration_session(
+                registration_session_id,
+                payload,
+            )
+            if registration_session_id
+            else resolved_remote_registry.register_composite_artifact(payload)
+        )
         result, error = parse_composite_registration_response(response)
 
         composite_registration: dict[str, Any] = {

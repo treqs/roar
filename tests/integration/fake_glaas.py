@@ -22,6 +22,7 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.registration_session_job_batches: list[dict[str, Any]] = []
         self.registration_session_job_creates: list[dict[str, Any]] = []
         self.artifact_batches: list[list[dict[str, Any]]] = []
+        self.registration_session_artifact_batches: list[list[dict[str, Any]]] = []
         self.auth_headers: list[dict[str, Any]] = []
         self.input_links: list[dict[str, Any]] = []
         self.output_links: list[dict[str, Any]] = []
@@ -34,6 +35,8 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.current_labels_by_target: dict[str, dict[str, Any]] = {}
         self.label_history_by_target: dict[str, list[dict[str, Any]]] = {}
         self.composite_registrations: list[dict[str, Any]] = []
+        self.registration_session_composite_registrations: list[dict[str, Any]] = []
+        self.registration_session_view_edges: list[dict[str, Any]] = []
         self.artifacts_by_digest: dict[str, dict[str, Any]] = {}
         self.artifact_dags_by_digest: dict[str, dict[str, Any]] = {}
         self.session_reproductions_by_hash: dict[str, dict[str, Any]] = {}
@@ -646,6 +649,51 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 self.server.artifact_batches.append(artifacts)
                 self._record_artifacts(artifacts)
             self._write_json(200, {"created": len(artifacts), "existing": 0})
+            return
+
+        registration_artifact_match = re.fullmatch(
+            r"/api/v1/registration-sessions/([^/]+)/artifacts/batch",
+            self.path,
+        )
+        if registration_artifact_match:
+            registration_session_id = registration_artifact_match.group(1)
+            _authenticated_user, session_state = self._authorize_registration_session_write(
+                registration_session_id,
+                authorization,
+            )
+            if session_state is None or session_state.get("status") != "active":
+                self._write_json(401, {"error": "Missing, invalid, or closed session"})
+                return
+            artifacts = payload.get("artifacts", [])
+            if isinstance(artifacts, list):
+                self.server.registration_session_artifact_batches.append(artifacts)
+                self._record_artifacts(artifacts)
+            self._write_json(200, {"created": len(artifacts), "existing": 0})
+            return
+
+        registration_composite_match = re.fullmatch(
+            r"/api/v1/registration-sessions/([^/]+)/artifacts/composites",
+            self.path,
+        )
+        if registration_composite_match:
+            registration_session_id = registration_composite_match.group(1)
+            _authenticated_user, session_state = self._authorize_registration_session_write(
+                registration_session_id,
+                authorization,
+            )
+            if session_state is None or session_state.get("status") != "active":
+                self._write_json(401, {"error": "Missing, invalid, or closed session"})
+                return
+            self.server.registration_session_composite_registrations.append(payload)
+            self._record_artifacts([payload])
+            self._write_json(
+                200,
+                {
+                    "artifact_id": "registration-composite-"
+                    f"{len(self.server.registration_session_composite_registrations)}",
+                    "created": True,
+                },
+            )
             return
 
         if self.path == "/api/v1/labels/sync":
@@ -1322,6 +1370,10 @@ class FakeGlaasServer:
     @property
     def artifact_batches(self) -> list[list[dict[str, Any]]]:
         return self._server.artifact_batches
+
+    @property
+    def registration_session_artifact_batches(self) -> list[list[dict[str, Any]]]:
+        return self._server.registration_session_artifact_batches
 
     @property
     def auth_headers(self) -> list[dict[str, Any]]:
