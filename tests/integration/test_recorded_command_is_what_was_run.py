@@ -22,6 +22,14 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
+# On Apple Silicon the system launchers are arm64e platform binaries, and dyld
+# refuses to insert the arm64 preload dylib into them:
+#   incompatible architecture (have 'arm64', need 'arm64e')
+_MACOS_PROTECTED_BINARY = pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="macOS protected system binaries reject preload injection",
+)
+
 
 def _roar(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -51,9 +59,13 @@ def initialised(tmp_path: Path) -> Path:
 
 def test_a_shebang_script_records_the_script_not_its_interpreter(initialised: Path) -> None:
     """The kernel rewrites cmdline to include the shebang interpreter, so /proc
-    reports `/usr/bin/env python3 ./train.sh` for a run of `./train.sh`."""
+    reports `<python> ./train.sh` for a run of `./train.sh`.
+
+    The interpreter is named directly rather than via `/usr/bin/env` so this
+    keeps running on macOS, where the system launchers are protected.
+    """
     script = initialised / "train.sh"
-    script.write_text("#!/usr/bin/env python3\nprint('hi')\n")
+    script.write_text(f"#!{sys.executable}\nprint('hi')\n")
     script.chmod(0o755)
 
     run = _roar(initialised, "run", "./train.sh")
@@ -62,6 +74,7 @@ def test_a_shebang_script_records_the_script_not_its_interpreter(initialised: Pa
     assert _latest_command(initialised) == ["./train.sh"]
 
 
+@_MACOS_PROTECTED_BINARY
 def test_a_wrapper_command_is_recorded_as_given(initialised: Path) -> None:
     run = _roar(initialised, "run", "env", "-u", "PYTHONPATH", sys.executable, "-c", "pass")
 
@@ -76,6 +89,7 @@ def test_a_wrapper_command_is_recorded_as_given(initialised: Path) -> None:
     ]
 
 
+@_MACOS_PROTECTED_BINARY
 def test_a_short_lived_command_still_records_its_argv(initialised: Path) -> None:
     """A process that exits immediately may be a zombie by the time /proc is
     read, which is where the recorded argv used to vary with machine load."""
