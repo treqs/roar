@@ -18,6 +18,7 @@ _MACOS_PROTECTED_BINARY = pytest.mark.skipif(
 
 # `true` is /bin/true on most Linux distributions but only /usr/bin/true on
 # macOS, where a hardcoded /bin/true exits 127 and looks like a roar failure.
+# On macOS it is SIP-protected either way, so its test carries the skip above.
 _TRUE_BINARY = shutil.which("true") or "/usr/bin/true"
 
 
@@ -87,6 +88,7 @@ def test_successful_python_capture_has_no_warning(tmp_path: Path) -> None:
     assert _latest_metadata(tmp_path)["python_capture"] == "complete"
 
 
+@_MACOS_PROTECTED_BINARY
 def test_non_python_command_is_not_misreported(tmp_path: Path) -> None:
     assert _roar(tmp_path, "init", "-n").returncode == 0
     assert _roar(tmp_path, "tracer", "use", "preload").returncode == 0
