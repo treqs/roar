@@ -13,7 +13,7 @@ use tracer_runtime::timestamp_now;
 
 use crate::events;
 use crate::ipc::{self, ClientMessage, DaemonMessage};
-use crate::state::{TracerOutput, TracerState};
+use crate::state::{ProcessInfo, TracerOutput, TracerState};
 
 // ── State types ──────────────────────────────────────────────────────────────
 
@@ -46,13 +46,31 @@ impl DaemonState {
         }
     }
 
-    pub fn register(&mut self, run_id: u64, root_pid: u32) {
+    pub fn register(&mut self, run_id: u64, root_pid: u32, root_command: Vec<String>) {
         let mut tracer = TracerState::new(None);
         tracer.start_time = timestamp_now();
         tracer.active_pids.insert(root_pid);
 
         // Capture initial process info from /proc (child is SIGSTOP'd but exists)
-        if let Some(info) = crate::state::capture_process_info(root_pid, None) {
+        let mut info = crate::state::capture_process_info(root_pid, None);
+        if !root_command.is_empty() {
+            // The client told us what it was asked to run, which is
+            // authoritative: /proc reports the post-exec argv, so a
+            // `#!/usr/bin/env python3` script reads back as
+            // `/usr/bin/env python3 ./train.sh` rather than `./train.sh`.
+            match info.as_mut() {
+                Some(info) => info.command = root_command,
+                None => {
+                    info = Some(ProcessInfo {
+                        pid: root_pid,
+                        parent_pid: None,
+                        command: root_command,
+                        env: HashMap::new(),
+                    })
+                }
+            }
+        }
+        if let Some(info) = info {
             tracer.processes.insert(root_pid, info);
         }
 
@@ -366,9 +384,16 @@ fn handle_client(
         };
 
         match msg {
-            ClientMessage::Register { run_id, root_pid } => {
+            ClientMessage::Register {
+                run_id,
+                root_pid,
+                root_command,
+            } => {
                 info!("register: run_id={run_id} pid={root_pid}");
-                state.lock().unwrap().register(run_id, root_pid);
+                state
+                    .lock()
+                    .unwrap()
+                    .register(run_id, root_pid, root_command);
                 ipc::send_message(&mut stream, &DaemonMessage::Ack { run_id })?;
             }
             ClientMessage::Deregister { run_id } => {
@@ -419,7 +444,7 @@ mod tests {
     #[test]
     fn test_register_creates_run_state() {
         let mut state = DaemonState::new();
-        state.register(1, 100);
+        state.register(1, 100, vec![]);
 
         assert!(state.runs.contains_key(&1));
         let run = &state.runs[&1];
@@ -433,8 +458,8 @@ mod tests {
     #[test]
     fn test_deregister_marks_completed_and_keeps_pid_to_run() {
         let mut state = DaemonState::new();
-        state.register(1, 100);
-        state.register(2, 200);
+        state.register(1, 100, vec![]);
+        state.register(2, 200, vec![]);
 
         let remaining = state.deregister(1);
         assert_eq!(remaining, 1);
@@ -450,8 +475,8 @@ mod tests {
     #[test]
     fn test_get_report_clears_pid_to_run_for_run() {
         let mut state = DaemonState::new();
-        state.register(1, 100);
-        state.register(2, 200);
+        state.register(1, 100, vec![]);
+        state.register(2, 200, vec![]);
 
         state.deregister(1);
         // Still routable until get_report.
@@ -466,7 +491,7 @@ mod tests {
     #[test]
     fn test_get_report_returns_real_data() {
         let mut state = DaemonState::new();
-        state.register(1, 100);
+        state.register(1, 100, vec![]);
 
         // Simulate some file I/O via the TracerState
         state
@@ -539,7 +564,7 @@ mod tests {
     #[test]
     fn test_late_event_after_deregister_is_still_routed() {
         let mut state = DaemonState::new();
-        state.register(1, 100);
+        state.register(1, 100, vec![]);
 
         // Register an open so the FD tracker has a path mapping.
         state
@@ -590,7 +615,7 @@ mod tests {
     #[test]
     fn test_event_after_get_report_is_dropped_safely() {
         let mut state = DaemonState::new();
-        state.register(1, 100);
+        state.register(1, 100, vec![]);
         state
             .runs
             .get_mut(&1)
@@ -611,8 +636,8 @@ mod tests {
         let mut state = DaemonState::new();
         assert_eq!(state.active_run_count(), 0);
 
-        state.register(1, 100);
-        state.register(2, 200);
+        state.register(1, 100, vec![]);
+        state.register(2, 200, vec![]);
         assert_eq!(state.active_run_count(), 2);
 
         state.deregister(1);
@@ -625,9 +650,9 @@ mod tests {
     #[test]
     fn test_multiple_registrations_independent() {
         let mut state = DaemonState::new();
-        state.register(1, 100);
-        state.register(2, 200);
-        state.register(3, 300);
+        state.register(1, 100, vec![]);
+        state.register(2, 200, vec![]);
+        state.register(3, 300, vec![]);
 
         assert_eq!(state.active_run_count(), 3);
         assert_eq!(state.pid_to_run.get(&100), Some(&1));
@@ -648,8 +673,8 @@ mod tests {
     #[test]
     fn test_process_event_routes_to_correct_run() {
         let mut state = DaemonState::new();
-        state.register(1, 100);
-        state.register(2, 200);
+        state.register(1, 100, vec![]);
+        state.register(2, 200, vec![]);
 
         // Open a file on run 1's PID (pid=100)
         state
