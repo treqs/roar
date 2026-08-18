@@ -7,9 +7,12 @@ recovering the full workload instead of whichever process wrote last.
 
 from __future__ import annotations
 
+import builtins
 import json
 import multiprocessing
 import os
+import signal
+import time
 
 from roar.execution.runtime.inject.tracker import (
     RuntimeInjectionTracker,
@@ -20,6 +23,10 @@ from roar.execution.runtime.inject.tracker import (
 class _FakeController:
     def handle_import(self, module_name, module):
         return None
+
+
+class _FakeEnviron(dict):
+    """A dict that tolerates the attribute patching ``install()`` performs."""
 
 
 def _tracker(log_path):
@@ -41,6 +48,97 @@ def _record_fork_only_import(tracker):
 
 def _exit_without_multiprocessing_cleanup():
     os._exit(0)
+
+
+def _installable_tracker(log_path):
+    """A tracker whose environ tolerates ``install()``'s attribute patching."""
+    return RuntimeInjectionTracker(
+        _FakeEnviron({"ROAR_LOG_FILE": str(log_path)}),
+        _FakeController(),
+        log_file=str(log_path),
+        inject_dir=str(log_path.parent / "inject"),
+    )
+
+
+def _noop_task(_):
+    return 1
+
+
+def _shards(tmp_path):
+    return sorted(p.name for p in tmp_path.glob("inject-log.json.*"))
+
+
+def test_install_is_what_wires_the_fork_worker_finalizer(tmp_path):
+    """Go through ``install()``, not the private method.
+
+    Calling ``_install_fork_worker_finalizer()`` directly passes even if the
+    single line wiring it into ``install()`` is deleted -- and that line sits in
+    the merge-conflict region with #287, so a conflict resolution could drop it
+    silently. This test is the only thing that would notice.
+    """
+    if "fork" not in multiprocessing.get_all_start_methods():
+        return
+
+    log_path = tmp_path / "inject-log.json"
+    tracker = _installable_tracker(log_path)
+
+    saved_open, saved_import = builtins.open, builtins.__import__
+    try:
+        tracker.install()
+        process = multiprocessing.get_context("fork").Process(
+            target=_record_fork_only_import,
+            args=(tracker,),
+        )
+        process.start()
+        process.join(timeout=10)
+    finally:
+        builtins.open, builtins.__import__ = saved_open, saved_import
+
+    assert process.exitcode == 0
+    assert (tmp_path / f"inject-log.json.{process.pid}").exists()
+
+
+def test_pool_context_manager_workers_still_report(tmp_path):
+    """``with Pool(...)`` exits via ``terminate()``, which SIGTERMs the workers.
+
+    SIGTERM's default disposition kills them outright, so neither the
+    multiprocessing finalizer nor atexit runs. This is the common idiom -- and
+    the ``num_proc`` case the finalizer's own docstring cites -- so it has to
+    report, not just the ``close()``/``join()`` shape.
+    """
+    if "fork" not in multiprocessing.get_all_start_methods():
+        return
+
+    log_path = tmp_path / "inject-log.json"
+    tracker = _installable_tracker(log_path)
+    tracker._install_fork_worker_finalizer()
+
+    context = multiprocessing.get_context("fork")
+    with context.Pool(2) as pool:
+        pool.map(_noop_task, range(2))
+
+    deadline = time.time() + 10
+    while time.time() < deadline and len(_shards(tmp_path)) < 2:
+        time.sleep(0.05)
+
+    assert len(_shards(tmp_path)) == 2, f"workers did not report: {_shards(tmp_path)}"
+    # The parent writes via atexit, which has not run yet.
+    assert f"inject-log.json.{os.getpid()}" not in _shards(tmp_path)
+
+
+def test_a_workload_that_owns_sigterm_is_not_displaced(tmp_path):
+    """Capture must never take a signal the workload is already handling."""
+    tracker = _installable_tracker(tmp_path / "inject-log.json")
+
+    def _workload_handler(signum, frame):
+        return None
+
+    previous = signal.signal(signal.SIGTERM, _workload_handler)
+    try:
+        tracker._install_sigterm_shard_writer()
+        assert signal.getsignal(signal.SIGTERM) is _workload_handler
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def test_write_log_writes_a_per_pid_shard_not_the_shared_file(tmp_path):
@@ -78,7 +176,11 @@ def test_real_fork_worker_writes_its_own_pid_shard(tmp_path):
 def test_forced_os_exit_remains_outside_finalizer_guarantee(tmp_path):
     """Document the lifecycle boundary: user code that calls os._exit bypasses
     multiprocessing cleanup as well as atexit. Crash safety needs incremental
-    import journaling; the orderly-worker finalizer must not pretend otherwise."""
+    import journaling; the orderly-worker finalizer must not pretend otherwise.
+
+    This is the honest remainder, not the whole gap. Termination by signal --
+    which is what `with Pool(...)` does to its workers -- IS covered, by
+    `_install_sigterm_shard_writer`. SIGKILL is not, and cannot be."""
     if "fork" not in multiprocessing.get_all_start_methods():
         return
 
