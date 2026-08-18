@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
+
+from sqlalchemy import text
 
 from ...core.interfaces.logger import ILogger
 from ...core.interfaces.registration import GitContext
@@ -26,6 +29,16 @@ from .session import prepare_publish_session
 
 if TYPE_CHECKING:
     from .source_resolution import ResolvedSource
+
+
+@dataclass(frozen=True)
+class DelegatedPutOperation:
+    """Durable local reservation for one broker-backed put operation."""
+
+    task_identity: str
+    session_id: int
+    ordinal: int
+    request_fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -46,6 +59,7 @@ class PreparedPutExecution:
     registration_session_status: str | None = None
     dataset_identifiers: list[dict[str, Any]] = field(default_factory=list)
     additional_composite_roots: dict[Path, list[ResolvedSource]] = field(default_factory=dict)
+    delegated_put_operation: DelegatedPutOperation | None = None
 
 
 def prepare_put_execution(
@@ -96,8 +110,13 @@ def prepare_put_execution(
     if missing_hashes:
         raise OSError(f"Failed to hash put source: {missing_hashes[0]}")
 
-    operation_payload = {
+    operation_payload: dict[str, Any] = {
         "destination": destination,
+        "git": {
+            "branch": git_context.branch,
+            "commit": git_context.commit,
+            "repo": git_context.repo,
+        },
         "local_session_hash": runtime.session_service.compute_session_hash(
             roar_dir=str(roar_dir),
             session_id=session_id,
@@ -117,13 +136,26 @@ def prepare_put_execution(
             key=lambda source: (source["path"], source["relative_key"]),
         ),
     }
-    operation_fingerprint = hashlib.sha256(
-        json.dumps(
-            operation_payload,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-    ).hexdigest()
+    delegated_task_identity = _delegated_task_identity()
+    if delegated_task_identity is not None:
+        operation_payload["lineage_revision"] = _local_lineage_revision(db_ctx, session_id)
+    request_fingerprint = _fingerprint(operation_payload)
+    delegated_put_operation = _reserve_delegated_put_operation(
+        db_ctx=db_ctx,
+        delegated_task_identity=delegated_task_identity,
+        session_id=session_id,
+        request_fingerprint=request_fingerprint,
+    )
+    operation_fingerprint = (
+        _fingerprint(
+            {
+                "ordinal": delegated_put_operation.ordinal,
+                "request_fingerprint": request_fingerprint,
+            }
+        )
+        if delegated_put_operation is not None
+        else request_fingerprint
+    )
 
     publish_session = prepare_publish_session(
         remote_registry=remote_registry,
@@ -168,7 +200,176 @@ def prepare_put_execution(
         source_hashes=source_hashes,
         dataset_identifiers=dataset_identifiers,
         additional_composite_roots=additional_composite_roots,
+        delegated_put_operation=delegated_put_operation,
     )
+
+
+def complete_delegated_put_operation(
+    db_ctx: Any,
+    operation: DelegatedPutOperation | None,
+) -> None:
+    """Mark a broker-backed put complete after its local and remote writes succeed."""
+    if not isinstance(operation, DelegatedPutOperation):
+        return
+
+    completed_at = time.time()
+    result = db_ctx.session.execute(
+        text(
+            """
+            UPDATE delegated_put_operations
+            SET status = 'completed', updated_at = :completed_at, completed_at = :completed_at
+            WHERE task_identity = :task_identity
+              AND session_id = :session_id
+              AND ordinal = :ordinal
+              AND request_fingerprint = :request_fingerprint
+              AND status = 'pending'
+            """
+        ),
+        {
+            "completed_at": completed_at,
+            "task_identity": operation.task_identity,
+            "session_id": operation.session_id,
+            "ordinal": operation.ordinal,
+            "request_fingerprint": operation.request_fingerprint,
+        },
+    )
+    if result.rowcount != 1:
+        raise RuntimeError("Delegated put operation reservation changed before completion")
+    db_ctx.commit()
+
+
+def _delegated_task_identity() -> str | None:
+    values = [
+        os.environ.get("ROAR_DELEGATED_JOB_ID", "").strip(),
+        os.environ.get("ROAR_DELEGATED_EXECUTION_ATTEMPT_ID", "").strip(),
+        os.environ.get("ROAR_DELEGATED_TASK_ID", "").strip(),
+    ]
+    if not any(values):
+        return None
+    if not all(values):
+        raise ValueError("Delegated publication task identity is incomplete")
+    return hashlib.sha256("\0".join(values).encode()).hexdigest()
+
+
+def _local_lineage_revision(db_ctx: Any, session_id: int) -> str:
+    jobs = db_ctx.session.execute(
+        text(
+            """
+            SELECT id, job_uid, step_number, step_identity, command, git_repo,
+                   git_commit, git_branch, status, exit_code
+            FROM jobs
+            WHERE session_id = :session_id
+            ORDER BY id
+            """
+        ),
+        {"session_id": session_id},
+    ).mappings()
+    links = db_ctx.session.execute(
+        text(
+            """
+            SELECT 'input' AS relation, link.job_id, link.artifact_id, link.path
+            FROM job_inputs AS link
+            JOIN jobs AS job ON job.id = link.job_id
+            WHERE job.session_id = :session_id
+            UNION ALL
+            SELECT 'output' AS relation, link.job_id, link.artifact_id, link.path
+            FROM job_outputs AS link
+            JOIN jobs AS job ON job.id = link.job_id
+            WHERE job.session_id = :session_id
+            ORDER BY relation, job_id, artifact_id, path
+            """
+        ),
+        {"session_id": session_id},
+    ).mappings()
+    return _fingerprint(
+        {
+            "jobs": [dict(row) for row in jobs],
+            "links": [dict(row) for row in links],
+        }
+    )
+
+
+def _reserve_delegated_put_operation(
+    *,
+    db_ctx: Any,
+    delegated_task_identity: str | None,
+    session_id: int,
+    request_fingerprint: str,
+) -> DelegatedPutOperation | None:
+    if delegated_task_identity is None:
+        return None
+
+    now = time.time()
+    row = (
+        db_ctx.session.execute(
+            text(
+                """
+                INSERT INTO delegated_put_operations (
+                    task_identity,
+                    session_id,
+                    ordinal,
+                    request_fingerprint,
+                    status,
+                    created_at,
+                    updated_at,
+                    completed_at
+                ) VALUES (
+                    :task_identity,
+                    :session_id,
+                    1,
+                    :request_fingerprint,
+                    'pending',
+                    :now,
+                    :now,
+                    NULL
+                )
+                ON CONFLICT(task_identity, session_id) DO UPDATE SET
+                    ordinal = CASE
+                        WHEN delegated_put_operations.status = 'completed'
+                        THEN delegated_put_operations.ordinal + 1
+                        ELSE delegated_put_operations.ordinal
+                    END,
+                    request_fingerprint = CASE
+                        WHEN delegated_put_operations.status = 'completed'
+                        THEN excluded.request_fingerprint
+                        ELSE delegated_put_operations.request_fingerprint
+                    END,
+                    status = 'pending',
+                    updated_at = excluded.updated_at,
+                    completed_at = NULL
+                WHERE delegated_put_operations.status = 'completed'
+                   OR delegated_put_operations.request_fingerprint = excluded.request_fingerprint
+                RETURNING ordinal, request_fingerprint
+                """
+            ),
+            {
+                "task_identity": delegated_task_identity,
+                "session_id": session_id,
+                "request_fingerprint": request_fingerprint,
+                "now": now,
+            },
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        raise ValueError(
+            "A different delegated put operation is already pending for this task; "
+            "retry the original command"
+        )
+    db_ctx.commit()
+    return DelegatedPutOperation(
+        task_identity=delegated_task_identity,
+        session_id=session_id,
+        ordinal=int(row["ordinal"]),
+        request_fingerprint=str(row["request_fingerprint"]),
+    )
+
+
+def _fingerprint(payload: Mapping[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _destination_type(destination: str) -> str:

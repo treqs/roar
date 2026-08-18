@@ -99,6 +99,13 @@ def prepare_put_execution(*args: Any, **kwargs: Any) -> Any:
     return _prepare_put_execution(*args, **kwargs)
 
 
+def complete_delegated_put_operation(*args: Any, **kwargs: Any) -> Any:
+    """Durably close a delegated put reservation after publication succeeds."""
+    from .put_preparation import complete_delegated_put_operation as _complete
+
+    return _complete(*args, **kwargs)
+
+
 def prepare_register_execution(*args: Any, **kwargs: Any) -> Any:
     """Load register preparation only when register runs."""
     from .register_preparation import (
@@ -929,6 +936,9 @@ def put_artifacts(request: PutRequest) -> PutResponse:
                     step_name=request.step_name,
                 ),
             )
+
+            if result.success:
+                complete_delegated_put_operation(db_ctx, prepared.delegated_put_operation)
 
             # Apply step name label if provided.
             if request.step_name and result.success and result.job_id:
