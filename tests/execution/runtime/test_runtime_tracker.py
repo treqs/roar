@@ -191,3 +191,119 @@ def test_workload_boundary_drops_bootstrap_modules_and_shared_libs(tmp_path, mon
     assert str(bootstrap_module) not in payload["modules_files"]
     assert str(workload_module) in payload["modules_files"]
     assert payload["shared_libs"] == ["/venv/numpy.libs/libopenblas.so"]
+
+
+class _NullController:
+    def handle_import(self, module_name: str, module) -> None:
+        return None
+
+
+def _origin_tracker(tmp_path):
+    return RuntimeInjectionTracker(
+        {"ROAR_LOG_FILE": str(tmp_path / "inject-log.json")},
+        _NullController(),
+        log_file=str(tmp_path / "inject-log.json"),
+        inject_dir=str(tmp_path / "inject"),
+    )
+
+
+class TestWorkloadImportOrigin:
+    """The origin heuristic decides what counts as workload code, and it reads
+    the importing module's globals. The real ``__import__`` ignores ``globals``
+    entirely at ``level == 0``, so anything it accepts today must keep working:
+    injected code that raises into a user's ``import`` is the cardinal failure
+    for this module."""
+
+    @pytest.mark.parametrize(
+        "origin_file",
+        [
+            pytest.param(Path("/work/train.py"), id="path-object"),
+            pytest.param(b"/work/train.py", id="bytes"),
+            pytest.param(5, id="int"),
+            pytest.param(None, id="none"),
+        ],
+    )
+    def test_a_non_str_origin_file_does_not_escape_into_the_import(
+        self, tmp_path, origin_file
+    ) -> None:
+        tracker = _origin_tracker(tmp_path)
+
+        # A non-stdlib name: the heuristic short-circuits on stdlib before it
+        # ever reads __file__, so "json" here would test nothing.
+        module = tracker.tracking_import(
+            "pytest", {"__name__": "m", "__file__": origin_file}, None, (), 0
+        )
+
+        assert module is not None  # the import itself still succeeded
+
+    def test_a_non_dict_globals_does_not_escape_into_the_import(self, tmp_path) -> None:
+        assert tracker_import_survives(_origin_tracker(tmp_path), object())
+
+    def test_loose_workload_code_is_recorded(self, tmp_path) -> None:
+        tracker = _origin_tracker(tmp_path)
+
+        tracker.tracking_import(
+            "json", {"__name__": "__main__", "__file__": "/work/train.py"}, None, (), 0
+        )
+
+        assert "json" not in tracker.workload_import_names  # stdlib is excluded
+
+        tracker.tracking_import(
+            "pytest", {"__name__": "__main__", "__file__": "/work/train.py"}, None, (), 0
+        )
+        assert "pytest" in tracker.workload_import_names
+
+    def test_an_installed_packages_own_import_is_not_workload_code(self, tmp_path) -> None:
+        """A dependency-of-a-dependency is the package's business, not the
+        workload's -- that distinction is the whole point of the signal."""
+        tracker = _origin_tracker(tmp_path)
+
+        tracker.tracking_import(
+            "pytest",
+            {
+                "__name__": "requests.adapters",
+                "__file__": "/v/lib/site-packages/requests/adapters.py",
+            },
+            None,
+            (),
+            0,
+        )
+
+        assert "pytest" not in tracker.workload_import_names
+
+    def test_roars_own_imports_are_never_workload_code(self, tmp_path) -> None:
+        tracker = _origin_tracker(tmp_path)
+
+        tracker.tracking_import(
+            "pytest",
+            {"__name__": "roar.execution.thing", "__file__": "/anywhere/x.py"},
+            None,
+            (),
+            0,
+        )
+
+        assert "pytest" not in tracker.workload_import_names
+
+
+def tracker_import_survives(tracker, globals_obj) -> bool:
+    tracker.tracking_import("pytest", globals_obj, None, (), 0)
+    return True
+
+
+def test_the_boundary_survives_a_module_with_a_non_str_file(tmp_path) -> None:
+    """``mark_workload_boundary`` walks live interpreter state, where a module's
+    ``__file__`` need not be a ``str``. Losing the snapshot is survivable;
+    raising here costs the whole inject log, since it runs during
+    ``sitecustomize`` where ``site`` swallows the exception."""
+    import types
+
+    tracker = _origin_tracker(tmp_path)
+    poisoned = types.ModuleType("poisoned_module")
+    poisoned.__file__ = 5
+    sys.modules["poisoned_module"] = poisoned
+    try:
+        tracker.mark_workload_boundary()
+    finally:
+        del sys.modules["poisoned_module"]
+
+    assert tracker._baseline_module_files  # real modules were still snapshotted

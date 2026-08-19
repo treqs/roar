@@ -383,11 +383,20 @@ class RuntimeInjectionTracker:
         setattr(self._environ, _ENVIRON_GET_METHOD_NAME, self.patched_environ_get)
 
     def mark_workload_boundary(self) -> None:
-        """Discard injection bootstrap activity and snapshot its native footprint."""
+        """Discard injection bootstrap activity and snapshot its native footprint.
+
+        Runs over live interpreter state, so it tolerates both hazards that
+        implies: a module's ``__file__`` need not be a ``str`` (import machinery
+        only requires it be present), and ``sys.modules`` can change size under
+        iteration if a background thread imports. Neither is worth losing the
+        snapshot over, and none of it may escape into the workload.
+        """
         self._baseline_module_files = {
-            os.path.abspath(getattr(module, "__file__", ""))
-            for module in sys.modules.values()
-            if getattr(module, "__file__", None)
+            os.path.abspath(module_file)
+            for module_file in (
+                getattr(module, "__file__", None) for module in list(sys.modules.values())
+            )
+            if isinstance(module_file, str) and module_file
         }
         roar_root = _roar_site_packages_root(self._inject_dir)
         runtime_paths = get_active_runtime_pythonpath(self._environ)
@@ -413,26 +422,39 @@ class RuntimeInjectionTracker:
             pass
         return self._real_open(*args, **kwargs)
 
-    def tracking_import(self, name, globals=None, locals=None, fromlist=(), level=0):
-        self.imported_modules.add(name)
-        # Rescue only imports explicitly issued by loose workload code. This is
-        # the useful origin signal from #275 without its name-keyed dependency
-        # subtraction, which #277 reverted for dropping same-named workload deps.
-        if level == 0 and name:
+    def _note_workload_import(self, name, globals, level) -> None:
+        """Record imports issued by loose workload code, not by installed packages.
+
+        This is the useful origin signal from #275 without its name-keyed
+        dependency subtraction, which #277 reverted for dropping same-named
+        workload deps.
+
+        Nothing here may escape into the workload's ``import`` statement. The
+        real ``__import__`` ignores ``globals`` entirely at ``level == 0``, so a
+        module whose ``__file__`` is a ``Path``, bytes, or any other non-``str``
+        imports fine today; reading it must not change that. Losing one origin
+        signal is a bounded cost, crashing the workload is not.
+        """
+        try:
+            if level != 0 or not name:
+                return
             top = name.split(".")[0]
+            if not top or top.startswith("_") or top in _STDLIB:
+                return
             origin = (globals or {}).get("__name__") or ""
+            if origin == "roar" or origin.startswith("roar."):
+                return
             origin_file = (globals or {}).get("__file__")
-            if (
-                top
-                and not top.startswith("_")
-                and top not in _STDLIB
-                and (
-                    origin == "__main__"
-                    or (origin_file and _site_packages_top(origin_file) is None)
-                )
-                and not (origin == "roar" or origin.startswith("roar."))
+            if origin == "__main__" or (
+                isinstance(origin_file, str) and _site_packages_top(origin_file) is None
             ):
                 self.workload_import_names.add(top)
+        except Exception:
+            return
+
+    def tracking_import(self, name, globals=None, locals=None, fromlist=(), level=0):
+        self.imported_modules.add(name)
+        self._note_workload_import(name, globals, level)
         module = self._real_import(name, globals, locals, fromlist, level)
 
         if self._environ.get("ROAR_WRAP") != "1":

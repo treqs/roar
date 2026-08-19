@@ -1,5 +1,6 @@
 # ruff: noqa: E402
 import atexit
+import contextlib
 import importlib.machinery
 import importlib.util
 import os
@@ -295,9 +296,17 @@ if os.environ.get("ROAR_WANDB_TO_TRACKIO"):
     except Exception:
         pass
 
+# Register the writer FIRST. Everything below is best-effort refinement of what
+# gets recorded; none of it is worth trading for recording nothing at all. This
+# ordering is load-bearing: site.execsitecustomize() swallows whatever escapes
+# here and the workload still runs, so a raise above this line would cost the
+# entire inject log rather than one snapshot.
+atexit.register(_runtime_tracker.write_log)
+
 # Everything above is Roar's injection bootstrap, not workload activity. Keep a
 # boundary snapshot so its Python packages and loaded shared libraries cannot
 # leak into lineage merely because compatible copies exist in the workload venv.
-_runtime_tracker.mark_workload_boundary()
-
-atexit.register(_runtime_tracker.write_log)
+# Guarded for the same reason: iterating sys.modules can raise if a background
+# thread imports concurrently, and a module's __file__ need not be a str.
+with contextlib.suppress(Exception):
+    _runtime_tracker.mark_workload_boundary()
