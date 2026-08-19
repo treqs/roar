@@ -390,6 +390,9 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
             "roar.application.publish.service.finalize_put_git",
             return_value=(None, []),
         ),
+        patch(
+            "roar.application.publish.service.complete_delegated_put_operation"
+        ) as complete_operation,
     ):
         mock_put_cls.return_value.put_prepared.return_value = put_result
 
@@ -414,6 +417,7 @@ def test_put_artifacts_continues_when_git_preflight_warns(tmp_path: Path) -> Non
         reproducible=False,
         commit_on_remote=False,
     )
+    complete_operation.assert_called_once_with(db_ctx, prepared.delegated_put_operation)
 
 
 def test_put_artifacts_returns_preparation_error_before_service(tmp_path: Path) -> None:

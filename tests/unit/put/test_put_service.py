@@ -10,7 +10,7 @@ import pytest
 
 from roar.application.publish.composite_builder import CompositeArtifactBuilder
 from roar.application.publish.put_execution import PutService
-from roar.application.publish.put_preparation import PreparedPutExecution
+from roar.application.publish.put_preparation import DelegatedPutOperation, PreparedPutExecution
 from roar.application.publish.registration import build_lineage_membership_index_payload
 from roar.application.publish.results import PutDryRunItem
 from roar.application.publish.source_resolution import ResolvedSource
@@ -83,6 +83,10 @@ def _prepared_put(
     session_url: str = "https://glaas.ai/dag/session_hash_abc123",
     destination_type: str = "memory",
     composite_source_type: str | None = None,
+    registration_session_id: str | None = None,
+    registration_session_status: str | None = None,
+    delegated_put_operation: DelegatedPutOperation | None = None,
+    lineage: LineageData | None = None,
 ) -> PreparedPutExecution:
     resolved: list[ResolvedSource] = []
     for source in sources:
@@ -120,10 +124,78 @@ def _prepared_put(
         resolved_sources=resolved,
         destination_type=destination_type,
         composite_source_type=composite_source_type,
+        registration_session_id=registration_session_id,
+        registration_session_status=registration_session_status,
+        delegated_put_operation=delegated_put_operation,
+        lineage=lineage,
     )
 
 
 class TestPutService:
+    def test_put_prepared_uses_the_reserved_lineage_snapshot(self, tmp_path: Path) -> None:
+        model_file = tmp_path / "model.pt"
+        model_file.write_bytes(b"model data")
+        lineage = LineageData(
+            jobs=[{"job_uid": "reserved-upstream", "command": "python upstream.py"}],
+            artifacts=[],
+            artifact_hashes=set(),
+        )
+        collector = MagicMock()
+        coordinator = _create_mock_coordinator()
+        service = PutService(
+            db_context=_create_mock_db(),
+            backend=MemoryBackend(bucket="test-bucket", prefix="models"),
+            destination="memory://test-bucket/models",
+            repo_root=tmp_path,
+            lineage_collector=collector,
+            registration_coordinator=coordinator,
+        )
+
+        result = service.put_prepared(
+            prepared=_prepared_put(tmp_path, sources=[model_file], lineage=lineage),
+            sources=[str(model_file)],
+            message="publish reserved snapshot",
+        )
+
+        assert result.success is True
+        collector.collect.assert_not_called()
+        assert coordinator.register_lineage.call_args.kwargs["jobs"] == lineage.jobs
+
+    def test_closed_registration_session_retry_does_not_upload_again(self, tmp_path: Path) -> None:
+        model_file = tmp_path / "model.pt"
+        model_file.write_bytes(b"model data")
+        db = _create_mock_db()
+        backend = MemoryBackend(bucket="test-bucket", prefix="models")
+        service = PutService(
+            db_context=db,
+            backend=backend,
+            destination="memory://test-bucket/models",
+            repo_root=tmp_path,
+            lineage_collector=MagicMock(),
+            registration_coordinator=_create_mock_coordinator(),
+        )
+
+        with patch.object(service, "_hash_files_batch") as hash_files:
+            result = service.put_prepared(
+                prepared=_prepared_put(
+                    tmp_path,
+                    sources=[model_file],
+                    session_hash="authoritative-session-hash",
+                    session_url="https://glaas.example/dag/authoritative-session-hash",
+                    registration_session_id="registration-session-1",
+                    registration_session_status="closed",
+                ),
+                sources=[str(model_file)],
+                message="retry publish model",
+            )
+
+        assert result.success is True
+        assert result.session_hash == "authoritative-session-hash"
+        assert result.session_url == "https://glaas.example/dag/authoritative-session-hash"
+        assert result.uploaded_files == []
+        hash_files.assert_not_called()
+        db.jobs.create.assert_not_called()
+
     def test_put_prepared_single_file_creates_job(self, tmp_path: Path) -> None:
         model_file = tmp_path / "model.pt"
         model_file.write_bytes(b"model data")
@@ -160,6 +232,90 @@ class TestPutService:
         assert call_kwargs["execution_role"] == "host"
         assert call_kwargs["job_type"] == "put"
         service._db.jobs.add_input.assert_called_once()
+
+    def test_active_delegated_retry_reuses_reserved_local_put_job(self, tmp_path: Path) -> None:
+        model_file = tmp_path / "model.pt"
+        model_file.write_bytes(b"model data")
+        db = _create_mock_db()
+        operation = DelegatedPutOperation(
+            task_identity="task",
+            session_id=1,
+            ordinal=1,
+            request_fingerprint="fingerprint",
+            put_job_uid="delegated-put-stable",
+        )
+        db.jobs.get_by_uid.return_value = {
+            "id": 42,
+            "job_uid": operation.put_job_uid,
+            "step_number": 3,
+        }
+        coordinator = _create_mock_coordinator()
+        coordinator.register_lineage_under_registration_session.return_value = (
+            BatchRegistrationResult(
+                session_registered=True,
+                jobs_created=0,
+                jobs_failed=0,
+                artifacts_registered=0,
+                artifacts_failed=0,
+                links_created=0,
+                links_failed=0,
+                errors=[],
+            )
+        )
+        coordinator.job_service.create_job_under_registration_session.return_value = (
+            JobRegistrationResult(
+                success=True,
+                job_uid="remote-put",
+                job_id="remote-put",
+                error=None,
+            )
+        )
+        coordinator.job_service.link_job_artifacts_under_registration_session.return_value = (
+            JobLinkResult(
+                success=True,
+                job_uid="remote-put",
+                inputs_linked=1,
+                outputs_linked=0,
+                error=None,
+            )
+        )
+        coordinator.session_service.finalize_registration_session.return_value = MagicMock(
+            success=True,
+            session_hash="final-hash",
+            session_url="https://glaas.example/dag/final-hash",
+            error=None,
+        )
+        service = PutService(
+            db_context=db,
+            backend=MemoryBackend(bucket="test-bucket", prefix="models"),
+            destination="memory://test-bucket/models",
+            repo_root=tmp_path,
+            lineage_collector=MagicMock(),
+            registration_coordinator=coordinator,
+        )
+        service._lineage_collector.collect.return_value = LineageData(
+            jobs=[],
+            artifacts=[],
+            artifact_hashes=set(),
+            pipeline={"id": 1},
+        )
+
+        result = service.put_prepared(
+            prepared=_prepared_put(
+                tmp_path,
+                sources=[model_file],
+                registration_session_id="registration-session",
+                registration_session_status="active",
+                delegated_put_operation=operation,
+            ),
+            sources=[str(model_file)],
+            message="retry",
+        )
+
+        assert result.success is True
+        assert result.job_id == 42
+        db.jobs.get_by_uid.assert_called_once_with(operation.put_job_uid)
+        db.jobs.create.assert_not_called()
 
     def test_put_prepared_refreshes_and_syncs_put_job_labels(self, tmp_path: Path) -> None:
         model_file = tmp_path / "model.pt"

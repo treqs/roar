@@ -631,12 +631,15 @@ class JobRegistrationService(IJobRegistrar):
         job_uid: str,
         inputs: list[dict[str, Any]] | None,
         outputs: list[dict[str, Any]] | None,
+        view_edges: list[dict[str, Any]] | None = None,
     ) -> JobLinkResult:
         """Link artifacts to a staged job under a remote registration session."""
         valid_inputs = self._normalize_link_artifacts(inputs or [], "input")
         valid_outputs = self._normalize_link_artifacts(outputs or [], "output")
 
-        if not valid_inputs and not valid_outputs:
+        valid_view_edges = [edge for edge in (view_edges or []) if isinstance(edge, dict)]
+
+        if not valid_inputs and not valid_outputs and not valid_view_edges:
             self._logger.debug(
                 "No staged artifacts to link for registration-session job %s",
                 job_uid,
@@ -681,6 +684,15 @@ class JobRegistrationService(IJobRegistrar):
                     result.get("artifacts_registered", len(batch)) if result else len(batch)
                 )
 
+        if valid_view_edges:
+            result, error = self.client.register_job_view_edges_under_registration_session(
+                registration_session_id,
+                job_uid,
+                valid_view_edges,
+            )
+            if error:
+                errors.append(f"view edges: {error}")
+
         if valid_outputs:
             output_batches = _batch_artifacts(valid_outputs, MAX_ARTIFACTS_PER_REQUEST)
             for batch_idx, batch in enumerate(output_batches):
@@ -718,10 +730,11 @@ class JobRegistrationService(IJobRegistrar):
             )
 
         self._logger.debug(
-            "Linked staged artifacts to registration-session job %s: %d inputs, %d outputs",
+            "Linked staged artifacts to registration-session job %s: %d inputs, %d outputs, %d view edges",
             job_uid,
             inputs_linked,
             outputs_linked,
+            len(valid_view_edges),
         )
         return JobLinkResult(
             success=True,

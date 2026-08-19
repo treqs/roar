@@ -21,6 +21,7 @@ from .results import (
     PutUploadedFile,
     RegisterLineageResponse,
 )
+from .targets import ResolvedRegisterTarget
 
 if TYPE_CHECKING:
     from ...db.query_context import QueryDatabaseContext
@@ -96,6 +97,13 @@ def prepare_put_execution(*args: Any, **kwargs: Any) -> Any:
     from .put_preparation import prepare_put_execution as _prepare_put_execution
 
     return _prepare_put_execution(*args, **kwargs)
+
+
+def complete_delegated_put_operation(*args: Any, **kwargs: Any) -> Any:
+    """Durably close a delegated put reservation after publication succeeds."""
+    from .put_preparation import complete_delegated_put_operation as _complete
+
+    return _complete(*args, **kwargs)
 
 
 def prepare_register_execution(*args: Any, **kwargs: Any) -> Any:
@@ -566,10 +574,14 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         )
 
     try:
-        resolved_target = resolve_register_lineage_target(
-            request.target,
-            cwd=request.cwd,
-            roar_dir=request.roar_dir,
+        resolved_target = (
+            ResolvedRegisterTarget(kind="active_session", value="")
+            if request.target is None
+            else resolve_register_lineage_target(
+                request.target,
+                cwd=request.cwd,
+                roar_dir=request.roar_dir,
+            )
         )
         runtime_kwargs: dict[str, Any] = {
             "start_dir": str(request.cwd),
@@ -738,6 +750,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
             confirm_callback=request.confirm_callback,
             prepared=prepared,
             composite_leaf_hashes=composite_leaf_hashes,
+            view_edges_by_job=view_edges_by_job,
         )
 
         # Push the consumes view edges now that the jobs + the anchor composite are
@@ -745,7 +758,7 @@ def register_lineage_target(request: RegisterLineageRequest) -> RegisterLineageR
         # under publication-scoped *remote* UIDs; translate via the mapping registration
         # persisted to the session metadata. Best-effort: never fails an otherwise-
         # successful registration.
-        if result.success and view_edges_by_job:
+        if result.success and view_edges_by_job and not prepared.registration_session_id:
             remote_uid_by_local = _load_remote_job_uid_mapping(
                 roar_dir=request.roar_dir, session_id=collected_lineage.session_id
             )
@@ -881,6 +894,14 @@ def put_artifacts(request: PutRequest) -> PutResponse:
                 destination=request.destination,
                 git_commit=git_commit,
                 logger=logger,
+                operation_options={
+                    "anonymous": request.anonymous,
+                    "as_dataset": request.as_dataset,
+                    "message": request.message,
+                    "no_tag": request.no_tag,
+                    "public": request.public,
+                    "step_name": request.step_name,
+                },
             )
 
             # Reproducibility facts for the receipt: same commit-span source as
@@ -915,6 +936,9 @@ def put_artifacts(request: PutRequest) -> PutResponse:
                     step_name=request.step_name,
                 ),
             )
+
+            if result.success:
+                complete_delegated_put_operation(db_ctx, prepared.delegated_put_operation)
 
             # Apply step name label if provided.
             if request.step_name and result.success and result.job_id:

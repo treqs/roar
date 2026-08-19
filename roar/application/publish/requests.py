@@ -11,7 +11,9 @@ from pathlib import Path
 class RegisterLineageRequest:
     """Application request for `roar register`."""
 
-    target: str
+    # None means the whole active session. Keep that intent explicit instead
+    # of freezing a pre-bootstrap canonical hash in the CLI.
+    target: str | None
     roar_dir: Path
     cwd: Path
     dry_run: bool = False

@@ -311,6 +311,9 @@ class RegistrationCoordinator(IRegistrationCoordinator):
                         links_failed=0,
                         errors=[],
                         already_registered_session_hash=distinct[0],
+                        existing_binding_prepared=bool(
+                            batch_counts.get("existing_binding_prepared", False)
+                        ),
                     )
                 # Partial overlap (some new + some already elsewhere) or jobs
                 # spanning multiple DAGs — can't form one DAG without a job
@@ -367,7 +370,10 @@ class RegistrationCoordinator(IRegistrationCoordinator):
 
             inputs = self._extract_staged_io_list(job, "_inputs", "_input_hashes")
             outputs = self._extract_staged_io_list(job, "_outputs", "_output_hashes")
-            if not inputs and not outputs:
+            view_edges = job.get("_view_edges")
+            if not isinstance(view_edges, list):
+                view_edges = []
+            if not inputs and not outputs and not view_edges:
                 continue
 
             link_result = self.job_service.link_job_artifacts_under_registration_session(
@@ -375,6 +381,7 @@ class RegistrationCoordinator(IRegistrationCoordinator):
                 job_uid=remote_job_uid,
                 inputs=inputs,
                 outputs=outputs,
+                view_edges=view_edges,
             )
             if link_result.success:
                 links_created += link_result.inputs_linked + link_result.outputs_linked

@@ -54,6 +54,7 @@ def preregister_lineage_composites_with_glaas(
     registration_errors: list[str],
     composite_builder: Any,
     logger: ILogger,
+    registration_session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Prepare and preregister lineage composites before batch link resolution."""
     payloads = build_lineage_composite_payloads(
@@ -68,6 +69,7 @@ def preregister_lineage_composites_with_glaas(
         payloads=payloads,
         registration_errors=registration_errors,
         logger=logger,
+        registration_session_id=registration_session_id,
     )
 
 

@@ -201,6 +201,35 @@ def test_sync_publish_labels_appends_error_when_sync_fails() -> None:
     assert errors == ["Label sync failed: permission denied"]
 
 
+def test_sync_publish_labels_uses_registration_session_scoped_route() -> None:
+    client = MagicMock()
+    client.sync_labels_under_registration_session.return_value = (
+        {"processed": 1, "created": 1},
+        None,
+    )
+
+    with patch(
+        "roar.application.publish.registration.collect_label_sync_payloads",
+        return_value=[{"entity_type": "dag", "session_hash": "session-hash"}],
+    ):
+        sync_publish_labels(
+            glaas_client=client,
+            db_ctx=MagicMock(),
+            session_id=7,
+            session_hash="session-hash",
+            jobs=[{"job_uid": "job-1"}],
+            artifacts=[],
+            errors=[],
+            registration_session_id="reg-session-123",
+        )
+
+    client.sync_labels_under_registration_session.assert_called_once_with(
+        "reg-session-123",
+        [{"entity_type": "dag", "session_hash": "session-hash"}],
+    )
+    client.sync_labels.assert_not_called()
+
+
 def test_sync_publish_labels_skips_empty_payloads() -> None:
     client = MagicMock()
 

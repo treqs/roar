@@ -1,6 +1,4 @@
-"""Tests for ArtifactRegistrationService.register_batch_under_registration_session
-backwards-compat fallback when talking to a glaas instance that doesn't have the
-staged-artifact endpoint (https://github.com/treqs-inc/glaas-api/pull/50)."""
+"""Fail-closed tests for scoped artifact staging."""
 
 from unittest.mock import MagicMock
 
@@ -24,10 +22,8 @@ def _artifacts(n=2):
     ]
 
 
-def test_404_on_first_batch_silently_skips_phase3():
-    """Old glaas without the staged endpoint returns 404; coordinator should
-    treat it as 'fall back to legacy link-implicit creation' and surface no
-    error, so `roar register` doesn't fail on every old server."""
+def test_404_on_first_batch_fails_closed():
+    """A receiver missing the scoped endpoint is not broker-compatible."""
     service, client = _service()
     client.register_artifacts_batch_under_registration_session.return_value = (
         0,
@@ -38,8 +34,8 @@ def test_404_on_first_batch_silently_skips_phase3():
     result = service.register_batch_under_registration_session(_artifacts(2), "reg-sess-x")
 
     assert result.success_count == 0
-    assert result.error_count == 0
-    assert result.errors == []
+    assert result.error_count == 2
+    assert any("404" in error for error in result.errors)
 
 
 def test_non_404_error_still_surfaces():

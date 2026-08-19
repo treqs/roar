@@ -5,7 +5,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from roar.application.publish.session import PreparedPublishSession, prepare_publish_session
+from roar.application.publish.session import (
+    PreparedPublishSession,
+    delegated_client_session_id,
+    prepare_publish_session,
+)
 from roar.core.interfaces.lineage import LineageData
 from roar.core.interfaces.registration import GitContext, SessionRegistrationResult
 
@@ -29,6 +33,32 @@ def _lineage() -> LineageData:
             }
         ]
     )
+
+
+def test_delegated_client_session_id_is_operation_scoped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ROAR_DELEGATED_JOB_ID", "job-1")
+    monkeypatch.setenv("ROAR_DELEGATED_EXECUTION_ATTEMPT_ID", "attempt-1")
+    monkeypatch.setenv("ROAR_DELEGATED_TASK_ID", "task-1")
+
+    register_id = delegated_client_session_id(
+        operation_kind="register",
+        operation_fingerprint="lineage-a",
+    )
+
+    assert register_id == delegated_client_session_id(
+        operation_kind="register",
+        operation_fingerprint="lineage-a",
+    )
+    assert register_id != delegated_client_session_id(
+        operation_kind="register",
+        operation_fingerprint="lineage-b",
+    )
+    assert register_id != delegated_client_session_id(
+        operation_kind="put",
+        operation_fingerprint="lineage-a",
+    )
+    assert register_id is not None
+    assert register_id.startswith("roar-delegated-v2-")
 
 
 def test_prepare_publish_session_computes_hash_without_registering(tmp_path: Path) -> None:
@@ -226,6 +256,50 @@ def test_prepare_publish_session_creates_registration_session_with_scoped_ssh_on
         session_hash="session-hash",
         session_url=None,
         registration_session_id="reg-session-scoped-ssh-123",
+    )
+    session_service.create_registration_session.assert_called_once_with(
+        client_session_id=None,
+        mode=None,
+    )
+    session_service.register.assert_not_called()
+
+
+def test_prepare_publish_session_creates_registration_session_with_delegated_auth(
+    tmp_path: Path,
+) -> None:
+    glaas_client = MagicMock()
+    glaas_client.publish_auth.access_token = None
+    glaas_client.publish_auth.scope_request = {
+        "owner_id": "owner-123",
+        "owner_type": "organization",
+        "project_id": "proj-123",
+        "visibility": "private",
+    }
+    glaas_client.publish_auth.ssh_auth_available = False
+    glaas_client.publish_auth.delegated_auth_available = True
+    session_service = MagicMock()
+    session_service.compute_session_hash.return_value = "session-hash"
+    session_service.create_registration_session.return_value = SessionRegistrationResult(
+        success=True,
+        session_hash="session-hash",
+        session_url=None,
+        registration_session_id="reg-session-delegated-123",
+    )
+
+    result = prepare_publish_session(
+        glaas_client=glaas_client,
+        session_service=session_service,
+        roar_dir=tmp_path / ".roar",
+        session_id=7,
+        git_context=_git_context(),
+        logger=MagicMock(),
+        register_with_glaas=True,
+    )
+
+    assert result == PreparedPublishSession(
+        session_hash="session-hash",
+        session_url=None,
+        registration_session_id="reg-session-delegated-123",
     )
     session_service.create_registration_session.assert_called_once_with(
         client_session_id=None,

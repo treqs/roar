@@ -103,6 +103,39 @@ def test_insert_job_with_null_parent_job_uid_succeeds() -> None:
     assert row["parent_job_uid"] is None
 
 
+def test_run_migrations_adds_stable_put_job_uid_to_v4_reservations() -> None:
+    conn = _create_legacy_db()
+    conn.executescript(
+        """
+        CREATE TABLE sessions (id INTEGER PRIMARY KEY);
+        INSERT INTO sessions (id) VALUES (7);
+        CREATE TABLE delegated_put_operations (
+            task_identity TEXT NOT NULL,
+            session_id INTEGER NOT NULL,
+            ordinal INTEGER NOT NULL,
+            request_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            completed_at REAL,
+            PRIMARY KEY (task_identity, session_id)
+        );
+        INSERT INTO delegated_put_operations (
+            task_identity, session_id, ordinal, request_fingerprint,
+            status, created_at, updated_at
+        ) VALUES ('abcdef0123456789', 7, 2, 'fingerprint', 'pending', 1, 1);
+        PRAGMA user_version = 4;
+        """
+    )
+
+    run_migrations(conn)
+
+    row = conn.execute("SELECT put_job_uid FROM delegated_put_operations").fetchone()
+    assert row is not None
+    assert row["put_job_uid"] == "delegated-put-abcdef0123456789-7-2"
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+
+
 def test_create_database_context_migrates_parent_job_uid_for_legacy_db(tmp_path: Path) -> None:
     roar_dir = tmp_path / ".roar"
     roar_dir.mkdir()
