@@ -341,9 +341,68 @@ class RuntimeInjectionTracker:
 
     def install(self) -> None:
         """Patch builtins and environ access for activity capture."""
+        self._install_fork_worker_finalizer()
         builtins.open = self.tracking_open
         builtins.__import__ = self.tracking_import
         setattr(self._environ, _ENVIRON_GET_METHOD_NAME, self.patched_environ_get)
+
+    def _install_fork_worker_finalizer(self) -> None:
+        """Make multiprocessing fork workers emit their per-PID inject shard.
+
+        ``multiprocessing`` workers terminate through ``os._exit``, bypassing
+        Python's ordinary atexit handlers. Its own shutdown path does run
+        child-local ``Finalize`` callbacks, so register one after each fork. The
+        existing parent-side shard merger then sees the worker report exactly as
+        intended by PR #265.
+
+        Workers are not always asked to stop, though. ``Pool.__exit__`` is
+        ``terminate()``, which SIGTERMs every worker, and ``util._exit_function``
+        does the same to surviving daemon children -- the ``DataLoader`` shape.
+        A killed worker runs no exit hook at all, so the child also writes its
+        shard *immediately* after forking; see ``_register_in_fork_child``.
+
+        Deliberately NOT done here: installing a SIGTERM handler. A Python
+        signal handler only runs when the interpreter reaches a bytecode
+        boundary, so a worker inside a long C call (BLAS, zlib, pickle) would
+        latch the signal and never die -- and both ``Pool._terminate_pool`` and
+        ``util._exit_function`` join workers with no timeout. Measured: a worker
+        in ``zlib.compress`` went from exit -15 in 0.02s to still alive after
+        8s. Hanging the workload is far worse than a thin shard.
+        """
+        try:
+            from multiprocessing import util as multiprocessing_util
+
+            multiprocessing_util.register_after_fork(
+                self, RuntimeInjectionTracker._register_in_fork_child
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _register_in_fork_child(tracker: RuntimeInjectionTracker) -> None:
+        """Give the child a shard now, and a complete one if it exits orderly.
+
+        The eager write is what survives a worker that is killed rather than
+        joined: it holds the state inherited at fork, which is the parent's
+        whole import set. The finalizer then rewrites the same per-PID path on
+        an orderly exit, upgrading it with whatever the worker imported while it
+        ran. Both paths are union-merged by ``merge_inject_logs``, so the
+        upgrade is free and a killed worker still contributes.
+
+        The remaining boundary, stated plainly: imports a worker makes *after*
+        forking are lost if it is killed before exiting. Closing that needs
+        incremental journaling, not an exit hook.
+        """
+        with contextlib.suppress(Exception):
+            tracker.write_log()
+        with contextlib.suppress(Exception):
+            from multiprocessing import util as multiprocessing_util
+
+            multiprocessing_util.Finalize(
+                None,
+                tracker.write_log,
+                exitpriority=-100,
+            )
 
     def tracking_open(self, *args, **kwargs):
         if is_suppressed():

@@ -7,7 +7,9 @@ recovering the full workload instead of whichever process wrote last.
 
 from __future__ import annotations
 
+import builtins
 import json
+import multiprocessing
 import os
 
 from roar.execution.runtime.inject.tracker import (
@@ -19,6 +21,10 @@ from roar.execution.runtime.inject.tracker import (
 class _FakeController:
     def handle_import(self, module_name, module):
         return None
+
+
+class _FakeEnviron(dict):
+    """A dict that tolerates the attribute patching ``install()`` performs."""
 
 
 def _tracker(log_path):
@@ -34,11 +40,160 @@ def _shard(base, pid, data):
     (base.parent / f"{base.name}.{pid}").write_text(json.dumps(data), encoding="utf-8")
 
 
+def _record_fork_only_import(tracker):
+    tracker.imported_modules.add("fork_only_dependency")
+
+
+def _record_then_force_exit(tracker):
+    # Recorded after fork, so only an exit hook could capture it -- and
+    # os._exit runs none.
+    tracker.imported_modules.add("fork_only_dependency")
+    os._exit(0)
+
+
+def _installable_tracker(log_path):
+    """A tracker whose environ tolerates ``install()``'s attribute patching."""
+    return RuntimeInjectionTracker(
+        _FakeEnviron({"ROAR_LOG_FILE": str(log_path)}),
+        _FakeController(),
+        log_file=str(log_path),
+        inject_dir=str(log_path.parent / "inject"),
+    )
+
+
+def _report_pid(_):
+    return os.getpid()
+
+
+def _shards(tmp_path):
+    return sorted(p.name for p in tmp_path.glob("inject-log.json.*"))
+
+
+def test_install_is_what_wires_the_fork_worker_finalizer(tmp_path):
+    """Go through ``install()``, not the private method.
+
+    Calling ``_install_fork_worker_finalizer()`` directly passes even if the
+    single line wiring it into ``install()`` is deleted -- and that line sits in
+    the merge-conflict region with #287, so a conflict resolution could drop it
+    silently. This test is the only thing that would notice.
+    """
+    if "fork" not in multiprocessing.get_all_start_methods():
+        return
+
+    log_path = tmp_path / "inject-log.json"
+    tracker = _installable_tracker(log_path)
+
+    saved_open, saved_import = builtins.open, builtins.__import__
+    try:
+        tracker.install()
+        process = multiprocessing.get_context("fork").Process(
+            target=_record_fork_only_import,
+            args=(tracker,),
+        )
+        process.start()
+        process.join(timeout=10)
+    finally:
+        builtins.open, builtins.__import__ = saved_open, saved_import
+
+    assert process.exitcode == 0
+    assert (tmp_path / f"inject-log.json.{process.pid}").exists()
+
+
+def test_pool_context_manager_workers_still_report(tmp_path):
+    """``with Pool(...)`` exits via ``terminate()``, which SIGTERMs the workers.
+
+    SIGTERM's default disposition kills them outright, so neither the
+    multiprocessing finalizer nor atexit runs. This is the common idiom -- and
+    the ``num_proc`` case the finalizer's own docstring cites -- so it has to
+    report, not just the ``close()``/``join()`` shape.
+
+    Asserted against the workers that actually ran a task, since those
+    demonstrably got through the after-fork hook. A worker forked and killed
+    while still bootstrapping may write nothing: the eager write makes this
+    best-effort, not a guarantee, and an exact shard count would be flaky.
+    """
+    if "fork" not in multiprocessing.get_all_start_methods():
+        return
+
+    log_path = tmp_path / "inject-log.json"
+    tracker = _installable_tracker(log_path)
+    tracker._install_fork_worker_finalizer()
+
+    context = multiprocessing.get_context("fork")
+    with context.Pool(2) as pool:
+        worker_pids = set(pool.map(_report_pid, range(8)))
+
+    assert worker_pids, "no worker ran a task"
+    for pid in worker_pids:
+        assert (tmp_path / f"inject-log.json.{pid}").exists(), (
+            f"worker {pid} ran a task but never reported; shards: {_shards(tmp_path)}"
+        )
+    # The parent writes via atexit, which has not run yet.
+    assert f"inject-log.json.{os.getpid()}" not in _shards(tmp_path)
+
+
 def test_write_log_writes_a_per_pid_shard_not_the_shared_file(tmp_path):
     log_path = tmp_path / "inject-log.json"
     _tracker(log_path).write_log()
     assert not log_path.exists()  # the shared path is NOT truncated
     assert (tmp_path / f"inject-log.json.{os.getpid()}").exists()  # the shard is
+
+
+def test_real_fork_worker_writes_its_own_pid_shard(tmp_path):
+    """Linux multiprocessing fork workers use os._exit, so ordinary atexit does
+    not run. The multiprocessing finalizer must write the worker's real shard."""
+    if "fork" not in multiprocessing.get_all_start_methods():
+        return
+
+    log_path = tmp_path / "inject-log.json"
+    tracker = _tracker(log_path)
+    tracker._install_fork_worker_finalizer()
+    process = multiprocessing.get_context("fork").Process(
+        target=_record_fork_only_import,
+        args=(tracker,),
+    )
+    process.start()
+    process.join(timeout=10)
+
+    assert process.exitcode == 0
+    worker_shard = tmp_path / f"inject-log.json.{process.pid}"
+    assert worker_shard.exists()
+    payload = json.loads(worker_shard.read_text())
+    assert payload["pid"] == process.pid
+    assert "fork_only_dependency" in payload["imported_modules"]
+    assert not (tmp_path / f"inject-log.json.{os.getpid()}").exists()
+
+
+def test_a_forced_exit_keeps_the_fork_time_shard_but_loses_later_imports(tmp_path):
+    """Document the lifecycle boundary precisely.
+
+    A worker that calls ``os._exit`` bypasses multiprocessing cleanup as well as
+    atexit, so no exit hook runs for it -- and the same is true of one killed by
+    SIGTERM or SIGKILL. The eager write at fork means such a worker still
+    contributes the state it inherited, rather than nothing at all.
+
+    What is lost is what it imported *after* forking. That is the honest
+    remainder, and closing it needs incremental import journaling rather than an
+    exit hook. This test pins both halves so neither claim drifts.
+    """
+    if "fork" not in multiprocessing.get_all_start_methods():
+        return
+
+    log_path = tmp_path / "inject-log.json"
+    tracker = _tracker(log_path)
+    tracker._install_fork_worker_finalizer()
+    process = multiprocessing.get_context("fork").Process(
+        target=_record_then_force_exit,
+        args=(tracker,),
+    )
+    process.start()
+    process.join(timeout=10)
+
+    assert process.exitcode == 0
+    worker_shard = tmp_path / f"inject-log.json.{process.pid}"
+    assert worker_shard.exists(), "the fork-time snapshot should survive a forced exit"
+    payload = json.loads(worker_shard.read_text())
+    assert "fork_only_dependency" not in payload["imported_modules"]
 
 
 def test_worker_shard_does_not_clobber_the_workload_record(tmp_path):
