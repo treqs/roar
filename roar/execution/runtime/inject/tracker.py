@@ -16,9 +16,6 @@ from roar.execution.runtime.inject.support import is_suppressed
 
 _ORIGINAL_ENVIRON_GET_ATTR = "_original_get"
 _ENVIRON_GET_METHOD_NAME = "get"
-# Marks our own SIGTERM handler so a re-install can supersede it without
-# displacing one the workload installed.
-_SHARD_WRITER_ATTR = "_roar_shard_writer"
 
 # roar injects its own variables (ROAR_WRAP, ROAR_EXECUTION_BACKEND,
 # ROAR_RUNTIME_PYTHONPATH_ACTIVE, ...) into the traced process environment.
@@ -358,19 +355,21 @@ class RuntimeInjectionTracker:
         existing parent-side shard merger then sees the worker report exactly as
         intended by PR #265.
 
-        Workers are not always asked to stop, though -- see
-        ``_install_sigterm_shard_writer`` for the terminated case, which is what
-        ``with Pool(...)`` does.
+        Workers are not always asked to stop, though. ``Pool.__exit__`` is
+        ``terminate()``, which SIGTERMs every worker, and ``util._exit_function``
+        does the same to surviving daemon children -- the ``DataLoader`` shape.
+        A killed worker runs no exit hook at all, so the child also writes its
+        shard *immediately* after forking; see ``_register_in_fork_child``.
 
-        What remains uncovered, deliberately: a workload calling ``os._exit``
-        directly, and SIGKILL. Neither can be intercepted; covering them needs
-        incremental import journaling rather than an exit hook.
+        Deliberately NOT done here: installing a SIGTERM handler. A Python
+        signal handler only runs when the interpreter reaches a bytecode
+        boundary, so a worker inside a long C call (BLAS, zlib, pickle) would
+        latch the signal and never die -- and both ``Pool._terminate_pool`` and
+        ``util._exit_function`` join workers with no timeout. Measured: a worker
+        in ``zlib.compress`` went from exit -15 in 0.02s to still alive after
+        8s. Hanging the workload is far worse than a thin shard.
         """
         try:
-            # Imported here, in the parent, so the fork child's own `import
-            # signal` below is a sys.modules hit. Importing for the first time
-            # inside a fork child can deadlock on the import lock.
-            import signal  # noqa: F401
             from multiprocessing import util as multiprocessing_util
 
             multiprocessing_util.register_after_fork(
@@ -381,7 +380,22 @@ class RuntimeInjectionTracker:
 
     @staticmethod
     def _register_in_fork_child(tracker: RuntimeInjectionTracker) -> None:
-        try:
+        """Give the child a shard now, and a complete one if it exits orderly.
+
+        The eager write is what survives a worker that is killed rather than
+        joined: it holds the state inherited at fork, which is the parent's
+        whole import set. The finalizer then rewrites the same per-PID path on
+        an orderly exit, upgrading it with whatever the worker imported while it
+        ran. Both paths are union-merged by ``merge_inject_logs``, so the
+        upgrade is free and a killed worker still contributes.
+
+        The remaining boundary, stated plainly: imports a worker makes *after*
+        forking are lost if it is killed before exiting. Closing that needs
+        incremental journaling, not an exit hook.
+        """
+        with contextlib.suppress(Exception):
+            tracker.write_log()
+        with contextlib.suppress(Exception):
             from multiprocessing import util as multiprocessing_util
 
             multiprocessing_util.Finalize(
@@ -389,48 +403,6 @@ class RuntimeInjectionTracker:
                 tracker.write_log,
                 exitpriority=-100,
             )
-        except Exception:
-            pass
-        tracker._install_sigterm_shard_writer()
-
-    def _install_sigterm_shard_writer(self) -> None:
-        """Also emit the shard when a worker is *terminated* rather than joined.
-
-        ``Pool.__exit__`` is ``terminate()``, which SIGTERMs every worker, and
-        ``util._exit_function`` does the same to surviving daemon children --
-        which is what ``DataLoader`` creates. SIGTERM's default disposition kills
-        the process outright, so neither the finalizer above nor atexit runs.
-        Without this, ``with Pool(...) as p:`` -- the common idiom, and the
-        ``num_proc`` case in the docstring above -- reports nothing at all, while
-        ``close()``/``join()`` reports fine.
-
-        Installed only in a fork child, and only when nothing else owns the
-        signal, so a workload's own SIGTERM handling is never displaced. The
-        default disposition is restored and re-raised so the process still dies
-        of SIGTERM and reports exit status -15 as the caller expects.
-        """
-        try:
-            import signal
-
-            current = signal.getsignal(signal.SIGTERM)
-            # Never displace a handler the workload owns. One of our own is
-            # fair game: a re-install, or a second tracker, should supersede it
-            # rather than leave the stale one writing the wrong shard.
-            if current is not signal.SIG_DFL and not getattr(current, _SHARD_WRITER_ATTR, False):
-                return
-
-            def _write_shard_then_die(signum, frame):
-                with contextlib.suppress(Exception):
-                    self.write_log()
-                signal.signal(signal.SIGTERM, signal.SIG_DFL)
-                os.kill(os.getpid(), signal.SIGTERM)
-
-            setattr(_write_shard_then_die, _SHARD_WRITER_ATTR, True)
-            signal.signal(signal.SIGTERM, _write_shard_then_die)
-        except Exception:
-            # Not the main thread, no SIGTERM on this platform, etc. The
-            # finalizer path still covers orderly shutdown.
-            pass
 
     def tracking_open(self, *args, **kwargs):
         if is_suppressed():
