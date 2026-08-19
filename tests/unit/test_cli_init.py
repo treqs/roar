@@ -301,3 +301,75 @@ def test_init_path_uses_target_repo_for_gitignore_updates(tmp_path: Path) -> Non
     assert caller_gitignore.read_text() == ".roar/\n"
     assert ".roar/" in target_gitignore.read_text().splitlines()
     assert (target_repo / ".roar").is_dir()
+
+
+class TestSharedEnvironmentDetection:
+    """roar sharing the workload's environment means both sets of requirements
+    must resolve together, and roar's dependencies land in the freeze where
+    nothing can attribute them (P0-28). The comparison must be against the
+    interpreter the WORKLOAD would use, not roar's own: under `uv tool` or pipx
+    roar always sits inside its own prefix, so comparing roar to itself reports
+    every correctly isolated install as shared -- nagging exactly the users who
+    took the advice."""
+
+    def _prefixes(self, monkeypatch, *, roar_prefix, venv=None, conda=None, path_python=None):
+        from roar.cli.commands import init as init_module
+
+        monkeypatch.setattr(init_module.sys, "prefix", roar_prefix, raising=False)
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.delenv("CONDA_PREFIX", raising=False)
+        if venv:
+            monkeypatch.setenv("VIRTUAL_ENV", venv)
+        if conda:
+            monkeypatch.setenv("CONDA_PREFIX", conda)
+        monkeypatch.setattr(init_module.shutil, "which", lambda _name: path_python, raising=False)
+        return init_module
+
+    def test_pip_installed_into_the_active_project_venv_is_shared(self, monkeypatch):
+        init_module = self._prefixes(monkeypatch, roar_prefix="/proj/.venv", venv="/proj/.venv")
+        assert init_module.roar_shares_this_environment() is True
+
+    def test_a_tool_install_alongside_an_active_project_venv_is_isolated(self, monkeypatch):
+        """The `uv tool` / pipx layout: roar runs from its own venv."""
+        init_module = self._prefixes(
+            monkeypatch, roar_prefix="/home/u/.local/share/uv/tools/roar-cli", venv="/proj/.venv"
+        )
+        assert init_module.roar_shares_this_environment() is False
+
+    def test_a_tool_install_with_no_venv_active_is_isolated(self, monkeypatch):
+        """No venv: the workload would run the system python, which is not roar's."""
+        init_module = self._prefixes(
+            monkeypatch,
+            roar_prefix="/home/u/.local/share/uv/tools/roar-cli",
+            path_python="/usr/bin/python3",
+        )
+        assert init_module.roar_shares_this_environment() is False
+
+    def test_a_system_install_with_no_venv_is_shared(self, monkeypatch):
+        init_module = self._prefixes(
+            monkeypatch, roar_prefix="/usr", path_python="/usr/bin/python3"
+        )
+        assert init_module.roar_shares_this_environment() is True
+
+    def test_a_conda_environment_is_honoured(self, monkeypatch):
+        init_module = self._prefixes(
+            monkeypatch, roar_prefix="/opt/conda/envs/proj", conda="/opt/conda/envs/proj"
+        )
+        assert init_module.roar_shares_this_environment() is True
+
+    def test_no_resolvable_interpreter_says_nothing(self, monkeypatch):
+        init_module = self._prefixes(monkeypatch, roar_prefix="/anything", path_python=None)
+        assert init_module.roar_shares_this_environment() is False
+
+    def test_detection_never_breaks_init(self, monkeypatch):
+        """A cosmetic hint must not be able to fail `roar init`."""
+        from roar.cli.commands import init as init_module
+
+        def _boom(_name):
+            raise OSError("PATH exploded")
+
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.delenv("CONDA_PREFIX", raising=False)
+        monkeypatch.setattr(init_module.shutil, "which", _boom, raising=False)
+
+        assert init_module.roar_shares_this_environment() is False

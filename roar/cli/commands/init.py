@@ -4,7 +4,10 @@ Native Click implementation of the init command.
 Usage: roar init
 """
 
+import os
+import shutil
 import sqlite3 as _sqlite3
+import sys
 from pathlib import Path
 
 import click
@@ -357,6 +360,54 @@ def _print_version_header() -> None:
     print_brand_header("init")
 
 
+def roar_shares_this_environment() -> bool:
+    """Whether roar is installed into the environment a workload would run in.
+
+    Sharing one environment means roar's requirements and the project's have to
+    resolve together, and roar's dependencies are loaded into the traced process
+    and recorded alongside the project's. They cannot be told apart afterwards:
+    roar's copy of a package and the workload's are the same file at the same
+    path, so nothing -- path, name, or dist metadata -- can attribute them.
+    Subtracting by name once stripped the workload's own tqdm and
+    typing-extensions, so the freeze over-includes instead (see
+    ``roar_footprint_paths``). Better to recommend separate environments up
+    front than to discover either problem in a published record.
+    """
+    try:
+        workload_prefix = _workload_interpreter_prefix()
+        if workload_prefix is None:
+            return False
+        return os.path.abspath(sys.prefix) == workload_prefix
+    except Exception:
+        # Never let a cosmetic hint break `roar init`.
+        return False
+
+
+def _workload_interpreter_prefix() -> str | None:
+    """The prefix of the interpreter ``roar run python ...`` would use.
+
+    Deliberately NOT ``sys.prefix``: that is *roar's* interpreter. Under a
+    ``uv tool`` or pipx install roar runs from its own venv, so roar always sits
+    under its own prefix and comparing the two would report every correctly
+    isolated install as shared -- nagging exactly the people who took the advice.
+
+    Resolution mirrors what a shell would do: the active virtualenv or conda
+    env, else the first ``python`` on PATH. Returns None when no interpreter can
+    be resolved, which is treated as "say nothing".
+    """
+    for env_var in ("VIRTUAL_ENV", "CONDA_PREFIX"):
+        value = os.environ.get(env_var)
+        if value:
+            return os.path.abspath(value)
+
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        if found:
+            # <prefix>/bin/python -> <prefix>
+            return os.path.abspath(os.path.dirname(os.path.dirname(os.path.realpath(found))))
+    return None
+
+
 def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) -> None:
     """Print git-style `hint:` lines for next steps. Amber-colored to
     match git's hint convention. Suppressed in quiet/non-TTY contexts."""
@@ -384,6 +435,13 @@ def _maybe_print_init_hints(*, in_git_repo: bool, gitignore_action: str | None) 
     hint()
     hint("Tracer auto-selects (eBPF → preload → ptrace). Switch with `roar tracer <backend>`;")
     hint("see all backends and readiness with `roar tracer`.")
+    if roar_shares_this_environment():
+        hint()
+        hint("roar is installed in the same environment as your project. We recommend")
+        hint("running roar from its own virtual environment: it prevents version")
+        hint("conflicts and keeps them out of your lineage.")
+        hint("  uv tool install roar-cli    # uv:   https://astral.sh/uv")
+        hint("  pipx install roar-cli       # pipx: sudo apt install pipx | brew install pipx")
     if in_git_repo:
         hint()
         hint("`roar run` requires a clean git tree — runs are tagged with the commit SHA.")
