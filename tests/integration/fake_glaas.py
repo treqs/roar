@@ -22,6 +22,7 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.registration_session_job_batches: list[dict[str, Any]] = []
         self.registration_session_job_creates: list[dict[str, Any]] = []
         self.artifact_batches: list[list[dict[str, Any]]] = []
+        self.registration_session_artifact_batches: list[list[dict[str, Any]]] = []
         self.auth_headers: list[dict[str, Any]] = []
         self.input_links: list[dict[str, Any]] = []
         self.output_links: list[dict[str, Any]] = []
@@ -34,6 +35,8 @@ class _FakeGlaasServer(ThreadingHTTPServer):
         self.current_labels_by_target: dict[str, dict[str, Any]] = {}
         self.label_history_by_target: dict[str, list[dict[str, Any]]] = {}
         self.composite_registrations: list[dict[str, Any]] = []
+        self.registration_session_composite_registrations: list[dict[str, Any]] = []
+        self.registration_session_view_edges: list[dict[str, Any]] = []
         self.artifacts_by_digest: dict[str, dict[str, Any]] = {}
         self.artifact_dags_by_digest: dict[str, dict[str, Any]] = {}
         self.session_reproductions_by_hash: dict[str, dict[str, Any]] = {}
@@ -160,6 +163,32 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
                 if isinstance(digest, str) and digest:
                     self.server.artifacts_by_digest[digest] = artifact
 
+    def _record_label_sync(self, labels: list[dict[str, Any]]) -> None:
+        self.server.label_syncs.append(labels)
+        for label in labels:
+            target_key = _label_target_key(label)
+            current = self.server.current_labels_by_target.get(target_key)
+            version = int(current.get("version", 0)) + 1 if isinstance(current, dict) else 1
+            current_label = {
+                "id": f"label-{len(self.server.current_labels_by_target) + 1}",
+                "entityType": label.get("entity_type"),
+                "version": version,
+                "metadata": label.get("metadata")
+                if isinstance(label.get("metadata"), dict)
+                else {},
+                "createdAt": "2026-01-01T00:00:00Z",
+            }
+            if label.get("entity_type") == "dag":
+                current_label["sessionHash"] = label.get("session_hash")
+            elif label.get("entity_type") == "job":
+                current_label["sessionHash"] = label.get("session_hash")
+                current_label["jobUid"] = label.get("job_uid")
+            elif label.get("entity_type") == "artifact":
+                current_label["sessionHash"] = label.get("session_hash")
+                current_label["artifactHash"] = label.get("artifact_hash")
+            self.server.current_labels_by_target[target_key] = current_label
+            self.server.label_history_by_target.setdefault(target_key, []).append(current_label)
+
     def _resolve_creator_identity(self, authenticated_user: dict[str, str] | None) -> str:
         if not isinstance(authenticated_user, dict):
             return "anonymous"
@@ -202,8 +231,8 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         jobs = [job for job in jobs_by_uid.values() if isinstance(job, dict)]
         return {
             "jobs": len(jobs),
-            "inputs": sum(len(job.get("inputs", [])) for job in jobs),
-            "outputs": sum(len(job.get("outputs", [])) for job in jobs),
+            "inputs": sum(len(_dedup_artifacts_by_hash(job.get("inputs", []))) for job in jobs),
+            "outputs": sum(len(_dedup_artifacts_by_hash(job.get("outputs", []))) for job in jobs),
         }
 
     def _compute_registration_session_hash(
@@ -230,8 +259,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             inputs = sorted(
                 [
                     {"hash": artifact.get("hash"), "path": artifact.get("path")}
-                    for artifact in job.get("inputs", [])
-                    if isinstance(artifact, dict)
+                    for artifact in _dedup_artifacts_by_hash(job.get("inputs", []))
                 ],
                 key=lambda artifact: (
                     str(artifact.get("hash") or ""),
@@ -241,8 +269,7 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             outputs = sorted(
                 [
                     {"hash": artifact.get("hash"), "path": artifact.get("path")}
-                    for artifact in job.get("outputs", [])
-                    if isinstance(artifact, dict)
+                    for artifact in _dedup_artifacts_by_hash(job.get("outputs", []))
                 ],
                 key=lambda artifact: (
                     str(artifact.get("hash") or ""),
@@ -622,40 +649,104 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
             self._write_json(200, {"created": len(artifacts), "existing": 0})
             return
 
+        registration_artifact_match = re.fullmatch(
+            r"/api/v1/registration-sessions/([^/]+)/artifacts/batch",
+            self.path,
+        )
+        if registration_artifact_match:
+            registration_session_id = registration_artifact_match.group(1)
+            _authenticated_user, session_state = self._authorize_registration_session_write(
+                registration_session_id,
+                authorization,
+            )
+            if session_state is None or session_state.get("status") != "active":
+                self._write_json(401, {"error": "Missing, invalid, or closed session"})
+                return
+            artifacts = payload.get("artifacts", [])
+            if isinstance(artifacts, list):
+                self.server.registration_session_artifact_batches.append(artifacts)
+                self._record_artifacts(artifacts)
+            self._write_json(200, {"created": len(artifacts), "existing": 0})
+            return
+
+        registration_composite_match = re.fullmatch(
+            r"/api/v1/registration-sessions/([^/]+)/artifacts/composites",
+            self.path,
+        )
+        if registration_composite_match:
+            registration_session_id = registration_composite_match.group(1)
+            _authenticated_user, session_state = self._authorize_registration_session_write(
+                registration_session_id,
+                authorization,
+            )
+            if session_state is None or session_state.get("status") != "active":
+                self._write_json(401, {"error": "Missing, invalid, or closed session"})
+                return
+            self.server.registration_session_composite_registrations.append(payload)
+            self._record_artifacts([payload])
+            self._write_json(
+                200,
+                {
+                    "artifact_id": "registration-composite-"
+                    f"{len(self.server.registration_session_composite_registrations)}",
+                    "created": True,
+                },
+            )
+            return
+
         if self.path == "/api/v1/labels/sync":
             labels = payload.get("labels", [])
             if isinstance(labels, list):
-                self.server.label_syncs.append(labels)
-                for label in labels:
-                    if not isinstance(label, dict):
-                        continue
-                    target_key = _label_target_key(label)
-                    current = self.server.current_labels_by_target.get(target_key)
-                    version = int(current.get("version", 0)) + 1 if isinstance(current, dict) else 1
-                    current_label = {
-                        "id": f"label-{len(self.server.current_labels_by_target) + 1}",
-                        "entityType": label.get("entity_type"),
-                        "version": version,
-                        "metadata": label.get("metadata")
-                        if isinstance(label.get("metadata"), dict)
-                        else {},
-                        "createdAt": "2026-01-01T00:00:00Z",
-                    }
-                    if label.get("entity_type") == "dag":
-                        current_label["sessionHash"] = label.get("session_hash")
-                    elif label.get("entity_type") == "job":
-                        current_label["sessionHash"] = label.get("session_hash")
-                        current_label["jobUid"] = label.get("job_uid")
-                    elif label.get("entity_type") == "artifact":
-                        current_label["sessionHash"] = label.get("session_hash")
-                        current_label["artifactHash"] = label.get("artifact_hash")
-                    self.server.current_labels_by_target[target_key] = current_label
-                self.server.label_history_by_target.setdefault(target_key, []).append(current_label)
+                self._record_label_sync([label for label in labels if isinstance(label, dict)])
                 self._write_json(
                     200,
                     {"created": 0, "updated": 0, "unchanged": len(labels)},
                 )
+            return
+
+        registration_label_match = re.fullmatch(
+            r"/api/v1/registration-sessions/([^/]+)/labels/batch",
+            self.path,
+        )
+        if registration_label_match:
+            registration_session_id = registration_label_match.group(1)
+            _authenticated_user, session_state = self._authorize_registration_session_write(
+                registration_session_id,
+                authorization,
+            )
+            if session_state is None:
+                self._write_json(401, {"error": "Missing or invalid auth"})
                 return
+            lineage_hash = session_state.get("hash")
+            if session_state.get("status") != "closed" or not isinstance(lineage_hash, str):
+                self._write_json(
+                    400,
+                    {"error": {"message": "Registration session must be finalized"}},
+                )
+                return
+            raw_labels = payload.get("labels", [])
+            labels = (
+                [
+                    {**label, "session_hash": lineage_hash}
+                    for label in raw_labels
+                    if isinstance(label, dict)
+                ]
+                if isinstance(raw_labels, list)
+                else []
+            )
+            self._record_label_sync(labels)
+            self._write_json(
+                200,
+                {
+                    "registration_session_id": registration_session_id,
+                    "hash": lineage_hash,
+                    "processed": len(labels),
+                    "created": len(labels),
+                    "updated": 0,
+                    "noops": 0,
+                },
+            )
+            return
 
         if self.path == "/api/v1/labels/reconcile":
             if authenticated_user is None:
@@ -1154,6 +1245,22 @@ class _FakeGlaasHandler(BaseHTTPRequestHandler):
         """Suppress default stderr logging for integration tests."""
 
 
+def _dedup_artifacts_by_hash(artifacts: Any) -> list[dict[str, Any]]:
+    """Model glaas's ``(job_id, artifact_hash)`` storage key: byte-identical edges
+    written to several paths collapse to one stored row, keeping the
+    lexicographically-smallest path. Mirrors roar's staged-count / canonical dedup
+    so this fake counts and hashes the way the real server stores (P0-22)."""
+    by_hash: dict[str, dict[str, Any]] = {}
+    for artifact in artifacts if isinstance(artifacts, list) else []:
+        if not isinstance(artifact, dict) or not artifact.get("hash"):
+            continue
+        digest = artifact["hash"]
+        current = by_hash.get(digest)
+        if current is None or str(artifact.get("path") or "") < str(current.get("path") or ""):
+            by_hash[digest] = artifact
+    return list(by_hash.values())
+
+
 def _parse_metadata_object(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -1277,6 +1384,10 @@ class FakeGlaasServer:
     @property
     def artifact_batches(self) -> list[list[dict[str, Any]]]:
         return self._server.artifact_batches
+
+    @property
+    def registration_session_artifact_batches(self) -> list[list[dict[str, Any]]]:
+        return self._server.registration_session_artifact_batches
 
     @property
     def auth_headers(self) -> list[dict[str, Any]]:

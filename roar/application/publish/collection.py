@@ -44,6 +44,11 @@ def collect_register_lineage(
     dry_run: bool = False,
 ) -> tuple[CollectedRegisterLineage | None, str | None]:
     """Collect local lineage for a resolved register target."""
+    if target.kind == "active_session":
+        return _collect_active_session_lineage(
+            roar_dir=roar_dir,
+            lineage_collector=lineage_collector,
+        )
     if target.kind == "step_reference":
         return _collect_step_lineage(
             step_reference=target.value,
@@ -79,6 +84,29 @@ def collect_register_lineage(
             logger=logger,
         )
     return None, f"Unsupported register target type: {target.kind}"
+
+
+def _collect_active_session_lineage(
+    *,
+    roar_dir: Path,
+    lineage_collector: LineageCollector,
+) -> tuple[CollectedRegisterLineage | None, str | None]:
+    with create_database_context(roar_dir) as db_ctx:
+        session = db_ctx.sessions.get_active()
+        if not session:
+            return None, "No active session. Run 'roar run' to create a session first."
+        session_id = int(session["id"])
+        lineage = lineage_collector.collect_session(session_id, roar_dir)
+
+    return (
+        CollectedRegisterLineage(
+            lineage=lineage,
+            session_id=session_id,
+            artifact_hash="",
+            session_hash_override=None,
+        ),
+        None,
+    )
 
 
 def _collect_step_lineage(

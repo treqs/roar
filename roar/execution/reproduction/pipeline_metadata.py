@@ -68,6 +68,17 @@ class PipelineMetadataParser:
                 return runtime
         return {}
 
+    def python_capture_complete(self, build_steps: list[dict], run_steps: list[dict]) -> bool:
+        """False when new lineage explicitly reports failed Python capture.
+
+        Older lineage has no marker and remains backward-compatible.
+        """
+        for step in [*build_steps, *run_steps]:
+            metadata = self._normalize_metadata(step.get("metadata"))
+            if metadata.get("python_capture") in {"missing", "invalid"}:
+                return False
+        return True
+
     def summarize_requirements(
         self, build_steps: list[dict], run_steps: list[dict]
     ) -> RequirementSummary:

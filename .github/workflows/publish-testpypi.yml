@@ -35,7 +35,8 @@ jobs:
           rustup component add rust-src --toolchain nightly
 
       - name: Install bpf-linker
-        run: cargo install bpf-linker
+        # Keep release builds aligned with the version validated in CI.
+        run: cargo install bpf-linker --version 0.10.4 --locked
 
       - name: Build and stage Rust binaries
         uses: ./.github/actions/build-rust-binaries
@@ -131,7 +132,7 @@ jobs:
       - name: Install build tools
         run: |
           python -m pip install --upgrade pip
-          pip install maturin
+          pip install 'maturin[zig]'
 
       - name: Download Rust binaries artifact
         uses: actions/download-artifact@v4
@@ -151,7 +152,19 @@ jobs:
         # macOS floor on macOS jobs so the single abi3 build host doesn't drift it.
         env:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos-deployment-target }}
-        run: maturin build --release --manifest-path rust/crates/artifact-hash-py/Cargo.toml --interpreter python --out dist
+          ROAR_WHEEL_PLATFORM: ${{ matrix.platform }}
+        run: |
+          args=(
+            build
+            --release
+            --manifest-path rust/crates/artifact-hash-py/Cargo.toml
+            --interpreter python
+            --out dist
+          )
+          if [[ "$ROAR_WHEEL_PLATFORM" == "linux" ]]; then
+            args+=(--zig --compatibility manylinux_2_17)
+          fi
+          maturin "${args[@]}"
 
       - name: Verify wheel contains native extension and binaries
         env:

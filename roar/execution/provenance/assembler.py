@@ -103,6 +103,7 @@ class ProvenanceAssemblerService:
             },
             "processes": ctx.process_summary,
             "runtime": self._runtime_to_dict(ctx.runtime_info),
+            "python_capture": ctx.python_data.capture_status,
         }
 
         # Add analyzer results

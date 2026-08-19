@@ -245,10 +245,29 @@ CREATE TABLE IF NOT EXISTS hash_cache (
 
 CREATE INDEX IF NOT EXISTS idx_hash_cache_path ON hash_cache(path);
 CREATE INDEX IF NOT EXISTS idx_hash_cache_updated ON hash_cache(cached_at);
+
+-- =============================================================================
+-- DELEGATED PUT OPERATIONS
+-- Durable retry identity for one broker-backed put operation. A pending row is
+-- reused after an interrupted response; completing it advances the ordinal for
+-- the next command, even when the request is otherwise identical.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS delegated_put_operations (
+    task_identity TEXT NOT NULL,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    request_fingerprint TEXT NOT NULL,
+    put_job_uid TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'completed')),
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    completed_at REAL,
+    PRIMARY KEY (task_identity, session_id)
+);
 """
 
 
-_SCHEMA_VERSION = 3  # Bump when adding new migrations below.
+_SCHEMA_VERSION = 5  # Bump when adding new migrations below.
 
 
 def run_migrations(conn) -> None:
@@ -364,6 +383,40 @@ def run_migrations(conn) -> None:
         label_columns = {row["name"] for row in cursor.fetchall()}
         if "write_origin" not in label_columns:
             conn.execute("ALTER TABLE labels ADD COLUMN write_origin TEXT")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS delegated_put_operations (
+            task_identity TEXT NOT NULL,
+            session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            request_fingerprint TEXT NOT NULL,
+            put_job_uid TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'completed')),
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            completed_at REAL,
+            PRIMARY KEY (task_identity, session_id)
+        )
+        """
+    )
+
+    delegated_put_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(delegated_put_operations)").fetchall()
+    }
+    if "put_job_uid" not in delegated_put_columns:
+        conn.execute(
+            "ALTER TABLE delegated_put_operations ADD COLUMN put_job_uid TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(
+            """
+            UPDATE delegated_put_operations
+            SET put_job_uid = 'delegated-put-' || substr(task_identity, 1, 16)
+                || '-' || session_id || '-' || ordinal
+            WHERE put_job_uid = ''
+            """
+        )
 
     # Stamp the schema version so subsequent opens skip the full migration check.
     conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")

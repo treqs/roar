@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -43,6 +45,54 @@ class PreparedPublishSession:
     session_url: str | None = None
     registration_session_id: str | None = None
     registration_session_mode: str | None = None
+    registration_session_status: str | None = None
+
+
+def delegated_client_session_id(
+    *,
+    operation_kind: str,
+    operation_fingerprint: str,
+) -> str | None:
+    """Return a stable retry key for one publication operation in a TReqs task."""
+    identity = [
+        os.environ.get("ROAR_DELEGATED_JOB_ID"),
+        os.environ.get("ROAR_DELEGATED_EXECUTION_ATTEMPT_ID"),
+        os.environ.get("ROAR_DELEGATED_TASK_ID"),
+    ]
+    if not all(identity):
+        return None
+    if not operation_kind or not operation_fingerprint:
+        raise ValueError("Delegated publication requires an operation identity")
+    digest = hashlib.sha256(
+        "\0".join(
+            [
+                *(str(value) for value in identity),
+                operation_kind,
+                operation_fingerprint,
+            ]
+        ).encode()
+    ).hexdigest()
+    return f"roar-delegated-v2-{digest}"
+
+
+def _dedup_edges_by_hash(edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse edges to one per CONTENT hash — matching glaas, which keys job
+    inputs/outputs on ``(job_id, artifact_hash)`` and so drops duplicate-path edges
+    for the same bytes (timm's ``os.link`` last/best/checkpoint = one inode, three
+    names). Keeps the lexicographically-smallest path so the surviving edge is
+    deterministic across roar and glaas. Edges without a resolvable hash are
+    dropped. A no-op when a job has no byte-identical edges — i.e. every currently
+    passing row — so existing session hashes are unchanged. P0-22.
+    """
+    by_hash: dict[str, dict[str, Any]] = {}
+    for edge in edges:
+        digest = _canonical_artifact_hash(edge)
+        if not digest:
+            continue
+        current = by_hash.get(digest)
+        if current is None or str(edge.get("path") or "") < str(current.get("path") or ""):
+            by_hash[digest] = edge
+    return list(by_hash.values())
 
 
 def build_canonical_session_payload(
@@ -63,7 +113,7 @@ def build_canonical_session_payload(
                         "hash": _canonical_artifact_hash(artifact),
                         "path": artifact.get("path"),
                     }
-                    for artifact in job.get("_inputs", [])
+                    for artifact in _dedup_edges_by_hash(job.get("_inputs", []))
                 ],
                 key=lambda artifact: (
                     str(artifact.get("hash") or ""),
@@ -76,7 +126,7 @@ def build_canonical_session_payload(
                         "hash": _canonical_artifact_hash(artifact),
                         "path": artifact.get("path"),
                     }
-                    for artifact in job.get("_outputs", [])
+                    for artifact in _dedup_edges_by_hash(job.get("_outputs", []))
                 ],
                 key=lambda artifact: (
                     str(artifact.get("hash") or ""),
@@ -110,11 +160,19 @@ def build_git_context_from_lineage(lineage: LineageData) -> GitContext:
 
 
 def build_staged_lineage_counts(jobs: list[dict[str, Any]]) -> dict[str, int]:
-    """Build lightweight finalize expectations for staged registration-session lineage."""
+    """Finalize expectations for staged registration-session lineage.
+
+    Counts DISTINCT content hashes per job — matching glaas, which stores job
+    edges keyed on ``(job_id, artifact_hash)`` and so collapses byte-identical
+    outputs written to several names (timm ``os.link`` last/best/checkpoint) to one
+    row. Asserting the raw per-path count made finalize 400 with "Staged lineage
+    counts did not match" (P0-22). A no-op for every currently-passing row (no
+    duplicate edges → distinct == path).
+    """
     return {
         "jobs": len(jobs),
-        "inputs": sum(len(job.get("_inputs", [])) for job in jobs),
-        "outputs": sum(len(job.get("_outputs", [])) for job in jobs),
+        "inputs": sum(len(_dedup_edges_by_hash(job.get("_inputs", []))) for job in jobs),
+        "outputs": sum(len(_dedup_edges_by_hash(job.get("_outputs", []))) for job in jobs),
     }
 
 
@@ -304,6 +362,8 @@ def prepare_publish_session(
     session_hash_override: str | None = None,
     lineage: LineageData | None = None,
     creator_identity: str | None = None,
+    operation_kind: str = "register",
+    operation_fingerprint: str | None = None,
 ) -> PreparedPublishSession:
     """Compute and optionally register the publish session."""
     resolved_remote_registry = coerce_remote_registry(
@@ -355,10 +415,14 @@ def prepare_publish_session(
     publish_auth = resolved_remote_registry.publish_auth
     access_token = getattr(publish_auth, "access_token", None)
     ssh_auth_available = getattr(publish_auth, "ssh_auth_available", False)
+    delegated_auth_available = getattr(publish_auth, "delegated_auth_available", False)
     scope_request = getattr(publish_auth, "scope_request", None)
 
     has_access_token = isinstance(access_token, str) and bool(access_token.strip())
     has_ssh_auth = ssh_auth_available if isinstance(ssh_auth_available, bool) else False
+    has_delegated_auth = (
+        delegated_auth_available if isinstance(delegated_auth_available, bool) else False
+    )
 
     anonymous_public_capable = (
         scope_request is None
@@ -388,7 +452,7 @@ def prepare_publish_session(
     )
 
     should_use_registration_sessions = (
-        has_access_token or has_ssh_auth or supports_anonymous_public_path
+        has_access_token or has_ssh_auth or has_delegated_auth or supports_anonymous_public_path
     )
 
     if should_use_registration_sessions:
@@ -398,7 +462,14 @@ def prepare_publish_session(
             f" (mode={registration_session_mode})" if registration_session_mode else "",
         )
         session_result = resolved_session_service.create_registration_session(
-            client_session_id=None,
+            client_session_id=(
+                delegated_client_session_id(
+                    operation_kind=operation_kind,
+                    operation_fingerprint=operation_fingerprint or session_hash,
+                )
+                if has_delegated_auth
+                else None
+            ),
             mode=registration_session_mode,
         )
         if not session_result.success:
@@ -409,11 +480,29 @@ def prepare_publish_session(
             "Registration session ready: %s",
             session_result.registration_session_id,
         )
+        if session_result.status == "closed" and session_result.registration_session_id:
+            finalized = resolved_session_service.finalize_registration_session(
+                registration_session_id=session_result.registration_session_id,
+                git_context=git_context,
+            )
+            if not finalized.success:
+                raise ValueError(
+                    "Closed registration session could not return its publication receipt: "
+                    f"{finalized.error}"
+                )
+            return PreparedPublishSession(
+                session_hash=finalized.session_hash,
+                session_url=finalized.session_url,
+                registration_session_id=session_result.registration_session_id,
+                registration_session_mode=session_result.registration_session_mode,
+                registration_session_status="closed",
+            )
         return PreparedPublishSession(
             session_hash=session_hash,
             session_url=None,
             registration_session_id=session_result.registration_session_id,
             registration_session_mode=session_result.registration_session_mode,
+            registration_session_status=session_result.status,
         )
 
     logger.debug("Registering session with GLaaS")

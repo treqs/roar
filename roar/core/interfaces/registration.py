@@ -91,6 +91,9 @@ class BatchRegistrationResult:
     # (a full re-register): the existing DAG hash. The caller skips finalize and
     # reuses this hash instead of failing on duplicate jobs.
     already_registered_session_hash: str | None = None
+    # True only when GLaaS has server-bound the fresh registration session to
+    # that existing hash after exact-scope and complete-job-set verification.
+    existing_binding_prepared: bool = False
 
 
 @runtime_checkable

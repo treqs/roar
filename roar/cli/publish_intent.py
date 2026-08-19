@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +19,8 @@ class PublishIntent:
 
 def _is_logged_in() -> bool:
     """True iff there's a usable GLaaS/TReqs session on this machine."""
+    if os.environ.get("ROAR_DELEGATED_AUTH") == "1":
+        return True
     try:
         from ..auth_store import load_auth_state
 
@@ -46,6 +49,16 @@ def resolve_publish_intent(
     Deterministic, so it's headless-safe — no interactive prompt is required to
     reach a default.
     """
+    if os.environ.get("ROAR_DELEGATED_AUTH") == "1":
+        # The workload is not the authority for attribution or visibility. The
+        # agent supplies the exact frozen project policy, which must beat repo
+        # config and command flags just as operational redirects beat saved
+        # config elsewhere.
+        return PublishIntent(
+            public=os.environ.get("ROAR_DELEGATED_VISIBILITY") == "public",
+            anonymous=False,
+        )
+
     if anonymous:
         return PublishIntent(public=True, anonymous=True)
 

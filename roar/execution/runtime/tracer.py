@@ -21,6 +21,7 @@ from ...core.interfaces.run import ISignalHandler
 from ...core.models.run import TracerResult
 from ...core.tracer_modes import TRACER_BACKEND_ORDER, is_valid_tracer_mode
 from ...execution.runtime import tracer_backends
+from ...execution.runtime.inject.tracker import merge_inject_logs
 
 
 class TracerService:
@@ -114,8 +115,9 @@ class TracerService:
     ) -> list[str]:
         """Probe the target Python and lazy-install a matching runtime tree on mismatch.
 
-        Returns a list of site-packages paths to prepend to
-        ``ROAR_RUNTIME_PYTHONPATH``. Empty on:
+        Returns a list of ABI-matched site-packages paths for
+        ``ROAR_RUNTIME_PYTHONPATH``. ``sitecustomize`` activates a returned
+        path only when it cannot shadow a workload import. Empty on:
         - non-Python targets (bash, make, etc.) — can't probe a python ABI;
         - matching ABI — bundled deps work as-is;
         - ``runtime.install = skip`` — opted out;
@@ -618,6 +620,13 @@ class TracerService:
         finally:
             signal_handler.restore()
             self.logger.debug("Signal handler restored")
+
+        # Union the per-PID inject-log shards written by every process in the tree
+        # into the single canonical inject_log_file the collector reads. Without
+        # this, a multiprocessing worker's shard would be the only record (each
+        # process used to truncate a shared log); merging recovers the workload's
+        # full package/file/import set.
+        merge_inject_logs(inject_log_file)
 
         end_time = time.time()
         duration = end_time - start_time

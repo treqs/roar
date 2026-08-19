@@ -154,6 +154,21 @@ class TestDataLoaderService:
 
 
 class TestLoadPythonData:
+    def test_missing_log_is_distinct_from_complete_empty_capture(self, tmp_path: Path) -> None:
+        missing = DataLoaderService().load_python_data(None)
+        assert missing.capture_status == "missing"
+
+        log_path = tmp_path / "inject-log.json"
+        _write_json(log_path, {})
+        complete = DataLoaderService().load_python_data(str(log_path))
+        assert complete.capture_status == "complete"
+
+    def test_invalid_log_is_reported(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "inject-log.json"
+        log_path.write_text("{not-json", encoding="utf-8")
+
+        assert DataLoaderService().load_python_data(str(log_path)).capture_status == "invalid"
+
     def test_python_identity_keys_flow_through(self, tmp_path: Path) -> None:
         """python_version / python_implementation make it from JSON into the model."""
         log_path = tmp_path / "inject-log.json"
@@ -211,7 +226,10 @@ class TestLoadPythonData:
         writer drops the key or the reader doesn't extract it, the loaded
         model's python_version is empty.
         """
-        from roar.execution.runtime.inject.tracker import RuntimeInjectionTracker
+        from roar.execution.runtime.inject.tracker import (
+            RuntimeInjectionTracker,
+            merge_inject_logs,
+        )
 
         log_path = tmp_path / "inject-log.json"
 
@@ -226,6 +244,7 @@ class TestLoadPythonData:
             inject_dir=str(tmp_path / "inject"),
         )
         tracker.write_log()
+        merge_inject_logs(str(log_path))  # write_log writes a per-PID shard; merge -> canonical
 
         data = DataLoaderService().load_python_data(str(log_path))
 

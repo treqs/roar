@@ -201,6 +201,7 @@ fn try_daemon_mode(output_file: &str, command: &[String]) -> Result<i32> {
         &ipc::ClientMessage::Register {
             run_id,
             root_pid: child_pid,
+            root_command: command.to_vec(),
         },
     )?;
 

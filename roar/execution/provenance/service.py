@@ -5,6 +5,7 @@ Coordinates all provenance collection services to produce the final output.
 """
 
 import os
+import re
 import shutil
 from datetime import datetime, timezone
 from typing import Any
@@ -125,6 +126,10 @@ class ProvenanceService:
             len(tracer_data.processes),
         )
         python_data = self._data_loader.load_python_data(python_log_path)
+        if python_data.capture_status == "missing" and not self._contains_python_process(
+            tracer_data.processes
+        ):
+            python_data.capture_status = "not-applicable"
         self.logger.debug(
             "Python data loaded: modules=%d, packages=%d",
             len(python_data.modules_files),
@@ -260,6 +265,7 @@ class ProvenanceService:
                 "shared_libs": python_data.shared_libs,
                 "used_packages": python_data.used_packages,
                 "installed_packages": python_data.installed_packages,
+                "capture_status": python_data.capture_status,
             },
         }
         analyzer_results = analyzers.run_analyzers(analyzer_context, config=config)
@@ -285,6 +291,24 @@ class ProvenanceService:
         result = self._assembler.assemble(ctx, config)
         self.logger.debug("Provenance collection complete")
         return result
+
+    @staticmethod
+    def _contains_python_process(processes: list[dict[str, Any]]) -> bool:
+        """Whether the native trace observed a Python interpreter process."""
+        for process in processes:
+            command = process.get("command") or []
+            if isinstance(command, str):
+                command = [command]
+            if not isinstance(command, list) or not command:
+                continue
+            # Wrapper processes such as `env PYTHONPATH=. python ...` may be
+            # the only process entry emitted by preload, so inspect every argv
+            # token for an interpreter executable rather than argv[0] alone.
+            for token in command:
+                executable = os.path.basename(str(token)).lower()
+                if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", executable):
+                    return True
+        return False
 
     def _resolve_exec_program(self, command: list[str] | None) -> str | None:
         """Resolve the run's exec'd program (the user's argv[0]) to an abspath.

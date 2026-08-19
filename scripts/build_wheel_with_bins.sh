@@ -139,6 +139,20 @@ resolve_built_artifact() {
 }
 
 build_python_wheel() {
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    echo "▶ Building portable manylinux_2_17 wheel with maturin and Zig..."
+    (
+      cd "$ROOT_DIR"
+      uvx --from 'maturin[zig]' maturin build \
+        --release \
+        --zig \
+        --compatibility manylinux_2_17 \
+        --manifest-path rust/crates/artifact-hash-py/Cargo.toml \
+        --out "$OUT_DIR"
+    )
+    return
+  fi
+
   if command -v uv >/dev/null 2>&1; then
     echo "▶ Building wheel with uv..."
     uv build --wheel --out-dir "$OUT_DIR"

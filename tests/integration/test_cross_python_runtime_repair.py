@@ -32,8 +32,9 @@ pytestmark = pytest.mark.integration
 
 _INJECT_DIR = str(Path(roar.__file__).resolve().parent / "execution" / "runtime" / "inject")
 # Roar's importable root + the site-packages carrying the *current* (and so,
-# for a different-ABI worker, wrong-ABI) pydantic_core — mirrors what the tracer
-# puts on ROAR_RUNTIME_PYTHONPATH for a cross-Python child.
+# for a different-ABI worker, wrong-ABI) pydantic_core. The tracer owns these
+# roots and declares them on ROAR_RUNTIME_PYTHONPATH; the workload's PYTHONPATH
+# contains only the startup hook.
 _SOURCE_ROOT = str(Path(roar.__file__).resolve().parent.parent)
 _CURRENT_SITE_PACKAGES = str(Path(pydantic_core.__file__).resolve().parent.parent)
 
@@ -103,7 +104,8 @@ def test_wrapper_launch_repairs_runtime_in_process_and_installs_once(tmp_path: P
 
     env = {
         **os.environ,
-        "PYTHONPATH": os.pathsep.join([_INJECT_DIR, _SOURCE_ROOT, _CURRENT_SITE_PACKAGES]),
+        "PYTHONPATH": _INJECT_DIR,
+        "ROAR_RUNTIME_PYTHONPATH": os.pathsep.join([_SOURCE_ROOT, _CURRENT_SITE_PACKAGES]),
         "ROAR_WRAP": "1",
         "XDG_CACHE_HOME": str(tmp_path / "xdg"),
         "PAYLOAD": _WORKER_PAYLOAD,

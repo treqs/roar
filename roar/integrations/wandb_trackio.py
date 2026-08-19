@@ -124,11 +124,25 @@ def _install_trackio_alias(space_id: str) -> bool:
     def init(*args, **kwargs):
         for k in _WANDB_ONLY_INIT:
             kwargs.pop(k, None)
+        # wandb's `resume` default is None ("do not resume"); trackio accepts only
+        # "must"/"allow"/"never" and RAISES ValueError on None. Callers that always
+        # pass the kwarg (lerobot: `resume="must" if cfg.resume else None`) therefore
+        # die in init(). Map wandb's None onto trackio's "never" — same meaning.
+        if kwargs.get("resume") is None:
+            kwargs.pop("resume", None)
         kwargs.setdefault("space_id", space_id)
         run = _orig_init(*args, **kwargs)
         try:
             if not hasattr(run, "summary"):
                 run.summary = {}
+            if not hasattr(run, "get_url"):
+                # wandb code (e.g. lerobot) calls run.get_url(); trackio's Run has
+                # no such method. run.url exists but returns the bare space id, not
+                # a URL — aliasing it would stop the crash and publish a broken link
+                # that still passes a smoke test. COMPOSE the Spaces URL instead;
+                # space_id and project are both in scope here.
+                _project = kwargs.get("project")
+                run.get_url = lambda: f"https://huggingface.co/spaces/{space_id}?project={_project}"
         except Exception:
             pass
         trackio.run = run
@@ -140,6 +154,11 @@ def _install_trackio_alias(space_id: str) -> bool:
 
     def log(*args, **kwargs):
         kwargs.pop("commit", None)
+        # wandb's first parameter is NAMED `data`; trackio names it `metrics`. Callers
+        # using the keyword form (lerobot: `wandb.log(data=batch_data, step=step)`)
+        # otherwise get TypeError: log() got an unexpected keyword argument 'data'.
+        if "data" in kwargs and not args:
+            args = (kwargs.pop("data"),)
         if args and isinstance(args[0], dict):
             args = (_to_jsonable(args[0]), *args[1:])
         try:
@@ -174,9 +193,16 @@ def _install_trackio_alias(space_id: str) -> bool:
 
 def _install_noop_wandb() -> None:
     """Alias ``wandb`` to a silent no-op module so an unmodified repo runs untracked."""
+    import importlib.machinery
     import types
 
     mod = types.ModuleType("wandb")
+    # types.ModuleType leaves __spec__ = None, and importlib.util.find_spec RAISES
+    # ("wandb.__spec__ is None") rather than returning None on that. accelerate's
+    # is_wandb_available() calls find_spec at `import accelerate`, so a credential-
+    # free host (i.e. every cold reproduce host) crashes on import. Give the stub a
+    # real spec. P0-15.
+    mod.__spec__ = importlib.machinery.ModuleSpec("wandb", loader=None)
 
     def _noop(*a, **k):
         return None

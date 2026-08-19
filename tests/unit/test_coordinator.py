@@ -398,7 +398,12 @@ def _reg_session_coordinator(batch_counts):
 
 def test_full_re_register_short_circuits_to_existing_dag() -> None:
     coordinator, artifact_service, job_service = _reg_session_coordinator(
-        {"created": 0, "existing": 0, "already_registered": ["dag-hash-abc"]}
+        {
+            "created": 0,
+            "existing": 0,
+            "already_registered": ["dag-hash-abc"],
+            "existing_binding_prepared": True,
+        }
     )
     result = coordinator.register_lineage_under_registration_session(
         registration_session_id="reg-1",
@@ -407,6 +412,7 @@ def test_full_re_register_short_circuits_to_existing_dag() -> None:
         artifacts=[{"hashes": [{"algorithm": "blake3", "digest": "in1"}], "size": 1}],
     )
     assert result.already_registered_session_hash == "dag-hash-abc"
+    assert result.existing_binding_prepared is True
     assert result.session_registered is True
     assert result.jobs_failed == 0
     # No staging / linking for an already-registered lineage.

@@ -57,11 +57,13 @@ def main() -> None:
     if missing_bins:
         raise SystemExit(f"Missing binaries in wheel: {missing_bins}")
 
-    has_native = any(
-        name.startswith("roar/_hash_native")
-        and (name.endswith(".so") or name.endswith(".pyd") or name.endswith(".dylib"))
+    native_extensions = {
+        name
         for name in names
-    )
+        if name.startswith("roar/_hash_native")
+        and (name.endswith(".so") or name.endswith(".pyd") or name.endswith(".dylib"))
+    }
+    has_native = bool(native_extensions)
     if not has_native:
         raise SystemExit("Missing native hash extension in wheel (roar/_hash_native*)")
 
@@ -74,9 +76,10 @@ def main() -> None:
         raise SystemExit("Missing preload interposer library in wheel (roar/bin/libroar*_preload*)")
 
     if platform == "linux":
-        _verify_linux_glibc_floor(wheel, names, required_bins)
+        linux_elf_members = required_bins | native_extensions
+        _verify_linux_glibc_floor(wheel, names, linux_elf_members)
         if expected_arch is not None:
-            _verify_linux_bin_arch(wheel, names, required_bins, expected_arch)
+            _verify_linux_bin_arch(wheel, names, linux_elf_members, expected_arch)
 
     print(f"Verified wheel contents: {wheel}")
 

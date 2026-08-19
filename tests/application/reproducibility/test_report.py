@@ -9,8 +9,31 @@ from roar.application.reproducibility.report import (
     build_report,
     is_shareable_remote,
     render_report,
+    runtime_captured,
     untracked_artifact_dirs,
 )
+
+
+class _Pipeline:
+    def __init__(self, metadata):
+        self.build_steps = []
+        self.run_steps = [{"metadata": metadata}]
+
+
+def test_runtime_capture_rejects_explicitly_missing_python_injection():
+    pipeline = _Pipeline(
+        {"runtime": {"python": {"version": "3.12.1"}}, "python_capture": "missing"}
+    )
+    assert runtime_captured(pipeline) is False
+
+
+def test_runtime_capture_accepts_complete_and_legacy_lineage():
+    complete = _Pipeline(
+        {"runtime": {"python": {"version": "3.12.1"}}, "python_capture": "complete"}
+    )
+    legacy = _Pipeline({"runtime": {"python": {"version": "3.12.1"}}})
+    assert runtime_captured(complete) is True
+    assert runtime_captured(legacy) is True
 
 
 def _full_report(**overrides):

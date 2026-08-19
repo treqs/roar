@@ -19,7 +19,7 @@ from ...application.publish.composite_builder import CompositeArtifactBuilder
 from ...application.publish.composites import build_publish_composite_results
 from ...application.publish.lineage import LineageCollector
 from ...application.publish.metadata import build_put_operation_metadata_json
-from ...application.publish.put_preparation import PreparedPutExecution
+from ...application.publish.put_preparation import DelegatedPutOperation, PreparedPutExecution
 from ...application.publish.registration import (
     normalize_registration_hashes,
     normalize_registration_source_type,
@@ -220,6 +220,7 @@ class PutService:
         session_hash = prepared.session_hash
         registration_session_id = prepared.registration_session_id
         registration_session_mode = prepared.registration_session_mode
+        registration_session_status = prepared.registration_session_status
         git_context = prepared.git_context
         resolved = prepared.resolved_sources
         destination_type = prepared.destination_type
@@ -246,12 +247,31 @@ class PutService:
                 would_upload=[PutDryRunItem(path=str(r.path), exists=r.exists) for r in resolved],
             )
 
+        # Delegated broker sessions use a deterministic client-session id. If a
+        # previous attempt reached finalize but the caller lost the response,
+        # create/resume returns the closed session and its authoritative receipt.
+        # Treat that as a completed retry before hashing or uploading anything;
+        # closed registration-session capabilities cannot accept more staging and
+        # re-uploading large artifacts would be both wasteful and misleading.
+        if registration_session_id and registration_session_status == "closed":
+            self._logger.debug(
+                "Put publication already finalized for registration session %s",
+                registration_session_id,
+            )
+            return PutResult(
+                success=True,
+                session_hash=session_hash,
+                session_url=prepared.session_url,
+            )
+
         # Process each file: hash, create artifact, upload
         uploads: list[_UploadedArtifact] = []
         composite_registrations: list[dict[str, Any]] = []
         lineage_composite_registrations: list[dict[str, Any]] = []
-        with Spinner(f"Hashing {len(resolved)} file(s)..."):
-            hashes_by_path = self._hash_files_batch([source.path for source in resolved])
+        hashes_by_path = prepared.source_hashes
+        if not hashes_by_path:
+            with Spinner(f"Hashing {len(resolved)} file(s)..."):
+                hashes_by_path = self._hash_files_batch([source.path for source in resolved])
 
         # Uploads are the long pole of a put (multi-GB artifacts to S3/GCS); show a
         # live N/M + cumulative-bytes counter rather than a dead terminal.
@@ -324,8 +344,11 @@ class PutService:
         )
 
         # Collect lineage for all uploaded artifacts (merged)
-        collector = self._lineage_collector or LineageCollector()
-        lineage = collector.collect(artifact_hashes, self._roar_dir)
+        if prepared.lineage is not None:
+            lineage = prepared.lineage
+        else:
+            collector = self._lineage_collector or LineageCollector()
+            lineage = collector.collect(artifact_hashes, self._roar_dir)
         self._logger.debug(
             "Lineage collected: %d job(s), %d artifact(s)",
             len(lineage.jobs),
@@ -340,6 +363,7 @@ class PutService:
                 coordinator=coordinator,
                 registration_session_id=registration_session_id,
                 registration_session_mode=registration_session_mode,
+                delegated_put_operation=prepared.delegated_put_operation,
                 session_id=session_id,
                 fallback_session_hash=session_hash or "",
                 git_context=git_context,
@@ -600,6 +624,7 @@ class PutService:
         coordinator: RegistrationCoordinator,
         registration_session_id: str,
         registration_session_mode: str | None,
+        delegated_put_operation: DelegatedPutOperation | None,
         session_id: int,
         fallback_session_hash: str,
         git_context: GitContext,
@@ -643,18 +668,30 @@ class PutService:
             timestamp=time.time(),
         )
 
-        step_number = self._db.sessions.get_next_step_number(session_id)
-        job_id, job_uid = self._db.jobs.create(
-            command=command,
-            timestamp=time.time(),
-            session_id=session_id,
-            step_number=step_number,
-            metadata=provisional_metadata_json,
-            execution_backend="local",
-            execution_role="host",
-            job_type="put",
-            exit_code=0,
+        stable_put_job_uid = (
+            delegated_put_operation.put_job_uid if delegated_put_operation is not None else None
         )
+        existing_put_job = (
+            self._db.jobs.get_by_uid(stable_put_job_uid) if stable_put_job_uid else None
+        )
+        if existing_put_job is not None:
+            job_id = int(existing_put_job["id"])
+            job_uid = str(existing_put_job["job_uid"])
+            step_number = int(existing_put_job.get("step_number") or 0)
+        else:
+            step_number = self._db.sessions.get_next_step_number(session_id)
+            job_id, job_uid = self._db.jobs.create(
+                command=command,
+                timestamp=time.time(),
+                job_uid=stable_put_job_uid,
+                session_id=session_id,
+                step_number=step_number,
+                metadata=provisional_metadata_json,
+                execution_backend="local",
+                execution_role="host",
+                job_type="put",
+                exit_code=0,
+            )
         self._logger.debug(
             "Put job created before registration-session finalize: id=%s, uid=%s, step=%d",
             job_id,
@@ -675,19 +712,56 @@ class PutService:
             composite_builder=self._composite_builder,
             declared=declared,
         )
+        uploaded_artifacts = self._build_uploaded_artifacts_for_registration(
+            uploads,
+            source_type,
+        )
+        staged_artifacts = prepare_batch_registration_artifacts(
+            uploaded_artifacts + lineage.artifacts,
+            registration_session_id,
+            fallback_to_hash=True,
+            prefer_blake3_first=True,
+        )
 
         put_job_registered = False
         put_job_links_succeeded = False
         with Spinner("Publishing lineage to GLaaS...") as spin:
+            spin.update("Staging lineage composites...")
+            lineage_composite_registrations = preregister_put_lineage_composites_with_glaas(
+                db_ctx=self._db,
+                glaas_client=client,
+                lineage_artifacts=lineage.artifacts,
+                session_hash=fallback_session_hash,
+                registration_errors=registration_errors,
+                dataset_identifiers=dataset_identifiers,
+                composite_builder=self._composite_builder,
+                logger=self._logger,
+                registration_session_id=registration_session_id,
+            )
+            spin.update("Staging output composites...")
+            composite_registrations = register_put_composites_with_glaas(
+                db_ctx=self._db,
+                glaas_client=client,
+                composite_results=composite_results_for_linking,
+                registration_errors=registration_errors,
+                dataset_identifiers=dataset_identifiers,
+                logger=self._logger,
+                registration_session_id=registration_session_id,
+            )
             spin.update("Staging lineage jobs and artifacts...")
             registration_result = coordinator.register_lineage_under_registration_session(
                 registration_session_id=registration_session_id,
                 git_context=git_context,
                 jobs=remote_lineage_jobs,
+                artifacts=staged_artifacts,
             )
             registration_errors.extend(registration_result.errors)
 
-            if registration_result.jobs_failed == 0 and registration_result.links_failed == 0:
+            if (
+                registration_result.jobs_failed == 0
+                and registration_result.links_failed == 0
+                and not registration_errors
+            ):
                 spin.update("Staging put job...")
                 put_job_result = coordinator.job_service.create_job_under_registration_session(
                     command=command,
@@ -757,39 +831,6 @@ class PutService:
                         session_hash = finalize_result.session_hash
                         session_url = finalize_result.session_url
 
-                        spin.update("Registering lineage composites...")
-                        lineage_composite_registrations = (
-                            preregister_put_lineage_composites_with_glaas(
-                                db_ctx=self._db,
-                                glaas_client=client,
-                                lineage_artifacts=lineage.artifacts,
-                                session_hash=session_hash,
-                                registration_errors=registration_errors,
-                                dataset_identifiers=dataset_identifiers,
-                                composite_builder=self._composite_builder,
-                                logger=self._logger,
-                            )
-                        )
-
-                        composite_results = build_publish_composite_results(
-                            resolved_sources=resolved,
-                            hashes_by_path=hashes_by_path,
-                            session_hash=session_hash,
-                            source_type=composite_source_type,
-                            additional_composite_roots=additional_composite_roots,
-                            composite_builder=self._composite_builder,
-                            declared=declared,
-                        )
-                        spin.update("Registering output composites...")
-                        composite_registrations = register_put_composites_with_glaas(
-                            db_ctx=self._db,
-                            glaas_client=client,
-                            composite_results=composite_results,
-                            registration_errors=registration_errors,
-                            dataset_identifiers=dataset_identifiers,
-                            logger=self._logger,
-                        )
-
         metadata_json = build_put_operation_metadata_json(
             message=message,
             destination=self._destination,
@@ -820,6 +861,7 @@ class PutService:
                 remote_job_uid=remote_put_job_uid,
                 registration_errors=registration_errors,
                 uploads=uploads,
+                registration_session_id=registration_session_id,
             )
 
         composite_result_items = [
@@ -1106,6 +1148,7 @@ class PutService:
         remote_job_uid: str,
         registration_errors: list[str],
         uploads: list[_UploadedArtifact] | None = None,
+        registration_session_id: str | None = None,
     ) -> None:
         """Sync the local current label document for the publish-time put job
         and its published artifacts (carrying ``roar.distribution.url``)."""
@@ -1122,6 +1165,7 @@ class PutService:
             jobs=[{"id": job_id, "job_uid": job_uid, "remote_job_uid": remote_job_uid}],
             artifacts=artifacts,
             errors=registration_errors,
+            registration_session_id=registration_session_id,
         )
 
     def _link_put_job_artifacts_with_glaas(

@@ -7,6 +7,8 @@ Follows SRP: coordinates, doesn't implement details.
 
 from __future__ import annotations
 
+import contextlib
+import glob
 import os
 import secrets
 import sys
@@ -289,6 +291,13 @@ class RunCoordinator:
             collect_dropped_paths=(ctx.verbosity == "debug"),
             command=list(ctx.command),
         )
+        if prov.get("python_capture") in {"missing", "invalid"}:
+            self.presenter.print_error(
+                "warning: Python package capture did not complete; this job's package list is "
+                "incomplete and its runtime reproducibility check will fail.\n"
+                "  Avoid replacing/removing PYTHONPATH, `env -i`, and Python -E/-I/-S. "
+                "Use `env -C <dir> python ...` when only a working-directory change is needed."
+            )
         t_prov_end = time.perf_counter()
         n_read = len(prov.get("data", {}).get("read_files", []))
         n_written = len(prov.get("data", {}).get("written_files", []))
@@ -472,3 +481,9 @@ class RunCoordinator:
                     os.remove(log_file)
             except OSError:
                 pass
+        # Sweep any per-PID inject-log shards that merge_inject_logs didn't reach
+        # (e.g. a report written after the merge, or a merge that never ran).
+        if inject_log:
+            for shard in glob.glob(glob.escape(inject_log) + ".*"):
+                with contextlib.suppress(OSError):
+                    os.remove(shard)

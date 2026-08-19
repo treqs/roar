@@ -1,5 +1,6 @@
 """Focused unit tests for RegisterService registration mechanics."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -90,6 +91,57 @@ class TestRegisterService:
         ordered = order_jobs_for_registration([child, parent])
 
         assert [job["job_uid"] for job in ordered] == ["parent-uid", "child-uid"]
+
+    def test_closed_delegated_publication_reuses_persisted_remote_job_uids(
+        self, tmp_path: Path
+    ) -> None:
+        remote_uid = "remote-job-authoritative"
+        prepared = PreparedRegisterExecution(
+            git_context=_git_context(tmp_path),
+            session_id=1,
+            session_hash="f" * 64,
+            session_url="https://glaas.example/dag/existing",
+            git_tag_name=None,
+            git_tag_repo_root=None,
+            registration_session_id="rs-closed",
+            registration_session_status="closed",
+        )
+        with (
+            patch("roar.application.publish.register_execution.config_get", return_value=False),
+            patch(
+                "roar.application.publish.register_execution.create_database_context"
+            ) as mock_ctx,
+            patch(
+                "roar.application.publish.register_execution.sync_publish_labels",
+                return_value=1,
+            ) as sync_labels,
+        ):
+            db_ctx = MagicMock()
+            db_ctx.__enter__ = MagicMock(return_value=db_ctx)
+            db_ctx.__exit__ = MagicMock(return_value=None)
+            db_ctx.sessions.get.return_value = {
+                "metadata": json.dumps(
+                    {"roar": {"remote_publication": {"glaas": {"jobs": {"job-local": remote_uid}}}}}
+                )
+            }
+            mock_ctx.return_value = db_ctx
+
+            result = self.service.register_prepared_lineage(
+                lineage=_lineage_data(jobs=[{"id": 1, "job_uid": "job-local"}]),
+                roar_dir=tmp_path / ".roar",
+                artifact_hash="",
+                dry_run=False,
+                as_blake3=False,
+                skip_confirmation=True,
+                confirm_callback=None,
+                prepared=prepared,
+            )
+
+        assert result.success is True
+        assert result.labels_synced == 1
+        synced_jobs = sync_labels.call_args.kwargs["jobs"]
+        assert synced_jobs[0]["job_uid"] == "job-local"
+        assert synced_jobs[0]["remote_job_uid"] == remote_uid
 
     def test_normalize_jobs_for_registration_filters_known_ray_noise_jobs(self) -> None:
         submit_job = {
@@ -463,3 +515,73 @@ class TestRegisterServiceGitUrlRedaction:
             == "https://user:[REDACTED]@github.com/org/repo.git"
         )
         assert "supersecrettoken123" not in str(finalize_call)
+
+    def test_existing_delegated_binding_is_finalized_before_scoped_label_sync(
+        self, tmp_path: Path
+    ) -> None:
+        from roar.core.interfaces.registration import SessionRegistrationResult
+
+        existing_hash = "e" * 64
+        mock_coordinator = MagicMock()
+        mock_coordinator.register_lineage_under_registration_session.return_value = (
+            BatchRegistrationResult(
+                session_registered=True,
+                jobs_created=0,
+                jobs_failed=0,
+                artifacts_registered=0,
+                artifacts_failed=0,
+                links_created=0,
+                links_failed=0,
+                errors=[],
+                already_registered_session_hash=existing_hash,
+                existing_binding_prepared=True,
+            )
+        )
+        mock_coordinator.session_service.finalize_registration_session.return_value = (
+            SessionRegistrationResult(
+                success=True,
+                session_hash=existing_hash,
+                session_url=f"https://glaas.example/dag/{existing_hash}",
+            )
+        )
+        service = RegisterService(glaas_client=MagicMock(), coordinator=mock_coordinator)
+        prepared = PreparedRegisterExecution(
+            git_context=GitContext(repo=None, commit=None, branch=None),
+            session_id=None,
+            session_hash="local-hash",
+            session_url=None,
+            git_tag_name=None,
+            git_tag_repo_root=None,
+            registration_session_id="rs-existing",
+        )
+
+        with patch("roar.application.publish.register_execution.config_get", return_value=False):
+            result = service.register_prepared_lineage(
+                lineage=_lineage_data(
+                    jobs=[
+                        {
+                            "id": 1,
+                            "job_uid": "job-existing",
+                            "step_number": 1,
+                            "timestamp": 10.0,
+                            "command": "python train.py",
+                        }
+                    ],
+                    artifacts=[],
+                    artifact_hashes=set(),
+                ),
+                roar_dir=tmp_path / ".roar",
+                artifact_hash=None,
+                dry_run=False,
+                as_blake3=False,
+                skip_confirmation=True,
+                confirm_callback=None,
+                prepared=prepared,
+            )
+
+        assert result.success is True
+        assert result.session_hash == existing_hash
+        mock_coordinator.session_service.finalize_registration_session.assert_called_once_with(
+            registration_session_id="rs-existing",
+            git_context=prepared.git_context,
+        )

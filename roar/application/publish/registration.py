@@ -414,6 +414,7 @@ def preregister_lineage_composites(
     payloads: list[CompositeRegistrationCandidate],
     registration_errors: list[str],
     logger: ILogger,
+    registration_session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Register lineage composites before the main link phase."""
     registrations: list[dict[str, Any]] = []
@@ -423,7 +424,14 @@ def preregister_lineage_composites(
     )
 
     for item in payloads:
-        response = resolved_remote_registry.register_composite_artifact(item.payload)
+        response = (
+            resolved_remote_registry.client.register_composite_artifact_under_registration_session(
+                registration_session_id,
+                item.payload,
+            )
+            if registration_session_id
+            else resolved_remote_registry.register_composite_artifact(item.payload)
+        )
         result, error = parse_composite_registration_response(response)
 
         registration: dict[str, Any] = {
@@ -468,6 +476,7 @@ def sync_publish_labels(
     jobs: list[dict[str, Any]],
     artifacts: list[dict[str, Any]],
     errors: list[str] | None = None,
+    registration_session_id: str | None = None,
 ) -> int:
     """Sync current local labels for published entities to GLaaS.
 
@@ -490,7 +499,15 @@ def sync_publish_labels(
         glaas_client=glaas_client,
     )
 
-    _label_result, label_error = resolved_remote_registry.sync_labels(payloads)
+    if registration_session_id:
+        _label_result, label_error = (
+            resolved_remote_registry.client.sync_labels_under_registration_session(
+                registration_session_id,
+                payloads,
+            )
+        )
+    else:
+        _label_result, label_error = resolved_remote_registry.sync_labels(payloads)
     if label_error:
         if errors is not None:
             errors.append(f"Label sync failed: {label_error}")

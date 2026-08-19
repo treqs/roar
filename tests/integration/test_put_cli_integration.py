@@ -142,6 +142,7 @@ def test_put_registers_lineage_with_fake_glaas_and_updates_local_dag(
     assert len(fake_glaas_publish_server.job_batches) == 0
     assert len(fake_glaas_publish_server.job_creates) == 0
     assert len(fake_glaas_publish_server.artifact_batches) == 0
+    assert len(fake_glaas_publish_server.registration_session_artifact_batches) == 1
     assert len(fake_glaas_publish_server.registration_session_job_batches) == 1
     assert len(fake_glaas_publish_server.registration_session_job_creates) == 1
     assert fake_glaas_publish_server.registration_session_input_links

@@ -71,7 +71,8 @@ jobs:
           rustup component add rust-src --toolchain nightly
 
       - name: Install bpf-linker
-        run: cargo install bpf-linker
+        # Keep CI reproducible; upgrade alongside its required LLVM toolchain.
+        run: cargo install bpf-linker --version 0.10.4 --locked
 
       - name: Build and stage Rust binaries
         uses: ./.github/actions/build-rust-binaries
@@ -272,11 +273,32 @@ jobs:
 
           python -m roar run "$(python -c 'import sys; print(sys.executable)')" smoke.py
 
-      - name: Run tests (parallel)
+      - name: Run tracer / platform-dependent tests (parallel)
+        # macOS CI exists to cover the OS-specific surface: the DYLD preload
+        # tracer, sitecustomize/runtime injection, the native _hash_native
+        # extension, and the real `roar run` product path. The rest of the suite
+        # is OS-independent pure-Python logic already fully covered by the Linux
+        # `test` job (5 Python versions), so running all ~1180 tests here only
+        # adds slow-runner wall-clock (and timeouts) without adding signal.
+        #
+        # Select the platform-dependent trees by path rather than by marker:
+        # low-churn, self-documenting, and fails safe — Linux-only tracer
+        # regressions living inside these dirs carry their own
+        # skipif(platform != "Linux") and simply skip on macOS, and there is no
+        # per-file marker to forget to apply (which is how a macOS-only tracer
+        # test would otherwise be silently dropped). The two hashing-value files
+        # are kept so a macOS-specific _hash_native ABI/endianness regression
+        # still can't slip through, even though the hashing *logic* is covered
+        # on Linux.
         run: >
           pytest --tb=short -x -m "not glaas and not live_glaas and not ebpf and not large_pipeline"
-          --ignore=tests/backends/osmo
-          --ignore-glob=tests/backends/test_osmo*.py
+          tests/execution/runtime
+          tests/integration
+          tests/happy_path
+          tests/application/run
+          tests/backends/local/integration
+          tests/unit/test_hashing_backend.py
+          tests/unit/test_canonical_session_hash.py
           --ignore=tests/execution/runtime/test_sitecustomize_perf.py
 
   test-tracer-privileged:
@@ -360,7 +382,7 @@ jobs:
       - name: Install build tools
         run: |
           python -m pip install --upgrade pip
-          pip install maturin
+          pip install 'maturin[zig]'
 
       - name: Download Rust binaries
         uses: actions/download-artifact@v4
@@ -378,7 +400,18 @@ jobs:
       - name: Build abi3 wheel
         env:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos-deployment-target }}
-        run: maturin build --release --manifest-path rust/crates/artifact-hash-py/Cargo.toml --out dist
+          ROAR_WHEEL_PLATFORM: ${{ matrix.platform }}
+        run: |
+          args=(
+            build
+            --release
+            --manifest-path rust/crates/artifact-hash-py/Cargo.toml
+            --out dist
+          )
+          if [[ "$ROAR_WHEEL_PLATFORM" == "linux" ]]; then
+            args+=(--zig --compatibility manylinux_2_17)
+          fi
+          maturin "${args[@]}"
 
       - name: Install uv
         run: |

@@ -70,6 +70,42 @@ def test_sync_aliases_to_trackio_and_strips_wandb_only_kwargs():
     assert "commit" not in calls["log"][1]  # wandb-only log kwarg stripped
 
 
+def test_lerobot_resume_none_is_dropped_before_trackio():
+    """trackio.init raises ValueError on ``resume=None``; wandb's default IS None
+    and lerobot always passes the kwarg (``resume="must" if cfg.resume else None``),
+    so it dies in init(). The shim must drop a None resume."""
+    calls: dict = {}
+    fake = types.ModuleType("trackio")
+    fake.init = lambda *a, **k: calls.__setitem__("init", k) or types.SimpleNamespace(summary={})
+    fake.log = lambda *a, **k: None
+    sys.modules["trackio"] = fake
+
+    wandb_trackio.install(environ={"ROAR_WANDB_TO_TRACKIO": "1", "TRACKIO_SPACE_ID": "org/space"})
+    import wandb
+
+    wandb.init(project="p", resume=None)  # would raise inside trackio without the drop
+    assert "resume" not in calls["init"]
+
+
+def test_lerobot_log_data_kwarg_is_forwarded_positionally():
+    """``wandb.log(data=..., step=...)`` — wandb's first param is named ``data``,
+    trackio's is ``metrics``, so the keyword form is a TypeError. The shim forwards
+    it positionally so the metrics actually reach trackio."""
+    calls: dict = {}
+    fake = types.ModuleType("trackio")
+    fake.init = lambda *a, **k: types.SimpleNamespace(summary={})
+    fake.log = lambda *a, **k: calls.__setitem__("log", (a, k))
+    sys.modules["trackio"] = fake
+
+    wandb_trackio.install(environ={"ROAR_WANDB_TO_TRACKIO": "1", "TRACKIO_SPACE_ID": "org/space"})
+    import wandb
+
+    wandb.log(data={"loss": 0.5}, step=3)
+    args, kwargs = calls["log"]
+    assert args and args[0] == {"loss": 0.5}  # metrics forwarded positionally
+    assert "data" not in kwargs  # no TypeError-inducing keyword survives
+
+
 def test_off_beats_a_configured_space():
     fake = types.ModuleType("trackio")
     fake.init = lambda *a, **k: None
@@ -84,3 +120,16 @@ def test_does_not_clobber_existing_wandb():
     sys.modules["wandb"] = sentinel
     wandb_trackio.install(environ={"ROAR_WANDB_TO_TRACKIO": "off"})
     assert sys.modules["wandb"] is sentinel
+
+
+def test_noop_wandb_has_a_spec_so_find_spec_does_not_raise():
+    """P0-15: a __spec__=None module makes importlib.util.find_spec RAISE, which
+    crashes `import accelerate` (is_wandb_available) on any credential-free host.
+    The no-op stub must carry a real spec."""
+    import importlib.util
+
+    wandb_trackio.install(environ={"ROAR_WANDB_TO_TRACKIO": "off"})
+    stub = sys.modules["wandb"]
+    assert stub.__spec__ is not None
+    # This raised ValueError("wandb.__spec__ is None") before the fix.
+    assert importlib.util.find_spec("wandb") is stub.__spec__

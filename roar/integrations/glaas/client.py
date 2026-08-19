@@ -202,6 +202,8 @@ class GlaasClient:
     def _make_auth_header(self, method: str, path: str, body: bytes | None = None) -> str | None:
         if self._force_anonymous:
             return None
+        if self._publish_auth.delegated_auth_available:
+            return None
         if self._publish_auth.access_token and not self._bearer_auth_rejected:
             return f"Bearer {self._publish_auth.access_token}"
         return make_auth_header(method, path, body)
@@ -214,7 +216,11 @@ class GlaasClient:
         return make_auth_header(method, path, body)
 
     def _can_fallback_from_bearer_to_ssh(self) -> bool:
-        if self._force_anonymous or self._bearer_auth_rejected:
+        if (
+            self._force_anonymous
+            or self._bearer_auth_rejected
+            or self._publish_auth.delegated_auth_available
+        ):
             return False
         if not self._publish_auth.access_token:
             return False
@@ -231,6 +237,8 @@ class GlaasClient:
         """
         if self._force_anonymous:
             return False
+        if self._publish_auth.delegated_auth_available:
+            return True
         if self._publish_auth.access_token:
             return True
         if not self.base_url:
@@ -372,6 +380,21 @@ class GlaasClient:
         """
         result, error = self._request("POST", "/api/v1/artifacts/composites", payload)
         return result, error
+
+    def register_composite_artifact_under_registration_session(
+        self,
+        registration_session_id: str,
+        payload: dict[str, Any],
+    ) -> tuple[dict | None, str | None]:
+        """Stage immutable composite metadata before session finalization."""
+        body = {key: value for key, value in payload.items() if key != "session_hash"}
+        return self._request(
+            "POST",
+            f"/api/v1/registration-sessions/{registration_session_id}/artifacts/composites",
+            body,
+            auth_header_value=self._registration_session_auth_header(),
+            allow_auth_fallback=False,
+        )
 
     def get_composite_components(self, hash_prefix: str) -> tuple[dict | None, str | None]:
         """
@@ -680,8 +703,6 @@ class GlaasClient:
             allow_auth_fallback=False,
         )
         error = _normalize_scope_error(self._publish_auth.scope_request, error)
-        if error is None and self._registration_session_mode == "anonymous_public":
-            self._clear_registration_session_auth()
         return result, error
 
     def sync_labels(
@@ -692,6 +713,25 @@ class GlaasClient:
         if not labels:
             return {"created": 0, "updated": 0, "unchanged": 0}, None
         return self._request("POST", "/api/v1/labels/sync", {"labels": labels})
+
+    def sync_labels_under_registration_session(
+        self,
+        registration_session_id: str,
+        labels: list[dict[str, Any]],
+    ) -> tuple[dict | None, str | None]:
+        """Sync labels only to lineage finalized by this registration session."""
+        if not labels:
+            return {"created": 0, "updated": 0, "noops": 0}, None
+        result, error = self._request(
+            "POST",
+            f"/api/v1/registration-sessions/{registration_session_id}/labels/batch",
+            {"labels": labels},
+            auth_header_value=self._registration_session_auth_header(),
+            allow_auth_fallback=False,
+        )
+        if error is None and self._registration_session_mode == "anonymous_public":
+            self._clear_registration_session_auth()
+        return result, error
 
     def reconcile_labels(
         self,
@@ -810,6 +850,7 @@ class GlaasClient:
             "already_registered": [
                 str(h) for h in (result.get("already_registered_session_hashes") or []) if h
             ],
+            "existing_binding_prepared": bool(result.get("existing_binding_prepared", False)),
         }
         return result.get("job_ids", []), result.get("errors", []), None, counts
 
@@ -851,6 +892,21 @@ class GlaasClient:
         """
         body: dict[str, Any] = {"view_edges": view_edges}
         return self._request("POST", f"/api/v1/jobs/{job_uid}/artifacts", body)
+
+    def register_job_view_edges_under_registration_session(
+        self,
+        registration_session_id: str,
+        job_uid: str,
+        view_edges: list[dict],
+    ) -> tuple[dict | None, str | None]:
+        """Stage view edges while both the job and composite are private."""
+        return self._request(
+            "POST",
+            f"/api/v1/registration-sessions/{registration_session_id}/jobs/{job_uid}/view-edges",
+            {"view_edges": view_edges},
+            auth_header_value=self._registration_session_auth_header(),
+            allow_auth_fallback=False,
+        )
 
     def register_job_inputs_under_registration_session(
         self,
