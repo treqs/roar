@@ -13,8 +13,11 @@ from typing import Any
 # Values that indicate missing/placeholder data and should never be sent to GLaaS
 FORBIDDEN_PLACEHOLDER_VALUES: frozenset[str | None] = frozenset({"unknown", "Unknown", "", None})
 
-# Valid source_type values for artifacts (None means local/lineage artifacts)
-VALID_SOURCE_TYPES: frozenset[str | None] = frozenset({"s3", "gs", "https", None})
+# Valid source_type values for artifacts (None means local/lineage artifacts).
+# Keep in step with `_VALID_REMOTE_SOURCE_TYPES` in application/publish/registration.py
+# and with the receiver's enum; test_source_type_allowlists pins the two local sets
+# together.
+VALID_SOURCE_TYPES: frozenset[str | None] = frozenset({"s3", "gs", "https", "hf", None})
 
 
 @dataclass
@@ -146,7 +149,7 @@ def validate_artifact_registration(
     Args:
         hashes: List of hash entries [{algorithm, digest}, ...]
         size: File size in bytes
-        source_type: Type of artifact source ('s3', 'gs', 'https', or None for local)
+        source_type: Type of artifact source; see VALID_SOURCE_TYPES (None for local)
         session_hash: Session this artifact belongs to
 
     Returns:
@@ -168,7 +171,8 @@ def validate_artifact_registration(
 
     # source_type must be one of the valid values (None is allowed for local artifacts)
     if source_type is not None and source_type not in VALID_SOURCE_TYPES:
-        errors.append(f"source_type must be 's3', 'gs', 'https', or None, got '{source_type}'")
+        allowed = ", ".join(sorted(repr(v) for v in VALID_SOURCE_TYPES if v is not None))
+        errors.append(f"source_type must be one of {allowed}, or None, got '{source_type}'")
 
     if _is_placeholder(session_hash):
         errors.append("session_hash is required")
