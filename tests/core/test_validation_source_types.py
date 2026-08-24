@@ -32,7 +32,8 @@ def _artifact(source_type: str | None) -> dict:
 def test_the_two_local_allowlists_agree():
     """The validator must accept every scheme the publish path can emit. A scheme
     the publish path stamps but the validator rejects is silently unregisterable."""
-    assert _VALID_REMOTE_SOURCE_TYPES <= {v for v in VALID_SOURCE_TYPES if v is not None}
+    validator_accepts = {v for v in VALID_SOURCE_TYPES if v is not None}
+    assert validator_accepts >= _VALID_REMOTE_SOURCE_TYPES
 
 
 def test_every_remote_scheme_validates():
