@@ -159,12 +159,36 @@ BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
         re.compile(r"(hooks\.slack\.com/services/)([A-Z0-9/]+)", re.IGNORECASE),
         r"\1[REDACTED]",
     ),
-    # Environment variable assignments in commands
+    # Environment variable assignments in commands.
+    #
+    # Case-sensitive, and a single "=" only. Both restrictions are load-bearing.
+    #
+    # This rule matched any name CONTAINING key/token/secret/..., case-insensitively,
+    # followed by "=". A pip requirement satisfies that: "tiktoken==0.12.0" is a name
+    # ending in "token" followed by "=", so the VERSION was redacted as if it were a
+    # credential. A published freeze then carried
+    #
+    #     'tiktoken==[REDACTED]'
+    #
+    # which no installer can execute, so the recorded environment could not be rebuilt
+    # -- the one thing the freeze exists to make possible. It cost a 3.5-hour training
+    # run its reproducibility gate, and it is not specific to tiktoken: authlib,
+    # keyring, tokenizers and python-jose all contain a keyword.
+    #
+    # Environment variables are uppercase by convention, and POSIX reserves that space
+    # for them, so dropping IGNORECASE keeps HF_TOKEN=, API_KEY= and MYTOKEN= while
+    # sparing every lowercase package name. Requiring a single "=" spares version pins
+    # regardless of case.
+    #
+    # The gap this leaves is a lowercase-named variable holding a secret with no
+    # recognisable prefix (hf_token=..., where the value is not hf_...). That is
+    # unconventional, and the value-shaped rules above -- hf_, sk-, ghp_, glpat-, AKIA
+    # -- catch the real providers by their token format rather than by variable name.
     (
         "env_var_assignment",
         re.compile(
-            r"([A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)[A-Z_]*)=([^\s]+)",
-            re.IGNORECASE,
+            r"([A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)[A-Z_]*)"
+            r"(?<!=)=(?!=)([^\s]+)"
         ),
         r"\1=[REDACTED]",
     ),
