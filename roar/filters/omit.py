@@ -227,7 +227,8 @@ BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
         "json_named_secret",
         re.compile(
             rf"((?:\\?[\"'])(?:{_SECRET_NAME})(?:\\?[\"'])\s*:\s*(?:\\?[\"']))"
-            rf"((?!{_VERSION}\\?[\"'])" r".*?)(\\?[\"'])",
+            rf"((?!{_VERSION}\\?[\"'])"
+            r".*?)(\\?[\"'])",
         ),
         r"\1[REDACTED]\3",
     ),

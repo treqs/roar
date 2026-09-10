@@ -44,18 +44,48 @@ def forms(name: str, value: str) -> list[str]:
 # google-auth and friends carry a *delimited* keyword, so only the version guard
 # spares them -- they are the case a name-only pattern cannot get right.
 PACKAGES = [
-    "tiktoken", "authlib", "keyring", "tokenizers", "secretstorage",
-    "python-jose", "google-auth", "google-auth-oauthlib", "dj-rest-auth",
-    "social-auth-core", "oauthlib", "azure-keyvault",
+    "tiktoken",
+    "authlib",
+    "keyring",
+    "tokenizers",
+    "secretstorage",
+    "python-jose",
+    "google-auth",
+    "google-auth-oauthlib",
+    "dj-rest-auth",
+    "social-auth-core",
+    "oauthlib",
+    "azure-keyvault",
 ]
 
 # Names that denote a credential, across every casing convention in use. Each was
 # redacted by 0.4.5 and silently stopped being redacted by one of its successors.
 SECRET_NAMES = [
-    "HF_TOKEN", "hf_token", "Hf_Token", "HfToken", "MYTOKEN", "MyToken", "myToken",
-    "API_KEY", "api_key", "api-key", "Api_Key", "apiKey", "ApiKey", "APIKey",
-    "secretValue", "SecretValue", "TOKEN_my", "Github_Token", "X-Api-Key",
-    "Token", "Key", "Secret", "Password", "Credential", "DB_PASSWORD",
+    "HF_TOKEN",
+    "hf_token",
+    "Hf_Token",
+    "HfToken",
+    "MYTOKEN",
+    "MyToken",
+    "myToken",
+    "API_KEY",
+    "api_key",
+    "api-key",
+    "Api_Key",
+    "apiKey",
+    "ApiKey",
+    "APIKey",
+    "secretValue",
+    "SecretValue",
+    "TOKEN_my",
+    "Github_Token",
+    "X-Api-Key",
+    "Token",
+    "Key",
+    "Secret",
+    "Password",
+    "Credential",
+    "DB_PASSWORD",
 ]
 
 
@@ -100,7 +130,7 @@ def test_a_real_record_keeps_its_versions_and_loses_its_secrets(f: OmitFilter):
     filter_metadata rather than filter_string because a fix verified only on the string
     form is exactly how the broken version shipped.
     """
-    packages = {p: "1.2.3" for p in PACKAGES}
+    packages = dict.fromkeys(PACKAGES, "1.2.3")
     record = {
         "packages": {"pip": packages},
         # the same map as a serialized blob -- the form that reached a published freeze
