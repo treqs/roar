@@ -1,4 +1,4 @@
-"""A version pin is not a credential.
+"""A version pin is not a credential, in any serialization.
 
 The env-var rule matched any name *containing* key/token/secret/..., case
 insensitively, followed by "=". A pip requirement satisfies that: ``tiktoken==0.12.0``
@@ -7,8 +7,15 @@ freeze then carried ``'tiktoken==[REDACTED]'``, which no installer can execute â
 recorded environment could not be rebuilt, which is the one thing a freeze exists to
 make possible.
 
-These pin both directions against the real patterns: package pins survive, and actual
-environment assignments are still redacted.
+0.4.6 fixed the ``name==version`` string form and shipped. It did not fix
+``{"name": "version"}`` -- and ``roar`` records packages as ``dict[str, str]`` keyed by
+package name, so the published freeze went on carrying ``"tiktoken": "[REDACTED]"``.
+The on-host checks all passed, because the installed distribution and the string form
+were both genuinely fine; only the serialized record was wrong. A second 3.5-hour run
+was spent discovering that.
+
+So these pin both directions in BOTH serializations: the string form, the JSON form,
+and the full record shape as it is actually written.
 """
 
 from __future__ import annotations
@@ -98,3 +105,103 @@ def test_provider_token_is_caught_by_value_even_when_the_name_is_lowercase(
     result = omit_filter.filter_string(f"hf_token={FAKE_HF_TOKEN}", field="command")
 
     assert FAKE_HF_TOKEN not in result.filtered
+
+
+# The shape roar actually serializes: dict[str, str] keyed by package name.
+# See roar/core/models/provenance.py -- used_packages, installed_packages, packages.
+def test_serialized_package_map_survives(omit_filter: OmitFilter) -> None:
+    import json
+
+    packages = {
+        "requests": "2.34.2",
+        "tiktoken": "0.11.0",
+        "authlib": "1.3.2",
+        "keyring": "25.4.1",
+        "tokenizers": "0.20.3",
+        "secretstorage": "3.3.3",
+        "torch": "2.9.1",
+    }
+    blob = json.dumps({"pip": packages, "used_packages": packages})
+
+    result = omit_filter.filter_string(blob, field="freeze")
+
+    assert "[REDACTED]" not in result.filtered
+    assert json.loads(result.filtered)["pip"] == packages
+
+
+JSON_SECRETS = [
+    pytest.param(f'{{"HF_TOKEN": "{FAKE_HF_TOKEN}"}}', id="uppercase-env"),
+    pytest.param(f'{{"api_key": "{FAKE_OPENAI_KEY}"}}', id="delimited-lowercase"),
+    pytest.param(f'{{"accessToken": "{FAKE_HF_TOKEN}"}}', id="camelcase"),
+    pytest.param('{"MYTOKEN": "abc123def456ghi"}', id="unprefixed-uppercase"),
+    pytest.param('{"password": "hunter2hunter2"}', id="bare-keyword"),
+]
+
+
+@pytest.mark.parametrize("blob", JSON_SECRETS)
+def test_json_named_secret_is_still_redacted(omit_filter: OmitFilter, blob: str) -> None:
+    # Narrowing the name pattern must not cost the case the rule exists for. A
+    # credential in a serialized environment is the thing being protected.
+    result = omit_filter.filter_string(blob, field="runtime")
+
+    assert "[REDACTED]" in result.filtered
+    assert blob.rsplit('": "', 1)[1].rstrip('"}') not in result.filtered
+
+
+def test_lowercase_delimited_assignment_is_redacted(omit_filter: OmitFilter) -> None:
+    # Strictly better than 0.4.6, which dropped IGNORECASE wholesale and so stopped
+    # matching lowercase names entirely. A delimiter distinguishes a credential name
+    # from a package name without giving up on lowercase.
+    result = omit_filter.filter_string(f"api_key={FAKE_OPENAI_KEY}", field="command")
+
+    assert result.filtered == "api_key=[REDACTED]"
+
+
+def test_a_real_record_keeps_its_versions_and_loses_its_secrets(omit_filter: OmitFilter) -> None:
+    """The true positive and the false positive in one artifact.
+
+    A filter that stopped redacting would pass every "package survives" case above
+    and be catastrophically wrong. This asserts both halves of the same record: the
+    dependency versions come through intact, and a credential sitting beside them in
+    the captured environment does not.
+    """
+    import json
+
+    record = {
+        "pip": {
+            "requests": "2.34.2",
+            "tiktoken": "0.11.0",
+            "authlib": "1.3.2",
+            "keyring": "25.4.1",
+            "tokenizers": "0.20.3",
+            "secretstorage": "3.3.3",
+            "torch": "2.9.1",
+        },
+        "runtime": {
+            "env_vars": {
+                "HF_TOKEN": FAKE_HF_TOKEN,
+                "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+                "api_key": "sk-" + "lowercaseDelimited123",
+                "accessToken": "camel" + "CaseSecret456",
+                "PATH": "/usr/local/bin:/usr/bin",
+            },
+            "command": f"env HF_TOKEN={FAKE_HF_TOKEN} python -m scripts.train --depth=14",
+        },
+    }
+
+    result = omit_filter.filter_string(json.dumps(record), field="freeze")
+    out = json.loads(result.filtered)
+
+    # Every version intact -- the freeze must remain installable.
+    assert out["pip"] == record["pip"]
+
+    # Every credential gone, by name shape and by value.
+    for name in ("HF_TOKEN", "OPENAI_API_KEY", "api_key", "accessToken"):
+        assert out["runtime"]["env_vars"][name] == "[REDACTED]", name
+    for secret in (FAKE_HF_TOKEN, FAKE_OPENAI_KEY):
+        assert secret not in result.filtered
+
+    # Innocent environment survives, including an unrelated "=" in the command.
+    assert out["runtime"]["env_vars"]["PATH"] == "/usr/local/bin:/usr/bin"
+    assert "--depth=14" in out["runtime"]["command"]
+    assert "HF_TOKEN=[REDACTED]" in out["runtime"]["command"]
