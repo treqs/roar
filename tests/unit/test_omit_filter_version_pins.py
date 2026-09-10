@@ -130,9 +130,9 @@ def test_serialized_package_map_survives(omit_filter: OmitFilter) -> None:
 
 
 JSON_SECRETS = [
-    pytest.param('{"HF_TOKEN": "%s"}' % FAKE_HF_TOKEN, id="uppercase-env"),
-    pytest.param('{"api_key": "%s"}' % FAKE_OPENAI_KEY, id="delimited-lowercase"),
-    pytest.param('{"accessToken": "%s"}' % FAKE_HF_TOKEN, id="camelcase"),
+    pytest.param(f'{{"HF_TOKEN": "{FAKE_HF_TOKEN}"}}', id="uppercase-env"),
+    pytest.param(f'{{"api_key": "{FAKE_OPENAI_KEY}"}}', id="delimited-lowercase"),
+    pytest.param(f'{{"accessToken": "{FAKE_HF_TOKEN}"}}', id="camelcase"),
     pytest.param('{"MYTOKEN": "abc123def456ghi"}', id="unprefixed-uppercase"),
     pytest.param('{"password": "hunter2hunter2"}', id="bare-keyword"),
 ]
