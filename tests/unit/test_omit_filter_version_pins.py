@@ -1,207 +1,163 @@
-"""A version pin is not a credential, in any serialization.
+"""A package version is not a credential; a credential is not a package version.
 
-The env-var rule matched any name *containing* key/token/secret/..., case
-insensitively, followed by "=". A pip requirement satisfies that: ``tiktoken==0.12.0``
-is a name ending in "token" followed by "=", so the VERSION was redacted. A published
-freeze then carried ``'tiktoken==[REDACTED]'``, which no installer can execute — the
-recorded environment could not be rebuilt, which is the one thing a freeze exists to
-make possible.
+Both halves have been broken by a fix for the other. Redacting a version makes the
+published freeze uninstallable, which cost a 3.5-hour training run its reproducibility
+gate twice. Narrowing the name pattern to stop that stopped real credentials from being
+redacted -- first every lowercase name, then 42 mixed-case ones, then package names
+containing a delimited keyword (google-auth) in the serialized form.
 
-0.4.6 fixed the ``name==version`` string form and shipped. It did not fix
-``{"name": "version"}`` -- and ``roar`` records packages as ``dict[str, str]`` keyed by
-package name, so the published freeze went on carrying ``"tiktoken": "[REDACTED]"``.
-The on-host checks all passed, because the installed distribution and the string form
-were both genuinely fine; only the serialized record was wrong. A second 3.5-hour run
-was spent discovering that.
-
-So these pin both directions in BOTH serializations: the string form, the JSON form,
-and the full record shape as it is actually written.
+So each case below is asserted in every serialization roar actually writes: the
+``name==version`` string, the ``{"name": "version"}`` JSON the record serializes, and
+the escaped JSON nested inside a serialized command.
 """
 
 from __future__ import annotations
+
+import json
 
 import pytest
 
 from roar.filters.omit import OmitFilter
 
-# Assembled at runtime so secret scanners do not flag the fixtures as real credentials.
-FAKE_HF_TOKEN = "hf_" + "AbCdEfGhIjKlMnOpQrStUvWxYz012345"
-FAKE_OPENAI_KEY = "sk-" + "AbCdEfGhIjKlMnOpQrStUv"
+# Assembled at runtime so secret scanners do not flag the fixtures.
+HF = "hf_" + "AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+SK = "sk-" + "AbCdEfGhIjKlMnOpQrStUv"
+OPAQUE = "hunter2hunter2"  # a real secret with no recognisable shape
 
 
 @pytest.fixture()
-def omit_filter() -> OmitFilter:
+def f() -> OmitFilter:
     return OmitFilter({})
 
 
-# Every one of these contains a keyword the rule looks for, and every one is a
-# dependency people really install.
-PACKAGE_PINS = [
-    pytest.param("tiktoken==0.12.0", id="tiktoken"),
-    pytest.param("authlib==1.3.2", id="authlib"),
-    pytest.param("keyring==25.4.1", id="keyring"),
-    pytest.param("tokenizers==0.20.3", id="tokenizers"),
-    pytest.param("python-jose[cryptography]==3.3.0", id="python-jose"),
-    pytest.param("secretstorage==3.3.3", id="secretstorage"),
+def forms(name: str, value: str) -> list[str]:
+    """The name/value pair in every serialization the record is written in."""
+    return [
+        f"{name}=={value}",
+        f"{name}={value}",
+        json.dumps({name: value}),
+        json.dumps(json.dumps({name: value})),  # escaped, nested in a command string
+    ]
+
+
+# Real dependencies whose names carry a keyword. None is a credential.
+# google-auth and friends carry a *delimited* keyword, so only the version guard
+# spares them -- they are the case a name-only pattern cannot get right.
+PACKAGES = [
+    "tiktoken",
+    "authlib",
+    "keyring",
+    "tokenizers",
+    "secretstorage",
+    "python-jose",
+    "google-auth",
+    "google-auth-oauthlib",
+    "dj-rest-auth",
+    "social-auth-core",
+    "oauthlib",
+    "azure-keyvault",
+]
+
+# Names that denote a credential, across every casing convention in use. Each was
+# redacted by 0.4.5 and silently stopped being redacted by one of its successors.
+SECRET_NAMES = [
+    "HF_TOKEN",
+    "hf_token",
+    "Hf_Token",
+    "HfToken",
+    "MYTOKEN",
+    "MyToken",
+    "myToken",
+    "API_KEY",
+    "api_key",
+    "api-key",
+    "Api_Key",
+    "apiKey",
+    "ApiKey",
+    "APIKey",
+    "secretValue",
+    "SecretValue",
+    "TOKEN_my",
+    "Github_Token",
+    "X-Api-Key",
+    "Token",
+    "Key",
+    "Secret",
+    "Password",
+    "Credential",
+    "DB_PASSWORD",
 ]
 
 
-@pytest.mark.parametrize("requirement", PACKAGE_PINS)
-def test_package_pin_survives_filtering(omit_filter: OmitFilter, requirement: str) -> None:
-    result = omit_filter.filter_string(requirement, field="packages")
-
-    assert result.filtered == requirement
-    assert result.detections == []
-
-
-def test_full_install_command_survives(omit_filter: OmitFilter) -> None:
-    # The shape that actually broke: a generated install line from a freeze. If any
-    # version is replaced the command cannot be executed literally, which is exactly
-    # the failure the reproducibility gate catches -- after the compute is spent.
-    command = "pip install torch==2.9.1 tiktoken==0.12.0 regex==2025.9.1 authlib==1.3.2"
-
-    result = omit_filter.filter_string(command, field="command")
-
-    assert result.filtered == command
-    assert "[REDACTED]" not in result.filtered
+@pytest.mark.parametrize("package", PACKAGES)
+@pytest.mark.parametrize("version", ["0.11.0", "2.0.0rc1", "1.0.dev4", "2.9.1+cu121"])
+def test_a_version_pin_survives_every_serialization(f: OmitFilter, package, version):
+    for text in forms(package, version):
+        assert f.filter_string(text, field="packages").filtered == text, text
 
 
-ENV_ASSIGNMENTS = [
-    pytest.param(f"HF_TOKEN={FAKE_HF_TOKEN}", "HF_TOKEN", id="hf-token"),
-    pytest.param(f"OPENAI_API_KEY={FAKE_OPENAI_KEY}", "OPENAI_API_KEY", id="openai-key"),
-    pytest.param("MYTOKEN=abc123def456", "MYTOKEN", id="unprefixed-uppercase"),
-    pytest.param("DB_PASSWORD=hunter2hunter2", "DB_PASSWORD", id="password"),
-    pytest.param("AWS_SECRET=abcdefghijklmnop", "AWS_SECRET", id="secret"),
-]
+@pytest.mark.parametrize("name", SECRET_NAMES)
+def test_a_credential_is_redacted_in_every_serialization(f: OmitFilter, name):
+    # Narrowing the name pattern must never cost this. Every casing here is a name a
+    # real project uses for a real secret.
+    for text in forms(name, OPAQUE):
+        if text.startswith(f"{name}=="):
+            continue  # "==" is the version-pin form, deliberately exempt
+        assert OPAQUE not in f.filter_string(text, field="runtime").filtered, text
 
 
-@pytest.mark.parametrize("assignment,name", ENV_ASSIGNMENTS)
-def test_environment_assignment_is_still_redacted(
-    omit_filter: OmitFilter, assignment: str, name: str
-) -> None:
-    # The reason the rule exists. Narrowing it must not cost this.
-    result = omit_filter.filter_string(assignment, field="command")
+def test_a_keyword_inside_a_word_is_not_a_credential_name(f: OmitFilter):
+    # "tokenizer" contains "token" but is one word; "api_key" carries it as its own.
+    # This boundary is what keeps a recorded command executable.
+    command = "python -m train --tokenizer=gpt2 --depth=14 --lr=3e-4"
+    assert f.filter_string(command, field="command").filtered == command
 
-    assert result.filtered == f"{name}=[REDACTED]"
-    assert assignment.split("=", 1)[1] not in result.filtered
-
-
-def test_assignment_inside_a_command_is_still_redacted(omit_filter: OmitFilter) -> None:
-    command = f"env HF_TOKEN={FAKE_HF_TOKEN} python -m scripts.base_train --depth=14"
-
-    result = omit_filter.filter_string(command, field="command")
-
-    assert FAKE_HF_TOKEN not in result.filtered
-    assert "HF_TOKEN=[REDACTED]" in result.filtered
-    # The unrelated argument must survive intact.
-    assert "--depth=14" in result.filtered
+    install = "pip install torch==2.9.1 tiktoken==0.11.0 google-auth==2.35.0"
+    assert f.filter_string(install, field="command").filtered == install
 
 
-def test_provider_token_is_caught_by_value_even_when_the_name_is_lowercase(
-    omit_filter: OmitFilter,
-) -> None:
-    # The gap the narrowing leaves is a lowercase variable name. Real providers are
-    # still caught by the shape of the value, which is why that gap is acceptable.
-    result = omit_filter.filter_string(f"hf_token={FAKE_HF_TOKEN}", field="command")
-
-    assert FAKE_HF_TOKEN not in result.filtered
+def test_a_secret_is_caught_by_value_even_when_the_name_says_nothing(f: OmitFilter):
+    # The backstop for names no pattern anticipates.
+    assert HF not in f.filter_string(f"whatever={HF}", field="command").filtered
+    assert SK not in f.filter_string(f'{{"opts": "{SK}"}}', field="runtime").filtered
 
 
-# The shape roar actually serializes: dict[str, str] keyed by package name.
-# See roar/core/models/provenance.py -- used_packages, installed_packages, packages.
-def test_serialized_package_map_survives(omit_filter: OmitFilter) -> None:
-    import json
+def test_a_real_record_keeps_its_versions_and_loses_its_secrets(f: OmitFilter):
+    """Both halves of one record, through the entry point that publishes it.
 
-    packages = {
-        "requests": "2.34.2",
-        "tiktoken": "0.11.0",
-        "authlib": "1.3.2",
-        "keyring": "25.4.1",
-        "tokenizers": "0.20.3",
-        "secretstorage": "3.3.3",
-        "torch": "2.9.1",
-    }
-    blob = json.dumps({"pip": packages, "used_packages": packages})
-
-    result = omit_filter.filter_string(blob, field="freeze")
-
-    assert "[REDACTED]" not in result.filtered
-    assert json.loads(result.filtered)["pip"] == packages
-
-
-JSON_SECRETS = [
-    pytest.param(f'{{"HF_TOKEN": "{FAKE_HF_TOKEN}"}}', id="uppercase-env"),
-    pytest.param(f'{{"api_key": "{FAKE_OPENAI_KEY}"}}', id="delimited-lowercase"),
-    pytest.param(f'{{"accessToken": "{FAKE_HF_TOKEN}"}}', id="camelcase"),
-    pytest.param('{"MYTOKEN": "abc123def456ghi"}', id="unprefixed-uppercase"),
-    pytest.param('{"password": "hunter2hunter2"}', id="bare-keyword"),
-]
-
-
-@pytest.mark.parametrize("blob", JSON_SECRETS)
-def test_json_named_secret_is_still_redacted(omit_filter: OmitFilter, blob: str) -> None:
-    # Narrowing the name pattern must not cost the case the rule exists for. A
-    # credential in a serialized environment is the thing being protected.
-    result = omit_filter.filter_string(blob, field="runtime")
-
-    assert "[REDACTED]" in result.filtered
-    assert blob.rsplit('": "', 1)[1].rstrip('"}') not in result.filtered
-
-
-def test_lowercase_delimited_assignment_is_redacted(omit_filter: OmitFilter) -> None:
-    # Strictly better than 0.4.6, which dropped IGNORECASE wholesale and so stopped
-    # matching lowercase names entirely. A delimiter distinguishes a credential name
-    # from a package name without giving up on lowercase.
-    result = omit_filter.filter_string(f"api_key={FAKE_OPENAI_KEY}", field="command")
-
-    assert result.filtered == "api_key=[REDACTED]"
-
-
-def test_a_real_record_keeps_its_versions_and_loses_its_secrets(omit_filter: OmitFilter) -> None:
-    """The true positive and the false positive in one artifact.
-
-    A filter that stopped redacting would pass every "package survives" case above
-    and be catastrophically wrong. This asserts both halves of the same record: the
-    dependency versions come through intact, and a credential sitting beside them in
-    the captured environment does not.
+    A filter that stopped redacting would pass every "version survives" case above and
+    be catastrophically wrong, so the two are asserted together. Driven through
+    filter_metadata rather than filter_string because a fix verified only on the string
+    form is exactly how the broken version shipped.
     """
-    import json
-
+    packages = dict.fromkeys(PACKAGES, "1.2.3")
     record = {
-        "pip": {
-            "requests": "2.34.2",
-            "tiktoken": "0.11.0",
-            "authlib": "1.3.2",
-            "keyring": "25.4.1",
-            "tokenizers": "0.20.3",
-            "secretstorage": "3.3.3",
-            "torch": "2.9.1",
-        },
+        "packages": {"pip": packages},
+        # the same map as a serialized blob -- the form that reached a published freeze
+        # as {"tiktoken": "[REDACTED]"} when only the string form had been fixed
+        "python_capture": json.dumps({"pip": packages}),
         "runtime": {
-            "env_vars": {
-                "HF_TOKEN": FAKE_HF_TOKEN,
-                "OPENAI_API_KEY": FAKE_OPENAI_KEY,
-                "api_key": "sk-" + "lowercaseDelimited123",
-                "accessToken": "camel" + "CaseSecret456",
-                "PATH": "/usr/local/bin:/usr/bin",
-            },
-            "command": f"env HF_TOKEN={FAKE_HF_TOKEN} python -m scripts.train --depth=14",
+            "env_vars": {"HF_TOKEN": HF, "api_key": SK, "PATH": "/usr/local/bin"},
+            "command": f"env HF_TOKEN={HF} python -m train --tokenizer=gpt2 --depth=14",
         },
+        "git": {"remote_url": f"https://x-access-token:{HF}@github.com/org/repo.git"},
     }
 
-    result = omit_filter.filter_string(json.dumps(record), field="freeze")
-    out = json.loads(result.filtered)
+    out, _ = f.filter_metadata(json.loads(json.dumps(record)))
+    blob = json.dumps(out)
 
-    # Every version intact -- the freeze must remain installable.
-    assert out["pip"] == record["pip"]
+    # Every version intact, in both serializations -- the freeze must stay installable.
+    assert out["packages"]["pip"] == packages
+    assert json.loads(out["python_capture"])["pip"] == packages
 
-    # Every credential gone, by name shape and by value.
-    for name in ("HF_TOKEN", "OPENAI_API_KEY", "api_key", "accessToken"):
-        assert out["runtime"]["env_vars"][name] == "[REDACTED]", name
-    for secret in (FAKE_HF_TOKEN, FAKE_OPENAI_KEY):
-        assert secret not in result.filtered
+    # Every credential gone, by name and by value.
+    for secret in (HF, SK):
+        assert secret not in blob
+    for name in ("HF_TOKEN", "api_key"):
+        # marker varies: a value-shaped rule may claim it first ([HF_TOKEN_REDACTED])
+        assert "REDACTED" in out["runtime"]["env_vars"][name], name
 
-    # Innocent environment survives, including an unrelated "=" in the command.
-    assert out["runtime"]["env_vars"]["PATH"] == "/usr/local/bin:/usr/bin"
+    # Innocent environment survives, including unrelated "=" in the command.
+    assert out["runtime"]["env_vars"]["PATH"] == "/usr/local/bin"
     assert "--depth=14" in out["runtime"]["command"]
-    assert "HF_TOKEN=[REDACTED]" in out["runtime"]["command"]
+    assert "--tokenizer=gpt2" in out["runtime"]["command"]
