@@ -155,3 +155,53 @@ def test_lowercase_delimited_assignment_is_redacted(omit_filter: OmitFilter) -> 
     result = omit_filter.filter_string(f"api_key={FAKE_OPENAI_KEY}", field="command")
 
     assert result.filtered == "api_key=[REDACTED]"
+
+
+def test_a_real_record_keeps_its_versions_and_loses_its_secrets(omit_filter: OmitFilter) -> None:
+    """The true positive and the false positive in one artifact.
+
+    A filter that stopped redacting would pass every "package survives" case above
+    and be catastrophically wrong. This asserts both halves of the same record: the
+    dependency versions come through intact, and a credential sitting beside them in
+    the captured environment does not.
+    """
+    import json
+
+    record = {
+        "pip": {
+            "requests": "2.34.2",
+            "tiktoken": "0.11.0",
+            "authlib": "1.3.2",
+            "keyring": "25.4.1",
+            "tokenizers": "0.20.3",
+            "secretstorage": "3.3.3",
+            "torch": "2.9.1",
+        },
+        "runtime": {
+            "env_vars": {
+                "HF_TOKEN": FAKE_HF_TOKEN,
+                "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+                "api_key": "sk-" + "lowercaseDelimited123",
+                "accessToken": "camel" + "CaseSecret456",
+                "PATH": "/usr/local/bin:/usr/bin",
+            },
+            "command": f"env HF_TOKEN={FAKE_HF_TOKEN} python -m scripts.train --depth=14",
+        },
+    }
+
+    result = omit_filter.filter_string(json.dumps(record), field="freeze")
+    out = json.loads(result.filtered)
+
+    # Every version intact -- the freeze must remain installable.
+    assert out["pip"] == record["pip"]
+
+    # Every credential gone, by name shape and by value.
+    for name in ("HF_TOKEN", "OPENAI_API_KEY", "api_key", "accessToken"):
+        assert out["runtime"]["env_vars"][name] == "[REDACTED]", name
+    for secret in (FAKE_HF_TOKEN, FAKE_OPENAI_KEY):
+        assert secret not in result.filtered
+
+    # Innocent environment survives, including an unrelated "=" in the command.
+    assert out["runtime"]["env_vars"]["PATH"] == "/usr/local/bin:/usr/bin"
+    assert "--depth=14" in out["runtime"]["command"]
+    assert "HF_TOKEN=[REDACTED]" in out["runtime"]["command"]
