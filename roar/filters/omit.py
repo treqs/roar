@@ -39,6 +39,31 @@ class OmitResult:
 
 
 # Built-in patterns for common secret formats
+# A name that DENOTES a credential, as opposed to a name that merely contains a
+# keyword. The distinction is the whole problem: "tiktoken" ends in "token" and is a
+# tokeniser, "authlib" begins with "auth" and is a library, "keyring" is a keyring.
+# Matching those redacted their VERSIONS out of published dependency freezes, which
+# made the recorded environment uninstallable -- and cost a completed 3.5-hour
+# training run its reproducibility gate twice, because the first fix covered only the
+# "name==version" string form and not the {"name": "version"} form the record
+# actually serializes.
+#
+# Three shapes denote a credential, and none of them matches a package name:
+#
+#   UPPERCASE     HF_TOKEN, API_KEY, MYTOKEN     -- env vars, POSIX convention
+#   delimited     api_key, access-token, token   -- the keyword is its own word
+#   camelCase     apiKey, accessToken            -- the capital is the delimiter
+#
+# "tiktoken" fails all three: it is lowercase, "token" is not delimited within it,
+# and there is no capital. Same for authlib, keyring, tokenizers, secretstorage.
+_SECRET_NAME = (
+    r"ROAR_SESSION_ID"
+    r"|[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)[A-Z0-9_]*"
+    r"|(?:[a-z0-9]+[_-])*(?:key|token|secret|password|passwd|pwd|credential|auth)"
+    r"(?:[_-][a-z0-9]+)*"
+    r"|[a-z0-9]+(?:Key|Token|Secret|Password|Passwd|Pwd|Credential|Auth)[A-Za-z0-9]*"
+)
+
 # Each pattern is a tuple of (id, compiled_regex, replacement)
 BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     # AWS credentials
@@ -186,10 +211,7 @@ BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     # -- catch the real providers by their token format rather than by variable name.
     (
         "env_var_assignment",
-        re.compile(
-            r"([A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)[A-Z_]*)"
-            r"(?<!=)=(?!=)([^\s]+)"
-        ),
+        re.compile(rf"({_SECRET_NAME})" r"(?<!=)=(?!=)([^\s]+)"),
         r"\1=[REDACTED]",
     ),
     # Sensitive environment values embedded in JSON, including Ray's
@@ -198,8 +220,7 @@ BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     (
         "json_named_secret",
         re.compile(
-            r"((?:\\?[\"'])(?:ROAR_SESSION_ID|[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)[A-Z_]*)(?:\\?[\"'])\s*:\s*(?:\\?[\"']))(.*?)(\\?[\"'])",
-            re.IGNORECASE,
+            r"((?:\\?[\"'])(?:" + _SECRET_NAME + r")(?:\\?[\"'])\s*:\s*(?:\\?[\"']))(.*?)(\\?[\"'])"
         ),
         r"\1[REDACTED]\3",
     ),
