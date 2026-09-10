@@ -39,31 +39,6 @@ class OmitResult:
 
 
 # Built-in patterns for common secret formats
-# A name that DENOTES a credential, as opposed to a name that merely contains a
-# keyword. The distinction is the whole problem: "tiktoken" ends in "token" and is a
-# tokeniser, "authlib" begins with "auth" and is a library, "keyring" is a keyring.
-# Matching those redacted their VERSIONS out of published dependency freezes, which
-# made the recorded environment uninstallable -- and cost a completed 3.5-hour
-# training run its reproducibility gate twice, because the first fix covered only the
-# "name==version" string form and not the {"name": "version"} form the record
-# actually serializes.
-#
-# Three shapes denote a credential, and none of them matches a package name:
-#
-#   UPPERCASE     HF_TOKEN, API_KEY, MYTOKEN     -- env vars, POSIX convention
-#   delimited     api_key, access-token, token   -- the keyword is its own word
-#   camelCase     apiKey, accessToken            -- the capital is the delimiter
-#
-# "tiktoken" fails all three: it is lowercase, "token" is not delimited within it,
-# and there is no capital. Same for authlib, keyring, tokenizers, secretstorage.
-_SECRET_NAME = (
-    r"ROAR_SESSION_ID"
-    r"|[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)[A-Z0-9_]*"
-    r"|(?:[a-z0-9]+[_-])*(?:key|token|secret|password|passwd|pwd|credential|auth)"
-    r"(?:[_-][a-z0-9]+)*"
-    r"|[a-z0-9]+(?:Key|Token|Secret|Password|Passwd|Pwd|Credential|Auth)[A-Za-z0-9]*"
-)
-
 # Each pattern is a tuple of (id, compiled_regex, replacement)
 BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     # AWS credentials
@@ -184,34 +159,13 @@ BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
         re.compile(r"(hooks\.slack\.com/services/)([A-Z0-9/]+)", re.IGNORECASE),
         r"\1[REDACTED]",
     ),
-    # Environment variable assignments in commands.
-    #
-    # Case-sensitive, and a single "=" only. Both restrictions are load-bearing.
-    #
-    # This rule matched any name CONTAINING key/token/secret/..., case-insensitively,
-    # followed by "=". A pip requirement satisfies that: "tiktoken==0.12.0" is a name
-    # ending in "token" followed by "=", so the VERSION was redacted as if it were a
-    # credential. A published freeze then carried
-    #
-    #     'tiktoken==[REDACTED]'
-    #
-    # which no installer can execute, so the recorded environment could not be rebuilt
-    # -- the one thing the freeze exists to make possible. It cost a 3.5-hour training
-    # run its reproducibility gate, and it is not specific to tiktoken: authlib,
-    # keyring, tokenizers and python-jose all contain a keyword.
-    #
-    # Environment variables are uppercase by convention, and POSIX reserves that space
-    # for them, so dropping IGNORECASE keeps HF_TOKEN=, API_KEY= and MYTOKEN= while
-    # sparing every lowercase package name. Requiring a single "=" spares version pins
-    # regardless of case.
-    #
-    # The gap this leaves is a lowercase-named variable holding a secret with no
-    # recognisable prefix (hf_token=..., where the value is not hf_...). That is
-    # unconventional, and the value-shaped rules above -- hf_, sk-, ghp_, glpat-, AKIA
-    # -- catch the real providers by their token format rather than by variable name.
+    # Environment variable assignments in commands
     (
         "env_var_assignment",
-        re.compile(rf"({_SECRET_NAME})" r"(?<!=)=(?!=)([^\s]+)"),
+        re.compile(
+            r"([A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)[A-Z_]*)=([^\s]+)",
+            re.IGNORECASE,
+        ),
         r"\1=[REDACTED]",
     ),
     # Sensitive environment values embedded in JSON, including Ray's
@@ -220,7 +174,8 @@ BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     (
         "json_named_secret",
         re.compile(
-            r"((?:\\?[\"'])(?:" + _SECRET_NAME + r")(?:\\?[\"'])\s*:\s*(?:\\?[\"']))(.*?)(\\?[\"'])"
+            r"((?:\\?[\"'])(?:ROAR_SESSION_ID|[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)[A-Z_]*)(?:\\?[\"'])\s*:\s*(?:\\?[\"']))(.*?)(\\?[\"'])",
+            re.IGNORECASE,
         ),
         r"\1[REDACTED]\3",
     ),
