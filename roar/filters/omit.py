@@ -38,6 +38,52 @@ class OmitResult:
         return len(self.detections) > 0
 
 
+# A name that DENOTES a credential, as opposed to one that merely contains a keyword.
+# The distinction is the whole problem: "tiktoken" ends in "token" and is a tokeniser,
+# "authlib" begins with "auth" and is a library, "keyring" is a keyring. Matching those
+# redacted their VERSIONS out of published dependency freezes, so the recorded
+# environment could not be reinstalled -- the one thing a freeze exists to make
+# possible. It cost a completed 3.5-hour training run its reproducibility gate twice.
+#
+# Casing is NOT the discriminator. Two earlier fixes assumed it was -- one dropped
+# case-insensitivity, the other enumerated three casing shapes -- and both stopped
+# redacting real credentials (Hf_Token, MyToken, api_key) while still breaking package
+# names in one serialization or another. What actually separates the two:
+#
+#   1. a WORD BOUNDARY in the name. "api_key" and "MyToken" carry the keyword as its
+#      own word, bounded by a delimiter, a case transition, or an edge. "tiktoken" and
+#      "tokenizer" are single words that happen to contain one.
+#   2. the VALUE. A version pin is never a credential -- see _VERSION below.
+#
+# With both guards in place the pattern does not need to exclude any casing, which is
+# why every form 0.4.5 caught is still caught here.
+_KW = r"(?:key|token|secret|password|passwd|pwd|credential|auth)"
+_KW_CAP = r"(?:Key|Token|Secret|Password|Passwd|Pwd|Credential|Auth)"
+_KW_UPPER = r"(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)"
+
+_SECRET_NAME = (
+    r"ROAR_SESSION_ID"
+    # delimiter-bounded, any casing: api_key, Api_Key, HF_TOKEN, my-token, X-Api-Key,
+    # TOKEN_my, google-auth, or the bare word itself (Token, secret, PASSWORD).
+    rf"|(?:[A-Za-z0-9]+[_-])*(?i:{_KW})(?:[_-][A-Za-z0-9]+)*"
+    # camel/Pascal boundary: apiKey, myToken, xApiKey, MyToken, ApiKey, APIKey, HfToken
+    rf"|(?:[A-Za-z][A-Za-z0-9]*)?{_KW_CAP}[A-Za-z0-9]*"
+    # lowercase keyword immediately followed by a capital: secretValue, authToken
+    rf"|{_KW}(?=[A-Z])[A-Za-z0-9]*"
+    # all-caps run around an all-caps keyword: MYTOKEN, AWS_SECRET
+    rf"|[A-Z0-9_]*{_KW_UPPER}[A-Z0-9_]*"
+)
+
+# A version pin is never a credential, in any casing or serialization. This guard --
+# not the name pattern -- is what spares tiktoken==0.11.0, {"tiktoken": "0.11.0"} and
+# the google-auth / dj-rest-auth family alike, including package names that genuinely
+# do carry a delimited keyword. Covers PEP 440: 1.2.3, 2.0.0rc1, 1.0.dev4, 2.9.1+cu121.
+_VERSION = (
+    r"\d+(?:\.\d+)*"
+    r"(?:[._-]?(?:a|b|c|rc|alpha|beta|dev|post|final)\d*)*"
+    r"(?:\+[A-Za-z0-9._-]+)?"
+)
+
 # Built-in patterns for common secret formats
 # Each pattern is a tuple of (id, compiled_regex, replacement)
 BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
@@ -161,45 +207,28 @@ BUILTIN_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     ),
     # Environment variable assignments in commands.
     #
-    # Case-sensitive, and a single "=" only. Both restrictions are load-bearing.
-    #
-    # This rule matched any name CONTAINING key/token/secret/..., case-insensitively,
-    # followed by "=". A pip requirement satisfies that: "tiktoken==0.12.0" is a name
-    # ending in "token" followed by "=", so the VERSION was redacted as if it were a
-    # credential. A published freeze then carried
-    #
-    #     'tiktoken==[REDACTED]'
-    #
-    # which no installer can execute, so the recorded environment could not be rebuilt
-    # -- the one thing the freeze exists to make possible. It cost a 3.5-hour training
-    # run its reproducibility gate, and it is not specific to tiktoken: authlib,
-    # keyring, tokenizers and python-jose all contain a keyword.
-    #
-    # Environment variables are uppercase by convention, and POSIX reserves that space
-    # for them, so dropping IGNORECASE keeps HF_TOKEN=, API_KEY= and MYTOKEN= while
-    # sparing every lowercase package name. Requiring a single "=" spares version pins
-    # regardless of case.
-    #
-    # The gap this leaves is a lowercase-named variable holding a secret with no
-    # recognisable prefix (hf_token=..., where the value is not hf_...). That is
-    # unconventional, and the value-shaped rules above -- hf_, sk-, ghp_, glpat-, AKIA
-    # -- catch the real providers by their token format rather than by variable name.
+    # A single "=" only, and never when the value is a version pin. Both restrictions
+    # exist so that "tiktoken==0.11.0" in a recorded pip command survives intact.
     (
         "env_var_assignment",
         re.compile(
-            r"([A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)[A-Z_]*)"
-            r"(?<!=)=(?!=)([^\s]+)"
+            rf"({_SECRET_NAME})" r"(?<!=)=(?!=)" rf"((?!{_VERSION}(?:\s|$))[^\s]+)",
         ),
         r"\1=[REDACTED]",
     ),
     # Sensitive environment values embedded in JSON, including Ray's
     # --runtime-env-json command argument. Optional backslashes cover JSON
     # nested inside a serialized command string.
+    #
+    # This is the form roar actually publishes package maps in, so the version guard
+    # matters more here than in the assignment rule: {"tiktoken": "0.11.0"} reached a
+    # published freeze as {"tiktoken": "[REDACTED]"} when only the "==" form was fixed.
     (
         "json_named_secret",
         re.compile(
-            r"((?:\\?[\"'])(?:ROAR_SESSION_ID|[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)[A-Z_]*)(?:\\?[\"'])\s*:\s*(?:\\?[\"']))(.*?)(\\?[\"'])",
-            re.IGNORECASE,
+            rf"((?:\\?[\"'])(?:{_SECRET_NAME})(?:\\?[\"'])\s*:\s*(?:\\?[\"']))"
+            rf"((?!{_VERSION}\\?[\"'])"
+            r".*?)(\\?[\"'])",
         ),
         r"\1[REDACTED]\3",
     ),
