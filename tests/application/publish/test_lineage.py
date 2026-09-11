@@ -3,6 +3,8 @@
 import sqlite3
 from unittest.mock import Mock
 
+import pytest
+
 from roar.application.publish.lineage import (
     LineageCollector,
     _extract_primary_digest,
@@ -10,6 +12,56 @@ from roar.application.publish.lineage import (
 )
 from roar.db.context import create_database_context
 from roar.db.schema import SCHEMA, run_migrations
+
+
+@pytest.mark.parametrize("method", ["collect", "collect_step", "collect_step_read_only"])
+@pytest.mark.parametrize("later_input_producer", [False, True])
+@pytest.mark.parametrize("same_timestamp", [False, True])
+def test_packaged_identical_content_preserves_training_ancestry(
+    tmp_path, method, later_input_producer, same_timestamp
+):
+    """Copying and hashing a checkpoint/report must preserve their earlier producers."""
+    roar_dir = tmp_path / ".roar"
+    with create_database_context(roar_dir) as db:
+        session_id = db.sessions.create(git_repo="/repo", git_commit="abc", make_active=True)
+        artifacts = {}
+        for name, digit in (("base", "1"), ("checkpoint", "2"), ("report", "3")):
+            artifacts[name], _ = db.artifacts.register(
+                {"blake3": digit * 64}, size=8, path=f"/work/{name}"
+            )
+        uids = {}
+        specs = [
+            ("fetch", ["base"], ["base"]),
+            ("train", ["base"], ["checkpoint"]),
+            ("evaluate", ["checkpoint"], ["report"]),
+            # Packaging copies both files, then hashes the copied outputs.
+            ("package", ["checkpoint", "report"], ["checkpoint", "report"]),
+        ]
+        if later_input_producer:
+            specs.append(("unrelated_later_fetch", [], ["base"]))
+        for step, (name, inputs, outputs) in enumerate(specs, 1):
+            job_id, uids[name] = db.jobs.create(
+                f"python {name}.py",
+                1.0 if same_timestamp else float(step),
+                session_id=session_id,
+                step_number=step,
+                duration_seconds=0.5,
+                exit_code=0,
+            )
+            for artifact in inputs:
+                db.jobs.add_input(job_id, artifacts[artifact], f"/work/{artifact}")
+            for artifact in outputs:
+                path = f"/release/{artifact}" if name == "package" else f"/work/{artifact}"
+                db.jobs.add_output(job_id, artifacts[artifact], path)
+
+    collector = LineageCollector()
+    if method == "collect":
+        lineage = collector.collect(["2" * 64, "3" * 64], roar_dir)
+    else:
+        lineage = getattr(collector, method)(session_id, 4, roar_dir)
+    assert [job["job_uid"] for job in lineage.jobs] == [
+        uids[name] for name in ("fetch", "train", "evaluate", "package")
+    ]
 
 
 class TestComputeIoSignature:
