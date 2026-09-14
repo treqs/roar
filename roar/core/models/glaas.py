@@ -16,7 +16,7 @@ from .base import ImmutableModel, RoarBaseModel
 # Includes canonical composite digest algorithm for composite artifact payloads.
 HashAlgorithm = Literal["blake3", "sha256", "sha512", "md5", "composite-blake3", "composite-sha256"]
 HexDigest = Annotated[str, Field(min_length=8, max_length=128, pattern=r"^[a-f0-9]+$")]
-SourceType = Literal["s3", "gs", "https"] | None
+SourceType = Literal["s3", "gs", "https", "hf"] | None
 
 
 # -------------------------------------------------------------------------

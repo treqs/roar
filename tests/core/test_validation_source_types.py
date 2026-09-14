@@ -17,6 +17,7 @@ These tests pin the sets together so the next scheme cannot be half-added.
 from __future__ import annotations
 
 from roar.application.publish.registration import _VALID_REMOTE_SOURCE_TYPES
+from roar.core.models.glaas import RegisterArtifactRequest
 from roar.core.validation import VALID_SOURCE_TYPES, validate_artifact_registration
 
 
@@ -46,6 +47,18 @@ def test_every_remote_scheme_validates():
 def test_hf_validates():
     """`roar put … hf://` stamps this on the artifact it publishes."""
     assert validate_artifact_registration(**_artifact("hf"))
+
+
+def test_hf_builds_a_glaas_registration_request():
+    """The typed API request must accept every source emitted by ``roar put``."""
+    request = RegisterArtifactRequest(
+        hashes=[{"algorithm": "blake3", "digest": "d" * 64}],
+        size=1,
+        source_type="hf",
+        source_url="hf://example/model/artifact.bin",
+    )
+
+    assert request.source_type == "hf"
 
 
 def test_none_still_validates():
