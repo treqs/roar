@@ -394,6 +394,9 @@ Labels are stored locally by default. You can explicitly reconcile current local
 
 Register session, job, step, or artifact lineage with GLaaS.
 
+Publishing an unchanged copy of an artifact preserves its earlier producer steps,
+including when a packaging command reads back the files it just copied.
+
 ```bash
 roar register model.pt              # Register model lineage
 roar register --dry-run model.pt    # Preview without registering

@@ -9,6 +9,7 @@ from typing import Any
 from ...core.digests import extract_primary_digest
 from ...core.interfaces.repositories import ArtifactRepository, JobRepository
 from ...core.interfaces.services import LineageService
+from ..lineage_order import ProducerOrder, preceding_producer, producer_order
 
 
 class DefaultLineageService(LineageService):
@@ -121,18 +122,21 @@ class DefaultLineageService(LineageService):
                     resolved_ids.append(artifact["id"])
 
         visited_jobs: set[int] = set()
-        visited_artifacts: set[str] = set()
+        visited_artifacts: set[tuple[str, ProducerOrder | None]] = set()
         jobs: list[dict[str, Any]] = []
 
-        def trace_upstream(artifact_id: str, current_depth: int):
-            if current_depth > max_depth or artifact_id in visited_artifacts:
+        def trace_upstream(
+            artifact_id: str, current_depth: int, before: ProducerOrder | None = None
+        ):
+            visit = (artifact_id, before)
+            if current_depth > max_depth or visit in visited_artifacts:
                 return
-            visited_artifacts.add(artifact_id)
+            visited_artifacts.add(visit)
 
             # Find the job that produced this artifact
             artifact_jobs = self._artifact_repo.get_jobs(artifact_id)
             produced_by = artifact_jobs.get("produced_by", [])
-            producer = produced_by[0] if produced_by else None
+            producer = preceding_producer(produced_by, before)
 
             if producer and producer["id"] not in visited_jobs:
                 visited_jobs.add(producer["id"])
@@ -156,7 +160,9 @@ class DefaultLineageService(LineageService):
                 ]
 
                 for inp in inputs:
-                    trace_upstream(inp["artifact_id"], current_depth + 1)
+                    # Copying and then hashing an output reads the same content
+                    # identity. Continue to its earlier producer, not this job again.
+                    trace_upstream(inp["artifact_id"], current_depth + 1, producer_order(producer))
 
                 # Get outputs
                 outputs = self._job_repo.get_outputs(producer["id"])
